@@ -2449,6 +2449,41 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     base_branch="main",
                 )
 
+    def test_generated_release_evidence_v2_index_does_not_require_checked_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            index_path = root / "docs/release-evidence/index-v2.json"
+            index_path.write_text('{"legacy_index":{},"releases":[],"schema_version":2}\n', encoding="utf-8")
+            subprocess.run(["git", "add", index_path.relative_to(root)], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "add generated release evidence v2 index"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            discovered = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="code/issue-662-shadow-capture",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+
+        self.assertIsNone(discovered)
+
     def test_rejects_non_docs_changes_on_evidence_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

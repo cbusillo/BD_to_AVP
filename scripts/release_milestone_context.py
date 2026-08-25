@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_CONFIG_PATH = Path(".github/github.json")
 EVIDENCE_INDEX_PATH = "docs/qualification/release-evidence-v1.json"
 RELEASE_LEDGER_PATH = "docs/release-evidence/index-v1.json"
+RELEASE_V2_INDEX_PATH = "docs/release-evidence/index-v2.json"
 RUNNER_BOUND_QUALIFICATION_PATHS = {
     "docs/qualification/release-qualification-policy-v1.json",
     "docs/qualification/video-quality-route-table-v2.json",
@@ -1877,7 +1878,9 @@ def discover_milestone_receipt(
         "qualificationRecordPath",
     )
     checked_release_mutation = any(
-        path.startswith("docs/release-evidence/") and not _is_recovery_authorization_path(path)
+        path.startswith("docs/release-evidence/")
+        and path != RELEASE_V2_INDEX_PATH
+        and not _is_recovery_authorization_path(path)
         for path in changed_paths
     )
     evidence_index_mutation = EVIDENCE_INDEX_PATH in changed_paths
