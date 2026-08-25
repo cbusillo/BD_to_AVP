@@ -93,6 +93,9 @@ jobs:
       - name: Unit smoke tests
         run: uv run python -m unittest discover -s tests -t .
 
+      - name: Verify committed release evidence
+        run: uv run python -m scripts.release_evidence_v2 --all-tags --worktree
+
       - name: Install XcodeGen
         run: brew install xcodegen
 

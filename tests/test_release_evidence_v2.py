@@ -24,6 +24,7 @@ from scripts.release_evidence_v2 import (
     with_self_digest,
     write_record,
 )
+from scripts.release_qualification_manifest import manifest_sha256
 from scripts.release_receipt import build_receipt, write_receipt
 from scripts.signed_artifact_receipt import (
     PROFILE_CASE_ID,
@@ -32,6 +33,7 @@ from scripts.signed_artifact_receipt import (
     validate_policy_case,
     write_receipt as write_signed_artifact_receipt,
 )
+from scripts.tier3_receipt import build_receipt as build_tier3_receipt, receipt_sha256 as tier3_receipt_sha256
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -150,9 +152,44 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         (bundle_root / "qualification-record.json").write_text(
             json.dumps(qualification, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        (bundle_root / "updater-route-receipt.json").write_text('{"result":"passed"}\n', encoding="utf-8")
-        (bundle_root / "clean-machine-signed-update-receipt.json").write_text('{"result":"passed"}\n', encoding="utf-8")
-        (bundle_root / "installed-ui-accessibility-receipt.json").write_text('{"result":"passed"}\n', encoding="utf-8")
+        cases = {case["id"]: case for case in policy["cases"]}
+        for case_id, sample_name in (
+            ("clean-machine-signed-update", "v0.3.2-clean-machine-signed-update-v1.json"),
+            ("installed-ui-accessibility", "v0.3.2-installed-ui-accessibility-v1.json"),
+        ):
+            sample = json.loads((REPO_ROOT / "docs" / "qualification" / sample_name).read_text(encoding="utf-8"))
+            facts = {
+                "assertions": {item["id"]: item["status"] for item in sample["assertions"]},
+                "cleanup": sample["cleanup"],
+                "completed_at": "2026-08-05T12:03:30Z",
+                "environment": sample["environment"],
+                "evidence": sample["evidence"],
+                "evidence_source": sample["evidence_source"],
+                "hardware": sample["hardware"],
+                "release_receipt_file_sha256": digest(release_receipt_path),
+                "release_receipt_reference": f"docs/release-evidence/{TAG}/release-receipt.json",
+                "result": sample["result"],
+                "started_at": "2026-08-05T12:02:00Z",
+            }
+            tier3_receipt = build_tier3_receipt(
+                facts,
+                policy_id=policy["policy_id"],
+                case=cases[case_id],
+                release_receipt=release_receipt,
+            )
+            (bundle_root / f"{case_id}-receipt.json").write_text(
+                json.dumps(tier3_receipt, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        qualification_manifest: dict[str, Any] = {
+            "manifest_type": "release-qualification-v1",
+            "schema_version": 1,
+        }
+        qualification_manifest["manifest_sha256"] = manifest_sha256(qualification_manifest)
+        (bundle_root / "qualification-manifest.json").write_text(
+            json.dumps(qualification_manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         return source_sha, bundle_root
 
     def capture_record(self, root: Path, source_sha: str) -> dict[str, Any]:
@@ -219,7 +256,60 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
     def qualification_record(self, root: Path, capture: dict[str, Any]) -> dict[str, Any]:
         bundle = root / "docs" / "release-evidence" / TAG
         profile_receipt_path = bundle / "signed-artifact-ui-receipt.json"
-        updater_receipt_path = bundle / "updater-route-receipt.json"
+        clean_receipt_path = bundle / "clean-machine-signed-update-receipt.json"
+        live_qualification_path = bundle / "live-qualification-v1.json"
+        qualification_manifest_path = bundle / "qualification-manifest.json"
+        release_receipt = json.loads((bundle / "release-receipt.json").read_text(encoding="utf-8"))
+        release = release_receipt["release"]
+        versions = release_receipt["versions"]
+        workflow = release_receipt["workflow"]
+        manifest = json.loads(qualification_manifest_path.read_text(encoding="utf-8"))
+        live_qualification = {
+            "candidate": {
+                "appcast_sha256": "c" * 64,
+                "build": versions["build"],
+                "dmg_sha256": "a" * 64,
+                "package_version": versions["package"],
+                "public_version": versions["public"],
+                "release_id": release["id"],
+                "release_run_id": workflow["run_id"],
+                "release_tag": TAG,
+                "signed_app_tree_sha256": release_receipt["signed_app_tree_sha256"],
+                "source_sha": capture["source_sha"],
+            },
+            "cases": [
+                {
+                    "id": "sparkle-update-route",
+                    "observations": {
+                        "candidate_offered_on_rc_route": True,
+                        "install_action": "Install and Relaunch",
+                        "post_update_build": versions["build"],
+                        "post_update_package_version": versions["package"],
+                        "post_update_signed_app_tree_sha256": release_receipt["signed_app_tree_sha256"],
+                        "prior_release_tag": "v0.3.0-rc.2",
+                        "profile_preserved": True,
+                        "qualification_artifact_digest": f"sha256:{'d' * 64}",
+                        "qualification_artifact_id": 888,
+                        "qualification_evidence_sha": "e" * 40,
+                        "qualification_manifest_sha256": manifest["manifest_sha256"],
+                        "qualification_receipt_reference": (
+                            f"docs/release-evidence/{TAG}/clean-machine-signed-update-receipt.json"
+                        ),
+                        "qualification_receipt_sha256": digest(clean_receipt_path),
+                        "qualification_workflow_run_id": 33333,
+                        "route": "rc",
+                    },
+                    "result": "passed",
+                }
+            ],
+            "qualification_id": "rc-live-qualification-v1",
+            "qualified_at": "2026-08-05T12:04:30Z",
+            "schema_version": 1,
+        }
+        live_qualification_path.write_text(
+            json.dumps(live_qualification, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         return with_self_digest(
             {
                 "accepted_case_receipts": {
@@ -231,8 +321,8 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                     },
                     "sparkle-update-route": {
                         "accepted_at": "2026-08-05T12:04:00Z",
-                        "path": f"docs/release-evidence/{TAG}/updater-route-receipt.json",
-                        "sha256": digest(updater_receipt_path),
+                        "path": f"docs/release-evidence/{TAG}/live-qualification-v1.json",
+                        "sha256": digest(live_qualification_path),
                         "source": "signed_artifact_receipt",
                     },
                     "clean-machine-signed-update": {
@@ -258,6 +348,10 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                     "preserved": True,
                     "receipt_sha256": digest(profile_receipt_path),
                 },
+                "qualification_manifest": {
+                    "path": f"docs/release-evidence/{TAG}/qualification-manifest.json",
+                    "sha256": digest(qualification_manifest_path),
+                },
                 "qualification_record": capture["qualification_record"],
                 "qualified_at": "2026-08-05T12:05:00Z",
                 "record_type": "qualification",
@@ -274,7 +368,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 },
                 "updater_route": {
                     "case_id": "sparkle-update-route",
-                    "receipt_sha256": digest(updater_receipt_path),
+                    "receipt_sha256": digest(live_qualification_path),
                     "result": "passed",
                 },
             }
@@ -382,6 +476,45 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "source input route_table digest"):
                 validate_v2_bundle(root / "source", TAG, worktree=True)
 
+    def test_capture_rejects_repository_actor_and_non_ancestor_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_sha, bundle = self.build_repository(root)
+            capture = self.write_capture(root, source_sha)
+            capture["repository"] = "other/repository"
+            capture = with_self_digest(capture)
+            (bundle / CAPTURE_NAME).unlink()
+            write_record(bundle / CAPTURE_NAME, capture)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "repository is not canonical"):
+                validate_v2_bundle(root, TAG, worktree=True)
+
+            source_sha, bundle = self.build_repository(root / "actor")
+            capture = self.write_capture(root / "actor", source_sha)
+            capture["capture_workflow"]["actor"] = "someone-else"
+            capture = with_self_digest(capture)
+            (bundle / CAPTURE_NAME).unlink()
+            write_record(bundle / CAPTURE_NAME, capture)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "not the approved release actor"):
+                validate_v2_bundle(root / "actor", TAG, worktree=True)
+
+            source_sha, bundle = self.build_repository(root / "ancestry")
+            capture = self.write_capture(root / "ancestry", source_sha)
+            tree = git(root / "ancestry", "write-tree")
+            unrelated = subprocess.run(
+                ["git", "commit-tree", tree],
+                cwd=root / "ancestry",
+                check=True,
+                capture_output=True,
+                input="unrelated\n",
+                text=True,
+            ).stdout.strip()
+            capture["source_sha"] = unrelated
+            capture = with_self_digest(capture)
+            (bundle / CAPTURE_NAME).unlink()
+            write_record(bundle / CAPTURE_NAME, capture)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "not an ancestor"):
+                validate_v2_bundle(root / "ancestry", TAG, worktree=True)
+
     def test_qualification_requires_exact_case_set_profile_preservation_and_artifact_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -414,6 +547,22 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "independent from the signed UI artifact"):
                 validate_v2_bundle(root, TAG, worktree=True)
 
+            qualification = self.qualification_record(root, capture)
+            qualification["successful_milestone"]["path"] = ".github/workflows/other.yml"
+            qualification = with_self_digest(qualification)
+            (bundle / QUALIFICATION_NAME).unlink()
+            write_record(bundle / QUALIFICATION_NAME, qualification)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "path is not canonical"):
+                validate_v2_bundle(root, TAG, worktree=True)
+
+            qualification = self.qualification_record(root, capture)
+            qualification["successful_milestone"]["actor"] = "someone-else"
+            qualification = with_self_digest(qualification)
+            (bundle / QUALIFICATION_NAME).unlink()
+            write_record(bundle / QUALIFICATION_NAME, qualification)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "actor is not the repository owner"):
+                validate_v2_bundle(root, TAG, worktree=True)
+
     def test_disposition_binds_structured_failed_run_and_terminal_preservation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -436,6 +585,14 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             (bundle / DISPOSITION_NAME).unlink()
             write_record(bundle / DISPOSITION_NAME, disposition)
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "failure keys changed"):
+                validate_v2_bundle(root, TAG, worktree=True)
+
+            disposition = self.disposition_record(capture)
+            disposition["failure_workflow"]["path"] = ".github/workflows/other.yml"
+            disposition = with_self_digest(disposition)
+            (bundle / DISPOSITION_NAME).unlink()
+            write_record(bundle / DISPOSITION_NAME, disposition)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "path is not canonical"):
                 validate_v2_bundle(root, TAG, worktree=True)
 
     def test_rejects_unknown_nested_keys_and_bool_for_integer(self) -> None:
@@ -526,14 +683,21 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 validate_v2_bundle(root, TAG, worktree=True)
 
     def test_representative_legacy_classes_are_explicit(self) -> None:
+        for tag, expected in (
+            ("v0.3.0", "legacy-publication-v1"),
+            ("v0.3.2", "legacy-qualification-manifest-v1"),
+            ("v0.3.2-beta.5", "legacy-failed-post-publication-v1"),
+        ):
+            self.assertEqual(verify_tag(REPO_ROOT, tag, worktree=True)["class"], expected)
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            for tag, expected in (
-                ("v0.3.0", "legacy-publication-v1"),
-                ("v0.3.2-beta.5", "legacy-failed-post-publication-v1"),
-            ):
-                shutil.copytree(REPO_ROOT / "docs" / "release-evidence" / tag, root / "docs" / "release-evidence" / tag)
-                self.assertEqual(verify_tag(root, tag, worktree=True)["class"], expected)
+            receipt_root = root / "docs" / "release-evidence" / "v0.3.0"
+            receipt_root.mkdir(parents=True)
+            shutil.copy2(
+                REPO_ROOT / "docs" / "release-evidence" / "v0.3.0" / "release-receipt.json",
+                receipt_root / "release-receipt.json",
+            )
+            self.assertEqual(verify_tag(root, "v0.3.0", worktree=True)["class"], "legacy-receipt-v1")
 
     def test_all_four_case_receipts_validate_digest_source_and_time(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -559,6 +723,61 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 write_record(bundle / QUALIFICATION_NAME, mutated)
                 with self.assertRaisesRegex(ReleaseEvidenceV2Error, f"receipt {case_id} source"):
                     validate_v2_bundle(root, TAG, worktree=True)
+
+    def test_case_receipt_contents_are_deeply_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_sha, bundle = self.build_repository(root)
+            capture = self.write_capture(root, source_sha)
+
+            qualification = self.qualification_record(root, capture)
+            clean_path = bundle / "clean-machine-signed-update-receipt.json"
+            clean_path.write_text(json.dumps({"result": "passed"}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            qualification["accepted_case_receipts"]["clean-machine-signed-update"]["sha256"] = digest(clean_path)
+            qualification = with_self_digest(qualification)
+            write_record(bundle / QUALIFICATION_NAME, qualification)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "clean-machine-signed-update is invalid"):
+                validate_v2_bundle(root, TAG, worktree=True)
+
+            (bundle / QUALIFICATION_NAME).unlink()
+            source_sha, bundle = self.build_repository(root / "installed")
+            capture = self.write_capture(root / "installed", source_sha)
+            qualification = self.qualification_record(root / "installed", capture)
+            installed_path = bundle / "installed-ui-accessibility-receipt.json"
+            installed = json.loads(installed_path.read_text(encoding="utf-8"))
+            installed["assertions"][0]["status"] = "failed"
+            installed["result"] = {"reason_code": "assertion_failed", "status": "failed"}
+            installed["receipt_sha256"] = tier3_receipt_sha256(installed)
+            installed_path.write_text(json.dumps(installed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            qualification["accepted_case_receipts"]["installed-ui-accessibility"]["sha256"] = digest(installed_path)
+            qualification = with_self_digest(qualification)
+            write_record(bundle / QUALIFICATION_NAME, qualification)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "installed-ui-accessibility did not pass"):
+                validate_v2_bundle(root / "installed", TAG, worktree=True)
+
+            source_sha, bundle = self.build_repository(root / "live")
+            capture = self.write_capture(root / "live", source_sha)
+            qualification = self.qualification_record(root / "live", capture)
+            live_path = bundle / "live-qualification-v1.json"
+            live = json.loads(live_path.read_text(encoding="utf-8"))
+            live["candidate"]["release_id"] += 1
+            live_path.write_text(json.dumps(live, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            qualification["accepted_case_receipts"]["sparkle-update-route"]["sha256"] = digest(live_path)
+            qualification["updater_route"]["receipt_sha256"] = digest(live_path)
+            qualification = with_self_digest(qualification)
+            write_record(bundle / QUALIFICATION_NAME, qualification)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "candidate conflicts"):
+                validate_v2_bundle(root / "live", TAG, worktree=True)
+
+            source_sha, bundle = self.build_repository(root / "profile")
+            capture = self.write_capture(root / "profile", source_sha)
+            qualification = self.qualification_record(root / "profile", capture)
+            qualification["accepted_case_receipts"][PROFILE_CASE_ID]["sha256"] = "0" * 64
+            qualification["profile_preservation"]["receipt_sha256"] = "0" * 64
+            qualification = with_self_digest(qualification)
+            write_record(bundle / QUALIFICATION_NAME, qualification)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "profile receipt conflicts"):
+                validate_v2_bundle(root / "profile", TAG, worktree=True)
 
     def test_signed_ui_receipt_binding_has_no_asset_id_and_zip_rejects_extra_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -644,7 +863,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "precedes capture"):
                 validate_v2_bundle(root, TAG, worktree=True)
 
-    def test_legacy_tampering_is_deeply_validated_and_historical_legacy_mode_is_explicitly_unsupported(self) -> None:
+    def test_legacy_tampering_is_deeply_validated_and_historical_revision_is_supported(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             tag = "v0.3.2-beta.5"
@@ -659,8 +878,40 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
 
             repo = root / "historical"
             shutil.copytree(REPO_ROOT, repo, dirs_exist_ok=True)
-            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "arbitrary historical revision"):
-                verify_tag(repo, "v0.3.0", verification_revision=git(repo, "rev-parse", "HEAD"))
+            self.assertEqual(
+                verify_tag(repo, "v0.3.0", verification_revision=git(repo, "rev-parse", "HEAD"))["class"],
+                "legacy-publication-v1",
+            )
+
+    def test_legacy_manifest_signed_ui_binding_and_publication_key_variants_are_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            clone = Path(temporary_directory) / "clone"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--shared", REPO_ROOT.as_posix(), clone.as_posix()],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            manifest_path = clone / "docs" / "release-evidence" / "v0.3.2" / "qualification-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["signed_ui_artifact"]["receipt_sha256"] = "9" * 64
+            manifest["manifest_sha256"] = manifest_sha256(manifest)
+            manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "signed UI binding conflicts"):
+                verify_tag(clone, "v0.3.2", worktree=True)
+
+            publication_root = Path(temporary_directory) / "publication"
+            shutil.copytree(
+                REPO_ROOT / "docs" / "release-evidence" / "v0.3.0",
+                publication_root / "docs" / "release-evidence" / "v0.3.0",
+            )
+            publication_path = publication_root / "docs" / "release-evidence" / "v0.3.0" / "publication-record.json"
+            publication = json.loads(publication_path.read_text(encoding="utf-8"))
+            publication["recovery_workflow_run"] = {"unexpected": True}
+            publication["extra"] = True
+            publication_path.write_text(json.dumps(publication, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "nearest recovery variant"):
+                verify_tag(publication_root, "v0.3.0", worktree=True)
 
 
 if __name__ == "__main__":

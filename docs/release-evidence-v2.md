@@ -11,9 +11,10 @@ does not invoke `gh`, `curl`, a network client, or credentials.
 By default the verifier reads the committed `HEAD` tree. Pass a full immutable
 commit SHA to replay a historical v2 tree; bundle files and `source_sha`
 ancestry are then evaluated against that revision, not against a later
-checkout. Clean checked-worktree validation of legacy v1 evidence is supported
-through `--worktree`; arbitrary historical legacy revisions are rejected unless
-they are materialized as a worktree.
+checkout. Legacy v1 evidence at an immutable revision is validated in a
+temporary detached worktree so the maintained validators retain their full
+historical Git context. Pass `--worktree` to validate intentional uncommitted
+evidence during local development.
 
 ```sh
 uv run python -m scripts.release_evidence_v2 --tag v0.3.2 --revision <full-git-sha>
@@ -52,8 +53,10 @@ refused.
 - Historical policy, route table, tag-specific signed qualification template,
   and milestone runner digests read at immutable `source_sha`, after proving
   `source_sha` is an ancestor of the requested verification revision. The
-  template path is exactly
-  `docs/qualification/<release-tag>-signed-qualification-v1.json`.
+  template path is `docs/qualification/<release-tag>-signed-qualification-v1.json`
+  for prereleases and
+  `docs/qualification/<release-tag>-stable-signed-qualification-v1.json` for a
+  stable release.
 
 ## Terminal Records
 
@@ -64,9 +67,10 @@ rejected; either terminal record without capture is rejected.
 `qualification-v2.json` binds the capture digest, the same archived
 `qualification-record.json` snapshot already bound by capture, successful
 milestone path/run/attempt/actor, and an independent positive qualification
-artifact ID/digest bound to that milestone run. It rejects any artifact ID or
-digest reused from the signed-UI capture artifact. The exact accepted-case set
-is:
+artifact ID/digest bound to that milestone run. It also binds the canonical
+`qualification-manifest.json` bytes and self-digest. It rejects any artifact ID
+or digest reused from the signed-UI capture artifact. The exact accepted-case
+set is:
 
 - `sparkle-update-route`
 - `clean-machine-signed-update`
@@ -74,11 +78,13 @@ is:
 - `profile-save-action-accessibility`
 
 Each of the four case receipts includes only `path`, `sha256`, `source`, and
-`accepted_at`. All four files and digests are checked, each source must be
-allowed by the historical policy, and timestamps must fit the
-capture-to-qualification chronology. The qualification also has explicit
-passed updater-route and preserved-profile results tied to their exact receipt
-digests.
+`accepted_at`, and each path is canonical inside the release bundle. The
+profile case reuses the deeply validated signed-UI receipt, the two Tier 3 cases
+run through the maintained Tier 3 receipt validator against historical policy,
+and the Sparkle case validates the full live-qualification candidate, updater,
+profile, artifact, workflow, manifest, and clean-machine receipt bindings. The
+qualification also has explicit passed updater-route and preserved-profile
+results tied to their exact receipt file digests.
 
 `disposition-v2.json` binds the capture digest, failed workflow path/run/attempt
 /actor, structured failure `code`, `subject`, `expected`, and `observed`, plus

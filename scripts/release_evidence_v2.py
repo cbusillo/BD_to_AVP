@@ -11,10 +11,11 @@ import tempfile
 import zipfile
 
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, cast
+from typing import Any, Iterator, Literal, cast
 
 from scripts.release_receipt import (
     EXPECTED_REPOSITORY,
@@ -25,13 +26,16 @@ from scripts.release_evidence import (
     ReleaseEvidenceError,
     validate_qualification_record,
 )
-from scripts.release_milestone_context import validate_failed_post_publication_qualification_record
+from scripts.release_milestone_context import (
+    ReleaseMilestoneContextError,
+    validate_failed_post_publication_qualification_record,
+)
 from scripts.release_qualification_manifest import (
     ReleaseQualificationManifestError,
-    _load_canonical_manifest,
-    signed_ui_binding_from_files,
-    validate_manifest,
+    load_validated_manifest,
+    manifest_sha256,
 )
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 from scripts.signed_artifact_receipt import (
     MAX_RECEIPT_BYTES,
     PROFILE_CASE_ID,
@@ -40,6 +44,7 @@ from scripts.signed_artifact_receipt import (
     release_expectation_from_receipt,
     validate_policy_case,
 )
+from scripts.tier3_receipt import Tier3ReceiptError, load_validated_receipt_bytes
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -51,8 +56,10 @@ RECEIPT_NAME = "release-receipt.json"
 SIGNED_UI_ARCHIVE_NAME = "signed-artifact-ui.zip"
 SIGNED_UI_RECEIPT_NAME = "signed-artifact-ui-receipt.json"
 QUALIFICATION_RECORD_NAME = "qualification-record.json"
+QUALIFICATION_MANIFEST_NAME = "qualification-manifest.json"
+LIVE_QUALIFICATION_NAME = "live-qualification-v1.json"
 SCHEMA_VERSION = 2
-EXPECTED_WORKFLOW_ACTOR = "shiny-code-bot"
+EXPECTED_MILESTONE_ACTOR = EXPECTED_REPOSITORY.partition("/")[0]
 EVIDENCE_WORKFLOW_PATH = ".github/workflows/release-evidence.yml"
 MILESTONE_WORKFLOW_PATH = ".github/workflows/milestone-qualification.yml"
 SOURCE_INPUT_PATHS = {
@@ -98,6 +105,7 @@ QUALIFICATION_KEYS = frozenset(
         "artifact",
         "capture",
         "profile_preservation",
+        "qualification_manifest",
         "qualification_record",
         "qualification_sha256",
         "qualified_at",
@@ -356,6 +364,32 @@ def _verification_reader(
         repo_root, verification_revision or _git_run(repo_root, ["rev-parse", "HEAD"], "resolve HEAD").decode().strip()
     )
     return _BundleReader(repo_root=repo_root, revision=revision, worktree=False)
+
+
+@contextmanager
+def _materialized_revision(repo_root: Path, revision: str) -> Iterator[Path]:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        worktree = Path(temporary_directory) / "revision"
+        _git_run(
+            repo_root,
+            ["worktree", "add", "--detach", "--force", worktree.as_posix(), revision],
+            "materialize historical revision",
+        )
+        cleanup_error: ReleaseEvidenceV2Error | None = None
+        try:
+            yield worktree
+        finally:
+            body_failed = sys.exc_info()[0] is not None
+            try:
+                _git_run(
+                    repo_root,
+                    ["worktree", "remove", "--force", worktree.as_posix()],
+                    "remove materialized historical revision",
+                )
+            except ReleaseEvidenceV2Error as error:
+                cleanup_error = error
+            if cleanup_error is not None and not body_failed:
+                raise cleanup_error
 
 
 def canonical_payload_bytes(record: Mapping[str, Any]) -> bytes:
@@ -629,9 +663,11 @@ def _validate_signed_ui_archive(archive_bytes: bytes, receipt_bytes: bytes) -> N
                     "Signed UI archive must contain exactly one non-directory canonical receipt file."
                 )
             receipt_entry = files[0]
-            if receipt_entry.file_size > MAX_RECEIPT_BYTES:
+            with archive.open(receipt_entry) as archived_receipt:
+                archived_receipt_bytes = archived_receipt.read(MAX_RECEIPT_BYTES + 1)
+            if len(archived_receipt_bytes) > MAX_RECEIPT_BYTES:
                 raise ReleaseEvidenceV2Error("Signed UI archive receipt exceeds its bounded receipt limit.")
-            if archive.read(receipt_entry) != receipt_bytes:
+            if archived_receipt_bytes != receipt_bytes:
                 raise ReleaseEvidenceV2Error("Signed UI archive receipt is not byte-identical to the archived receipt.")
     except zipfile.BadZipFile as error:
         raise ReleaseEvidenceV2Error("Signed UI archive is not a valid ZIP archive.") from error
@@ -732,7 +768,7 @@ def _validate_capture(reader: _BundleReader, record: Mapping[str, Any]) -> Captu
     capture_workflow = _workflow_binding(
         record.get("capture_workflow"), "capture-v2 workflow", expected_path=EVIDENCE_WORKFLOW_PATH
     )
-    if capture_workflow.actor != EXPECTED_WORKFLOW_ACTOR:
+    if capture_workflow.actor != REQUIRED_ACTOR:
         raise ReleaseEvidenceV2Error("capture-v2 workflow actor is not the approved release actor.")
     release_route = _string(release_receipt.get("release_route"), "release route")
     source_inputs = _validate_source_inputs(
@@ -822,24 +858,180 @@ def _validate_terminal_common(
     return event_at, capture_binding, _verify_record_digest(record, digest_field, f"{record_type}-v2 record")
 
 
-def _historical_allowed_sources(repo_root: Path, source_sha: str) -> Mapping[str, frozenset[str]]:
+def _historical_policy(repo_root: Path, source_sha: str) -> tuple[str, Mapping[str, Mapping[str, Any]]]:
     policy_bytes = _git_run(
         repo_root,
         ["show", f"{source_sha}:{SOURCE_INPUT_PATHS['policy']}"],
         "read historical release qualification policy",
     )
     policy = _load_json_bytes(policy_bytes, "historical release qualification policy")
+    policy_id = _string(policy.get("policy_id"), "historical release qualification policy ID")
     cases = policy.get("cases")
     if not isinstance(cases, list):
         raise ReleaseEvidenceV2Error("Historical release qualification policy cases are unavailable.")
-    output: dict[str, frozenset[str]] = {}
+    output: dict[str, Mapping[str, Any]] = {}
     for case in cases:
-        if not isinstance(case, Mapping) or not isinstance(case.get("id"), str):
-            continue
-        sources = case.get("allowed_evidence_sources")
-        if isinstance(sources, list) and all(isinstance(source, str) for source in sources):
-            output[cast(str, case["id"])] = frozenset(cast(list[str], sources))
-    return output
+        case_mapping = _mapping(case, "historical release qualification case")
+        case_id = _string(case_mapping.get("id"), "historical release qualification case ID")
+        if case_id in output:
+            raise ReleaseEvidenceV2Error("Historical release qualification policy contains duplicate case IDs.")
+        output[case_id] = case_mapping
+    return policy_id, output
+
+
+def _case_source(case: Mapping[str, Any], case_id: str, source: str) -> None:
+    sources = case.get("allowed_evidence_sources")
+    if not isinstance(sources, list) or not all(isinstance(item, str) for item in sources):
+        raise ReleaseEvidenceV2Error(f"Historical release qualification case {case_id} has invalid evidence sources.")
+    if source not in sources:
+        raise ReleaseEvidenceV2Error(
+            f"qualification-v2 receipt {case_id} source is not allowed by the historical policy."
+        )
+
+
+def _validate_tier3_case_receipt(
+    reader: _BundleReader,
+    *,
+    case_id: str,
+    binding: DigestBinding,
+    source: str,
+    policy_id: str,
+    case: Mapping[str, Any],
+) -> None:
+    content = _require_digest(reader, binding, f"qualification case receipt {case_id}")
+    receipt = _load_json_bytes(content, f"qualification case receipt {case_id}")
+    if content != canonical_record_bytes(receipt):
+        raise ReleaseEvidenceV2Error(f"Qualification case receipt {case_id} must use canonical JSON serialization.")
+    try:
+        validated = load_validated_receipt_bytes(
+            content,
+            policy_id=policy_id,
+            case=case,
+            reference_content=lambda reference: reader.read(reference, "Tier 3 referenced release receipt"),
+        )
+    except (OSError, Tier3ReceiptError) as error:
+        raise ReleaseEvidenceV2Error(f"Qualification case receipt {case_id} is invalid: {error}") from error
+    result = _mapping(validated.get("result"), f"qualification case receipt {case_id} result")
+    if validated.get("case_id") != case_id or validated.get("evidence_source") != source:
+        raise ReleaseEvidenceV2Error(f"Qualification case receipt {case_id} identity is invalid.")
+    if result.get("status") != "passed":
+        raise ReleaseEvidenceV2Error(f"Qualification case receipt {case_id} did not pass.")
+
+
+def _release_channel(release_tag: str, prerelease: object) -> str:
+    if prerelease is False:
+        return "stable"
+    if prerelease is not True:
+        raise ReleaseEvidenceV2Error("Validated release receipt prerelease flag is invalid.")
+    if "-beta." in release_tag:
+        return "beta"
+    if "-rc." in release_tag:
+        return "rc"
+    raise ReleaseEvidenceV2Error("Prerelease tag does not identify a beta or release-candidate channel.")
+
+
+def _validate_live_qualification_receipt(
+    content: bytes,
+    *,
+    capture: CaptureV2,
+    release_receipt: Mapping[str, Any],
+    clean_machine_receipt: DigestBinding,
+    artifact_id: int,
+    artifact_sha256: str,
+    milestone_workflow: WorkflowBinding,
+    qualification_manifest_sha256: str,
+    qualified_at: datetime,
+) -> None:
+    record = _load_json_bytes(content, "sparkle update live qualification receipt")
+    if content != canonical_record_bytes(record):
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification receipt must use canonical JSON serialization.")
+    _exact_keys(
+        record,
+        frozenset({"candidate", "cases", "qualification_id", "qualified_at", "schema_version"}),
+        "sparkle update live qualification receipt",
+    )
+    if record.get("schema_version") != 1:
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification receipt schema_version must be 1.")
+    release = _mapping(release_receipt.get("release"), "validated release receipt release")
+    versions = _mapping(release_receipt.get("versions"), "validated release receipt versions")
+    workflow = _mapping(release_receipt.get("workflow"), "validated release receipt workflow")
+    expected_candidate = {
+        "appcast_sha256": _receipt_artifact_digest(release_receipt, "appcast"),
+        "build": versions.get("build"),
+        "dmg_sha256": _receipt_artifact_digest(release_receipt, "dmg"),
+        "package_version": versions.get("package"),
+        "public_version": versions.get("public"),
+        "release_id": release.get("id"),
+        "release_run_id": workflow.get("run_id"),
+        "release_tag": capture.release_tag,
+        "signed_app_tree_sha256": release_receipt.get("signed_app_tree_sha256"),
+        "source_sha": capture.source_sha,
+    }
+    candidate = _mapping(record.get("candidate"), "sparkle update live qualification candidate")
+    _exact_keys(candidate, frozenset(expected_candidate), "sparkle update live qualification candidate")
+    if candidate != expected_candidate:
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification candidate conflicts with the release receipt.")
+    channel = _release_channel(capture.release_tag, release.get("prerelease"))
+    if record.get("qualification_id") != f"{channel}-live-qualification-v1":
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification ID conflicts with the release channel.")
+    live_qualified_at = _timestamp(record.get("qualified_at"), "sparkle update live qualification qualified_at")
+    if live_qualified_at < capture.captured_at or live_qualified_at > qualified_at:
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification timestamp conflicts with bundle chronology.")
+    cases = record.get("cases")
+    if not isinstance(cases, list) or len(cases) != 1:
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification must contain exactly one case.")
+    case = _mapping(cases[0], "sparkle update live qualification case")
+    _exact_keys(case, frozenset({"id", "observations", "result"}), "sparkle update live qualification case")
+    if case.get("id") != "sparkle-update-route" or case.get("result") != "passed":
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification case did not pass.")
+    observations = _mapping(case.get("observations"), "sparkle update live qualification observations")
+    route = _string(observations.get("route"), "sparkle update live qualification route")
+    if route not in {"beta", "rc", "stable"}:
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification route is unsupported.")
+    offered_key = f"candidate_offered_on_{route}_route"
+    expected_observation_keys = frozenset(
+        {
+            offered_key,
+            "install_action",
+            "post_update_build",
+            "post_update_package_version",
+            "post_update_signed_app_tree_sha256",
+            "prior_release_tag",
+            "profile_preserved",
+            "qualification_artifact_digest",
+            "qualification_artifact_id",
+            "qualification_evidence_sha",
+            "qualification_manifest_sha256",
+            "qualification_receipt_reference",
+            "qualification_receipt_sha256",
+            "qualification_workflow_run_id",
+            "route",
+        }
+    )
+    _exact_keys(observations, expected_observation_keys, "sparkle update live qualification observations")
+    prior_tag = _tag(observations.get("prior_release_tag"), "sparkle update prior release tag")
+    if prior_tag == capture.release_tag:
+        raise ReleaseEvidenceV2Error("Sparkle update prior release tag must differ from the candidate.")
+    expected_observations = {
+        offered_key: True,
+        "install_action": "Install and Relaunch",
+        "post_update_build": versions.get("build"),
+        "post_update_package_version": versions.get("package"),
+        "post_update_signed_app_tree_sha256": release_receipt.get("signed_app_tree_sha256"),
+        "prior_release_tag": prior_tag,
+        "profile_preserved": True,
+        "qualification_artifact_digest": f"sha256:{artifact_sha256}",
+        "qualification_artifact_id": artifact_id,
+        "qualification_evidence_sha": observations.get("qualification_evidence_sha"),
+        "qualification_manifest_sha256": qualification_manifest_sha256,
+        "qualification_receipt_reference": clean_machine_receipt.path,
+        "qualification_receipt_sha256": clean_machine_receipt.sha256,
+        "qualification_workflow_run_id": milestone_workflow.run_id,
+        "route": route,
+    }
+    _sha(observations.get("qualification_evidence_sha"), "sparkle update qualification evidence SHA")
+    if observations != expected_observations:
+        raise ReleaseEvidenceV2Error("Sparkle update live qualification observations conflict with terminal evidence.")
 
 
 def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], capture: CaptureV2) -> QualificationV2:
@@ -877,6 +1069,8 @@ def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], ca
         "qualification-v2 successful milestone",
         expected_path=MILESTONE_WORKFLOW_PATH,
     )
+    if milestone_workflow.actor != EXPECTED_MILESTONE_ACTOR:
+        raise ReleaseEvidenceV2Error("qualification-v2 milestone actor is not the repository owner.")
     artifact = _mapping(record.get("artifact"), "qualification-v2 artifact")
     _exact_keys(artifact, frozenset({"artifact_id", "run_attempt", "run_id", "sha256"}), "qualification-v2 artifact")
     artifact_id = _positive_integer(artifact.get("artifact_id"), "qualification-v2 artifact ID")
@@ -887,35 +1081,92 @@ def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], ca
         raise ReleaseEvidenceV2Error("qualification-v2 artifact is not bound to the successful milestone run.")
     if artifact_id == capture.signed_ui.artifact_id or artifact_sha256 == capture.signed_ui.archive.sha256:
         raise ReleaseEvidenceV2Error("qualification-v2 artifact must be independent from the signed UI artifact.")
+    qualification_manifest = _digest_binding(
+        record.get("qualification_manifest"),
+        "qualification-v2 qualification manifest",
+        expected_path=f"docs/release-evidence/{capture.release_tag}/{QUALIFICATION_MANIFEST_NAME}",
+    )
+    qualification_manifest_bytes = _require_digest(reader, qualification_manifest, "qualification manifest")
+    qualification_manifest_record = _load_json_bytes(qualification_manifest_bytes, "qualification manifest")
+    if qualification_manifest_bytes != canonical_record_bytes(qualification_manifest_record):
+        raise ReleaseEvidenceV2Error("Qualification manifest must use canonical JSON serialization.")
+    qualification_manifest_self_digest = _sha256(
+        qualification_manifest_record.get("manifest_sha256"), "qualification manifest self SHA-256"
+    )
+    if qualification_manifest_self_digest != manifest_sha256(qualification_manifest_record):
+        raise ReleaseEvidenceV2Error("Qualification manifest self-digest mismatch.")
+    release_receipt = _validate_receipt_bytes(
+        reader.read(capture.receipt.path, "archived release receipt"), capture.receipt
+    )
     receipts = _mapping(record.get("accepted_case_receipts"), "qualification-v2 accepted case receipts")
     _exact_keys(receipts, REQUIRED_CASE_IDS, "qualification-v2 accepted case receipts")
-    allowed_sources = _historical_allowed_sources(reader.repo_root, capture.source_sha)
+    policy_id, policy_cases = _historical_policy(reader.repo_root, capture.source_sha)
+    expected_receipt_paths = {
+        PROFILE_CASE_ID: capture.signed_ui.receipt.path,
+        "sparkle-update-route": f"docs/release-evidence/{capture.release_tag}/{LIVE_QUALIFICATION_NAME}",
+        "clean-machine-signed-update": (
+            f"docs/release-evidence/{capture.release_tag}/clean-machine-signed-update-receipt.json"
+        ),
+        "installed-ui-accessibility": (
+            f"docs/release-evidence/{capture.release_tag}/installed-ui-accessibility-receipt.json"
+        ),
+    }
     validated_receipts: dict[str, DigestBinding] = {}
-    receipt_paths: set[str] = set()
+    receipt_sources: dict[str, str] = {}
     for case_id in sorted(REQUIRED_CASE_IDS):
         receipt = _mapping(receipts.get(case_id), f"qualification-v2 receipt {case_id}")
         _exact_keys(
             receipt, frozenset({"accepted_at", "path", "sha256", "source"}), f"qualification-v2 receipt {case_id}"
         )
         source = _string(receipt.get("source"), f"qualification-v2 receipt {case_id} source")
-        if source not in allowed_sources.get(case_id, frozenset()):
-            raise ReleaseEvidenceV2Error(
-                f"qualification-v2 receipt {case_id} source is not allowed by the historical policy."
-            )
+        case = policy_cases.get(case_id)
+        if case is None:
+            raise ReleaseEvidenceV2Error(f"Historical release qualification policy is missing case {case_id}.")
+        _case_source(case, case_id, source)
         accepted_at = _timestamp(receipt.get("accepted_at"), f"qualification-v2 receipt {case_id} accepted_at")
         if accepted_at < capture.captured_at or accepted_at > qualified_at:
             raise ReleaseEvidenceV2Error(
                 f"qualification-v2 receipt {case_id} timestamp conflicts with bundle chronology."
             )
-        binding = DigestBinding(
-            path=_path(receipt.get("path"), f"qualification-v2 receipt {case_id} path"),
-            sha256=_sha256(receipt.get("sha256"), f"qualification-v2 receipt {case_id} SHA-256"),
+        binding = _digest_binding(
+            {"path": receipt.get("path"), "sha256": receipt.get("sha256")},
+            f"qualification-v2 receipt {case_id}",
+            expected_path=expected_receipt_paths[case_id],
         )
-        if binding.path in receipt_paths:
-            raise ReleaseEvidenceV2Error("qualification-v2 case receipts must reference four distinct files.")
-        receipt_paths.add(binding.path)
-        _require_digest(reader, binding, f"qualification case receipt {case_id}")
         validated_receipts[case_id] = binding
+        receipt_sources[case_id] = source
+    profile_receipt = validated_receipts[PROFILE_CASE_ID]
+    if (
+        profile_receipt.path != capture.signed_ui.receipt.path
+        or profile_receipt.sha256 != capture.signed_ui.receipt.file_sha256
+    ):
+        raise ReleaseEvidenceV2Error("qualification-v2 profile receipt conflicts with the validated signed UI receipt.")
+    _require_digest(reader, profile_receipt, "qualification profile receipt")
+    for case_id in ("clean-machine-signed-update", "installed-ui-accessibility"):
+        _validate_tier3_case_receipt(
+            reader,
+            case_id=case_id,
+            binding=validated_receipts[case_id],
+            source=receipt_sources[case_id],
+            policy_id=policy_id,
+            case=policy_cases[case_id],
+        )
+    live_qualification_content = _require_digest(
+        reader,
+        validated_receipts["sparkle-update-route"],
+        "qualification case receipt sparkle-update-route",
+    )
+    _validate_live_qualification_receipt(
+        live_qualification_content,
+        capture=capture,
+        release_receipt=release_receipt,
+        clean_machine_receipt=validated_receipts["clean-machine-signed-update"],
+        artifact_id=artifact_id,
+        artifact_sha256=artifact_sha256,
+        milestone_workflow=milestone_workflow,
+        qualification_manifest_sha256=qualification_manifest_self_digest,
+        qualified_at=qualified_at,
+    )
     profile = _mapping(record.get("profile_preservation"), "qualification-v2 profile preservation")
     _exact_keys(profile, frozenset({"case_id", "preserved", "receipt_sha256"}), "qualification-v2 profile preservation")
     if (
@@ -925,7 +1176,7 @@ def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], ca
         raise ReleaseEvidenceV2Error("qualification-v2 must record an explicit preserved profile result.")
     if (
         _sha256(profile.get("receipt_sha256"), "profile preservation receipt SHA-256")
-        != validated_receipts[PROFILE_CASE_ID].sha256
+        != capture.signed_ui.receipt.file_sha256
     ):
         raise ReleaseEvidenceV2Error(
             "qualification-v2 profile preservation receipt conflicts with the required case receipt."
@@ -958,13 +1209,13 @@ def _validate_disposition(reader: _BundleReader, record: Mapping[str, Any], capt
         digest_field="disposition_sha256",
         expected_keys=DISPOSITION_KEYS,
     )
-    workflow = _mapping(record.get("failure_workflow"), "disposition-v2 failed workflow")
-    _exact_keys(workflow, frozenset({"actor", "path", "run_attempt", "run_id"}), "disposition-v2 failed workflow")
-    _workflow_binding(
-        workflow,
+    workflow = _workflow_binding(
+        record.get("failure_workflow"),
         "disposition-v2 failed workflow",
         expected_path=MILESTONE_WORKFLOW_PATH,
     )
+    if workflow.actor != EXPECTED_MILESTONE_ACTOR:
+        raise ReleaseEvidenceV2Error("disposition-v2 failed workflow actor is not the repository owner.")
     failure = _mapping(record.get("failure"), "disposition-v2 failure")
     _exact_keys(failure, frozenset({"code", "expected", "observed", "subject"}), "disposition-v2 failure")
     _identifier(failure.get("code"), "disposition-v2 failure code")
@@ -1070,10 +1321,18 @@ def _validate_legacy_publication(repo_root: Path, release_tag: str) -> None:
     recovery_keys = base_keys | {"recovery_workflow_run"}
     backfill_keys = base_keys | {"immutable_release_receipt_asset", "note", "receipt_origin"}
     actual_keys = frozenset(publication)
-    if actual_keys not in {base_keys, recovery_keys, backfill_keys}:
-        missing = sorted(base_keys - actual_keys)
-        extra = sorted(actual_keys - base_keys)
-        raise ReleaseEvidenceV2Error(f"legacy publication record keys changed; missing={missing}, extra={extra}.")
+    accepted_variants = {"base": base_keys, "recovery": recovery_keys, "backfill": backfill_keys}
+    if actual_keys not in accepted_variants.values():
+        variant_name, variant_keys = min(
+            accepted_variants.items(),
+            key=lambda item: len(item[1] - actual_keys) + len(actual_keys - item[1]),
+        )
+        missing = sorted(variant_keys - actual_keys)
+        extra = sorted(actual_keys - variant_keys)
+        raise ReleaseEvidenceV2Error(
+            f"legacy publication record keys changed from nearest {variant_name} variant; "
+            f"missing={missing}, extra={extra}."
+        )
     if publication.get("schema_version") != 1:
         raise ReleaseEvidenceV2Error("Legacy publication record schema_version must be 1.")
     release = _mapping(receipt.get("release"), "legacy receipt release")
@@ -1127,59 +1386,22 @@ def _validate_legacy_qualification_manifest(repo_root: Path, release_tag: str) -
     manifest_relative = f"{EVIDENCE_ROOT}/{release_tag}/qualification-manifest.json"
     manifest_path, _ = _repo_path(repo_root, manifest_relative, "legacy qualification manifest")
     try:
-        manifest = _load_canonical_manifest(manifest_path)
-        validate_manifest(manifest, repo_root=repo_root)
+        load_validated_manifest(manifest_path, repo_root=repo_root)
     except ReleaseQualificationManifestError as error:
         raise ReleaseEvidenceV2Error(f"Legacy qualification manifest is invalid: {error}") from error
-    receipt, receipt_path, receipt_file_sha256 = _legacy_release_receipt(repo_root, release_tag)
-    release_receipt_binding = _mapping(manifest.get("release_receipt"), "legacy manifest release receipt")
-    if release_receipt_binding.get("file_sha256") != receipt_file_sha256:
-        raise ReleaseEvidenceV2Error("Legacy qualification manifest receipt digest conflicts with its checked receipt.")
-    paths = _mapping(manifest.get("paths"), "legacy manifest paths")
-    qualification_path, _ = _repo_path(repo_root, paths.get("qualification"), "legacy qualification record")
-    try:
-        validate_qualification_record(
-            qualification_path,
-            receipt,
-            policy_path=repo_root / cast(str, paths["policy"]),
-            route_table_path=repo_root / cast(str, paths["route_table"]),
-        )
-    except (ReleaseEvidenceError, OSError) as error:
-        raise ReleaseEvidenceV2Error(f"Legacy qualification record is invalid: {error}") from error
-    signed_ui = _mapping(manifest.get("signed_ui_artifact"), "legacy manifest signed UI artifact")
-    try:
-        signed_ui_binding_from_files(
-            repo_root=repo_root,
-            release_receipt_path=receipt_path,
-            receipt=receipt,
-            release_receipt_asset_id=_positive_integer(
-                release_receipt_binding.get("asset_id"), "legacy manifest release receipt asset ID"
-            ),
-            release_receipt_file_sha256=receipt_file_sha256,
-            signed_ui_artifact_id=_positive_integer(signed_ui.get("artifact_id"), "legacy signed UI artifact ID"),
-            signed_ui_artifact_digest=_sha256(signed_ui.get("artifact_sha256"), "legacy signed UI artifact digest"),
-            signed_ui_archive_path=repo_root / cast(str, signed_ui["archive_path"]),
-            signed_ui_receipt_path=repo_root / cast(str, signed_ui["receipt_path"]),
-            signed_ui_receipt_file_sha256=_sha256(
-                signed_ui.get("receipt_file_sha256"), "legacy signed UI receipt file digest"
-            ),
-            policy_path=repo_root / cast(str, paths["policy"]),
-        )
-    except (ReleaseQualificationManifestError, OSError) as error:
-        raise ReleaseEvidenceV2Error(f"Legacy signed UI artifact evidence is invalid: {error}") from error
 
 
 def _legacy_class(reader: _BundleReader, release_tag: str) -> str:
     if not reader.worktree:
-        raise ReleaseEvidenceV2Error(
-            "Legacy v1 verification for an arbitrary historical revision is unsupported "
-            "without materializing the revision."
-        )
+        if reader.revision is None:
+            raise ReleaseEvidenceV2Error("Verification revision is missing.")
+        with _materialized_revision(reader.repo_root, reader.revision) as materialized_root:
+            return _legacy_class(_BundleReader(materialized_root, None, True), release_tag)
     bundle = f"{EVIDENCE_ROOT}/{release_tag}"
     if reader.exists(f"{bundle}/failed-post-publication-qualification-v1.json"):
         try:
             validate_failed_post_publication_qualification_record(reader.repo_root, release_tag)
-        except Exception as error:
+        except (OSError, ReleaseMilestoneContextError) as error:
             raise ReleaseEvidenceV2Error(f"Legacy failed post-publication record is invalid: {error}") from error
         return "legacy-failed-post-publication-v1"
     if reader.exists(f"{bundle}/qualification-manifest.json"):
