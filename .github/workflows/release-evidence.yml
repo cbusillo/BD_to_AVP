@@ -428,15 +428,19 @@ jobs:
           set -euo pipefail
           mkdir -p prepared-evidence
           {
-            git diff --name-only main...HEAD -- docs
             git diff --name-only -- docs
             git ls-files --others --exclude-standard -- docs
-          } | LC_ALL=C sort -u > evidence-files.txt
-          if [ ! -s evidence-files.txt ]; then
+          } | LC_ALL=C sort -u > new-evidence-files.txt
+          if [ ! -s new-evidence-files.txt ]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          {
+            git diff --name-only main...HEAD -- docs
+            git diff --name-only -- docs
+            git ls-files --others --exclude-standard -- docs
+          } | LC_ALL=C sort -u > evidence-files.txt
           while IFS= read -r path; do
             rsync -R "$path" prepared-evidence/
           done < evidence-files.txt

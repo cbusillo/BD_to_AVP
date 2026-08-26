@@ -1389,6 +1389,36 @@ printf '%s' "$CODESIGN_METADATA"
                 sorted(path.relative_to(prepared).as_posix() for path in bundle.iterdir()),
             )
 
+    def test_release_evidence_stage_is_noop_for_current_evidence_branch(self) -> None:
+        workflow = load_workflow("release-evidence.yml")
+        stage_script = next(
+            step["run"]
+            for step in workflow["jobs"]["validate-and-prepare"]["steps"]
+            if step["name"] == "Stage only generated evidence files"
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_path = root / "github-output"
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Fixture"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=root, check=True)
+            evidence_path = root / "docs/release-evidence/v1.0.0/capture-v2.json"
+            evidence_path.parent.mkdir(parents=True)
+            evidence_path.write_text('{"state":"CAPTURED"}\n', encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+            subprocess.run(["git", "switch", "-qc", "automation/release-evidence-v1.0.0"], cwd=root, check=True)
+
+            subprocess.run(
+                ["bash", "-c", stage_script],
+                cwd=root,
+                env={**os.environ, "GITHUB_OUTPUT": str(output_path)},
+                check=True,
+            )
+
+            self.assertEqual(output_path.read_text(encoding="utf-8"), "has_changes=false\n")
+            self.assertFalse(any((root / "prepared-evidence").rglob("*")))
+
     def test_release_evidence_merge_preserves_snapshot_and_accepts_later_rolling_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
