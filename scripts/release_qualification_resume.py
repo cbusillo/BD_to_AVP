@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 from scripts.github_release_run import GhAPIClient
 from scripts.qualify_release_scope import QualificationScopeError
+from scripts.release_evidence_v2 import ReleaseEvidenceV2Error, validate_v2_bundle
 from scripts.release_milestone_context import ReleaseMilestoneContextError
 from scripts.release_qualification_artifact import (
     QualificationArtifactError,
@@ -52,7 +53,7 @@ WORKFLOW_PATH = ".github/workflows/milestone-qualification.yml"
 WORKFLOW_JOB_NAME = "Collect exact post-publication qualification receipts"
 RESUME_TYPE = "bd_to_avp.release_qualification_resume"
 CHECKPOINT_TYPE = "bd_to_avp.release_qualification_resume_checkpoint"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EXIT_SUCCESS = 0
 EXIT_FAILED = 1
 EXIT_OPERATOR_REQUIRED = 20
@@ -109,7 +110,6 @@ class ResumeIdentity:
     evidence_ref: str
     evidence_sha: str
     evidence_base_sha: str
-    evidence_pr_number: int
     release_receipt_file_sha256: str
     signed_ui_artifact_id: int
     signed_ui_artifact_sha256: str
@@ -381,7 +381,6 @@ def _identity_from_checkpoint(checkpoint: Mapping[str, Any]) -> ResumeIdentity:
         evidence_ref=_string(recorded.get("evidence_ref"), "checkpoint evidence ref"),
         evidence_sha=_sha(recorded.get("evidence_sha"), "checkpoint evidence SHA"),
         evidence_base_sha=_sha(recorded.get("evidence_base_sha"), "checkpoint evidence base SHA"),
-        evidence_pr_number=_integer(recorded.get("evidence_pr_number"), "checkpoint evidence PR number"),
         release_receipt_file_sha256=_sha256(
             recorded.get("release_receipt_file_sha256"),
             "checkpoint release receipt digest",
@@ -424,7 +423,6 @@ def _validate_checkpoint_rebind(
         "candidate_sha",
         "release_id",
         "evidence_ref",
-        "evidence_pr_number",
         "release_receipt_file_sha256",
         "signed_ui_artifact_id",
         "signed_ui_artifact_sha256",
@@ -528,34 +526,6 @@ def _validate_repository(client: GitHubAPI) -> None:
     _integer(repository.get("id"), "GitHub repository ID")
 
 
-def _open_evidence_pr(client: GitHubAPI, evidence_ref: str, evidence_sha: str) -> Mapping[str, Any]:
-    endpoint = (
-        f"repos/{REPOSITORY}/pulls?state=open&base={MAIN_BRANCH}"
-        f"&head={REPOSITORY_OWNER}%3A{quote(evidence_ref, safe='')}&per_page=100"
-    )
-    pulls = _sequence(client.get_json(endpoint, active_auth=True), "open evidence pull requests")
-    if len(pulls) != 1:
-        raise QualificationResumeSafetyError(
-            f"Expected exactly one open pull request for {evidence_ref}; found {len(pulls)}."
-        )
-    pull = _mapping(pulls[0], "evidence pull request")
-    head = _mapping(pull.get("head"), "evidence pull request head")
-    base = _mapping(pull.get("base"), "evidence pull request base")
-    if (
-        pull.get("state") != "open"
-        or head.get("ref") != evidence_ref
-        or head.get("sha") != evidence_sha
-        or _mapping(head.get("repo"), "evidence pull request head repository").get("full_name") != REPOSITORY
-        or base.get("ref") != MAIN_BRANCH
-        or _mapping(base.get("repo"), "evidence pull request base repository").get("full_name") != REPOSITORY
-    ):
-        raise QualificationResumeSafetyError(
-            "Evidence pull request identity conflicts with the checked evidence branch."
-        )
-    _integer(pull.get("number"), "evidence pull request number")
-    return pull
-
-
 def _require_local_evidence_checkout(repo_root: Path, identity: ResumeIdentity) -> None:
     local_head = _sha(_git_text(repo_root, ["rev-parse", "HEAD"], "local HEAD"), "local HEAD")
     local_branch = _git_text(repo_root, ["symbolic-ref", "--quiet", "--short", "HEAD"], "local branch")
@@ -581,12 +551,28 @@ def _require_local_evidence_checkout(repo_root: Path, identity: ResumeIdentity) 
         raise QualificationResumeSafetyError(f"Evidence branch contains non-documentation changes: {unexpected!r}.")
 
 
+def _require_durable_capture_checkpoint(repo_root: Path, identity: ResumeIdentity) -> None:
+    try:
+        result = validate_v2_bundle(
+            repo_root,
+            identity.release_tag,
+            verification_revision=identity.evidence_sha,
+        )
+    except ReleaseEvidenceV2Error as error:
+        raise QualificationResumeSafetyError(
+            "Evidence branch commit does not contain a valid durable v2 capture checkpoint."
+        ) from error
+    if result.get("class") not in {"v2-captured", "v2-qualified"}:
+        raise QualificationResumeSafetyError(
+            "Evidence branch commit does not contain an active CAPTURED qualification checkpoint."
+        )
+
+
 def _identity_from_binding(
     binding: EvidenceBinding,
     *,
     main_sha: str,
     evidence_sha: str,
-    evidence_pr_number: int,
 ) -> ResumeIdentity:
     manifest = binding.manifest
     if manifest is None:
@@ -607,7 +593,6 @@ def _identity_from_binding(
         evidence_ref=_string(canonical_evidence.get("ref"), "manifest evidence ref"),
         evidence_sha=_sha(evidence_sha, "evidence branch SHA"),
         evidence_base_sha=_sha(canonical_evidence.get("base_sha"), "manifest evidence base SHA"),
-        evidence_pr_number=_integer(evidence_pr_number, "evidence pull request number"),
         release_receipt_file_sha256=_sha256(
             release_receipt.get("file_sha256"),
             "manifest release receipt file digest",
@@ -872,20 +857,6 @@ def _revalidate_remote_identity(
     )
     if _ref_sha(client, identity.evidence_ref) != evidence_sha:
         raise QualificationResumeSafetyError("Evidence branch moved after qualification resume preflight.")
-    pull_attempts = 5 if evidence_sha != identity.evidence_sha else 1
-    pull: Mapping[str, Any] | None = None
-    for attempt in range(pull_attempts):
-        try:
-            pull = _open_evidence_pr(client, identity.evidence_ref, evidence_sha)
-            break
-        except QualificationResumeSafetyError:
-            if attempt + 1 == pull_attempts:
-                raise
-            time.sleep(1.0)
-    if pull is None:
-        raise QualificationResumeSafetyError("Evidence pull request identity could not be revalidated.")
-    if pull.get("number") != identity.evidence_pr_number:
-        raise QualificationResumeSafetyError("Evidence pull request changed after qualification resume preflight.")
 
 
 def _require_no_active_exact_runs(client: GitHubAPI, identity: ResumeIdentity) -> None:
@@ -1143,12 +1114,10 @@ def resume_qualification(
     canonical_evidence = _mapping(binding.manifest.get("canonical_evidence"), "manifest canonical evidence")
     evidence_ref = _string(canonical_evidence.get("ref"), "manifest evidence ref")
     evidence_sha = _ref_sha(github, evidence_ref)
-    pull = _open_evidence_pr(github, evidence_ref, evidence_sha)
     identity = _identity_from_binding(
         binding,
         main_sha=main_sha,
         evidence_sha=evidence_sha,
-        evidence_pr_number=_integer(pull.get("number"), "evidence pull request number"),
     )
     if identity.runner_sha != identity.main_sha:
         return _result(
@@ -1158,11 +1127,12 @@ def resume_qualification(
             identity=identity,
             next_action="Rerun Release Evidence to refresh the manifest against the current protected main SHA.",
         )
+    _require_durable_capture_checkpoint(repo_root, identity)
     if resolved_apply_checkpoint_path.exists():
         apply_summary = _apply_checkpoint_summary(resolved_apply_checkpoint_path)
         if apply_summary is None:
             raise QualificationResumeSafetyError("Qualification apply checkpoint disappeared during preflight.")
-        if apply_plan_sha256 is None and apply_summary.get("state") == "commented":
+        if apply_plan_sha256 is None and apply_summary.get("state") == "pushed":
             apply_plan_sha256 = _sha256(
                 apply_summary.get("plan_sha256"),
                 "completed reconciliation plan digest",
@@ -1183,7 +1153,6 @@ def resume_qualification(
                     repo_root=repo_root,
                     identity=identity,
                     expected_plan_sha256=apply_plan_sha256,
-                    client=github,
                     checkpoint_path=resolved_apply_checkpoint_path,
                     revalidate_remote=lambda evidence_sha: _revalidate_remote_identity(
                         github,
@@ -1208,14 +1177,10 @@ def resume_qualification(
             reconciliation_plan=outcome.plan,
             reconciliation_result={
                 "commit_sha": outcome.commit_sha,
-                "comment_id": outcome.comment_id,
             },
-            next_action=(
-                "Qualification evidence was committed, pushed, and recorded on the canonical evidence pull request."
-            ),
+            next_action="Qualification evidence was committed and pushed to the canonical evidence branch.",
         )
     _require_local_evidence_checkout(repo_root, identity)
-
     if resolved_checkpoint_path.exists():
         with _checkpoint_lock(resolved_checkpoint_path):
             checkpoint = _load_checkpoint(resolved_checkpoint_path)
@@ -1225,6 +1190,7 @@ def resume_qualification(
     active = [run for run in matches if run.get("status") in ACTIVE_RUN_STATUSES]
     if len(active) > 1:
         raise QualificationResumeSafetyError("Multiple active exact Milestone Qualification runs exist.")
+    selected_run: Mapping[str, Any] | None
     if checkpoint is not None:
         checkpoint_identity = _identity_from_checkpoint(checkpoint)
         if checkpoint_identity != identity:
@@ -1526,7 +1492,6 @@ def resume_qualification(
                         identity=identity,
                         bundle=bundle,
                         expected_plan_sha256=apply_plan_sha256,
-                        client=github,
                         checkpoint_path=resolved_apply_checkpoint_path,
                         revalidate_remote=lambda evidence_sha: _revalidate_remote_identity(
                             github,
@@ -1553,11 +1518,8 @@ def resume_qualification(
                 reconciliation_plan=outcome.plan,
                 reconciliation_result={
                     "commit_sha": outcome.commit_sha,
-                    "comment_id": outcome.comment_id,
                 },
-                next_action=(
-                    "Qualification evidence was committed, pushed, and recorded on the canonical evidence pull request."
-                ),
+                next_action="Qualification evidence was committed and pushed to the canonical evidence branch.",
             )
         return _result(
             "reconciliation_planned" if requires_changes else "reconciliation_current",

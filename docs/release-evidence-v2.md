@@ -1,10 +1,13 @@
 # Release Evidence v2
 
 Release Evidence v2 is an additive, offline-verifiable, write-once format for
-release evidence under `docs/release-evidence/<tag>/`. It runs in shadow mode
-beside the maintained v1 reconciliation and automatic PR path for new or
-in-progress evidence checkpoints; reruns whose complete checkpoint is already
-on protected `main` remain a no-op. It does not remove or gate v1 behavior.
+release evidence under `docs/release-evidence/<tag>/`. For new or in-progress
+evidence, the commit at `automation/release-evidence-<tag>` plus its validated
+`capture-v2.json` in state `CAPTURED` is the durable capture checkpoint. The
+secret-free Release Evidence workflow creates or advances that branch directly
+with a non-force push; it does not create, update, comment on, or delete a pull
+request. Reruns whose complete checkpoint is already on protected `main` remain
+a no-op. V1 evidence remains available for compatibility and reconciliation.
 Evidence files are passive data: the verifier uses only local files and local
 Git operations. For legacy revision replay it creates and removes a temporary
 detached worktree. It does not invoke `gh`, `curl`, a network client, or
@@ -51,10 +54,15 @@ directory. The index contains no timestamps or current-time fields and excludes
 itself from release inventories.
 Protected-main CI regenerates this view in memory and rejects committed index
 drift; the release-evidence workflow writes and immediately rechecks the same
-bytes before staging its advisory shadow output.
+bytes before staging its durable branch output.
 Any later commit that adds terminal receipts or other checked files beneath a
 release bundle must regenerate `index-v2.json` with the documented `index
 --write` command before CI will accept the branch.
+
+The automation branch is evidence state, not merge authorization. After capture
+and qualification are complete, an operator opens the normal protected pull
+request to merge the docs-only branch into `main`; branch protection, required
+CI, review, and conversation-resolution rules remain unchanged.
 
 ## Capture Record
 

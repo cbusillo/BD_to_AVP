@@ -1108,17 +1108,20 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             self.assertEqual(reused["capture_sha256"], capture["capture_sha256"])
             self.assertEqual((bundle / CAPTURE_NAME).read_bytes(), original)
 
-    def test_workflow_contract_uses_unconditional_shadow_capture_and_index(self) -> None:
+    def test_workflow_contract_uses_durable_capture_and_direct_branch_push(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release-evidence.yml").read_text(encoding="utf-8")
         ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("name: Sanitize release evidence tag and ref", workflow)
-        self.assertIn("name: Generate or validate shadow capture-v2", workflow)
-        self.assertIn("name: Generate and check shadow index-v2", workflow)
+        self.assertIn("name: Generate or validate durable capture-v2", workflow)
+        self.assertIn("name: Generate and check durable index-v2", workflow)
         self.assertIn("--captured-at", workflow)
         self.assertIn("--capture-workflow-run-id", workflow)
         self.assertIn("name: Publish complete evidence outputs", workflow)
         self.assertIn("CAPTURE_WORKFLOW_ACTOR: ${{ github.actor }}", workflow)
-        self.assertIn("branch: ${{ needs.validate-and-prepare.outputs.evidence_ref }}", workflow)
+        self.assertIn("name: Commit and push exact docs-only evidence", workflow)
+        self.assertIn('git push origin "$COMMIT_SHA:refs/heads/$EVIDENCE_REF"', workflow)
+        self.assertNotIn("peter-evans/create-pull-request", workflow)
+        self.assertNotIn("pull-requests: write", workflow)
         self.assertNotIn("if: vars.RELEASE_EVIDENCE_V2", workflow)
         self.assertIn("python -m scripts.release_evidence_v2 index --check --worktree", ci_workflow)
 

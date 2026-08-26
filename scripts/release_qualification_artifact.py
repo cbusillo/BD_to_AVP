@@ -87,21 +87,50 @@ class ReconciliationFile:
 
 @dataclass(frozen=True)
 class ReconciliationBundle:
-    plan: dict[str, object]
+    plan: dict[str, Any]
     files: tuple[ReconciliationFile, ...]
 
 
 class QualificationIdentity(Protocol):
-    release_tag: str
-    candidate_sha: str
-    manifest_sha256: str
-    runner_sha: str
-    main_sha: str
-    evidence_ref: str
-    evidence_sha: str
-    release_receipt_file_sha256: str
-    signed_ui_artifact_id: int
-    signed_ui_artifact_sha256: str
+    @property
+    def release_tag(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def candidate_sha(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def manifest_sha256(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def runner_sha(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def main_sha(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def evidence_ref(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def evidence_sha(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def release_receipt_file_sha256(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def signed_ui_artifact_id(self) -> int:
+        raise NotImplementedError
+
+    @property
+    def signed_ui_artifact_sha256(self) -> str:
+        raise NotImplementedError
 
     @property
     def digest(self) -> str:
@@ -1134,7 +1163,7 @@ def plan_reconciliation(
     artifact: Mapping[str, Any],
     manifest: Mapping[str, Any],
     archive_bytes: bytes,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     return plan_reconciliation_bundle(
         repo_root=repo_root,
         identity=identity,
@@ -1205,7 +1234,7 @@ def download_and_plan_reconciliation(
     run: Mapping[str, Any],
     artifact: Mapping[str, Any],
     manifest: Mapping[str, Any],
-) -> dict[str, object]:
+) -> dict[str, Any]:
     return download_reconciliation_bundle(
         client=client,
         repo_root=repo_root,

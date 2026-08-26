@@ -8,6 +8,7 @@ import zipfile
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from scripts.qualify_release_scope import _validate_live_publication_evidence
 from scripts.release_qualification_artifact import (
@@ -29,7 +30,7 @@ ARTIFACT_ID = 9001
 
 
 class FakeArtifactAPI:
-    def __init__(self, metadata: dict[str, object], archive: bytes) -> None:
+    def __init__(self, metadata: dict[str, Any], archive: bytes) -> None:
         self.metadata = metadata
         self.archive = archive
         self.gets: list[tuple[str, bool]] = []
@@ -55,7 +56,7 @@ class ReleaseQualificationArtifactTests(unittest.TestCase):
     def fixture(
         self,
         root: Path,
-    ) -> tuple[ResumeIdentity, dict[str, object], dict[str, object], dict[str, object], dict[str, bytes], bytes]:
+    ) -> tuple[ResumeIdentity, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, bytes], bytes]:
         policy_path = root / "docs/qualification/release-qualification-policy-v1.json"
         index_path = root / "docs/qualification/release-evidence-v1.json"
         release_receipt_path = root / f"docs/release-evidence/{RELEASE_TAG}/release-receipt.json"
@@ -162,7 +163,6 @@ class ReleaseQualificationArtifactTests(unittest.TestCase):
             evidence_ref=f"automation/release-evidence-{RELEASE_TAG}",
             evidence_sha=runner_sha,
             evidence_base_sha=runner_sha,
-            evidence_pr_number=42,
             release_receipt_file_sha256=hashlib.sha256(release_receipt_content).hexdigest(),
             signed_ui_artifact_id=456,
             signed_ui_artifact_sha256="6" * 64,
