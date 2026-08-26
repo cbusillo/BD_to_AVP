@@ -1402,12 +1402,26 @@ printf '%s' "$CODESIGN_METADATA"
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
             subprocess.run(["git", "config", "user.name", "Fixture"], cwd=root, check=True)
             subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=root, check=True)
+            base_path = root / "docs/base.md"
+            base_path.parent.mkdir(parents=True)
+            base_path.write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+            subprocess.run(["git", "switch", "-qc", "automation/release-evidence-v1.0.0"], cwd=root, check=True)
             evidence_path = root / "docs/release-evidence/v1.0.0/capture-v2.json"
             evidence_path.parent.mkdir(parents=True)
             evidence_path.write_text('{"state":"CAPTURED"}\n', encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=root, check=True)
-            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
-            subprocess.run(["git", "switch", "-qc", "automation/release-evidence-v1.0.0"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "captured evidence"], cwd=root, check=True)
+
+            branch_only_paths = subprocess.run(
+                ["git", "diff", "--name-only", "main...HEAD", "--", "docs"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+            self.assertEqual(branch_only_paths, ["docs/release-evidence/v1.0.0/capture-v2.json"])
 
             subprocess.run(
                 ["bash", "-c", stage_script],
