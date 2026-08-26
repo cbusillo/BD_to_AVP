@@ -111,6 +111,9 @@ jobs:
             --worktree \
             --base-revision "$BASE_SHA"
 
+      - name: Verify release evidence index
+        run: uv run python -m scripts.release_evidence_v2 index --check --worktree
+
       - name: Install XcodeGen
         run: brew install xcodegen
 

@@ -1,0 +1,193 @@
+{
+  "legacy_index": {
+    "path": "docs/release-evidence/index-v1.json",
+    "sha256": "c0fd7301bd05e928be4866b36efd589e95209e09a4c0700805fdfa1def97ba7a"
+  },
+  "releases": [
+    {
+      "evidence_class": "legacy-publication-v1",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.0/publication-record.json",
+          "sha256": "9f07d1a349e71ff109627d9f2493d0e2a1c65326a141b45a5c0ee569e2bf7833"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.0/release-receipt.json",
+          "sha256": "f1da7083036120104fe702326cb88224e0233e26a2044a8e0ca0bd57520f9f79"
+        }
+      ],
+      "release_tag": "v0.3.0"
+    },
+    {
+      "evidence_class": "legacy-publication-v1",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.0-rc.3/appcast.xml.base64",
+          "sha256": "434c05a7c3a5fba29ddcb756fe78f978776b9a1a8eb2eca2a590cc2b6a04bdf9"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.0-rc.3/publication-record.json",
+          "sha256": "73a45ad745f117a0c590c1966eeefab1f6f86263cd3948f800de3163078ec01d"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.0-rc.3/release-notes.md",
+          "sha256": "140e457ae718f1391bae01c4f767e09c732c5c33bfe73b222bf7ab4ab0f1fe16"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
+          "sha256": "e2cd5c52b5e177048783a8ca2d8f6d8ba7580be8f933702a42072928839f2c3d"
+        }
+      ],
+      "release_tag": "v0.3.0-rc.3"
+    },
+    {
+      "evidence_class": "legacy-publication-v1",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.1/publication-record.json",
+          "sha256": "b080989bf03c54ac9f8e37c9c52afd6c97467ced3a582a17f4d7ba8b1044cca6"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.1/release-receipt.json",
+          "sha256": "47ae149d8c6a04085821c9f13dbbd112990902602876895a561530ca83ae2c88"
+        }
+      ],
+      "release_tag": "v0.3.1"
+    },
+    {
+      "evidence_class": "legacy-qualification-manifest-v1",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.2/publication-record.json",
+          "sha256": "47bda0215fd81dcf02a276a8f60e2bf869571865f1c3b1c1c99a9796dba0a370"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2/qualification-manifest.json",
+          "sha256": "6b02525a9cefd8da5992c8923dc8f84ddeb829be6433cb77c1178f899f56a091"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2/qualification-record.json",
+          "sha256": "5ec93f64a7c23acd10bf179b2288600ee0b54a1440a85eee2588126523f2701b"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2/release-receipt.json",
+          "sha256": "21e8d6fa0c4f8e014fd57565f993652cc76a4bb3a968e5752e2a4bcb2a1237b0"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2/signed-artifact-ui-receipt.json",
+          "sha256": "db546c6b94b4676ea65b6f829be5331fbcfc288476d5ec29d7bea6479ffbe248"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2/signed-artifact-ui.zip",
+          "sha256": "4a8d04461220a3b66f865d2a08f201ab1948ff784181b12a93273b90f940d9dd"
+        }
+      ],
+      "release_tag": "v0.3.2"
+    },
+    {
+      "evidence_class": "legacy-qualification-manifest-v1",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.2/publication-record.json",
+          "sha256": "055866321b18d216abdacfaa73784dc69192702af6e429e7754d2c0fa4a4f6d4"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.2/qualification-manifest.json",
+          "sha256": "67b8e5caf02801707efc0546b1794258d145510819c8cb22dd91e2ddd45bf62d"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.2/qualification-record.json",
+          "sha256": "ee82c63ffb6accdc7de5712f1e581efe32b7e6cd51d43a78c48c8791d599ea57"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.2/release-receipt.json",
+          "sha256": "f88259e5f82f5885f087adf1a284f47bda97741e99ad982ccbcd758efe829f19"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.2/signed-artifact-ui-receipt.json",
+          "sha256": "3dfe3230c0fec7f1e0e6066e4dacde02d355b51e1074507cfb276c9ef278fec0"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.2/signed-artifact-ui.zip",
+          "sha256": "115611f11c44ac4bee3ca8053d25e1b8823a5a4340ee32e1771f2161d6f208a3"
+        }
+      ],
+      "release_tag": "v0.3.2-beta.2"
+    },
+    {
+      "evidence_class": "legacy-failed-post-publication-v1",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.5/failed-post-publication-qualification-v1.json",
+          "sha256": "84f3bfce0e6c242b3b8d60f0b82e85894b62e1958f3806499d8797cfd2cb1274"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.5/release-receipt.json",
+          "sha256": "81e1568ff93c0fad946dff59c5d4e00c97008162db93218cc4f58dcd2ad8af6c"
+        }
+      ],
+      "release_tag": "v0.3.2-beta.5"
+    },
+    {
+      "evidence_class": "legacy-qualification-manifest-v1",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.7/publication-record.json",
+          "sha256": "413537b8135cba8d37fe7af689d036e0ab364df2859f5319c84016443197fed0"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.7/qualification-manifest.json",
+          "sha256": "97afc00742be32f057258eb04b38ebd05b617687134f23da7d40c0a7a75aebd8"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.7/qualification-record.json",
+          "sha256": "4fb7b10ed15b3c3f341b3386ba9502f3a0d126040916a912e8e8950b188786e0"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.7/release-receipt.json",
+          "sha256": "6afe63b1212ce0b59d7b893f8b501297361c45e8fbf88484ab915e92f0b060b3"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.7/signed-artifact-ui-receipt.json",
+          "sha256": "452e5098b1de521b09ab67b96afa5a7cf88e1161383f3f0fe8d2a9705ad8da7f"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-beta.7/signed-artifact-ui.zip",
+          "sha256": "e6fb978a0f90ae5e448210c0c7a4c7356b9bae2bfcd2f2befb7827b3279cd9f0"
+        }
+      ],
+      "release_tag": "v0.3.2-beta.7"
+    },
+    {
+      "evidence_class": "legacy-qualification-manifest-v1",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.2-rc.1/publication-record.json",
+          "sha256": "d9d26e7357acedec3e968a99cf667a8a2a3c76ce9f50e5778781514c2f1d4d20"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-rc.1/qualification-manifest.json",
+          "sha256": "ab7173f4379f97209c9e49f48e67d02539a17c61eb63a60b03318ee5e7ee64b5"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-rc.1/qualification-record.json",
+          "sha256": "7e78c7bf244a8ca8e497c7dccb1b90b346b9a7925f70219927f53a108d64171e"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-rc.1/release-receipt.json",
+          "sha256": "dec0546e8e4c7178fba99492911f12896277260c767f96e0c492d7cbfc3c1d54"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-rc.1/signed-artifact-ui-receipt.json",
+          "sha256": "9f3a0cf76896b8a7fa70e4ce5fc715e482e8fbbd4e30bffaac8bf0562b7e7fa1"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.2-rc.1/signed-artifact-ui.zip",
+          "sha256": "c8383f78c7ae3ba58b39f8abda2b8ab5c8aa31100434fc1cec01ee54259031b4"
+        }
+      ],
+      "release_tag": "v0.3.2-rc.1"
+    }
+  ],
+  "schema_version": 2
+}

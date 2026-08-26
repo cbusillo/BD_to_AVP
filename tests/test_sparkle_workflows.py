@@ -1184,6 +1184,10 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("checkpoint_source=main", str(prepare))
         self.assertIn("existing_branch_sha", str(prepare))
         self.assertIn("steps.reuse.outputs.checkpoint_source != 'main'", str(prepare))
+        shadow_capture_step = next(
+            step for step in prepare["steps"] if step["name"] == "Generate or validate shadow capture-v2"
+        )
+        self.assertEqual(shadow_capture_step["if"], "steps.reuse.outputs.checkpoint_source != 'main'")
         self.assertIn("partial qualification checkpoint state", str(prepare))
         self.assertIn("expired before Release Evidence captured it", str(prepare))
         self.assertIn("scripts.release_qualification_manifest validate", str(prepare))
@@ -1198,7 +1202,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("--signed-ui-artifact-archive", str(prepare))
         self.assertIn("signed-artifact-ui.zip", str(prepare))
         self.assertIn("qualification-record.json", str(prepare))
-        self.assertIn("steps.reconcile.outputs.manifest_sha256", str(prepare))
+        self.assertIn("steps.final-outputs.outputs.manifest_sha256", str(prepare))
         self.assertIn(".immutable == true", str(prepare))
         self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
         self.assertIn("ROLLING_QUALIFICATION_PATH", str(prepare))
@@ -1207,7 +1211,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("EXPECTED_EXISTING_BRANCH_SHA", str(create_pr))
         self.assertIn("Evidence branch moved after evidence preparation", str(create_pr))
         self.assertNotIn("conflicting qualification manifest", str(create_pr))
-        self.assertIn("automation/release-evidence-", str(create_pr))
+        self.assertIn("needs.validate-and-prepare.outputs.evidence_ref", str(create_pr))
         create_pr_steps = [
             step for step in create_pr["steps"] if step.get("uses", "").startswith("peter-evans/create-pull-request@")
         ]
@@ -1217,7 +1221,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(create_pr_inputs["add-paths"], "docs")
         self.assertEqual(
             create_pr_inputs["branch"],
-            "automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}",
+            "${{ needs.validate-and-prepare.outputs.evidence_ref }}",
         )
         self.assertEqual(
             create_pr_inputs["commit-message"],
@@ -1238,6 +1242,7 @@ printf '%s' "$CODESIGN_METADATA"
             "remains intentionally unmergeable",
             "blocking live-artifact and automated Tier 3 receipt",
             "Optional physical-hardware and native-window presentation",
+            "release_evidence_v2 index --write",
         ):
             with self.subTest(body_fragment=body_fragment):
                 self.assertIn(body_fragment, create_pr_inputs["body"])

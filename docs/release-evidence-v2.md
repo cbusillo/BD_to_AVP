@@ -1,11 +1,14 @@
 # Release Evidence v2
 
 Release Evidence v2 is an additive, offline-verifiable, write-once format for
-release evidence under `docs/release-evidence/<tag>/`. It does not alter
-release, qualification, or workflow/controller behavior. Evidence files are
-passive data: the verifier uses only local files and local Git operations. For
-legacy revision replay it creates and removes a temporary detached worktree. It
-does not invoke `gh`, `curl`, a network client, or credentials.
+release evidence under `docs/release-evidence/<tag>/`. It runs in shadow mode
+beside the maintained v1 reconciliation and automatic PR path for new or
+in-progress evidence checkpoints; reruns whose complete checkpoint is already
+on protected `main` remain a no-op. It does not remove or gate v1 behavior.
+Evidence files are passive data: the verifier uses only local files and local
+Git operations. For legacy revision replay it creates and removes a temporary
+detached worktree. It does not invoke `gh`, `curl`, a network client, or
+credentials.
 
 ## Verification
 
@@ -23,11 +26,35 @@ uv run python -m scripts.release_evidence_v2 --all-tags \
   --revision <full-git-sha> \
   --base-revision <full-git-sha>
 uv run python -m scripts.release_evidence_v2 --tag v0.3.2 --worktree
+uv run python -m scripts.release_evidence_v2 index --write --repo-root .
+uv run python -m scripts.release_evidence_v2 index --check --worktree \
+  --repo-root .
 ```
 
 `--base-revision` enforces write-once history: every v2 record in the base tree
 must exist byte-identically in the verified tree. Changed or deleted records are
 refused.
+
+The capture producer consumes only already-validated v1 files plus explicit
+workflow provenance and timestamps. Its inputs include `--captured-at`,
+`--live-appcast-verified-at`, `--capture-workflow-run-id`, and
+`--capture-workflow-run-attempt`; supplying the same inputs produces identical
+bytes. A capture already present in the bundle is validated and reused, never
+regenerated or overwritten. The `sanitize` command emits the exact canonical
+release tag and `automation/release-evidence-<tag>` ref before workflow shell
+or Git ref use.
+
+`index-v2.json` contains only `schema_version`, a path/digest binding for
+`index-v1.json`, and sorted release entries. Each release entry records the
+existing verifier class and every sorted repo-relative file/digest in that tag
+directory. The index contains no timestamps or current-time fields and excludes
+itself from release inventories.
+Protected-main CI regenerates this view in memory and rejects committed index
+drift; the release-evidence workflow writes and immediately rechecks the same
+bytes before staging its advisory shadow output.
+Any later commit that adds terminal receipts or other checked files beneath a
+release bundle must regenerate `index-v2.json` with the documented `index
+--write` command before CI will accept the branch.
 
 ## Capture Record
 
