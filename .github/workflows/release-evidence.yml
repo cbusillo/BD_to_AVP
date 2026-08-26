@@ -464,7 +464,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-          ref: ${{ needs.validate-and-prepare.outputs.base_main_sha }}
+          ref: main
 
       - name: Reject protected-main movement during evidence transfer
         env:
