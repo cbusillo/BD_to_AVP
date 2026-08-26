@@ -1216,6 +1216,13 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("Evidence branch moved after evidence preparation", str(publish))
         self.assertNotIn("conflicting qualification manifest", str(publish))
         self.assertIn("needs.validate-and-prepare.outputs.evidence_ref", str(publish))
+        conflict_step = next(
+            step for step in publish["steps"] if step["name"] == "Reject conflicting evidence on the idempotent branch"
+        )
+        self.assertEqual(
+            conflict_step["env"]["EXPECTED_MAIN_SHA"],
+            "${{ needs.validate-and-prepare.outputs.base_main_sha }}",
+        )
         actor_step = next(
             step
             for step in publish["steps"]
