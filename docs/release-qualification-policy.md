@@ -90,8 +90,9 @@ uv run python -m scripts.qualify_release_scope \
   --require-evidence
 ```
 
-When a published candidate's post-publication evidence PR cannot merge, a
-reviewed successor preparation may add that release's exact checked receipt
+When a published candidate's post-publication evidence branch cannot merge
+through its protected pull request, a reviewed successor preparation may add
+that release's exact checked receipt
 without claiming milestone completion. This narrow carry-forward is accepted
 only when the receipt was absent from the base, matches the immutable GitHub
 release asset and successful guarded workflow run, validates against its release
@@ -120,8 +121,8 @@ uv run python -m scripts.release_milestone_context \
 ```
 
 This disposition preserves failed qualification truth. It is not an accepted
-qualification receipt, does not make the failed evidence PR mergeable, and does
-not authorize successor preparation or release operations.
+qualification receipt, does not make the failed evidence branch eligible to
+merge, and does not authorize successor preparation or release operations.
 Workflow and publication timestamps are revalidated from GitHub before record
 creation, then locked by the exact run/release identifiers, canonical file, and
 disposition self-digest; the release receipt itself does not carry those
@@ -482,14 +483,15 @@ including legacy v0.3.1, return `complete` without contacting GitHub or writing 
 checkpoint.
 
 Before offering dispatch, the controller verifies the repository identity,
-remote `main`, evidence ref and SHA, exactly one same-repository open evidence
-PR, docs-only branch diff, manifest self digest, runner SHA, candidate and
-release identities, signed UI artifact, policy/checkpoint/route/controller
-digests, and existing exact workflow runs through the same active GitHub
-identity used for dispatch. The workflow display title includes
+remote `main`, evidence ref and SHA, docs-only branch diff, manifest self digest,
+runner SHA, candidate and release identities, signed UI artifact,
+policy/checkpoint/route/controller digests, and existing exact workflow runs
+through the same active GitHub identity used for dispatch. The branch commit and
+its validated v2 `CAPTURED` bundle are durable without an open pull request. The
+workflow display title includes
 the release tag and full manifest digest because `workflow_dispatch` returns no
 run ID. More than one active exact run, a moved ref, a mismatched checkpoint, a
-fork PR, a skipped qualification job, partial identity, or any non-documentation
+skipped qualification job, partial identity, or any non-documentation
 evidence-branch change fails closed.
 
 The initial command reports `dispatch_ready` and the exact values required for
@@ -523,19 +525,21 @@ binding.
 `--apply-plan-sha256 <plan-sha256>`;
 `reconciliation_current` means the checked destinations and evidence records
 are already identical. Planning deliberately does not mutate evidence refs,
-files, commits, comments, or pull requests.
+files, or commits.
 
 Apply freezes the full authorized plan and exact target file bytes in a separate
 mode-`0600`, self-digested checkpoint while sharing the per-release dispatch
 lock. Before every mutation it revalidates protected `main`, the canonical
-evidence ref and same-repository pull request, the active `cbusillo` identity,
-and the absence of an active exact Milestone Qualification run. It writes only
-the planned qualification receipts and append-only evidence index, creates one
-identity-bound commit, performs a non-force fast-forward push, and posts one
-marker-bound pull-request comment. Prepared, files-written, committed, pushed,
-and commented states are adopted after interruption rather than repeated.
-Conflicting local content, unrelated worktree changes, moved refs, changed pull
-requests, duplicate markers, or a non-fast-forward push fail closed.
+evidence ref, the active `cbusillo` identity, and the absence of an active exact
+Milestone Qualification run. It writes only the planned qualification receipts
+and append-only evidence index, creates one identity-bound commit, performs a
+non-force fast-forward push, and revalidates the exact remote commit and content.
+Prepared, files-written, committed, and pushed states are adopted after
+interruption rather than repeated. Conflicting local content, unrelated
+worktree changes, moved refs, or a non-fast-forward push fail closed. Once the
+pushed commit is revalidated, the apply checkpoint is removed and the outcome
+contains the commit SHA; no pull-request comment or comment ID is created or
+persisted.
 
 Expired milestone transport may trigger an explicitly authorized fresh
 qualification run only when no validated apply checkpoint or equivalent durable
@@ -560,17 +564,17 @@ main digest, manifest digest, ancestry, immutable-binding, projection, and
 duplicate-run checks; it never reuses the earlier artifact under the new
 manifest identity.
 
-The initial evidence PR is expected to remain unmergeable while blocking
+The durable evidence branch may remain without a pull request while blocking
 live-artifact or automated Tier 3 receipts are absent. Collectors add validated
 receipts to that same idempotent branch. Optional physical and native-window
 presentation outcomes remain visible in the report. A blocking milestone
 failure never rebuilds, retags, re-signs, replaces, or unpublishes the immutable
 release; it blocks evidence reconciliation and milestone completion until the
-checked blocking evidence passes.
-CI discovers checked manifest or release-receipt changes from the pull-request
-diff and requires a same-repository PR targeting `main`, the exact
-`automation/release-evidence-<tag>` branch, and a docs-only diff, so a fork or a
-copied evidence branch cannot skip the milestone gate.
+checked blocking evidence passes. When evidence is ready to merge, an operator
+opens the normal same-repository pull request from the exact
+`automation/release-evidence-<tag>` branch to `main`. Protected CI derives the
+checked manifest or release-receipt changes from that docs-only pull-request
+diff, and all protected-main review and required-check rules remain in force.
 
 The `--output` flag writes the JSON report before the enforcement exit,
 so the `if: always()` upload step captures it even when enforcement fails. The
@@ -588,9 +592,12 @@ After the operator workflow completes, `.github/workflows/release-evidence.yml`
 validates the successful `workflow_dispatch` run, approved actor, protected
 source SHA, immutable release fields, asset IDs and sizes, receipt digest, live
 Pages appcast, and the same-run signed UI artifact metadata and receipt while
-the Actions artifact is still available. It then opens or updates one
-task-branch PR containing the release receipt, signed UI receipt, qualification
-manifest, publication record, release ledger, qualification fields, and cut
-packet status. The workflow has no signing, notarization, Sparkle private-key,
-PyPI, or deployment secrets. The evidence PR cannot merge until protected CI's
-milestone report passes.
+the Actions artifact is still available. It then creates or advances the exact
+`automation/release-evidence-<tag>` branch with a direct actor-bound, non-force
+push containing the release receipt, signed UI receipt, durable v2 capture,
+qualification manifest, publication record, release ledger, qualification
+fields, and cut packet status. The workflow uses only `contents: write`, has no
+signing, notarization, Sparkle private-key, PyPI, deployment, or pull-request
+credential, and verifies the remote SHA and published bytes after the push. It
+does not open or delete a pull request. A later operator-opened merge pull
+request remains blocked until protected CI's milestone report passes.

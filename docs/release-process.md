@@ -340,18 +340,22 @@ The workflow performs these ordered boundaries:
    `docs/release-evidence/<tag>/`, atomically snapshots the updated qualification
    as immutable `qualification-record.json`, writes a deterministic public-safe
    `qualification-manifest.json`, writes the publication record and release
-   ledger, updates the rolling qualification and cut packet, and opens or
-   updates `automation/release-evidence-<tag>`. Protected CI validates the
-   checked manifest/receipt identities and runs the `milestone` qualification
-   phase. The PR remains intentionally unmergeable until every blocking
-   live-publication and automated Tier 3 receipt has been added to that same
-   idempotent branch and the milestone report passes. Physical hardware and
-   manual Sparkle-window evidence remains visible as passed, failed, skipped,
-   missing, or due, but it does not block reconciliation. Branch protection,
-   review, and normal merge policy remain in force. A reconciliation or
+   ledger, updates the rolling qualification and cut packet, writes the durable
+   v2 `CAPTURED` bundle, and directly creates or advances
+   `automation/release-evidence-<tag>` with an actor-bound non-force push. The
+   branch commit plus `capture-v2.json` is the durable capture checkpoint; the
+   workflow uses only `contents: write`, verifies the exact remote SHA and file
+   bytes after pushing, and does not create, comment on, or delete a pull
+   request. Physical hardware and manual Sparkle-window evidence remains visible
+   as passed, failed, skipped, missing, or due, but it does not block
+   reconciliation. When the evidence is ready to merge, an operator opens the
+   normal protected docs-only pull request from the automation branch. Protected
+   CI validates the checked manifest/receipt identities and runs the `milestone`
+   qualification phase; branch protection, review, and normal merge policy remain
+   in force. A reconciliation or
    milestone failure does not rebuild, replace, or invalidate the correctly
-   published release. If protected `main` advances while the evidence PR is
-   open, rerunning Release Evidence first validates the prior manifest against
+   published release. If protected `main` advances while the evidence branch is
+   active, rerunning Release Evidence first validates the prior manifest against
    its immutable qualification snapshot and the controller, policy, route table,
    and case classifications stored at its recorded runner SHA, then refreshes
    only reviewed-main policy and checkpoint fields while preserving exact
@@ -402,7 +406,7 @@ The workflow performs these ordered boundaries:
    bounded collection failed, and exit `3` means the operator cancelled with no
    public state written.
 
-   When blocking automated cases remain on an open canonical evidence branch,
+   When blocking automated cases remain on the canonical evidence branch,
    run the bounded resume observer from the exact checked
    `automation/release-evidence-<tag>` branch head:
 
@@ -411,10 +415,10 @@ The workflow performs these ordered boundaries:
      --release-tag <tag>
    ```
 
-   The first invocation is observational. It verifies the same-repository
-   evidence PR, remote evidence head, protected `main`, manifest runner and
-   digest, docs-only branch diff, prior dispatches, job conclusion, and retained
-   artifact metadata. If dispatch is the only safe next transition, the JSON
+   The first invocation is observational. It verifies the remote evidence head,
+   protected `main`, manifest runner and digest, docs-only branch diff, prior
+   dispatches, job conclusion, and retained artifact metadata. No open pull
+   request is required or queried. If dispatch is the only safe next transition, the JSON
    response reports the exact required `main` and manifest values. Authorize
    that one workflow dispatch by repeating the command with both values:
 
@@ -458,7 +462,7 @@ The workflow performs these ordered boundaries:
    exits `20` with the canonical plan and its SHA-256; `reconciliation_current`
    exits `0` when every proposed destination and evidence-index record is
    already identical. Planning creates no repository files, commits, pushes,
-   comments, or pull requests.
+   or pull requests.
 
    Apply an exact reviewed plan by echoing its digest:
 
@@ -469,25 +473,27 @@ The workflow performs these ordered boundaries:
    ```
 
    Apply requires the active GitHub identity `cbusillo`, the exact canonical
-   evidence worktree and pull request, an unchanged protected `main`, no active
-   exact Milestone Qualification run, and a clean worktree. Before changing
+   evidence worktree, an unchanged protected `main`, no active exact Milestone
+   Qualification run, and a clean worktree. Before changing
    files it freezes the authorized plan and exact target bytes in a mode-`0600`,
    self-digested apply checkpoint adjacent to the dispatch checkpoint. It then
    uses per-file atomic replacement plus resumable verification for only the
    planned qualification receipts and append-only evidence index, creates one
    commit containing the plan and run identities,
-   performs a non-force fast-forward push, and posts one marker-bound pull-request
-   comment. Every transition is adopted rather than duplicated after an
-   interruption, including a commit or push whose response was lost. Reruns must
-   repeat the exact `--apply-plan-sha256`; `reconciliation_apply_pending` reports
-   that requirement and `reconciliation_applied` exits `0` after the commit,
-   push, and comment are all durable.
+   performs a non-force fast-forward push, and revalidates the exact remote
+   commit and content. Every transition is adopted rather than duplicated after
+   an interruption, including a commit or push whose response was lost. Reruns
+   must repeat the exact `--apply-plan-sha256` unless the serialized state is
+   already `pushed`; `reconciliation_apply_pending` reports that requirement and
+   `reconciliation_applied` exits `0` after the pushed commit is durable. The
+   result contains the pushed commit SHA and no pull-request comment or comment
+   ID.
 
    The apply checkpoint is
    `<git-common-dir>/bd-to-avp/release-qualification/<tag>.apply.json` and shares
    the dispatch checkpoint lock. Never delete it while an apply transition is
    incomplete; the controller removes it only after the pushed commit and exact
-   marker comment are revalidated as durable. `artifact_expired` permits a new run only after explicit retry
+   remote branch state are revalidated as durable. `artifact_expired` permits a new run only after explicit retry
    authorization when no validated apply checkpoint or equivalent durable state
    exists; checked receipts already accepted by `status` remain a no-op after
    Actions transport expires.

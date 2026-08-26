@@ -4,8 +4,10 @@ import tempfile
 import unittest
 
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from scripts.release_milestone_context import ReleaseMilestoneContext
@@ -21,6 +23,7 @@ from scripts.release_qualification_resume import (
     _checkpoint_lock,
     _checkpoint_payload,
     _dispatch,
+    _require_durable_capture_checkpoint,
     _require_no_active_exact_runs,
     _revalidate_remote_identity,
     _run_matches,
@@ -44,10 +47,6 @@ RUNS_ENDPOINT = (
     "?event=workflow_dispatch&branch=main&per_page=100"
 )
 RUNS_ENDPOINT_PAGE_2 = RUNS_ENDPOINT + "&page=2"
-PR_ENDPOINT = (
-    "repos/cbusillo/BD_to_AVP/pulls?state=open&base=main"
-    f"&head=cbusillo%3Aautomation%2Frelease-evidence-{RELEASE_TAG}&per_page=100"
-)
 
 
 class FakeGitHubAPI:
@@ -80,11 +79,11 @@ class FakeGitHubAPI:
     def post_json(
         self,
         endpoint: str,
-        payload: dict[str, object],
+        payload: Mapping[str, object],
         *,
         active_auth: bool = False,
     ) -> object:
-        self.posts.append((endpoint, MappingProxy(payload), active_auth))
+        self.posts.append((endpoint, MappingProxy(dict(payload)), active_auth))
         return None
 
     def get_bytes(
@@ -114,7 +113,7 @@ class FailOnGitHubAPI:
     def post_json(
         self,
         endpoint: str,
-        payload: dict[str, object],
+        payload: Mapping[str, object],
         *,
         active_auth: bool = False,
     ) -> object:
@@ -168,7 +167,7 @@ def binding(*, runner_sha: str = MAIN_SHA) -> EvidenceBinding:
     return EvidenceBinding(context=context, manifest=document, mode="manifest")
 
 
-def status_payload(*, blocking: bool = True) -> dict[str, object]:
+def status_payload(*, blocking: bool = True) -> dict[str, Any]:
     blockers = ["clean-machine-signed-update"] if blocking else []
     return {
         "release_tag": RELEASE_TAG,
@@ -177,19 +176,6 @@ def status_payload(*, blocking: bool = True) -> dict[str, object]:
         "passed": not blockers,
         "summary": {"blocking": len(blockers)},
         "groups": {"blocking": blockers},
-    }
-
-
-def pull_request(*, number: int = 42, evidence_sha: str = EVIDENCE_SHA) -> dict[str, object]:
-    return {
-        "number": number,
-        "state": "open",
-        "head": {
-            "ref": EVIDENCE_REF,
-            "sha": evidence_sha,
-            "repo": {"full_name": "cbusillo/BD_to_AVP"},
-        },
-        "base": {"ref": "main", "repo": {"full_name": "cbusillo/BD_to_AVP"}},
     }
 
 
@@ -242,7 +228,6 @@ def identity() -> ResumeIdentity:
         evidence_ref=EVIDENCE_REF,
         evidence_sha=EVIDENCE_SHA,
         evidence_base_sha=BASE_SHA,
-        evidence_pr_number=42,
         release_receipt_file_sha256="5" * 64,
         signed_ui_artifact_id=456,
         signed_ui_artifact_sha256="6" * 64,
@@ -265,7 +250,6 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             f"repos/cbusillo/BD_to_AVP/git/ref/heads/automation%2Frelease-evidence-{RELEASE_TAG}",
             {"object": {"sha": EVIDENCE_SHA}},
         )
-        client.set(PR_ENDPOINT, [pull_request()])
         return client
 
     def refreshed_runner_checkpoint(
@@ -311,12 +295,13 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self,
         client: FakeGitHubAPI,
         checkpoint_path: Path,
-        **kwargs: object,
+        **kwargs: Any,
     ):
         with (
             patch("scripts.release_qualification_resume.build_status", return_value=status_payload()),
             patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
             patch("scripts.release_qualification_resume._require_local_evidence_checkout"),
+            patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
         ):
             return resume_qualification(
                 REPO_ROOT,
@@ -340,7 +325,8 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, EXIT_SUCCESS)
         self.assertEqual(result.payload["state"], "complete")
-        self.assertFalse(result.payload["checkpoint"]["present"])
+        checkpoint_payload = cast(Mapping[str, object], result.payload["checkpoint"])
+        self.assertFalse(checkpoint_payload["present"])
         self.assertFalse(checkpoint.exists())
 
     def test_malformed_checked_status_is_reported_as_resume_error(self) -> None:
@@ -379,29 +365,44 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(QualificationResumeSafetyError, "is active"):
             _require_no_active_exact_runs(client, identity())
 
-    def test_remote_identity_retries_transient_pull_request_head_lag(self) -> None:
+    def test_remote_identity_revalidates_pushed_branch_without_pull_request_lookup(self) -> None:
         client = self.configured_client()
         pushed_sha = "9" * 40
         client.set(
             f"repos/cbusillo/BD_to_AVP/git/ref/heads/automation%2Frelease-evidence-{RELEASE_TAG}",
             {"object": {"sha": pushed_sha}},
         )
-        client.set_sequence(
-            PR_ENDPOINT,
-            [
-                [pull_request(evidence_sha=EVIDENCE_SHA)],
-                [pull_request(evidence_sha=pushed_sha)],
-            ],
+
+        _revalidate_remote_identity(
+            client,
+            identity(),
+            expected_evidence_sha=pushed_sha,
         )
 
-        with patch("scripts.release_qualification_resume.time.sleep") as sleep:
-            _revalidate_remote_identity(
-                client,
-                identity(),
-                expected_evidence_sha=pushed_sha,
-            )
+        self.assertFalse(any("/pulls?" in endpoint for endpoint, _active_auth in client.gets))
 
-        sleep.assert_called_once_with(1.0)
+    def test_durable_capture_checkpoint_is_bound_to_exact_evidence_commit(self) -> None:
+        with patch(
+            "scripts.release_qualification_resume.validate_v2_bundle",
+            return_value={"class": "v2-captured"},
+        ) as validate:
+            _require_durable_capture_checkpoint(REPO_ROOT, identity())
+
+        validate.assert_called_once_with(
+            REPO_ROOT,
+            RELEASE_TAG,
+            verification_revision=EVIDENCE_SHA,
+        )
+
+    def test_failed_v2_disposition_is_not_an_active_capture_checkpoint(self) -> None:
+        with (
+            patch(
+                "scripts.release_qualification_resume.validate_v2_bundle",
+                return_value={"class": "v2-failed"},
+            ),
+            self.assertRaisesRegex(QualificationResumeSafetyError, "active CAPTURED"),
+        ):
+            _require_durable_capture_checkpoint(REPO_ROOT, identity())
 
     def test_exact_dispatch_is_checkpointed_and_adopts_visible_run(self) -> None:
         client = self.configured_client()
@@ -425,6 +426,8 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertEqual(result.exit_code, EXIT_SUCCESS)
         self.assertEqual(result.payload["state"], "running")
         self.assertEqual(mode, 0o600)
+        self.assertEqual(checkpoint_payload["schema_version"], 2)
+        self.assertNotIn("evidence_pr_number", checkpoint_payload["identity"])
         self.assertEqual(checkpoint_payload["dispatch"]["state"], "observed")
         self.assertEqual(checkpoint_payload["dispatch"]["run_id"], 101)
         self.assertEqual(len(client.posts), 1)
@@ -622,13 +625,14 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         local_checkout.assert_not_called()
         self.assertEqual(client.posts, [])
 
-    def test_duplicate_open_pull_requests_fail_closed(self) -> None:
+    def test_blocked_resume_does_not_require_open_pull_request(self) -> None:
         client = self.configured_client()
-        client.set(PR_ENDPOINT, [pull_request(number=42), pull_request(number=43)])
+        client.set(RUNS_ENDPOINT, {"workflow_runs": []})
         with tempfile.TemporaryDirectory() as temporary_directory:
-            with self.assertRaisesRegex(QualificationResumeSafetyError, "exactly one open pull request"):
-                self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
+            result = self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
 
+        self.assertEqual(result.payload["state"], "dispatch_ready")
+        self.assertFalse(any("/pulls?" in endpoint for endpoint, _active_auth in client.gets))
         self.assertEqual(client.posts, [])
 
     def test_wrong_active_identity_fails_before_checkpoint_or_dispatch(self) -> None:
@@ -1217,7 +1221,6 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             state="reconciliation_applied",
             plan=plan,
             commit_sha="9" * 40,
-            comment_id=77,
         )
         with (
             tempfile.TemporaryDirectory() as temporary_directory,
@@ -1239,7 +1242,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertEqual(result.exit_code, EXIT_SUCCESS)
         self.assertEqual(result.payload["state"], "reconciliation_applied")
         self.assertEqual(result.payload["reconciliation_result"]["commit_sha"], "9" * 40)
-        self.assertEqual(result.payload["reconciliation_result"]["comment_id"], 77)
+        self.assertEqual(set(result.payload["reconciliation_result"]), {"commit_sha"})
         apply.assert_called_once()
 
     def test_apply_checkpoint_continues_before_complete_early_return(self) -> None:
@@ -1249,7 +1252,6 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             state="reconciliation_applied",
             plan=plan,
             commit_sha="9" * 40,
-            comment_id=77,
         )
         complete_status = status_payload()
         complete_status["groups"] = {"blocking": []}
@@ -1261,12 +1263,16 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
                 patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
                 patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
                 patch(
+                    "scripts.release_qualification_resume._require_local_evidence_checkout"
+                ) as require_local_checkout,
+                patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
+                patch(
                     "scripts.release_qualification_resume.continue_reconciliation_apply",
                     return_value=outcome,
                 ) as continuation,
                 patch(
                     "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
-                    return_value={"present": True, "state": "commented", "plan_sha256": "8" * 64},
+                    return_value={"present": True, "state": "committed", "plan_sha256": "8" * 64},
                 ),
             ):
                 result = resume_qualification(
@@ -1279,6 +1285,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
 
         self.assertEqual(result.payload["state"], "reconciliation_applied")
         continuation.assert_called_once()
+        require_local_checkout.assert_not_called()
 
     def test_apply_checkpoint_requires_exact_plan_echo(self) -> None:
         client = self.configured_client()
@@ -1291,9 +1298,11 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             with (
                 patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
                 patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch("scripts.release_qualification_resume._require_local_evidence_checkout"),
+                patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
                 patch(
                     "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
-                    return_value={"present": True, "state": "pushed", "plan_sha256": "8" * 64},
+                    return_value={"present": True, "state": "committed", "plan_sha256": "8" * 64},
                 ),
             ):
                 result = resume_qualification(
@@ -1318,6 +1327,8 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             with (
                 patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
                 patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch("scripts.release_qualification_resume._require_local_evidence_checkout"),
+                patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
             ):
                 with self.assertRaisesRegex(QualificationResumeSafetyError, "keys changed"):
                     resume_qualification(
@@ -1334,7 +1345,6 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             state="reconciliation_applied",
             plan=plan,
             commit_sha="9" * 40,
-            comment_id=77,
         )
         complete_status = status_payload()
         complete_status["groups"] = {"blocking": []}
@@ -1345,13 +1355,15 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             with (
                 patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
                 patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch("scripts.release_qualification_resume._require_local_evidence_checkout"),
+                patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
                 patch(
                     "scripts.release_qualification_resume.continue_reconciliation_apply",
                     return_value=outcome,
                 ) as continuation,
                 patch(
                     "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
-                    return_value={"present": True, "state": "commented", "plan_sha256": "8" * 64},
+                    return_value={"present": True, "state": "pushed", "plan_sha256": "8" * 64},
                 ),
             ):
                 result = resume_qualification(
