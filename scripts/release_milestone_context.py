@@ -1830,7 +1830,11 @@ def discover_milestone_receipt(
                 "A failed post-publication disposition pull request must add exactly one disposition record."
             )
         disposition_relative, disposition_tag = disposition_matches[0]
-        release_evidence_changes = sorted(path for path in changed_paths if path.startswith("docs/release-evidence/"))
+        release_evidence_changes = sorted(
+            path
+            for path in changed_paths
+            if path.startswith("docs/release-evidence/") and path != RELEASE_V2_INDEX_PATH
+        )
         if release_evidence_changes != [disposition_relative]:
             raise ReleaseMilestoneContextError(
                 "A failed post-publication disposition pull request may change only its new disposition record "

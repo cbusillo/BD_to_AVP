@@ -41,7 +41,12 @@ class ReleaseRecoveryRecordTests(unittest.TestCase):
         path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     @staticmethod
-    def build_disposition_repository(root: Path, *, tamper_receipt: bool = False) -> tuple[str, str]:
+    def build_disposition_repository(
+        root: Path,
+        *,
+        tamper_receipt: bool = False,
+        include_generated_v2_index: bool = False,
+    ) -> tuple[str, str]:
         evidence_root = root / "docs" / "release-evidence" / "v0.3.2-beta.5"
         evidence_root.mkdir(parents=True)
         source_root = REPO_ROOT / "docs" / "release-evidence" / "v0.3.2-beta.5"
@@ -65,6 +70,11 @@ class ReleaseRecoveryRecordTests(unittest.TestCase):
         if tamper_receipt:
             receipt_path = evidence_root / "release-receipt.json"
             receipt_path.write_text(receipt_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        if include_generated_v2_index:
+            (root / "docs" / "release-evidence" / "index-v2.json").write_text(
+                '{"legacy_index":{},"releases":[],"schema_version":2}\n',
+                encoding="utf-8",
+            )
         subprocess.run(["git", "add", "."], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "add disposition"], cwd=root, check=True)
         head_sha = subprocess.run(
@@ -111,6 +121,23 @@ class ReleaseRecoveryRecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             base_sha, head_sha = self.build_disposition_repository(root)
+
+            receipt_path = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="code/issue-634-beta5-disposition",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+
+        self.assertIsNone(receipt_path)
+
+    def test_allows_generated_v2_index_with_failed_post_publication_disposition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            base_sha, head_sha = self.build_disposition_repository(root, include_generated_v2_index=True)
 
             receipt_path = discover_milestone_receipt(
                 root,
