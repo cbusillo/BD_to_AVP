@@ -16,6 +16,7 @@ from scripts.release_milestone_context import (
     ReleaseMilestoneContext,
     ReleaseMilestoneContextError,
     _validate_failed_unpublished_candidate,
+    _validate_release_evidence_tag_scope,
     _requires_unpublished_candidate_recovery,
     discover_milestone_manifest,
     discover_milestone_receipt,
@@ -417,6 +418,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         bind_base_candidate: bool = False,
         previous_beta_override: tuple[str, object] | None = None,
         include_extra_evidence_file: bool = False,
+        include_generated_v2_index: bool = False,
         tamper_config: bool = False,
     ) -> tuple[str, str]:
         base_qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
@@ -548,6 +550,10 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             publication_path = receipt_path.with_name("publication-record.json")
             publication_path.write_text('{"schema_version": 1}\n', encoding="utf-8")
             paths.append(publication_path)
+        if include_generated_v2_index:
+            index_path = root / "docs/release-evidence/index-v2.json"
+            index_path.write_text('{"legacy_index":{},"releases":[],"schema_version":2}\n', encoding="utf-8")
+            paths.append(index_path)
         subprocess.run(["git", "add", *paths], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "prepare successor after published beta"], cwd=root, check=True)
         head_sha = subprocess.run(
@@ -1554,6 +1560,28 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
 
         self.assertIsNone(discovered)
 
+    def test_allows_generated_v2_index_with_published_prior_receipt_carry_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_published_prior_receipt_transition(
+                root,
+                include_generated_v2_index=True,
+            )
+
+            discovered = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="prepare/v0.3.1-beta.2",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+                published_receipt_verifier=lambda _path, _receipt, _digest: None,
+            )
+
+        self.assertIsNone(discovered)
+
     def test_rejects_published_prior_receipt_identity_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -2483,6 +2511,16 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             )
 
         self.assertIsNone(discovered)
+
+    def test_generated_release_evidence_v2_index_is_allowed_with_single_tag_evidence(self) -> None:
+        _validate_release_evidence_tag_scope(
+            (
+                "docs/release-evidence/v0.3.0/release-receipt.json",
+                "docs/release-evidence/v0.3.0/capture-v2.json",
+                "docs/release-evidence/index-v2.json",
+            ),
+            "v0.3.0",
+        )
 
     def test_rejects_non_docs_changes_on_evidence_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -1652,6 +1652,7 @@ def _validate_release_evidence_tag_scope(changed_paths: Sequence[str], release_t
         if path.startswith("docs/release-evidence/")
         and not path.startswith(expected_prefix)
         and path != RELEASE_LEDGER_PATH
+        and path != RELEASE_V2_INDEX_PATH
         and not _is_recovery_authorization_path(path)
     )
     if unrelated_paths:
@@ -1918,6 +1919,7 @@ def discover_milestone_receipt(
                 if path.startswith("docs/release-evidence/")
                 and not _is_recovery_authorization_path(path)
                 and path != receipt_relative
+                and path != RELEASE_V2_INDEX_PATH
             ]
             if other_checked_release_changes or evidence_index_mutation or RELEASE_LEDGER_PATH in changed_paths:
                 raise ReleaseMilestoneContextError(
