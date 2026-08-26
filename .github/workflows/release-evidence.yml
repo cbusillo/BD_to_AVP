@@ -371,6 +371,7 @@ jobs:
 
       - name: Generate or validate shadow capture-v2
         id: capture-v2
+        if: steps.reuse.outputs.checkpoint_source != 'main'
         env:
           CAPTURE_TIMESTAMP: ${{ steps.publication.outputs.live_appcast_verified_at }}
           CAPTURE_WORKFLOW_ACTOR: ${{ github.actor }}

@@ -1,12 +1,14 @@
 # Release Evidence v2
 
 Release Evidence v2 is an additive, offline-verifiable, write-once format for
-release evidence under `docs/release-evidence/<tag>/`. It runs unconditionally
-in shadow mode beside the maintained v1 reconciliation and automatic PR path;
-it does not remove or gate v1 behavior. Evidence files are passive data: the
-verifier uses only local files and local Git operations. For legacy revision
-replay it creates and removes a temporary detached worktree. It does not invoke
-`gh`, `curl`, a network client, or credentials.
+release evidence under `docs/release-evidence/<tag>/`. It runs in shadow mode
+beside the maintained v1 reconciliation and automatic PR path for new or
+in-progress evidence checkpoints; reruns whose complete checkpoint is already
+on protected `main` remain a no-op. It does not remove or gate v1 behavior.
+Evidence files are passive data: the verifier uses only local files and local
+Git operations. For legacy revision replay it creates and removes a temporary
+detached worktree. It does not invoke `gh`, `curl`, a network client, or
+credentials.
 
 ## Verification
 

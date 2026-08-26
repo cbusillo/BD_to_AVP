@@ -1184,6 +1184,10 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("checkpoint_source=main", str(prepare))
         self.assertIn("existing_branch_sha", str(prepare))
         self.assertIn("steps.reuse.outputs.checkpoint_source != 'main'", str(prepare))
+        shadow_capture_step = next(
+            step for step in prepare["steps"] if step["name"] == "Generate or validate shadow capture-v2"
+        )
+        self.assertEqual(shadow_capture_step["if"], "steps.reuse.outputs.checkpoint_source != 'main'")
         self.assertIn("partial qualification checkpoint state", str(prepare))
         self.assertIn("expired before Release Evidence captured it", str(prepare))
         self.assertIn("scripts.release_qualification_manifest validate", str(prepare))
