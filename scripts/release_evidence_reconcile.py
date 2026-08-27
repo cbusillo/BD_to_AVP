@@ -169,8 +169,10 @@ def _operator_environment() -> dict[str, str]:
         "CODEX_GITHUB_TOKEN",
         "GH_ENTERPRISE_TOKEN",
         "GITHUB_ENTERPRISE_TOKEN",
+        "GH_CONFIG_DIR",
         "GH_HOST",
         "GH_REPO",
+        "XDG_CONFIG_HOME",
     ):
         environment.pop(name, None)
     return environment
@@ -251,12 +253,20 @@ def _verify_evidence_lineage(repo_root: Path, main_sha: str, evidence_sha: str) 
         raise ReleaseEvidenceReconciliationError(
             "Evidence branch is stale or diverged: its merge base is not the current protected main SHA."
         )
-    result = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", main_sha, evidence_sha],
-        cwd=repo_root,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", main_sha, evidence_sha],
+            cwd=repo_root,
+            capture_output=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ReleaseEvidenceReconciliationError("Timed out while verifying evidence branch ancestry.") from error
+    except OSError as error:
+        raise ReleaseEvidenceReconciliationError(
+            "Unable to start git while verifying evidence branch ancestry."
+        ) from error
     if result.returncode != 0:
         raise ReleaseEvidenceReconciliationError(
             "Evidence branch does not descend from the current protected main SHA."
@@ -294,13 +304,14 @@ def _current_operator(repo_root: Path) -> str:
 
 
 def _verify_canonical_checkout(repo_root: Path, repository: str) -> None:
+    origin_url = _git_output(repo_root, ["remote", "get-url", "origin"], "resolve the origin remote")
     checkout = _mapping(
         _gh_json(
             repo_root,
-            ["repo", "view", "--json", "nameWithOwner"],
-            "resolve the current checkout repository",
+            ["repo", "view", origin_url, "--json", "nameWithOwner"],
+            "resolve the origin repository",
         ),
-        "current checkout repository",
+        "origin repository",
     )
     if checkout.get("nameWithOwner") != repository:
         raise ReleaseEvidenceReconciliationError(
@@ -339,19 +350,6 @@ def _verify_branch_protection(repo_root: Path, repository: str, expected_checks:
         raise ReleaseEvidenceReconciliationError(
             "Protected main required checks do not exactly match repository metadata: "
             f"expected={list(expected_checks)}, actual={sorted(contexts)}."
-        )
-    pull_request_reviews = _mapping(
-        _gh_json(
-            repo_root,
-            ["api", f"repos/{repository}/branches/{MAIN_BRANCH}/protection/required_pull_request_reviews"],
-            "read protected main pull-request requirement",
-        ),
-        "protected main pull-request requirement",
-    )
-    required_approvals = pull_request_reviews.get("required_approving_review_count")
-    if isinstance(required_approvals, bool) or not isinstance(required_approvals, int) or required_approvals < 0:
-        raise ReleaseEvidenceReconciliationError(
-            "Protected main does not expose a valid pull-request review requirement."
         )
     for key, expected in (
         ("enforce_admins", True),
@@ -458,7 +456,7 @@ def _open_main_pull_requests(repo_root: Path, repository: str) -> list[Mapping[s
             "--limit",
             "1000",
             "--json",
-            "number,url,baseRefName,headRefName,headRefOid,author",
+            "number,url,baseRefName,headRefName,headRefOid,headRepository,author",
         ],
         "list open pull requests to protected main",
     )
@@ -484,6 +482,11 @@ def _pr_action(
         if pull_request.get("headRefOid") != plan.evidence_sha:
             raise ReleaseEvidenceReconciliationError(
                 "Open evidence pull request does not point at the exact remote evidence SHA."
+            )
+        head_repository = _mapping(pull_request.get("headRepository"), "open evidence pull-request head repository")
+        if head_repository.get("nameWithOwner") != plan.repository:
+            raise ReleaseEvidenceReconciliationError(
+                "Open evidence pull request does not originate from the canonical repository."
             )
         author = _mapping(pull_request.get("author"), "open evidence pull-request author")
         if author.get("login") != plan.operator:

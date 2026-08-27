@@ -121,15 +121,10 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
         def run(_root: Path, arguments: list[str], _description: str) -> object:
             if arguments == ["api", "user"]:
                 return {"login": operator}
-            if arguments == ["repo", "view", "--json", "nameWithOwner"]:
+            if arguments[:2] == ["repo", "view"] and arguments[-2:] == ["--json", "nameWithOwner"]:
                 return {"nameWithOwner": checkout_repository}
             if arguments[:2] == ["api", f"repos/{REPOSITORY}/branches/main/protection"]:
                 return self.protection(checks=checks)
-            if arguments[:2] == [
-                "api",
-                f"repos/{REPOSITORY}/branches/main/protection/required_pull_request_reviews",
-            ]:
-                return {"required_approving_review_count": 0}
             if arguments[:2] == ["pr", "list"]:
                 return pull_requests
             self.fail(f"unexpected gh request: {arguments}")
@@ -186,6 +181,52 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
             ):
                 preflight(repository, release_tag=TAG)
 
+    def test_non_evidence_diff_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository, _, _ = self.build_repository(Path(temporary_directory))
+            workflow = repository / ".github" / "workflows" / "unexpected.yml"
+            workflow.parent.mkdir(parents=True, exist_ok=True)
+            workflow.write_text("name: unexpected\n", encoding="utf-8")
+            git(repository, "add", str(workflow.relative_to(repository)))
+            git(repository, "commit", "-m", "unexpected workflow")
+            git(repository, "push", "origin", f"automation/release-evidence-{TAG}")
+            contexts = self.preflight_context(repository, [])
+            with (
+                contexts[0],
+                contexts[1],
+                contexts[2],
+                contexts[3],
+                self.assertRaisesRegex(ReleaseEvidenceReconciliationError, "outside the exact release bundle"),
+            ):
+                preflight(repository, release_tag=TAG)
+
+    def test_evidence_branch_without_requested_bundle_change_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository, _, _ = self.build_repository(Path(temporary_directory))
+            git(repository, "switch", "main")
+            self.write_json(repository / "docs" / "release-evidence" / "index-v2.json", {"schema_version": 2})
+            git(repository, "add", "docs/release-evidence/index-v2.json")
+            git(repository, "commit", "-m", "index only")
+            git(
+                repository,
+                "push",
+                "--force",
+                "origin",
+                f"HEAD:refs/heads/automation/release-evidence-{TAG}",
+            )
+            contexts = self.preflight_context(repository, [])
+            with (
+                contexts[0],
+                contexts[1],
+                contexts[2],
+                contexts[3],
+                self.assertRaisesRegex(
+                    ReleaseEvidenceReconciliationError,
+                    "does not change the requested release bundle",
+                ),
+            ):
+                preflight(repository, release_tag=TAG)
+
     def test_moved_main_echo_is_refused_before_pr_creation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             repository, evidence_sha, main_sha = self.build_repository(Path(temporary_directory))
@@ -217,6 +258,7 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                     "baseRefName": "main",
                     "headRefName": f"automation/release-evidence-{TAG}",
                     "headRefOid": evidence_sha,
+                    "headRepository": {"nameWithOwner": REPOSITORY},
                     "number": 700,
                     "url": "https://example.invalid/pr/700",
                 }
@@ -253,6 +295,7 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                         "baseRefName": "main",
                         "headRefName": f"automation/release-evidence-{TAG}",
                         "headRefOid": evidence_sha,
+                        "headRepository": {"nameWithOwner": REPOSITORY},
                         "number": 701,
                         "url": "https://example.invalid/pr/701",
                     }
@@ -293,6 +336,7 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                     "baseRefName": "main",
                     "headRefName": "feature/unrelated",
                     "headRefOid": evidence_sha,
+                    "headRepository": {"nameWithOwner": REPOSITORY},
                     "number": 702,
                     "url": "https://example.invalid/pr/702",
                 }
@@ -353,6 +397,8 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                     "CODEX_GITHUB_TOKEN": "automation-token",
                     "GH_HOST": "untrusted.example",
                     "GH_REPO": "other/repository",
+                    "GH_CONFIG_DIR": "/tmp/untrusted-gh",
+                    "XDG_CONFIG_HOME": "/tmp/untrusted-xdg",
                     "KEEP_ME": "yes",
                 },
                 clear=False,
@@ -368,7 +414,15 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
         for call in run.call_args_list:
             environment = call.kwargs["env"]
             self.assertEqual(environment["KEEP_ME"], "yes")
-            for name in ("GH_TOKEN", "GITHUB_TOKEN", "CODEX_GITHUB_TOKEN", "GH_HOST", "GH_REPO"):
+            for name in (
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "CODEX_GITHUB_TOKEN",
+                "GH_CONFIG_DIR",
+                "GH_HOST",
+                "GH_REPO",
+                "XDG_CONFIG_HOME",
+            ):
                 self.assertNotIn(name, environment)
 
     def test_actor_mismatch_refuses_adoption(self) -> None:
@@ -380,6 +434,7 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                     "baseRefName": "main",
                     "headRefName": f"automation/release-evidence-{TAG}",
                     "headRefOid": evidence_sha,
+                    "headRepository": {"nameWithOwner": REPOSITORY},
                     "number": 703,
                     "url": "https://example.invalid/pr/703",
                 }
@@ -391,6 +446,30 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                 contexts[2],
                 contexts[3],
                 self.assertRaisesRegex(ReleaseEvidenceReconciliationError, "active local GitHub operator"),
+            ):
+                preflight(repository, release_tag=TAG)
+
+    def test_fork_pull_request_refuses_adoption(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository, evidence_sha, _ = self.build_repository(Path(temporary_directory))
+            pull_requests = [
+                {
+                    "author": {"login": "cbusillo"},
+                    "baseRefName": "main",
+                    "headRefName": f"automation/release-evidence-{TAG}",
+                    "headRefOid": evidence_sha,
+                    "headRepository": {"nameWithOwner": "someone/fork"},
+                    "number": 704,
+                    "url": "https://example.invalid/pr/704",
+                }
+            ]
+            contexts = self.preflight_context(repository, pull_requests)
+            with (
+                contexts[0],
+                contexts[1],
+                contexts[2],
+                contexts[3],
+                self.assertRaisesRegex(ReleaseEvidenceReconciliationError, "canonical repository"),
             ):
                 preflight(repository, release_tag=TAG)
 

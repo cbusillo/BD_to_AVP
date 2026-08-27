@@ -164,15 +164,16 @@ uv run python -m scripts.release_evidence_reconcile reconcile \
   --plan-digest <preflight-plan-digest>
 ```
 
-The helper verifies that `automation/release-evidence-<tag>` points at the
-echoed remote commit and descends from the current protected-main base. It
+The helper verifies that the checkout's exact `origin` resolves to the canonical
+repository, that `automation/release-evidence-<tag>` points at the echoed remote
+commit, and that the commit descends from the current protected-main base. It
 refuses stale branches, a moved `main`, non-evidence diffs, stale
 `index-v2.json`, incomplete bundles, any terminal class other than
 `v2-qualified`, and a durable `v2-failed` disposition. The standard offline v2
 verifier and write-once history check run against the immutable evidence SHA.
 
-It also refuses another open PR to `main`, a canonical evidence PR with a
-different head SHA, or an author other than the active local `gh`
+It also refuses another open PR to `main`, a canonical evidence PR from a fork
+or with a different head SHA, or an author other than the active local `gh`
 operator. An existing exact PR is adopted without another write, making retry
 idempotent. When no PR exists, the helper invokes only `gh pr create` for the
 canonical branch and `main`; it never merges, force-pushes, deletes a branch,
