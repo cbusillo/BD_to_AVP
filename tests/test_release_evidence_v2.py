@@ -1236,7 +1236,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "no v2 capture"):
                 dispose_v2(root, release_tag=TAG, **self.disposition_arguments())
 
-            capture = self.write_capture(root, source_sha)
+            self.write_capture(root, source_sha)
             capture_path = bundle / CAPTURE_NAME
             capture_path.write_text("{}\n", encoding="utf-8")
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "capture-v2 record keys changed"):
