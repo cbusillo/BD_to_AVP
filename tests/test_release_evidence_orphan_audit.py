@@ -72,6 +72,7 @@ class AuditFixture:
         terminal: str | None = None,
         on_main: bool = False,
         malformed: bool = False,
+        wrap_blob_content: bool = False,
     ) -> None:
         ref_sha = sha(f"ref:{tag}")
         tree_sha = sha(f"tree:{tag}")
@@ -107,8 +108,11 @@ class AuditFixture:
             blob_sha = sha(f"blob:{tag}:{filename}")
             path = f"{prefix}/{filename}"
             entries.append({"path": path, "sha": blob_sha, "type": "blob"})
+            encoded = base64.b64encode(json.dumps(record).encode("utf-8")).decode("ascii")
+            if wrap_blob_content:
+                encoded = "\n".join(encoded[index : index + 20] for index in range(0, len(encoded), 20))
             self.api.responses[f"repos/{REPOSITORY}/git/blobs/{blob_sha}"] = {
-                "content": base64.b64encode(json.dumps(record).encode("utf-8")).decode("ascii"),
+                "content": encoded,
                 "encoding": "base64",
             }
         self.api.responses[f"repos/{REPOSITORY}/git/commits/{ref_sha}"] = {
@@ -122,6 +126,25 @@ class AuditFixture:
         self.refs.append({"object": {"sha": ref_sha}, "ref": f"refs/heads/automation/release-evidence-{tag}"})
         if on_main:
             self.main_entries.extend(entries)
+
+    def add_legacy_bundle(self, tag: str, *, committed_at: datetime) -> None:
+        ref_sha = sha(f"legacy-ref:{tag}")
+        tree_sha = sha(f"legacy-tree:{tag}")
+        self.api.responses[f"repos/{REPOSITORY}/git/commits/{ref_sha}"] = {
+            "committer": {"date": committed_at.isoformat().replace("+00:00", "Z")},
+            "tree": {"sha": tree_sha},
+        }
+        self.api.responses[f"repos/{REPOSITORY}/git/trees/{tree_sha}?recursive=1"] = {
+            "tree": [
+                {
+                    "path": f"docs/release-evidence/{tag}/release-receipt.json",
+                    "sha": sha(f"legacy-blob:{tag}"),
+                    "type": "blob",
+                }
+            ],
+            "truncated": False,
+        }
+        self.refs.append({"object": {"sha": ref_sha}, "ref": f"refs/heads/automation/release-evidence-{tag}"})
 
     def add_invalid_ref(self, suffix: str) -> None:
         ref_sha = sha(f"ref:{suffix}")
@@ -154,6 +177,13 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         fixture.main_entries.append(
             {"path": "docs/release-evidence/index-v2.json", "sha": sha("later-index"), "type": "blob"}
         )
+        fixture.main_entries.append(
+            {
+                "path": "docs/release-evidence/v1.0.0/later-annotation.json",
+                "sha": sha("later-annotation"),
+                "type": "blob",
+            }
+        )
         report = run_audit(fixture.finalize(), now=NOW)
 
         self.assertEqual(report.findings[0].classification, "reconciled")
@@ -179,8 +209,50 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         self.assertEqual(report.findings[0].bundle_state, "failed")
         self.assertEqual(report.alert_action, "open")
         self.assertEqual(api.created[0]["assignees"], ["cbusillo"])
+        self.assertNotIn("state", api.created[0])
         self.assertIn("automation/release-evidence-v1.0.2", str(api.created[0]["body"]))
         self.assertIn("72.0h", str(api.created[0]["body"]))
+        self.assertIn("Do not run the qualified-evidence reconciliation helper", str(api.created[0]["body"]))
+
+    def test_legacy_only_branch_is_ignored(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_legacy_bundle("v0.3.2-beta.5", committed_at=NOW - timedelta(days=30))
+        report = run_audit(fixture.finalize(), now=NOW)
+
+        self.assertEqual(report.findings[0].classification, "legacy_ignored")
+        self.assertEqual(report.findings[0].bundle_state, "legacy")
+        self.assertEqual(report.alert_action, "clear")
+
+    def test_branch_without_v2_or_legacy_marker_is_malformed(self) -> None:
+        fixture = AuditFixture()
+        tag = "v0.9.0"
+        ref_sha = sha(f"empty-ref:{tag}")
+        tree_sha = sha(f"empty-tree:{tag}")
+        fixture.api.responses[f"repos/{REPOSITORY}/git/commits/{ref_sha}"] = {
+            "committer": {"date": (NOW - timedelta(days=5)).isoformat().replace("+00:00", "Z")},
+            "tree": {"sha": tree_sha},
+        }
+        fixture.api.responses[f"repos/{REPOSITORY}/git/trees/{tree_sha}?recursive=1"] = {
+            "tree": [],
+            "truncated": False,
+        }
+        fixture.refs.append({"object": {"sha": ref_sha}, "ref": f"refs/heads/automation/release-evidence-{tag}"})
+
+        report = run_audit(fixture.finalize(), now=NOW)
+
+        self.assertEqual(report.findings[0].classification, "malformed")
+        self.assertIn("neither v2 records nor a recognized legacy", report.findings[0].reason)
+
+    def test_line_wrapped_github_blob_content_is_supported(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_bundle(
+            "v1.0.10",
+            captured_at=NOW - timedelta(hours=1),
+            wrap_blob_content=True,
+        )
+        report = run_audit(fixture.finalize(), now=NOW)
+
+        self.assertEqual(report.findings[0].classification, "recent")
 
     def test_malformed_bundle_alerts_without_reconciliation(self) -> None:
         fixture = AuditFixture()

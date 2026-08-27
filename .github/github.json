@@ -208,6 +208,7 @@
     "Stable",
     "Prerelease",
     "Release Evidence",
+    "Release Evidence Orphan Audit",
     "Milestone Qualification",
     "Manage Sparkle Pages",
     "Update FFmpeg Vendor Pins"

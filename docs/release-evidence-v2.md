@@ -27,7 +27,10 @@ The audit recognizes a valid `CAPTURED` record and either terminal v2 state
 `docs/release-evidence/<tag>/` blob path/SHA map from each canonical
 `automation/release-evidence-<tag>` ref to protected `main`. Exact bundle
 identity is reconciled even if `docs/release-evidence/index-v2.json` has since
-evolved. A valid non-reconciled bundle is **recent** for less than 72 hours and
+evolved or protected `main` later adds files to the same release bundle.
+Canonical branches that contain legacy evidence but no v2 record are reported
+as **legacy ignored** and do not alert. A valid non-reconciled bundle is
+**recent** for less than 72 hours and
 a **stale orphan** at or after 72 hours, measured from `capture-v2.json`'s
 `captured_at`. Invalid canonical refs, missing or contradictory v2 records,
 and unreadable REST blobs are **malformed**.
@@ -39,9 +42,12 @@ refuses to act if more than one matching alert issue exists, avoiding ambiguous
 ownership and issue spam. Each alert lists the ref, commit SHA, age,
 classification, v2 state, and remediation.
 
-For a stale valid terminal bundle, inspect the REST evidence and use the
+For a stale qualified terminal bundle, inspect the REST evidence and use the
 actor-aware reconciliation helper to open or adopt the protected-main PR; do
-not force-push or rewrite the evidence. For malformed evidence, do not
+not force-push or rewrite the evidence. A durable failed terminal bundle must
+not use the qualified-evidence reconciliation helper; preserve it for incident
+review and retire the orphan ref only through an explicit operator decision.
+For malformed evidence, do not
 reconcile it: preserve the ref for incident review and recreate valid canonical
 evidence only through the trusted producer. The helper may be run locally with
 an authenticated `gh` client, but it remains REST-only for automation refs:

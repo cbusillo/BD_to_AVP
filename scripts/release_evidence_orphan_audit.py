@@ -18,6 +18,7 @@ from scripts.release_evidence_v2 import (
     DISPOSITION_NAME,
     EVIDENCE_ROOT,
     QUALIFICATION_NAME,
+    ReleaseEvidenceV2Error,
     evidence_ref_for_tag,
     sanitize_release_tag,
 )
@@ -32,6 +33,13 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ALERT_MARKER = "<!-- release-evidence-orphan-audit:v1 -->"
 ALERT_TITLE = "Release evidence orphan audit requires attention"
 GITHUB_TIMEOUT_SECONDS = 30
+LEGACY_EVIDENCE_MARKERS = frozenset(
+    {
+        "failed-post-publication-qualification-v1.json",
+        "publication-record.json",
+        "release-receipt.json",
+    }
+)
 
 
 class ReleaseEvidenceOrphanAuditError(RuntimeError):
@@ -230,7 +238,7 @@ def _blob_json(api: GitHubRestApi, repository: str, sha: str, description: str) 
         raise ReleaseEvidenceOrphanAuditError(f"{description} must use base64 blob encoding.")
     encoded = _string(response.get("content"), description)
     try:
-        raw = base64.b64decode(encoded, validate=True)
+        raw = base64.b64decode("".join(encoded.split()), validate=True)
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
         raise ReleaseEvidenceOrphanAuditError(f"{description} is not valid UTF-8 JSON.") from error
@@ -243,7 +251,7 @@ def _canonical_tag(ref: str) -> str:
     tag = ref.removeprefix(EVIDENCE_REF_PREFIX)
     try:
         sanitized = sanitize_release_tag(tag)
-    except Exception as error:
+    except ReleaseEvidenceV2Error as error:
         raise ReleaseEvidenceOrphanAuditError("ref has an invalid release tag suffix.") from error
     if ref != f"refs/heads/{evidence_ref_for_tag(sanitized)}":
         raise ReleaseEvidenceOrphanAuditError("ref does not exactly match its canonical release-evidence tag.")
@@ -322,7 +330,9 @@ def _commit_age_hours(commit: Mapping[str, Any], now: datetime) -> float | None:
         return None
 
 
-def _remediation(classification: str, tag: str | None) -> str:
+def _remediation(classification: str, tag: str | None, bundle_state: str = "unknown") -> str:
+    if classification == "legacy_ignored":
+        return "No action. This canonical branch contains legacy evidence only and is outside the v2 orphan policy."
     if classification == "reconciled":
         return "No action. Protected main contains the exact v2 bundle blobs; index-v2.json may evolve independently."
     if classification == "recent":
@@ -331,6 +341,11 @@ def _remediation(classification: str, tag: str | None) -> str:
             f"72-hour threshold for {tag}."
         )
     if classification == "stale_orphan":
+        if bundle_state == "failed":
+            return (
+                "Do not run the qualified-evidence reconciliation helper. Preserve the durable failure ref, review the "
+                f"release incident for {tag}, and retire the orphan ref only through an explicit operator decision."
+            )
         return (
             "Inspect the GitHub REST bundle, then use the actor-aware reconciliation helper to open or adopt the "
             f"protected-main PR for {tag}; do not force-push or rewrite evidence."
@@ -380,10 +395,33 @@ def inspect_evidence_ref(
         return _malformed(ref, sha, str(error), age_hours=commit_age_hours)
     try:
         ref_blobs = _bundle_blobs(_tree_blobs(api, repository, commit), tag)
+        prefix = f"{EVIDENCE_ROOT}/{tag}/"
+        v2_paths = {
+            f"{prefix}{CAPTURE_NAME}",
+            f"{prefix}{QUALIFICATION_NAME}",
+            f"{prefix}{DISPOSITION_NAME}",
+        }
+        if not v2_paths.intersection(ref_blobs):
+            legacy_paths = {f"{prefix}{name}" for name in LEGACY_EVIDENCE_MARKERS}
+            if not legacy_paths.intersection(ref_blobs):
+                raise ReleaseEvidenceOrphanAuditError(
+                    "canonical branch contains neither v2 records nor a recognized legacy evidence marker."
+                )
+            return EvidenceFinding(
+                ref=ref,
+                sha=sha,
+                age_hours=commit_age_hours,
+                classification="legacy_ignored",
+                bundle_state="legacy",
+                captured_at=None,
+                reason="canonical branch contains no v2 evidence records",
+                remediation=_remediation("legacy_ignored", tag),
+            )
         bundle_state, captured_at, reason = _bundle_state(api, repository, ref_blobs, tag)
     except ReleaseEvidenceOrphanAuditError as error:
         return _malformed(ref, sha, str(error), age_hours=commit_age_hours)
-    if ref_blobs == _bundle_blobs(main_blobs, tag):
+    main_bundle_blobs = _bundle_blobs(main_blobs, tag)
+    if all(main_bundle_blobs.get(path) == blob_sha for path, blob_sha in ref_blobs.items()):
         return EvidenceFinding(
             ref=ref,
             sha=sha,
@@ -392,7 +430,7 @@ def inspect_evidence_ref(
             bundle_state=bundle_state,
             captured_at=captured_at.isoformat().replace("+00:00", "Z"),
             reason="protected main has byte-identical bundle blobs",
-            remediation=_remediation("reconciled", tag),
+            remediation=_remediation("reconciled", tag, bundle_state),
         )
     age_hours = _hours_since(captured_at, now)
     classification = "stale_orphan" if age_hours >= threshold_hours else "recent"
@@ -404,7 +442,7 @@ def inspect_evidence_ref(
         bundle_state=bundle_state,
         captured_at=captured_at.isoformat().replace("+00:00", "Z"),
         reason=reason,
-        remediation=_remediation(classification, tag),
+        remediation=_remediation(classification, tag, bundle_state),
     )
 
 
@@ -469,9 +507,8 @@ def _alert_issue(
     if not candidates:
         if not alertable:
             return "clear", None
-        created = api.create_issue(
-            _issue_payload(alertable, owner=owner, threshold_hours=threshold_hours, state="open")
-        )
+        payload = _issue_payload(alertable, owner=owner, threshold_hours=threshold_hours, state="open")
+        created = api.create_issue({key: value for key, value in payload.items() if key != "state"})
         return "open", _issue_number(created)
     issue = candidates[0]
     number = _issue_number(issue)
