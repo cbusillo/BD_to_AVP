@@ -128,7 +128,7 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                 return self.protection(checks=checks)
             if arguments[:2] == ["pr", "list"]:
                 return pull_requests
-            self.fail(f"unexpected gh request: {arguments}")
+            raise AssertionError(f"unexpected gh request: {arguments}")
 
         return run
 
