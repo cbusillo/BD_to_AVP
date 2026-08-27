@@ -82,6 +82,7 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 TAG_PATTERN = re.compile(r"^v[0-9A-Za-z](?:[0-9A-Za-z]|[.-][0-9A-Za-z])*$")
 TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+ARTIFACT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CAPTURE_KEYS = frozenset(
     {
         "capture_sha256",
@@ -328,6 +329,15 @@ def _identifier(value: object, description: str) -> str:
     if IDENTIFIER_PATTERN.fullmatch(text) is None:
         raise ReleaseEvidenceV2Error(f"{description} must be a lowercase identifier.")
     return text
+
+
+def _artifact_name(value: object, description: str) -> str:
+    name = _string(value, description)
+    if ARTIFACT_NAME_PATTERN.fullmatch(name) is None:
+        raise ReleaseEvidenceV2Error(
+            f"{description} must be a basename containing only letters, digits, dots, underscores, and hyphens."
+        )
+    return name
 
 
 def _path(value: object, description: str) -> str:
@@ -737,6 +747,310 @@ def capture_v2(
         evidence_ref=evidence_ref,
     )
     return write_or_validate_capture_v2(repo_root, release_tag, record)
+
+
+def _terminal_production_context(
+    repo_root: Path,
+    release_tag: str,
+    *,
+    record_type: Literal["qualification", "disposition"],
+) -> tuple[_BundleReader, CaptureV2]:
+    tag = sanitize_release_tag(release_tag)
+    bundle = validate_v2_bundle(repo_root, tag, worktree=True)
+    bundle_class = _string(bundle.get("class"), "validated v2 bundle class")
+    conflicting_class = "v2-failed" if record_type == "qualification" else "v2-qualified"
+    if bundle_class == conflicting_class:
+        raise ReleaseEvidenceV2Error(
+            f"Terminal v2 evidence is mutually exclusive: cannot write {record_type}-v2 beside {bundle_class}."
+        )
+    capture = bundle.get("capture")
+    if not isinstance(capture, CaptureV2):
+        raise ReleaseEvidenceV2Error("Validated v2 bundle did not return a capture-v2 record.")
+    return _verification_reader(repo_root, verification_revision=None, worktree=True), capture
+
+
+def _terminal_immutable_identity(
+    record: Mapping[str, Any], record_type: Literal["qualification", "disposition"]
+) -> dict[str, Any]:
+    digest_field = "qualification_sha256" if record_type == "qualification" else "disposition_sha256"
+    timestamp_field = "qualified_at" if record_type == "qualification" else "failed_at"
+    return {key: value for key, value in record.items() if key not in {digest_field, timestamp_field}}
+
+
+def _validate_terminal_candidate(
+    reader: _BundleReader,
+    capture: CaptureV2,
+    record: Mapping[str, Any],
+    record_type: Literal["qualification", "disposition"],
+) -> None:
+    if record_type == "qualification":
+        _validate_qualification(reader, record, capture)
+    else:
+        _validate_disposition(reader, record, capture)
+
+
+def write_or_validate_terminal_v2(
+    repo_root: Path,
+    release_tag: str,
+    record: Mapping[str, Any],
+    *,
+    record_type: Literal["qualification", "disposition"],
+) -> Mapping[str, Any]:
+    repo_root = repo_root.resolve()
+    tag = sanitize_release_tag(release_tag)
+    reader, capture = _terminal_production_context(repo_root, tag, record_type=record_type)
+    _validate_terminal_candidate(reader, capture, record, record_type)
+    name = QUALIFICATION_NAME if record_type == "qualification" else DISPOSITION_NAME
+    target = repo_root / EVIDENCE_ROOT / tag / name
+    if target.exists():
+        existing = _load_record(reader, f"{EVIDENCE_ROOT}/{tag}/{name}", f"existing {record_type}-v2 record")
+        _validate_terminal_candidate(reader, capture, existing, record_type)
+        if _terminal_immutable_identity(existing, record_type) != _terminal_immutable_identity(record, record_type):
+            raise ReleaseEvidenceV2Error(
+                f"Existing {record_type}-v2 conflicts with the newly supplied immutable terminal evidence."
+            )
+        return existing
+    write_record(target, record)
+    validate_v2_bundle(repo_root, tag, worktree=True)
+    return record
+
+
+def _accepted_case_receipts_from_inputs(
+    repo_root: Path,
+    accepted_case_receipts: Mapping[str, Any],
+) -> dict[str, dict[str, str]]:
+    _exact_keys(accepted_case_receipts, REQUIRED_CASE_IDS, "qualification accepted case receipt inputs")
+    output: dict[str, dict[str, str]] = {}
+    for case_id in sorted(REQUIRED_CASE_IDS):
+        supplied = _mapping(accepted_case_receipts.get(case_id), f"qualification input receipt {case_id}")
+        _exact_keys(
+            supplied,
+            frozenset({"accepted_at", "path", "result", "source"}),
+            f"qualification input receipt {case_id}",
+        )
+        if supplied.get("result") != "passed":
+            raise ReleaseEvidenceV2Error(f"Qualification input receipt {case_id} result must be passed.")
+        accepted_at = _string(supplied.get("accepted_at"), f"qualification input receipt {case_id} accepted_at")
+        _timestamp(accepted_at, f"qualification input receipt {case_id} accepted_at")
+        path, relative = _repo_path(repo_root, supplied.get("path"), f"qualification input receipt {case_id} path")
+        try:
+            content = path.read_bytes()
+        except OSError as error:
+            raise ReleaseEvidenceV2Error(
+                f"Unable to read qualification input receipt {case_id} at {path}: {error}"
+            ) from error
+        output[case_id] = {
+            "accepted_at": accepted_at,
+            "path": relative,
+            "sha256": _digest_bytes(content),
+            "source": _string(supplied.get("source"), f"qualification input receipt {case_id} source"),
+        }
+    return output
+
+
+def build_qualification_v2(
+    repo_root: Path,
+    *,
+    release_tag: str,
+    qualified_at: str,
+    milestone_actor: str,
+    milestone_run_id: int,
+    milestone_run_attempt: int,
+    qualification_artifact_path: Path,
+    qualification_artifact_id: int,
+    qualification_manifest_path: Path,
+    accepted_case_receipts: Mapping[str, Any],
+    milestone_path: str = MILESTONE_WORKFLOW_PATH,
+) -> dict[str, Any]:
+    repo_root = repo_root.resolve()
+    tag = sanitize_release_tag(release_tag)
+    reader, capture = _terminal_production_context(repo_root, tag, record_type="qualification")
+    manifest_relative = _relative_repo_path(repo_root, qualification_manifest_path, "qualification manifest path")
+    try:
+        artifact_bytes = qualification_artifact_path.read_bytes()
+    except OSError as error:
+        raise ReleaseEvidenceV2Error(
+            f"Unable to read qualification artifact at {qualification_artifact_path}: {error}"
+        ) from error
+    try:
+        manifest_bytes = qualification_manifest_path.read_bytes()
+    except OSError as error:
+        raise ReleaseEvidenceV2Error(
+            f"Unable to read qualification manifest at {qualification_manifest_path}: {error}"
+        ) from error
+    artifact_name = _artifact_name(qualification_artifact_path.name, "qualification artifact name")
+    _timestamp(qualified_at, "qualification-v2 qualified_at")
+    case_receipts = _accepted_case_receipts_from_inputs(repo_root, accepted_case_receipts)
+    record = with_self_digest(
+        {
+            "accepted_case_receipts": case_receipts,
+            "artifact": {
+                "artifact_id": _positive_integer(qualification_artifact_id, "qualification artifact ID"),
+                "name": artifact_name,
+                "run_attempt": _positive_integer(milestone_run_attempt, "milestone run attempt"),
+                "run_id": _positive_integer(milestone_run_id, "milestone run ID"),
+                "sha256": _digest_bytes(artifact_bytes),
+            },
+            "capture": {
+                "path": f"{EVIDENCE_ROOT}/{tag}/{CAPTURE_NAME}",
+                "sha256": capture.capture_sha256,
+            },
+            "profile_preservation": {
+                "case_id": PROFILE_CASE_ID,
+                "preserved": True,
+                "receipt_sha256": capture.signed_ui.receipt.file_sha256,
+            },
+            "qualification_manifest": {"path": manifest_relative, "sha256": _digest_bytes(manifest_bytes)},
+            "qualification_record": {
+                "path": capture.qualification_record.path,
+                "sha256": capture.qualification_record.sha256,
+            },
+            "qualified_at": qualified_at,
+            "record_type": "qualification",
+            "release_tag": tag,
+            "schema_version": SCHEMA_VERSION,
+            "source_sha": capture.source_sha,
+            "state": "QUALIFIED",
+            "successful_milestone": {
+                "actor": _string(milestone_actor, "successful milestone actor"),
+                "path": _path(milestone_path, "successful milestone path"),
+                "result": "success",
+                "run_attempt": _positive_integer(milestone_run_attempt, "milestone run attempt"),
+                "run_id": _positive_integer(milestone_run_id, "milestone run ID"),
+            },
+            "updater_route": {
+                "case_id": "sparkle-update-route",
+                "receipt_sha256": case_receipts["sparkle-update-route"]["sha256"],
+                "result": "passed",
+            },
+        }
+    )
+    _validate_qualification(reader, record, capture)
+    return record
+
+
+def qualify_v2(
+    repo_root: Path,
+    *,
+    release_tag: str,
+    qualified_at: str,
+    milestone_actor: str,
+    milestone_run_id: int,
+    milestone_run_attempt: int,
+    qualification_artifact_path: Path,
+    qualification_artifact_id: int,
+    qualification_manifest_path: Path,
+    accepted_case_receipts: Mapping[str, Any],
+    milestone_path: str = MILESTONE_WORKFLOW_PATH,
+) -> Mapping[str, Any]:
+    record = build_qualification_v2(
+        repo_root,
+        release_tag=release_tag,
+        qualified_at=qualified_at,
+        milestone_actor=milestone_actor,
+        milestone_run_id=milestone_run_id,
+        milestone_run_attempt=milestone_run_attempt,
+        qualification_artifact_path=qualification_artifact_path,
+        qualification_artifact_id=qualification_artifact_id,
+        qualification_manifest_path=qualification_manifest_path,
+        accepted_case_receipts=accepted_case_receipts,
+        milestone_path=milestone_path,
+    )
+    return write_or_validate_terminal_v2(repo_root, release_tag, record, record_type="qualification")
+
+
+def build_disposition_v2(
+    repo_root: Path,
+    *,
+    release_tag: str,
+    failed_at: str,
+    failure_workflow_actor: str,
+    failure_workflow_run_id: int,
+    failure_workflow_run_attempt: int,
+    failure_code: str,
+    failure_subject: str,
+    failure_expected: str,
+    failure_observed: str,
+    release_identity_preserved: bool,
+    signed_artifact_preserved: bool,
+    source_identity_preserved: bool,
+    failure_workflow_path: str = MILESTONE_WORKFLOW_PATH,
+) -> dict[str, Any]:
+    repo_root = repo_root.resolve()
+    tag = sanitize_release_tag(release_tag)
+    reader, capture = _terminal_production_context(repo_root, tag, record_type="disposition")
+    _timestamp(failed_at, "disposition-v2 failed_at")
+    record = with_self_digest(
+        {
+            "capture": {
+                "path": f"{EVIDENCE_ROOT}/{tag}/{CAPTURE_NAME}",
+                "sha256": capture.capture_sha256,
+            },
+            "failed_at": failed_at,
+            "failure": {
+                "code": _identifier(failure_code, "disposition failure code"),
+                "expected": _string(failure_expected, "disposition failure expected"),
+                "observed": _string(failure_observed, "disposition failure observed"),
+                "subject": _string(failure_subject, "disposition failure subject"),
+            },
+            "failure_workflow": {
+                "actor": _string(failure_workflow_actor, "failed milestone actor"),
+                "path": _path(failure_workflow_path, "failed milestone path"),
+                "run_attempt": _positive_integer(failure_workflow_run_attempt, "failed milestone run attempt"),
+                "run_id": _positive_integer(failure_workflow_run_id, "failed milestone run ID"),
+            },
+            "preservation": {
+                "release_identity_preserved": _boolean(
+                    release_identity_preserved, "release identity preservation result"
+                ),
+                "signed_artifact_preserved": _boolean(signed_artifact_preserved, "signed artifact preservation result"),
+                "source_identity_preserved": _boolean(source_identity_preserved, "source identity preservation result"),
+            },
+            "record_type": "disposition",
+            "release_tag": tag,
+            "schema_version": SCHEMA_VERSION,
+            "source_sha": capture.source_sha,
+            "state": "FAILED",
+        }
+    )
+    _validate_disposition(reader, record, capture)
+    return record
+
+
+def dispose_v2(
+    repo_root: Path,
+    *,
+    release_tag: str,
+    failed_at: str,
+    failure_workflow_actor: str,
+    failure_workflow_run_id: int,
+    failure_workflow_run_attempt: int,
+    failure_code: str,
+    failure_subject: str,
+    failure_expected: str,
+    failure_observed: str,
+    release_identity_preserved: bool,
+    signed_artifact_preserved: bool,
+    source_identity_preserved: bool,
+    failure_workflow_path: str = MILESTONE_WORKFLOW_PATH,
+) -> Mapping[str, Any]:
+    record = build_disposition_v2(
+        repo_root,
+        release_tag=release_tag,
+        failed_at=failed_at,
+        failure_workflow_actor=failure_workflow_actor,
+        failure_workflow_run_id=failure_workflow_run_id,
+        failure_workflow_run_attempt=failure_workflow_run_attempt,
+        failure_code=failure_code,
+        failure_subject=failure_subject,
+        failure_expected=failure_expected,
+        failure_observed=failure_observed,
+        release_identity_preserved=release_identity_preserved,
+        signed_artifact_preserved=signed_artifact_preserved,
+        source_identity_preserved=source_identity_preserved,
+        failure_workflow_path=failure_workflow_path,
+    )
+    return write_or_validate_terminal_v2(repo_root, release_tag, record, record_type="disposition")
 
 
 def _tree_paths(reader: _BundleReader, prefix: str) -> list[str]:
@@ -1496,8 +1810,13 @@ def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], ca
     if milestone_workflow.actor != EXPECTED_MILESTONE_ACTOR:
         raise ReleaseEvidenceV2Error("qualification-v2 milestone actor is not the repository owner.")
     artifact = _mapping(record.get("artifact"), "qualification-v2 artifact")
-    _exact_keys(artifact, frozenset({"artifact_id", "run_attempt", "run_id", "sha256"}), "qualification-v2 artifact")
+    _exact_keys(
+        artifact,
+        frozenset({"artifact_id", "name", "run_attempt", "run_id", "sha256"}),
+        "qualification-v2 artifact",
+    )
     artifact_id = _positive_integer(artifact.get("artifact_id"), "qualification-v2 artifact ID")
+    _artifact_name(artifact.get("name"), "qualification-v2 artifact name")
     artifact_sha256 = _sha256(artifact.get("sha256"), "qualification-v2 artifact SHA-256")
     artifact_run_attempt = _positive_integer(artifact.get("run_attempt"), "qualification-v2 artifact run attempt")
     artifact_run_id = _positive_integer(artifact.get("run_id"), "qualification-v2 artifact run ID")
@@ -2002,6 +2321,43 @@ def _parse_capture_arguments(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _parse_qualify_arguments(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build and write-once validate deterministic qualification-v2 evidence."
+    )
+    parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--qualified-at", required=True)
+    parser.add_argument("--milestone-actor", required=True)
+    parser.add_argument("--milestone-run-id", type=int, required=True)
+    parser.add_argument("--milestone-run-attempt", type=int, required=True)
+    parser.add_argument("--qualification-artifact", type=Path, required=True)
+    parser.add_argument("--qualification-artifact-id", type=int, required=True)
+    parser.add_argument("--qualification-manifest", type=Path, required=True)
+    parser.add_argument("--accepted-case-receipts", type=Path, required=True)
+    parser.add_argument("--github-output", type=Path)
+    return parser.parse_args(argv)
+
+
+def _parse_dispose_arguments(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build and write-once validate deterministic disposition-v2 evidence.")
+    parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--failed-at", required=True)
+    parser.add_argument("--failure-workflow-actor", required=True)
+    parser.add_argument("--failure-workflow-run-id", type=int, required=True)
+    parser.add_argument("--failure-workflow-run-attempt", type=int, required=True)
+    parser.add_argument("--failure-code", required=True)
+    parser.add_argument("--failure-subject", required=True)
+    parser.add_argument("--failure-expected", required=True)
+    parser.add_argument("--failure-observed", required=True)
+    parser.add_argument("--release-identity-preserved", action="store_true", required=True)
+    parser.add_argument("--signed-artifact-preserved", action="store_true", required=True)
+    parser.add_argument("--source-identity-preserved", action="store_true", required=True)
+    parser.add_argument("--github-output", type=Path)
+    return parser.parse_args(argv)
+
+
 def _parse_index_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate or check deterministic release evidence index-v2.")
     parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
@@ -2084,6 +2440,78 @@ def _run_capture(argv: Sequence[str]) -> int:
     return 0
 
 
+def _run_qualify(argv: Sequence[str]) -> int:
+    args = _parse_qualify_arguments(argv)
+    repo_root = args.repo_root.resolve()
+    try:
+        accepted_case_receipts = _load_json_path(
+            _path_from_cli(args.accepted_case_receipts), "qualification accepted case receipt inputs"
+        )
+        record = qualify_v2(
+            repo_root,
+            release_tag=args.release_tag,
+            qualified_at=args.qualified_at,
+            milestone_actor=args.milestone_actor,
+            milestone_run_id=args.milestone_run_id,
+            milestone_run_attempt=args.milestone_run_attempt,
+            qualification_artifact_path=_path_from_cli(args.qualification_artifact),
+            qualification_artifact_id=args.qualification_artifact_id,
+            qualification_manifest_path=_path_from_cli(args.qualification_manifest),
+            accepted_case_receipts=accepted_case_receipts,
+        )
+        release_tag = sanitize_release_tag(record.get("release_tag"))
+    except (OSError, ReleaseEvidenceV2Error) as error:
+        print(f"release-evidence-v2: {error}", file=sys.stderr)
+        return 1
+    outputs = {
+        "qualification_path": f"{EVIDENCE_ROOT.as_posix()}/{release_tag}/{QUALIFICATION_NAME}",
+        "qualification_sha256": record["qualification_sha256"],
+        "qualified_at": record["qualified_at"],
+        "release_tag": release_tag,
+    }
+    if args.github_output is not None:
+        _write_github_output(_path_from_cli(args.github_output), outputs)
+    else:
+        print(json.dumps(outputs, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def _run_dispose(argv: Sequence[str]) -> int:
+    args = _parse_dispose_arguments(argv)
+    repo_root = args.repo_root.resolve()
+    try:
+        record = dispose_v2(
+            repo_root,
+            release_tag=args.release_tag,
+            failed_at=args.failed_at,
+            failure_workflow_actor=args.failure_workflow_actor,
+            failure_workflow_run_id=args.failure_workflow_run_id,
+            failure_workflow_run_attempt=args.failure_workflow_run_attempt,
+            failure_code=args.failure_code,
+            failure_subject=args.failure_subject,
+            failure_expected=args.failure_expected,
+            failure_observed=args.failure_observed,
+            release_identity_preserved=args.release_identity_preserved,
+            signed_artifact_preserved=args.signed_artifact_preserved,
+            source_identity_preserved=args.source_identity_preserved,
+        )
+        release_tag = sanitize_release_tag(record.get("release_tag"))
+    except (OSError, ReleaseEvidenceV2Error) as error:
+        print(f"release-evidence-v2: {error}", file=sys.stderr)
+        return 1
+    outputs = {
+        "disposition_path": f"{EVIDENCE_ROOT.as_posix()}/{release_tag}/{DISPOSITION_NAME}",
+        "disposition_sha256": record["disposition_sha256"],
+        "failed_at": record["failed_at"],
+        "release_tag": release_tag,
+    }
+    if args.github_output is not None:
+        _write_github_output(_path_from_cli(args.github_output), outputs)
+    else:
+        print(json.dumps(outputs, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
 def _run_index(argv: Sequence[str]) -> int:
     args = _parse_index_arguments(argv)
     repo_root = args.repo_root.resolve()
@@ -2115,6 +2543,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_sanitize(arguments[1:])
     if arguments and arguments[0] in {"capture", "capture-v2"}:
         return _run_capture(arguments[1:])
+    if arguments and arguments[0] in {"qualify", "qualification", "qualification-v2"}:
+        return _run_qualify(arguments[1:])
+    if arguments and arguments[0] in {"dispose", "disposition", "disposition-v2"}:
+        return _run_dispose(arguments[1:])
     if arguments and arguments[0] in {"index", "index-v2"}:
         return _run_index(arguments[1:])
     args = _parse_arguments(argv)

@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import zipfile
 
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,10 @@ from scripts.release_evidence_v2 import (
     canonical_record_bytes,
     capture_v2,
     check_index_v2,
+    dispose_v2,
     evidence_ref_for_tag,
+    main,
+    qualify_v2,
     sanitize_evidence_ref,
     sanitize_release_tag,
     validate_v2_bundle,
@@ -170,6 +174,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             json.dumps(qualification, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         (bundle_root / "live-appcast.xml").write_bytes(LIVE_APPCAST_BYTES)
+        (bundle_root / "qualification-artifact.zip").write_bytes(b"qualification artifact\n")
         cases = {case["id"]: case for case in policy["cases"]}
         for case_id, sample_name in (
             ("clean-machine-signed-update", "v0.3.2-clean-machine-signed-update-v1.json"),
@@ -273,6 +278,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
 
     def qualification_record(self, root: Path, capture: dict[str, Any]) -> dict[str, Any]:
         bundle = root / "docs" / "release-evidence" / TAG
+        artifact_path = bundle / "qualification-artifact.zip"
         profile_receipt_path = bundle / "signed-artifact-ui-receipt.json"
         clean_receipt_path = bundle / "clean-machine-signed-update-receipt.json"
         live_qualification_path = bundle / "live-qualification-v1.json"
@@ -306,7 +312,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                         "post_update_signed_app_tree_sha256": release_receipt["signed_app_tree_sha256"],
                         "prior_release_tag": "v0.3.0-rc.2",
                         "profile_preserved": True,
-                        "qualification_artifact_digest": f"sha256:{'d' * 64}",
+                        "qualification_artifact_digest": f"sha256:{digest(artifact_path)}",
                         "qualification_artifact_id": 888,
                         "qualification_evidence_sha": "e" * 40,
                         "qualification_manifest_sha256": manifest["manifest_sha256"],
@@ -356,7 +362,13 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                         "source": "tier3_automation_receipt",
                     },
                 },
-                "artifact": {"artifact_id": 888, "run_attempt": 3, "run_id": 33333, "sha256": "d" * 64},
+                "artifact": {
+                    "artifact_id": 888,
+                    "name": artifact_path.name,
+                    "run_attempt": 3,
+                    "run_id": 33333,
+                    "sha256": digest(artifact_path),
+                },
                 "capture": {
                     "path": f"docs/release-evidence/{TAG}/capture-v2.json",
                     "sha256": capture["capture_sha256"],
@@ -425,6 +437,34 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 "state": "FAILED",
             }
         )
+
+    def qualification_inputs(self, root: Path, capture: dict[str, Any]) -> dict[str, Any]:
+        record = self.qualification_record(root, capture)
+        return {
+            case_id: {
+                "accepted_at": receipt["accepted_at"],
+                "path": receipt["path"],
+                "result": "passed",
+                "source": receipt["source"],
+            }
+            for case_id, receipt in record["accepted_case_receipts"].items()
+        }
+
+    @staticmethod
+    def disposition_arguments() -> dict[str, Any]:
+        return {
+            "failed_at": "2026-08-05T12:05:00Z",
+            "failure_workflow_actor": "cbusillo",
+            "failure_workflow_run_id": 33333,
+            "failure_workflow_run_attempt": 3,
+            "failure_code": "profile_preservation_failed",
+            "failure_subject": "profile-save-action-accessibility",
+            "failure_expected": "profile preserved",
+            "failure_observed": "profile missing",
+            "release_identity_preserved": True,
+            "signed_artifact_preserved": True,
+            "source_identity_preserved": True,
+        }
 
     def write_capture(self, root: Path, source_sha: str) -> dict[str, Any]:
         capture = self.capture_record(root, source_sha)
@@ -1107,6 +1147,214 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             )
             self.assertEqual(reused["capture_sha256"], capture["capture_sha256"])
             self.assertEqual((bundle / CAPTURE_NAME).read_bytes(), original)
+
+    def test_qualification_producer_writes_valid_record_and_reuses_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_sha, bundle = self.build_repository(root)
+            capture = self.write_capture(root, source_sha)
+            inputs = self.qualification_inputs(root, capture)
+            artifact_path = bundle / "qualification-artifact.zip"
+            record = qualify_v2(
+                root,
+                release_tag=TAG,
+                qualified_at="2026-08-05T12:05:00Z",
+                milestone_actor="cbusillo",
+                milestone_run_id=33333,
+                milestone_run_attempt=3,
+                qualification_artifact_path=artifact_path,
+                qualification_artifact_id=888,
+                qualification_manifest_path=bundle / "qualification-manifest.json",
+                accepted_case_receipts=inputs,
+            )
+            qualification_path = bundle / QUALIFICATION_NAME
+            original = qualification_path.read_bytes()
+            self.assertEqual(record["artifact"]["name"], artifact_path.name)
+            self.assertEqual(validate_v2_bundle(root, TAG, worktree=True)["class"], "v2-qualified")
+
+            reused = qualify_v2(
+                root,
+                release_tag=TAG,
+                qualified_at="2026-08-05T12:06:00Z",
+                milestone_actor="cbusillo",
+                milestone_run_id=33333,
+                milestone_run_attempt=3,
+                qualification_artifact_path=artifact_path,
+                qualification_artifact_id=888,
+                qualification_manifest_path=bundle / "qualification-manifest.json",
+                accepted_case_receipts=inputs,
+            )
+            self.assertEqual(reused["qualification_sha256"], record["qualification_sha256"])
+            self.assertEqual(qualification_path.read_bytes(), original)
+
+            renamed_artifact = bundle / "qualification-artifact-renamed.zip"
+            renamed_artifact.write_bytes(artifact_path.read_bytes())
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "immutable terminal evidence"):
+                qualify_v2(
+                    root,
+                    release_tag=TAG,
+                    qualified_at="2026-08-05T12:06:00Z",
+                    milestone_actor="cbusillo",
+                    milestone_run_id=33333,
+                    milestone_run_attempt=3,
+                    qualification_artifact_path=renamed_artifact,
+                    qualification_artifact_id=888,
+                    qualification_manifest_path=bundle / "qualification-manifest.json",
+                    accepted_case_receipts=inputs,
+                )
+            self.assertEqual(qualification_path.read_bytes(), original)
+
+    def test_disposition_producer_writes_valid_record_and_is_mutually_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_sha, bundle = self.build_repository(root)
+            self.write_capture(root, source_sha)
+            record = dispose_v2(root, release_tag=TAG, **self.disposition_arguments())
+            disposition_path = bundle / DISPOSITION_NAME
+            self.assertEqual(validate_v2_bundle(root, TAG, worktree=True)["class"], "v2-failed")
+            self.assertEqual(
+                record["disposition_sha256"], json.loads(disposition_path.read_text())["disposition_sha256"]
+            )
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "mutually exclusive"):
+                qualify_v2(
+                    root,
+                    release_tag=TAG,
+                    qualified_at="2026-08-05T12:05:00Z",
+                    milestone_actor="cbusillo",
+                    milestone_run_id=33333,
+                    milestone_run_attempt=3,
+                    qualification_artifact_path=bundle / "qualification-artifact.zip",
+                    qualification_artifact_id=888,
+                    qualification_manifest_path=bundle / "qualification-manifest.json",
+                    accepted_case_receipts=self.qualification_inputs(root, self.capture_record(root, source_sha)),
+                )
+
+    def test_terminal_producers_reject_missing_capture_and_malformed_case_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_sha, bundle = self.build_repository(root)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "no v2 capture"):
+                dispose_v2(root, release_tag=TAG, **self.disposition_arguments())
+
+            capture = self.write_capture(root, source_sha)
+            capture_path = bundle / CAPTURE_NAME
+            capture_path.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "capture-v2 record keys changed"):
+                dispose_v2(root, release_tag=TAG, **self.disposition_arguments())
+            capture_path.unlink()
+            capture = self.write_capture(root, source_sha)
+            inputs = self.qualification_inputs(root, capture)
+            inputs["clean-machine-signed-update"].pop("result")
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "input receipt clean-machine-signed-update"):
+                qualify_v2(
+                    root,
+                    release_tag=TAG,
+                    qualified_at="2026-08-05T12:05:00Z",
+                    milestone_actor="cbusillo",
+                    milestone_run_id=33333,
+                    milestone_run_attempt=3,
+                    qualification_artifact_path=bundle / "qualification-artifact.zip",
+                    qualification_artifact_id=888,
+                    qualification_manifest_path=bundle / "qualification-manifest.json",
+                    accepted_case_receipts=inputs,
+                )
+
+            inputs = self.qualification_inputs(root, capture)
+            malformed = bundle / "clean-machine-signed-update-receipt.json"
+            malformed.write_text('{"result":"passed"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "clean-machine-signed-update"):
+                qualify_v2(
+                    root,
+                    release_tag=TAG,
+                    qualified_at="2026-08-05T12:05:00Z",
+                    milestone_actor="cbusillo",
+                    milestone_run_id=33333,
+                    milestone_run_attempt=3,
+                    qualification_artifact_path=bundle / "qualification-artifact.zip",
+                    qualification_artifact_id=888,
+                    qualification_manifest_path=bundle / "qualification-manifest.json",
+                    accepted_case_receipts=inputs,
+                )
+
+    def test_terminal_cli_outputs_are_canonical_and_tags_are_sanitized(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_sha, bundle = self.build_repository(root)
+            capture = self.write_capture(root, source_sha)
+            inputs_path = root / "case-receipts.json"
+            inputs_path.write_text(
+                json.dumps(self.qualification_inputs(root, capture), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                result = main(
+                    [
+                        "qualify",
+                        "--repo-root",
+                        str(root),
+                        "--release-tag",
+                        TAG,
+                        "--qualified-at",
+                        "2026-08-05T12:05:00Z",
+                        "--milestone-actor",
+                        "cbusillo",
+                        "--milestone-run-id",
+                        "33333",
+                        "--milestone-run-attempt",
+                        "3",
+                        "--qualification-artifact",
+                        str(bundle / "qualification-artifact.zip"),
+                        "--qualification-artifact-id",
+                        "888",
+                        "--qualification-manifest",
+                        str(bundle / "qualification-manifest.json"),
+                        "--accepted-case-receipts",
+                        str(inputs_path),
+                    ]
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                json.loads(stdout.getvalue()),
+                {
+                    "qualification_path": f"docs/release-evidence/{TAG}/qualification-v2.json",
+                    "qualification_sha256": json.loads((bundle / QUALIFICATION_NAME).read_text())[
+                        "qualification_sha256"
+                    ],
+                    "qualified_at": "2026-08-05T12:05:00Z",
+                    "release_tag": TAG,
+                },
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                result = main(
+                    [
+                        "dispose",
+                        "--release-tag",
+                        "../unsafe",
+                        "--failed-at",
+                        "2026-08-05T12:05:00Z",
+                        "--failure-workflow-actor",
+                        "cbusillo",
+                        "--failure-workflow-run-id",
+                        "33333",
+                        "--failure-workflow-run-attempt",
+                        "3",
+                        "--failure-code",
+                        "profile_preservation_failed",
+                        "--failure-subject",
+                        "profile-save-action-accessibility",
+                        "--failure-expected",
+                        "profile preserved",
+                        "--failure-observed",
+                        "profile missing",
+                        "--release-identity-preserved",
+                        "--signed-artifact-preserved",
+                        "--source-identity-preserved",
+                    ]
+                )
+            self.assertEqual(result, 1)
+            self.assertIn("canonical release tag", stderr.getvalue())
 
     def test_workflow_contract_uses_durable_capture_and_direct_branch_push(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release-evidence.yml").read_text(encoding="utf-8")
