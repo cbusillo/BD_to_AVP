@@ -55,11 +55,14 @@ class GitHubRestTransportError(ReleaseEvidenceOrphanAuditError):
 class GitHubRestApi(Protocol):
     repository: str
 
-    def get(self, endpoint: str, *, paginate: bool = False) -> Any: ...
+    def get(self, endpoint: str, *, paginate: bool = False) -> Any:
+        raise NotImplementedError
 
-    def create_issue(self, payload: Mapping[str, object]) -> Mapping[str, Any]: ...
+    def create_issue(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        raise NotImplementedError
 
-    def update_issue(self, number: int, payload: Mapping[str, object]) -> Mapping[str, Any]: ...
+    def update_issue(self, number: int, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -570,15 +573,20 @@ def _issue_payload(
             f"`{_markdown(finding.ref)}` | `{_markdown(finding.sha)}` | {age} | {finding.classification} | "
             f"{finding.bundle_state} | {_markdown(finding.remediation)} |"
         )
+    operator_action = " ".join(
+        (
+            "Review only GitHub REST tree/blob data for the listed `automation/release-evidence-*` refs.",
+            "Do not check out, fetch, or execute them. For valid terminal evidence, use the actor-aware",
+            "reconciliation helper; for malformed evidence, preserve the ref for review and recreate only",
+            "through the trusted producer.",
+        )
+    )
     lines.extend(
         [
             "",
             "### Operator action",
             "",
-            "Review only GitHub REST tree/blob data for the listed `automation/release-evidence-*` refs. "
-            "Do not check out, fetch, or execute them. For valid terminal evidence, use the actor-aware "
-            "reconciliation helper; for malformed evidence, preserve the ref for review and recreate only "
-            "through the trusted producer.",
+            operator_action,
         ]
     )
     return {"assignees": [owner], "body": "\n".join(lines), "state": state, "title": ALERT_TITLE}
