@@ -88,10 +88,12 @@ record path, and self-digest.
 ```sh
 uv run python -m scripts.release_evidence_v2 qualify \
   --release-tag v0.3.2 --qualified-at <utc-timestamp> \
-  --milestone-actor cbusillo --milestone-run-id <id> --milestone-run-attempt <attempt> \
+  --milestone-actor cbusillo --milestone-run-id <id> \
+  --milestone-run-attempt <attempt> \
   --qualification-artifact /local/path/qualification-artifact.zip \
   --qualification-artifact-id <id> \
-  --qualification-manifest docs/release-evidence/v0.3.2/qualification-manifest.json \
+  --qualification-manifest \
+  docs/release-evidence/v0.3.2/qualification-manifest.json \
   --accepted-case-receipts /local/path/accepted-case-receipts.json
 
 uv run python -m scripts.release_evidence_v2 dispose \
@@ -110,7 +112,8 @@ silently alter unrelated evidence files:
 
 ```sh
 uv run python -m scripts.release_evidence_v2 index --write --repo-root .
-uv run python -m scripts.release_evidence_v2 index --check --worktree --repo-root .
+uv run python -m scripts.release_evidence_v2 index --check --worktree \
+  --repo-root .
 ```
 
 `index-v2.json` contains only `schema_version`, a path/digest binding for
@@ -125,10 +128,55 @@ Any later commit that adds terminal receipts or other checked files beneath a
 release bundle must regenerate `index-v2.json` with the documented `index
 --write` command before CI will accept the branch.
 
-The automation branch is evidence state, not merge authorization. After capture
-and qualification are complete, an operator opens the normal protected pull
-request to merge the docs-only branch into `main`; branch protection, required
-CI, review, and conversation-resolution rules remain unchanged.
+The automation branch is evidence state, not merge authorization. After a
+qualification is complete, an authenticated operator uses the local
+reconciliation helper to open or adopt the normal protected pull request to
+merge the docs-only branch into `main`; branch protection, required CI,
+review, and conversation-resolution rules remain unchanged. The secret-free
+workflow never receives pull-request write permission.
+
+## Operator Reconciliation
+
+Run the observational preflight first. It reads the active local `gh` operator,
+canonical remote evidence ref, current protected `main`, branch protection,
+open pull requests, and immutable evidence files. It fetches only the two
+remote commits locally; it never creates a pull request or changes a remote
+branch.
+
+```sh
+uv run python -m scripts.release_evidence_reconcile preflight \
+  --release-tag v0.3.2-beta.8
+```
+
+The compact JSON output contains the exact `evidence_sha`, `main_sha`, and
+`plan_digest`. The plan binds the exact tag/ref, release/source identity,
+release and capture actors/runs, successful qualification actor/run, artifact
+identity, active operator, and required protected checks. To permit the only
+mutation, echo all three values exactly from a fresh preflight:
+
+```sh
+uv run python -m scripts.release_evidence_reconcile reconcile \
+  --release-tag v0.3.2-beta.8 \
+  --evidence-sha <preflight-evidence-sha> \
+  --main-sha <preflight-main-sha> \
+  --plan-digest <preflight-plan-digest>
+```
+
+The helper verifies that `automation/release-evidence-<tag>` points at the
+echoed remote commit and descends from the current protected-main base. It
+refuses stale branches, a moved `main`, non-evidence diffs, stale
+`index-v2.json`, incomplete bundles, any terminal class other than
+`v2-qualified`, and a durable `v2-disposed` failure. The standard offline v2
+verifier and write-once history check run against the immutable evidence SHA.
+
+It also refuses another open PR to `main`, a canonical evidence PR with a
+different head SHA, or an author other than the active local `gh`
+operator. An existing exact PR is adopted without another write, making retry
+idempotent. When no PR exists, the helper invokes only `gh pr create` for the
+canonical branch and `main`; it never merges, force-pushes, deletes a branch,
+edits protection, or uses a workflow token. Required checks continue to run on
+that final protected PR and must complete under the repository's normal merge
+rules.
 
 ## Capture Record
 
