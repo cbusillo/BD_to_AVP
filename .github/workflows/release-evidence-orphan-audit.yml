@@ -37,7 +37,10 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Sync locked audit environment
+        run: uv sync --locked --all-groups --python 3.12
+
       - name: Audit release-evidence refs through GitHub REST
         env:
           GH_TOKEN: ${{ github.token }}
-        run: uv run python -m scripts.release_evidence_orphan_audit
+        run: uv run --frozen python -m scripts.release_evidence_orphan_audit

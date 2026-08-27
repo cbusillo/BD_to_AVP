@@ -8,13 +8,13 @@ import unittest
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from scripts.release_evidence_orphan_audit import (
     ALERT_MARKER,
     ALERT_TITLE,
     EvidenceFinding,
-    ReleaseEvidenceOrphanAuditError,
+    GitHubRestTransportError,
     run_audit,
 )
 
@@ -29,6 +29,25 @@ def sha(value: str) -> str:
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def alert_issue(
+    number: int,
+    *,
+    body: str = ALERT_MARKER,
+    state: str = "open",
+    title: str = ALERT_TITLE,
+    author: str = "github-actions[bot]",
+    assignees: list[Mapping[str, str]] | None = None,
+) -> dict[str, object]:
+    return {
+        "assignees": assignees or [],
+        "body": body,
+        "number": number,
+        "state": state,
+        "title": title,
+        "user": {"login": author},
+    }
 
 
 class FakeGitHubRestClient:
@@ -47,7 +66,10 @@ class FakeGitHubRestClient:
             return self.ref_pages
         if endpoint.endswith("issues?state=all&per_page=100"):
             return self.issue_pages
-        return self.responses[endpoint]
+        response = self.responses[endpoint]
+        if isinstance(response, Exception):
+            raise response
+        return response
 
     def create_issue(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
         self.created.append(payload)
@@ -73,6 +95,7 @@ class AuditFixture:
         on_main: bool = False,
         malformed: bool = False,
         wrap_blob_content: bool = False,
+        both_terminals: bool = False,
     ) -> None:
         ref_sha = sha(f"ref:{tag}")
         tree_sha = sha(f"tree:{tag}")
@@ -102,6 +125,23 @@ class AuditFixture:
                 "schema_version": 2,
                 "source_sha": sha(f"source:{tag}"),
                 "state": state,
+            }
+        if both_terminals:
+            records["qualification-v2.json"] = {
+                "capture": {"path": f"{prefix}/capture-v2.json", "sha256": capture_digest},
+                "record_type": "qualification",
+                "release_tag": tag,
+                "schema_version": 2,
+                "source_sha": sha(f"source:{tag}"),
+                "state": "QUALIFIED",
+            }
+            records["disposition-v2.json"] = {
+                "capture": {"path": f"{prefix}/capture-v2.json", "sha256": capture_digest},
+                "record_type": "disposition",
+                "release_tag": tag,
+                "schema_version": 2,
+                "source_sha": sha(f"source:{tag}"),
+                "state": "FAILED",
             }
         entries: list[Mapping[str, Any]] = []
         for filename, record in records.items():
@@ -274,31 +314,86 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         self.assertEqual(report.findings[0].classification, "malformed")
         self.assertEqual(report.findings[0].age_hours, 72.0)
 
+    def test_future_capture_timestamp_is_malformed(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_bundle("v1.0.11", captured_at=NOW + timedelta(minutes=6))
+        report = run_audit(fixture.finalize(), now=NOW)
+
+        self.assertEqual(report.findings[0].classification, "malformed")
+        self.assertIn("more than five minutes in the future", report.findings[0].reason)
+
+    def test_transport_failure_aborts_without_impeaching_evidence(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_bundle("v1.0.12", captured_at=NOW - timedelta(days=4), terminal="qualified")
+        api = fixture.finalize()
+        blob_endpoint = next(endpoint for endpoint in api.responses if "/git/blobs/" in endpoint)
+        api.responses[blob_endpoint] = GitHubRestTransportError("rate limited")
+
+        with self.assertRaisesRegex(GitHubRestTransportError, "rate limited"):
+            run_audit(api, now=NOW)
+        self.assertEqual(api.created, [])
+
+    def test_truncated_tree_aborts_the_audit(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_bundle("v1.0.13", captured_at=NOW - timedelta(days=4))
+        api = fixture.finalize()
+        ref_sha = fixture.refs[0]["object"]["sha"]
+        commit = api.responses[f"repos/{REPOSITORY}/git/commits/{ref_sha}"]
+        self.assertIsInstance(commit, Mapping)
+        commit_record = cast(Mapping[str, Any], commit)
+        tree = commit_record["tree"]
+        self.assertIsInstance(tree, Mapping)
+        tree_sha = cast(Mapping[str, Any], tree)["sha"]
+        api.responses[f"repos/{REPOSITORY}/git/trees/{tree_sha}?recursive=1"] = {
+            "tree": [],
+            "truncated": True,
+        }
+
+        with self.assertRaisesRegex(GitHubRestTransportError, "truncated tree"):
+            run_audit(api, now=NOW)
+
+    def test_split_brain_terminal_records_are_malformed(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_bundle("v1.0.14", captured_at=NOW - timedelta(days=4), both_terminals=True)
+        report = run_audit(fixture.finalize(), now=NOW)
+
+        self.assertEqual(report.findings[0].classification, "malformed")
+        self.assertIn("both terminal v2 records", report.findings[0].reason)
+
     def test_duplicate_alert_issues_refuse_ambiguous_ownership(self) -> None:
         fixture = AuditFixture()
         fixture.add_bundle("v1.0.4", captured_at=NOW - timedelta(days=4))
         api = fixture.finalize()
+        api.issue_pages = [[alert_issue(20), alert_issue(21)]]
+
+        report = run_audit(api, now=NOW)
+
+        self.assertEqual(report.alert_action, "ambiguous")
+        self.assertIsNone(report.alert_issue_number)
+        self.assertEqual(api.created, [])
+        self.assertEqual(api.updated, [])
+
+    def test_untrusted_lookalike_issues_cannot_block_alert_creation(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_bundle("v1.0.15", captured_at=NOW - timedelta(days=4))
+        api = fixture.finalize()
         api.issue_pages = [
             [
-                {"body": ALERT_MARKER, "number": 20, "state": "open", "title": ALERT_TITLE},
-                {"body": ALERT_MARKER, "number": 21, "state": "open", "title": ALERT_TITLE},
+                alert_issue(30, author="outsider"),
+                alert_issue(31, author="outsider", body="lookalike", title=ALERT_TITLE),
             ]
         ]
 
-        with self.assertRaisesRegex(ReleaseEvidenceOrphanAuditError, "Ambiguous duplicate"):
-            run_audit(api, now=NOW)
-        self.assertEqual(api.created, [])
-        self.assertEqual(api.updated, [])
+        report = run_audit(api, now=NOW)
+
+        self.assertEqual(report.alert_action, "open")
+        self.assertEqual(len(api.created), 1)
 
     def test_adopts_one_legacy_alert_issue(self) -> None:
         fixture = AuditFixture()
         fixture.add_bundle("v1.0.5", captured_at=NOW - timedelta(days=4))
         api = fixture.finalize()
-        api.issue_pages = [
-            [
-                {"assignees": [], "body": "legacy", "number": 22, "state": "open", "title": ALERT_TITLE},
-            ]
-        ]
+        api.issue_pages = [[alert_issue(22, body="legacy", author="cbusillo")]]
         report = run_audit(api, now=NOW)
 
         self.assertEqual(report.alert_action, "adopt")
@@ -309,11 +404,7 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         stale_fixture = AuditFixture()
         stale_fixture.add_bundle("v1.0.6", captured_at=NOW - timedelta(days=4))
         stale_api = stale_fixture.finalize()
-        stale_api.issue_pages = [
-            [
-                {"assignees": [], "body": ALERT_MARKER, "number": 23, "state": "open", "title": ALERT_TITLE},
-            ]
-        ]
+        stale_api.issue_pages = [[alert_issue(23)]]
         stale_report = run_audit(stale_api, now=NOW)
 
         self.assertEqual(stale_report.alert_action, "update")
@@ -322,21 +413,23 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         clear_fixture = AuditFixture()
         clear_fixture.add_bundle("v1.0.7", captured_at=NOW - timedelta(days=4), terminal="qualified", on_main=True)
         clear_api = clear_fixture.finalize()
-        clear_api.issue_pages = [
-            [
-                {
-                    "assignees": [{"login": "cbusillo"}],
-                    "body": ALERT_MARKER,
-                    "number": 23,
-                    "state": "open",
-                    "title": ALERT_TITLE,
-                },
-            ]
-        ]
+        clear_api.issue_pages = [[alert_issue(23, assignees=[{"login": "cbusillo"}])]]
         clear_report = run_audit(clear_api, now=NOW)
 
         self.assertEqual(clear_report.alert_action, "clear")
         self.assertEqual(clear_api.updated, [(23, {"state": "closed"})])
+
+    def test_closed_managed_alert_reopens_when_findings_return(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_bundle("v1.0.16", captured_at=NOW - timedelta(days=4))
+        api = fixture.finalize()
+        api.issue_pages = [[alert_issue(24, state="closed", assignees=[{"login": "cbusillo"}])]]
+
+        report = run_audit(api, now=NOW)
+
+        self.assertEqual(report.alert_action, "update")
+        self.assertEqual(api.updated[0][0], 24)
+        self.assertEqual(api.updated[0][1]["state"], "open")
 
     def test_pagination_and_workflow_never_use_automation_ref_code(self) -> None:
         fixture = AuditFixture()
@@ -360,6 +453,8 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         self.assertIn("ref: main", workflow)
         self.assertNotIn("git fetch", workflow.lower())
         self.assertNotIn("automation/", workflow)
+        self.assertIn("uv sync --locked --all-groups --python 3.12", workflow)
+        self.assertIn("uv run --frozen", workflow)
         self.assertNotIn('["git"', helper)
         self.assertIn("git/trees", helper)
         self.assertIn("git/blobs", helper)

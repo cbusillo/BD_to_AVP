@@ -32,14 +32,18 @@ Canonical branches that contain legacy evidence but no v2 record are reported
 as **legacy ignored** and do not alert. A valid non-reconciled bundle is
 **recent** for less than 72 hours and
 a **stale orphan** at or after 72 hours, measured from `capture-v2.json`'s
-`captured_at`. Invalid canonical refs, missing or contradictory v2 records,
+`captured_at`. A capture timestamp more than five minutes in the future is
+malformed rather than silently clamped. Invalid canonical refs, missing or contradictory v2 records,
 and unreadable REST blobs are **malformed**.
 
 Stale or malformed findings are grouped into one marker-owned alert issue,
-assigned to `cbusillo`. The audit updates or reopens that same issue, can adopt
-one pre-existing matching alert, and closes it when the findings clear. It
-refuses to act if more than one matching alert issue exists, avoiding ambiguous
-ownership and issue spam. Each alert lists the ref, commit SHA, age,
+assigned to `cbusillo`. Only issues authored by `cbusillo`,
+`github-actions[bot]`, or `shiny-code-bot` can be adopted or updated; public
+lookalike issues are ignored. The audit updates or reopens that same issue, can
+adopt one pre-existing trusted matching alert, and closes it when the findings
+clear. If more than one trusted matching alert exists, the audit reports an
+ambiguous action without mutating either issue, avoiding ownership guesses and
+issue spam. Each alert lists the ref, commit SHA, age,
 classification, v2 state, and remediation.
 
 For a stale qualified terminal bundle, inspect the REST evidence and use the

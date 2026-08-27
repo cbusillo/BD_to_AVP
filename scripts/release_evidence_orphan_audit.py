@@ -10,7 +10,7 @@ import sys
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, cast
 
 from scripts.release_evidence_v2 import (
@@ -33,6 +33,8 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ALERT_MARKER = "<!-- release-evidence-orphan-audit:v1 -->"
 ALERT_TITLE = "Release evidence orphan audit requires attention"
 GITHUB_TIMEOUT_SECONDS = 30
+MAX_FUTURE_SKEW = timedelta(minutes=5)
+TRUSTED_ALERT_BOT_LOGINS = frozenset({"github-actions[bot]", "shiny-code-bot"})
 LEGACY_EVIDENCE_MARKERS = frozenset(
     {
         "failed-post-publication-qualification-v1.json",
@@ -43,6 +45,10 @@ LEGACY_EVIDENCE_MARKERS = frozenset(
 
 
 class ReleaseEvidenceOrphanAuditError(RuntimeError):
+    pass
+
+
+class GitHubRestTransportError(ReleaseEvidenceOrphanAuditError):
     pass
 
 
@@ -142,20 +148,16 @@ class GitHubRestClient:
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
-            raise ReleaseEvidenceOrphanAuditError(
-                f"Timed out while requesting GitHub REST endpoint {endpoint!r}."
-            ) from error
+            raise GitHubRestTransportError(f"Timed out while requesting GitHub REST endpoint {endpoint!r}.") from error
         except OSError as error:
-            raise ReleaseEvidenceOrphanAuditError("Unable to start gh for the GitHub REST audit.") from error
+            raise GitHubRestTransportError("Unable to start gh for the GitHub REST audit.") from error
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or "no diagnostic"
-            raise ReleaseEvidenceOrphanAuditError(f"GitHub REST request {endpoint!r} failed: {detail}")
+            raise GitHubRestTransportError(f"GitHub REST request {endpoint!r} failed: {detail}")
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError as error:
-            raise ReleaseEvidenceOrphanAuditError(
-                f"GitHub REST endpoint {endpoint!r} returned invalid JSON."
-            ) from error
+            raise GitHubRestTransportError(f"GitHub REST endpoint {endpoint!r} returned invalid JSON.") from error
 
 
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
@@ -214,9 +216,7 @@ def _tree_blobs(api: GitHubRestApi, repository: str, commit: Mapping[str, Any]) 
     tree_sha = _sha(tree.get("sha"), "commit tree SHA")
     response = _mapping(api.get(f"repos/{repository}/git/trees/{tree_sha}?recursive=1"), "recursive tree")
     if response.get("truncated") is True:
-        raise ReleaseEvidenceOrphanAuditError(
-            "GitHub returned a truncated tree; refusing incomplete orphan-audit evidence."
-        )
+        raise GitHubRestTransportError("GitHub returned a truncated tree; refusing incomplete orphan-audit evidence.")
     blobs: dict[str, str] = {}
     for entry in _sequence(response.get("tree"), "recursive tree entries"):
         item = _mapping(entry, "recursive tree entry")
@@ -386,6 +386,8 @@ def inspect_evidence_ref(
         return _malformed(ref, str(object_record.get("sha", "unknown")), str(error))
     try:
         commit = _commit(api, repository, sha)
+    except GitHubRestTransportError:
+        raise
     except ReleaseEvidenceOrphanAuditError as error:
         return _malformed(ref, sha, str(error))
     commit_age_hours = _commit_age_hours(commit, now)
@@ -418,6 +420,10 @@ def inspect_evidence_ref(
                 remediation=_remediation("legacy_ignored", tag),
             )
         bundle_state, captured_at, reason = _bundle_state(api, repository, ref_blobs, tag)
+        if captured_at > now + MAX_FUTURE_SKEW:
+            raise ReleaseEvidenceOrphanAuditError("capture-v2 captured_at is more than five minutes in the future.")
+    except GitHubRestTransportError:
+        raise
     except ReleaseEvidenceOrphanAuditError as error:
         return _malformed(ref, sha, str(error), age_hours=commit_age_hours)
     main_bundle_blobs = _bundle_blobs(main_blobs, tag)
@@ -487,6 +493,14 @@ def _issue_owner_matches(issue: Mapping[str, Any], owner: str) -> bool:
     return any(isinstance(assignee, Mapping) and assignee.get("login") == owner for assignee in assignees)
 
 
+def _trusted_alert_author(issue: Mapping[str, Any], owner: str) -> bool:
+    user = issue.get("user")
+    if not isinstance(user, Mapping):
+        return False
+    login = user.get("login")
+    return login == owner or login in TRUSTED_ALERT_BOT_LOGINS
+
+
 def _alert_issue(
     api: GitHubRestApi, findings: Sequence[EvidenceFinding], *, owner: str, threshold_hours: int
 ) -> tuple[str, int | None]:
@@ -497,12 +511,14 @@ def _alert_issue(
         )
         if "pull_request" not in issue
     ]
-    marker_issues = [issue for issue in issues if ALERT_MARKER in str(issue.get("body") or "")]
-    legacy_issues = [issue for issue in issues if issue.get("title") == ALERT_TITLE and issue not in marker_issues]
+    trusted_issues = [issue for issue in issues if _trusted_alert_author(issue, owner)]
+    marker_issues = [issue for issue in trusted_issues if ALERT_MARKER in str(issue.get("body") or "")]
+    legacy_issues = [
+        issue for issue in trusted_issues if issue.get("title") == ALERT_TITLE and issue not in marker_issues
+    ]
     candidates = marker_issues + legacy_issues
     if len(candidates) > 1:
-        numbers = ", ".join(str(_issue_number(issue)) for issue in candidates)
-        raise ReleaseEvidenceOrphanAuditError(f"Ambiguous duplicate release-evidence alert issues: {numbers}.")
+        return "ambiguous", None
     alertable = [finding for finding in findings if finding.alertable]
     if not candidates:
         if not alertable:
