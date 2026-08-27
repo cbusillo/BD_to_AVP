@@ -47,6 +47,72 @@ regenerated or overwritten. The `sanitize` command emits the exact canonical
 release tag and `automation/release-evidence-<tag>` ref before workflow shell
 or Git ref use.
 
+## Terminal Production
+
+`qualify` and `dispose` are offline, deterministic, write-once producers for
+the two mutually exclusive terminal records. They read only explicit local
+files, local workflow provenance, and the already-captured bundle; neither
+command invokes `gh`, makes a network request, or reads credentials.
+
+Before either command writes, it validates `capture-v2.json` in the exact
+worktree bundle. A valid terminal record with the same immutable identity is
+reused byte-for-byte. A different terminal timestamp may therefore be supplied
+on a rerun without changing the durable record. Any other identity conflict,
+an invalid or missing capture, or the opposite terminal record fails closed and
+does not overwrite evidence.
+
+For `qualify`, provide the downloaded qualification artifact as a local file;
+the producer binds its basename, ID, SHA-256, and exact milestone actor/path/run
+ID/run attempt. A rerun must materialize the artifact under the same basename;
+renaming identical bytes is treated as an immutable identity conflict.
+`--accepted-case-receipts` is a local JSON object with exactly
+the four required case IDs. Each entry has these explicit fields:
+
+```json
+{
+  "clean-machine-signed-update": {
+    "accepted_at": "2026-08-05T12:04:00Z",
+    "path": "docs/release-evidence/v0.3.0-rc.3/clean-machine-signed-update-receipt.json",
+    "result": "passed",
+    "source": "tier3_automation_receipt"
+  }
+}
+```
+
+The producer computes each receipt file digest itself and then reuses the
+existing deep receipt validators. It rejects a non-passed input, malformed
+receipt, unexpected path/source, or chronology conflict. A successful command
+prints only a canonical compact JSON object with the sanitized release tag,
+record path, and self-digest.
+
+```sh
+uv run python -m scripts.release_evidence_v2 qualify \
+  --release-tag v0.3.2 --qualified-at <utc-timestamp> \
+  --milestone-actor cbusillo --milestone-run-id <id> --milestone-run-attempt <attempt> \
+  --qualification-artifact /local/path/qualification-artifact.zip \
+  --qualification-artifact-id <id> \
+  --qualification-manifest docs/release-evidence/v0.3.2/qualification-manifest.json \
+  --accepted-case-receipts /local/path/accepted-case-receipts.json
+
+uv run python -m scripts.release_evidence_v2 dispose \
+  --release-tag v0.3.2 --failed-at <utc-timestamp> \
+  --failure-workflow-actor cbusillo --failure-workflow-run-id <id> \
+  --failure-workflow-run-attempt <attempt> \
+  --failure-code <lowercase_identifier> --failure-subject <subject> \
+  --failure-expected <expected> --failure-observed <observed> \
+  --release-identity-preserved --signed-artifact-preserved --source-identity-preserved
+```
+
+`dispose` requires all structured failure fields and all three terminal
+identity-preservation remediation flags. After either terminal command changes
+a bundle, intentionally regenerate and check the index; the producers do not
+silently alter unrelated evidence files:
+
+```sh
+uv run python -m scripts.release_evidence_v2 index --write --repo-root .
+uv run python -m scripts.release_evidence_v2 index --check --worktree --repo-root .
+```
+
 `index-v2.json` contains only `schema_version`, a path/digest binding for
 `index-v1.json`, and sorted release entries. Each release entry records the
 existing verifier class and every sorted repo-relative file/digest in that tag
@@ -103,7 +169,7 @@ rejected; either terminal record without capture is rejected.
 `qualification-v2.json` binds the capture digest, the same archived
 `qualification-record.json` snapshot already bound by capture, successful
 milestone path/run/attempt/actor, and an independent positive qualification
-artifact ID/digest bound to that milestone run. It also binds the canonical
+artifact ID/name/digest bound to that milestone run. It also binds the canonical
 `qualification-manifest.json` bytes and self-digest. It rejects any artifact ID
 or digest reused from the signed-UI capture artifact. The exact accepted-case
 set is:
