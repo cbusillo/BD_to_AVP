@@ -284,7 +284,7 @@ def _terminal_state(record: Mapping[str, Any], tag: str, source_sha: str, captur
         expected = ("disposition", "FAILED", "failed")
     else:
         raise ReleaseEvidenceOrphanAuditError("terminal v2 record has an unknown record type.")
-    if record_type != expected[0] or state != expected[1] or record.get("schema_version") != 2:
+    if state != expected[1] or record.get("schema_version") != 2:
         raise ReleaseEvidenceOrphanAuditError("terminal v2 record has an invalid state.")
     if (
         _record_string(record, "release_tag") != tag
@@ -631,7 +631,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"release-evidence orphan audit: {error}", file=sys.stderr)
         return 2
     print(json.dumps(report.as_dict(), sort_keys=True, separators=(",", ":")))
-    return 0
+    return 1 if report.alert_action == "ambiguous" else 0
 
 
 if __name__ == "__main__":

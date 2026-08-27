@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import unittest
 
 from collections.abc import Mapping
+from contextlib import redirect_stdout
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from scripts.release_evidence_orphan_audit import (
     ALERT_MARKER,
     ALERT_TITLE,
+    AuditReport,
     EvidenceFinding,
     GitHubRestTransportError,
+    main,
     run_audit,
 )
 
@@ -472,6 +477,25 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         )
 
         self.assertEqual(finding.as_dict()["age_hours"], 72.0)
+
+    def test_ambiguous_alert_report_exits_nonzero_after_printing(self) -> None:
+        report = AuditReport(
+            findings=(),
+            threshold_hours=72,
+            observed_at="2026-08-27T12:00:00Z",
+            alert_action="ambiguous",
+            alert_issue_number=None,
+        )
+        output = io.StringIO()
+        with (
+            patch("scripts.release_evidence_orphan_audit.GitHubRestClient"),
+            patch("scripts.release_evidence_orphan_audit.run_audit", return_value=report),
+            redirect_stdout(output),
+        ):
+            result = main(["--repository", REPOSITORY])
+
+        self.assertEqual(result, 1)
+        self.assertEqual(json.loads(output.getvalue())["alert_action"], "ambiguous")
 
 
 if __name__ == "__main__":

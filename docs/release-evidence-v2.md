@@ -43,7 +43,8 @@ lookalike issues are ignored. The audit updates or reopens that same issue, can
 adopt one pre-existing trusted matching alert, and closes it when the findings
 clear. If more than one trusted matching alert exists, the audit reports an
 ambiguous action without mutating either issue, avoiding ownership guesses and
-issue spam. Each alert lists the ref, commit SHA, age,
+issue spam; it still prints the audit report and exits nonzero so the scheduled
+workflow is visibly failed. Each alert lists the ref, commit SHA, age,
 classification, v2 state, and remediation.
 
 For a stale qualified terminal bundle, inspect the REST evidence and use the
