@@ -13,6 +13,55 @@ Git operations. For legacy revision replay it creates and removes a temporary
 detached worktree. It does not invoke `gh`, `curl`, a network client, or
 credentials.
 
+## Orphan Audit
+
+`Release Evidence Orphan Audit` runs daily at 14:17 UTC and can also be run
+manually from protected `main`. It has only `contents: read` and `issues: write`
+permissions. The workflow checks out the trusted protected `main` helper only;
+it never checks out, fetches, or executes an `automation/release-evidence-*`
+ref. Instead, it reads matching refs, commits, recursive trees, and the v2
+record blobs through the GitHub REST API.
+
+The audit recognizes a valid `CAPTURED` record and either terminal v2 state
+(`QUALIFIED` or `FAILED`). It compares the complete
+`docs/release-evidence/<tag>/` blob path/SHA map from each canonical
+`automation/release-evidence-<tag>` ref to protected `main`. Exact bundle
+identity is reconciled even if `docs/release-evidence/index-v2.json` has since
+evolved or protected `main` later adds files to the same release bundle.
+Canonical branches that contain legacy evidence but no v2 record are reported
+as **legacy ignored** and do not alert. A valid non-reconciled bundle is
+**recent** for less than 72 hours and
+a **stale orphan** at or after 72 hours, measured from `capture-v2.json`'s
+`captured_at`. A capture timestamp more than five minutes in the future is
+malformed rather than silently clamped. Invalid canonical refs, missing or contradictory v2 records,
+and unreadable REST blobs are **malformed**.
+
+Stale or malformed findings are grouped into one marker-owned alert issue,
+assigned to `cbusillo`. Only issues authored by `cbusillo`,
+`github-actions[bot]`, or `shiny-code-bot` can be adopted or updated; public
+lookalike issues are ignored. The audit updates or reopens that same issue, can
+adopt one pre-existing trusted matching alert, and closes it when the findings
+clear. If more than one trusted matching alert exists, the audit reports an
+ambiguous action without mutating either issue, avoiding ownership guesses and
+issue spam; it still prints the audit report and exits nonzero so the scheduled
+workflow is visibly failed. Each alert lists the ref, commit SHA, age,
+classification, v2 state, and remediation.
+
+For a stale qualified terminal bundle, inspect the REST evidence and use the
+actor-aware reconciliation helper to open or adopt the protected-main PR; do
+not force-push or rewrite the evidence. A durable failed terminal bundle must
+not use the qualified-evidence reconciliation helper; preserve it for incident
+review and retire the orphan ref only through an explicit operator decision.
+For malformed evidence, do not
+reconcile it: preserve the ref for incident review and recreate valid canonical
+evidence only through the trusted producer. The helper may be run locally with
+an authenticated `gh` client, but it remains REST-only for automation refs:
+
+```sh
+uv run python -m scripts.release_evidence_orphan_audit \
+  --repository cbusillo/BD_to_AVP --threshold-hours 72 --owner cbusillo
+```
+
 ## Verification
 
 By default the verifier reads the committed `HEAD` tree. Pass a full immutable
