@@ -14,6 +14,7 @@ from scripts.release_evidence_reconcile import (
     preflight,
     reconcile,
 )
+from scripts.release_evidence_v2 import ReleaseEvidenceV2Error
 
 
 TAG = "v0.3.2-beta.8"
@@ -357,9 +358,12 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                 contexts[3],
                 patch(
                     "scripts.release_evidence_reconcile.verify_tag",
-                    side_effect=ReleaseEvidenceReconciliationError("bad bundle"),
+                    side_effect=ReleaseEvidenceV2Error("bad bundle"),
                 ),
-                self.assertRaisesRegex(ReleaseEvidenceReconciliationError, "bad bundle"),
+                self.assertRaisesRegex(
+                    ReleaseEvidenceReconciliationError,
+                    "Offline release-evidence verification failed: bad bundle",
+                ),
             ):
                 preflight(repository, release_tag=TAG)
 

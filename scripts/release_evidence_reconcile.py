@@ -253,24 +253,6 @@ def _verify_evidence_lineage(repo_root: Path, main_sha: str, evidence_sha: str) 
         raise ReleaseEvidenceReconciliationError(
             "Evidence branch is stale or diverged: its merge base is not the current protected main SHA."
         )
-    try:
-        result = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", main_sha, evidence_sha],
-            cwd=repo_root,
-            capture_output=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise ReleaseEvidenceReconciliationError("Timed out while verifying evidence branch ancestry.") from error
-    except OSError as error:
-        raise ReleaseEvidenceReconciliationError(
-            "Unable to start git while verifying evidence branch ancestry."
-        ) from error
-    if result.returncode != 0:
-        raise ReleaseEvidenceReconciliationError(
-            "Evidence branch does not descend from the current protected main SHA."
-        )
 
 
 def _verify_docs_only_diff(repo_root: Path, main_sha: str, evidence_sha: str, release_tag: str) -> None:
