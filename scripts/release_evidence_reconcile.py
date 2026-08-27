@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -31,6 +32,8 @@ MAIN_BRANCH = "main"
 INDEX_PATH = "docs/release-evidence/index-v2.json"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+GIT_TIMEOUT_SECONDS = 60
+GITHUB_TIMEOUT_SECONDS = 30
 
 
 class ReleaseEvidenceReconciliationError(RuntimeError):
@@ -139,27 +142,63 @@ def _mapping(value: object, description: str) -> Mapping[str, Any]:
 
 
 def _git_output(repo_root: Path, arguments: Sequence[str], description: str) -> str:
-    result = subprocess.run(
-        ["git", *arguments],
-        cwd=repo_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ReleaseEvidenceReconciliationError(f"Timed out while attempting to {description}.") from error
+    except OSError as error:
+        raise ReleaseEvidenceReconciliationError(f"Unable to start git while attempting to {description}.") from error
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no diagnostic"
         raise ReleaseEvidenceReconciliationError(f"Unable to {description}: {detail}")
     return result.stdout.strip()
 
 
+def _operator_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "CODEX_GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GH_HOST",
+        "GH_REPO",
+    ):
+        environment.pop(name, None)
+    return environment
+
+
+def _run_gh(repo_root: Path, arguments: Sequence[str], description: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["gh", *arguments],
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            env=_operator_environment(),
+            timeout=GITHUB_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ReleaseEvidenceReconciliationError(
+            f"Timed out while attempting to {description} with local gh."
+        ) from error
+    except OSError as error:
+        raise ReleaseEvidenceReconciliationError(
+            f"Unable to start gh while attempting to {description} with local authentication."
+        ) from error
+
+
 def _gh_json(repo_root: Path, arguments: Sequence[str], description: str) -> Any:
-    result = subprocess.run(
-        ["gh", *arguments],
-        cwd=repo_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = _run_gh(repo_root, arguments, description)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no diagnostic"
         raise ReleaseEvidenceReconciliationError(f"Unable to {description} with local gh authentication: {detail}")
@@ -170,13 +209,7 @@ def _gh_json(repo_root: Path, arguments: Sequence[str], description: str) -> Any
 
 
 def _gh_command(repo_root: Path, arguments: Sequence[str], description: str) -> None:
-    result = subprocess.run(
-        ["gh", *arguments],
-        cwd=repo_root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = _run_gh(repo_root, arguments, description)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no diagnostic"
         raise ReleaseEvidenceReconciliationError(f"Unable to {description} with local gh authentication: {detail}")
@@ -233,7 +266,7 @@ def _verify_evidence_lineage(repo_root: Path, main_sha: str, evidence_sha: str) 
 def _verify_docs_only_diff(repo_root: Path, main_sha: str, evidence_sha: str, release_tag: str) -> None:
     changed = _git_output(
         repo_root,
-        ["diff", "--name-only", "--diff-filter=ACMRD", main_sha, evidence_sha],
+        ["diff", "--name-only", main_sha, evidence_sha],
         "list evidence branch changes",
     ).splitlines()
     bundle_prefix = f"docs/release-evidence/{release_tag}/"
@@ -258,6 +291,21 @@ def _load_json_at_revision(repo_root: Path, revision: str, path: str, descriptio
 def _current_operator(repo_root: Path) -> str:
     user = _mapping(_gh_json(repo_root, ["api", "user"], "read active GitHub operator"), "active GitHub operator")
     return _string(user.get("login"), "active GitHub operator login")
+
+
+def _verify_canonical_checkout(repo_root: Path, repository: str) -> None:
+    checkout = _mapping(
+        _gh_json(
+            repo_root,
+            ["repo", "view", "--json", "nameWithOwner"],
+            "resolve the current checkout repository",
+        ),
+        "current checkout repository",
+    )
+    if checkout.get("nameWithOwner") != repository:
+        raise ReleaseEvidenceReconciliationError(
+            f"Current checkout must resolve to the canonical repository {repository}."
+        )
 
 
 def _required_checks_from_metadata(repo_root: Path, main_sha: str) -> tuple[str, ...]:
@@ -292,8 +340,19 @@ def _verify_branch_protection(repo_root: Path, repository: str, expected_checks:
             "Protected main required checks do not exactly match repository metadata: "
             f"expected={list(expected_checks)}, actual={sorted(contexts)}."
         )
-    if protection.get("required_pull_request_reviews") is None:
-        raise ReleaseEvidenceReconciliationError("Protected main must require pull requests.")
+    pull_request_reviews = _mapping(
+        _gh_json(
+            repo_root,
+            ["api", f"repos/{repository}/branches/{MAIN_BRANCH}/protection/required_pull_request_reviews"],
+            "read protected main pull-request requirement",
+        ),
+        "protected main pull-request requirement",
+    )
+    required_approvals = pull_request_reviews.get("required_approving_review_count")
+    if isinstance(required_approvals, bool) or not isinstance(required_approvals, int) or required_approvals < 0:
+        raise ReleaseEvidenceReconciliationError(
+            "Protected main does not expose a valid pull-request review requirement."
+        )
     for key, expected in (
         ("enforce_admins", True),
         ("allow_force_pushes", False),
@@ -396,6 +455,8 @@ def _open_main_pull_requests(repo_root: Path, repository: str) -> list[Mapping[s
             MAIN_BRANCH,
             "--state",
             "open",
+            "--limit",
+            "1000",
             "--json",
             "number,url,baseRefName,headRefName,headRefOid,author",
         ],
@@ -446,6 +507,7 @@ def preflight(repo_root: Path, *, release_tag: str, repository: str = EXPECTED_R
         raise ReleaseEvidenceReconciliationError(
             f"Repository must be the canonical release repository {EXPECTED_REPOSITORY}."
         )
+    _verify_canonical_checkout(repo_root, repository)
     evidence_ref = evidence_ref_for_tag(tag)
     remote_evidence_ref = f"refs/heads/{evidence_ref}"
     remote_main_ref = f"refs/heads/{MAIN_BRANCH}"
@@ -460,7 +522,7 @@ def preflight(repo_root: Path, *, release_tag: str, repository: str = EXPECTED_R
         verified = verify_tag(repo_root, tag, verification_revision=evidence_sha)
         terminal_class = verified.get("class")
         if terminal_class != "v2-qualified":
-            if terminal_class == "v2-disposed":
+            if terminal_class == "v2-failed":
                 raise ReleaseEvidenceReconciliationError(
                     "Durable failed v2 evidence cannot be reconciled into protected main."
                 )

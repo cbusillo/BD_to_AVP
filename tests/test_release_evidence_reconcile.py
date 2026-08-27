@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +9,8 @@ from unittest.mock import patch
 
 from scripts.release_evidence_reconcile import (
     ReleaseEvidenceReconciliationError,
+    _gh_command,
+    _gh_json,
     preflight,
     reconcile,
 )
@@ -101,7 +104,6 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
     def protection(*, checks: list[str] | None = None) -> dict[str, object]:
         return {
             "required_status_checks": {"strict": True, "contexts": checks or CHECKS},
-            "required_pull_request_reviews": {},
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
             "allow_deletions": {"enabled": False},
@@ -114,12 +116,20 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
         *,
         operator: str = "cbusillo",
         checks: list[str] | None = None,
+        checkout_repository: str = REPOSITORY,
     ):
         def run(_root: Path, arguments: list[str], _description: str) -> object:
             if arguments == ["api", "user"]:
                 return {"login": operator}
+            if arguments == ["repo", "view", "--json", "nameWithOwner"]:
+                return {"nameWithOwner": checkout_repository}
             if arguments[:2] == ["api", f"repos/{REPOSITORY}/branches/main/protection"]:
                 return self.protection(checks=checks)
+            if arguments[:2] == [
+                "api",
+                f"repos/{REPOSITORY}/branches/main/protection/required_pull_request_reviews",
+            ]:
+                return {"required_approving_review_count": 0}
             if arguments[:2] == ["pr", "list"]:
                 return pull_requests
             self.fail(f"unexpected gh request: {arguments}")
@@ -133,6 +143,7 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
         *,
         operator: str = "cbusillo",
         checks: list[str] | None = None,
+        checkout_repository: str = REPOSITORY,
     ):
         return (
             patch("scripts.release_evidence_reconcile.verify_tag", return_value={"class": "v2-qualified"}),
@@ -140,7 +151,12 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
             patch("scripts.release_evidence_reconcile.check_index_v2"),
             patch(
                 "scripts.release_evidence_reconcile._gh_json",
-                side_effect=self.gh_json(pull_requests, operator=operator, checks=checks),
+                side_effect=self.gh_json(
+                    pull_requests,
+                    operator=operator,
+                    checks=checks,
+                    checkout_repository=checkout_repository,
+                ),
             ),
         )
 
@@ -154,6 +170,19 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                 contexts[2],
                 contexts[3],
                 self.assertRaisesRegex(ReleaseEvidenceReconciliationError, "stale or diverged"),
+            ):
+                preflight(repository, release_tag=TAG)
+
+    def test_noncanonical_checkout_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository, _, _ = self.build_repository(Path(temporary_directory))
+            contexts = self.preflight_context(repository, [], checkout_repository="someone/fork")
+            with (
+                contexts[0],
+                contexts[1],
+                contexts[2],
+                contexts[3],
+                self.assertRaisesRegex(ReleaseEvidenceReconciliationError, "canonical repository"),
             ):
                 preflight(repository, release_tag=TAG)
 
@@ -279,9 +308,9 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                 preflight(repository, release_tag=TAG)
             contexts = self.preflight_context(repository, [])
             with (
-                contexts[0],
                 contexts[1],
                 contexts[2],
+                contexts[3],
                 patch(
                     "scripts.release_evidence_reconcile.verify_tag",
                     side_effect=ReleaseEvidenceReconciliationError("bad bundle"),
@@ -307,10 +336,40 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
                 contexts[1],
                 contexts[2],
                 contexts[3],
-                patch("scripts.release_evidence_reconcile.verify_tag", return_value={"class": "v2-disposed"}),
+                patch("scripts.release_evidence_reconcile.verify_tag", return_value={"class": "v2-failed"}),
                 self.assertRaisesRegex(ReleaseEvidenceReconciliationError, "Durable failed"),
             ):
                 preflight(repository, release_tag=TAG)
+
+    def test_gh_calls_force_active_local_authentication(self) -> None:
+        completed_json = subprocess.CompletedProcess(["gh"], 0, stdout='{"login":"cbusillo"}', stderr="")
+        completed_command = subprocess.CompletedProcess(["gh"], 0, stdout="", stderr="")
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GH_TOKEN": "workflow-token",
+                    "GITHUB_TOKEN": "github-token",
+                    "CODEX_GITHUB_TOKEN": "automation-token",
+                    "GH_HOST": "untrusted.example",
+                    "GH_REPO": "other/repository",
+                    "KEEP_ME": "yes",
+                },
+                clear=False,
+            ),
+            patch(
+                "scripts.release_evidence_reconcile.subprocess.run",
+                side_effect=[completed_json, completed_command],
+            ) as run,
+        ):
+            self.assertEqual(_gh_json(Path.cwd(), ["api", "user"], "read operator"), {"login": "cbusillo"})
+            _gh_command(Path.cwd(), ["pr", "create"], "create pull request")
+
+        for call in run.call_args_list:
+            environment = call.kwargs["env"]
+            self.assertEqual(environment["KEEP_ME"], "yes")
+            for name in ("GH_TOKEN", "GITHUB_TOKEN", "CODEX_GITHUB_TOKEN", "GH_HOST", "GH_REPO"):
+                self.assertNotIn(name, environment)
 
     def test_actor_mismatch_refuses_adoption(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

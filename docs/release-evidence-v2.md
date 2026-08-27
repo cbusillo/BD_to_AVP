@@ -141,7 +141,9 @@ Run the observational preflight first. It reads the active local `gh` operator,
 canonical remote evidence ref, current protected `main`, branch protection,
 open pull requests, and immutable evidence files. It fetches only the two
 remote commits locally; it never creates a pull request or changes a remote
-branch.
+branch. The helper ignores token environment variables such as `GH_TOKEN` and
+uses the authenticated local `gh` credential store for every GitHub read and
+the eventual PR creation.
 
 ```sh
 uv run python -m scripts.release_evidence_reconcile preflight \
@@ -166,7 +168,7 @@ The helper verifies that `automation/release-evidence-<tag>` points at the
 echoed remote commit and descends from the current protected-main base. It
 refuses stale branches, a moved `main`, non-evidence diffs, stale
 `index-v2.json`, incomplete bundles, any terminal class other than
-`v2-qualified`, and a durable `v2-disposed` failure. The standard offline v2
+`v2-qualified`, and a durable `v2-failed` disposition. The standard offline v2
 verifier and write-once history check run against the immutable evidence SHA.
 
 It also refuses another open PR to `main`, a canonical evidence PR with a
