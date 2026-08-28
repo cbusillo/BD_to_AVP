@@ -684,6 +684,43 @@ final class ConversionQueueStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentQueueSameGroupPreservesSourceRemovalOwnerPerSource() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupID = UUID()
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
+        let firstSource = (0 ..< 2).map { offset in
+            makeItem(
+                ordinal: offset,
+                groupID: groupID,
+                origin: .multiTitle,
+                sourcePath: "/tmp/first.iso",
+                options: options
+            )
+        }
+        let secondSource = (0 ..< 2).map { offset in
+            makeItem(
+                ordinal: 2 + offset,
+                groupID: groupID,
+                origin: .multiTitle,
+                sourcePath: "/tmp/second.iso",
+                options: options
+            )
+        }
+        try await store.replaceItems(firstSource + secondSource)
+
+        try await store.moveWaitingItem(firstSource[0].id, before: secondSource[1].id)
+
+        for sourcePath in ["/tmp/first.iso", "/tmp/second.iso"] {
+            let sourceItems = store.items.filter { $0.intent.source.path == sourcePath }
+            XCTAssertEqual(
+                sourceItems.filter { $0.intent.options.job.removeOriginalAfterSuccess }.map(\.id),
+                [try XCTUnwrap(sourceItems.last?.id)]
+            )
+        }
+    }
+
+    @MainActor
     func testPersistentQueueRestoreRejectsTokenWhoseItemAlreadyExists() async throws {
         let store = ConversionQueueStore.inMemory()
         let item = makeItem(ordinal: 0)
