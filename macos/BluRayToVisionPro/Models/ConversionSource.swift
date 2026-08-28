@@ -205,12 +205,14 @@ enum DiscSourceDetector {
     ) -> Bool {
         guard source.kind == .physicalDisc,
               let devicePath = devicePathResolver(source.url),
-              let expectedIdentifier = source.mediaIdentifier,
-              let currentIdentifier = mediaIdentifierResolver(source.url)
+              devicePath == source.workerSourcePath
         else {
             return false
         }
-        return devicePath == source.workerSourcePath && currentIdentifier == expectedIdentifier
+        guard let expectedIdentifier = source.mediaIdentifier else {
+            return true
+        }
+        return mediaIdentifierResolver(source.url) == expectedIdentifier
     }
 
     private static func mediaIdentifier(

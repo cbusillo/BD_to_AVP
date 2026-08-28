@@ -490,7 +490,7 @@ final class ConversionViewModelTests: XCTestCase {
             )
         )
         await fulfillment(of: [conversionFailed], timeout: 2)
-        while viewModel.hasActiveWorker { await Task.yield() }
+        while viewModel.hasActiveWork { await Task.yield() }
 
         XCTAssertEqual(viewModel.state.failureCode, "title_unavailable")
         XCTAssertTrue(viewModel.canRetry)
@@ -2955,6 +2955,55 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUnavailableAdmittedItemAdvancesToNextAvailableSource() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let firstURL = directoryURL.appendingPathComponent("missing.mkv")
+        let secondURL = directoryURL.appendingPathComponent("available.mkv")
+        _ = FileManager.default.createFile(atPath: firstURL.path, contents: Data("video".utf8))
+        _ = FileManager.default.createFile(atPath: secondURL.path, contents: Data("video".utf8))
+        let inspection = SourceInspection(
+            name: "Fixture",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            sizeBytes: 10
+        )
+        let admission = SetupQueueAdmission()
+        admission.add(drafts: [firstURL, secondURL].map { sourceURL in
+            ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: sourceURL),
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions()
+            )
+        })
+        let queueStore = ConversionQueueStore.inMemory()
+        let converted = expectation(description: "available source converted")
+        var conversionPaths: [String] = []
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { job in
+            conversionPaths.append(job.source.path)
+            converted.fulfill()
+        })
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { $0.url != firstURL }
+        )
+
+        XCTAssertTrue(viewModel.startConversionQueue(admissionItems: admission.items))
+        await fulfillment(of: [converted], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(conversionPaths, [secondURL.path])
+        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .completed])
+        XCTAssertEqual(queueStore.items.first?.failure?.code, "source_unavailable")
+    }
+
+    @MainActor
     func testAdoptedRestoredSourceFolderRunsHeadless() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3032,6 +3081,76 @@ final class ConversionViewModelTests: XCTestCase {
         XCTAssertTrue(explicitAdoption)
         XCTAssertNotEqual(queueStore.items.first?.state, .attention)
         XCTAssertEqual(queueStore.items.first?.intent.options.encoding.subtitles.mode, .off)
+    }
+
+    @MainActor
+    func testDurableSingleDecisionPausesPumpAndRetriesOwnedItem() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("feature.mkv")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false
+        )
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: sourceURL),
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: directoryURL,
+            options: ConversionOptions()
+        )
+        let item = DurableConversionQueueItem(
+            ordinal: 0,
+            origin: .singleSource,
+            intent: DurableQueueItemIntent(draft: draft),
+            inspection: inspection,
+            state: .failed,
+            failure: DurableQueueFailure(code: "temporary", message: "Temporary", details: nil, retryable: true)
+        )
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Retry without subtitles?",
+            choices: [WorkerRecoveryChoice.retryWithoutSubtitles.rawValue],
+            details: nil
+        )
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems([item])
+        let firstStarted = expectation(description: "first conversion started")
+        let retryStarted = expectation(description: "retry conversion started")
+        var conversionCount = 0
+        let worker = TwoPhaseWorkerClient(
+            onConversionJobReceived: { _ in
+                conversionCount += 1
+                if conversionCount == 1 {
+                    firstStarted.fulfill()
+                } else {
+                    retryStarted.fulfill()
+                }
+            },
+            recoveryDecision: decision
+        )
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+
+        let adopted = await viewModel.adoptPersistentQueueItem(item.id)
+        XCTAssertTrue(adopted)
+        await fulfillment(of: [firstStarted], timeout: 2)
+        while viewModel.state.phase != WorkerPhase.decisionRequired || queueStore.items.first?.state != .attention {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(viewModel.state.recoveryDecision, decision)
+        XCTAssertTrue(viewModel.resolveRecoveryChoice(.retryWithoutSubtitles))
+        await fulfillment(of: [retryStarted], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.first?.state, .completed)
+        XCTAssertEqual(queueStore.items.first?.intent.options.encoding.subtitles.mode, .off)
+        XCTAssertEqual(queueStore.items.first?.attempts.count, 2)
     }
 
     @MainActor
@@ -3157,6 +3276,73 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPartialMultiTitleAdoptionPreservesSourceForUnfinishedSibling() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let titles = ["One", "Two", "Three"].enumerated().map { offset, name in
+            SourceTitle(
+                id: "title-\(offset)",
+                name: name,
+                outputName: name,
+                durationSeconds: 100 - Double(offset),
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                mainFeature: offset == 0
+            )
+        }
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            titles: titles
+        )
+        let groupID = UUID()
+        let items = titles.enumerated().map { offset, title in
+            var options = ConversionOptions()
+            options.job.removeOriginalAfterSuccess = offset == titles.count - 1
+            let draft = ConversionDraft(
+                source: ConversionSource(kind: .discImage, url: sourceURL),
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: options,
+                selectedTitle: title
+            )
+            return DurableConversionQueueItem(
+                ordinal: offset,
+                groupID: groupID,
+                origin: .multiTitle,
+                intent: DurableQueueItemIntent(draft: draft),
+                inspection: inspection,
+                state: offset == 0 ? .completed : .interrupted,
+                result: offset == 0 ? DurableQueueResult(outputPath: "/Movies/One_AVP.mov") : nil
+            )
+        }
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems(items)
+        let converted = expectation(description: "selected title converted")
+        var removeOriginal: Bool?
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { job in
+            removeOriginal = job.job?.removeOriginal
+            converted.fulfill()
+        })
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+
+        let adopted = await viewModel.adoptPersistentQueueItem(items[2].id)
+        XCTAssertTrue(adopted)
+        await fulfillment(of: [converted], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(removeOriginal, false)
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .interrupted, .completed])
+    }
+
+    @MainActor
     func testStopForQuitDoesNotLaunchLaterAdoptedSingleSource() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3190,15 +3376,27 @@ final class ConversionViewModelTests: XCTestCase {
         let queueStore = ConversionQueueStore.inMemory()
         try await queueStore.replaceItems([first, second])
         let firstStarted = expectation(description: "first started")
+        let secondStarted = expectation(description: "second started after explicit readoption")
         var receivedPaths: [String] = []
-        let worker = TwoPhaseWorkerClient(
+        let cancellingWorker = TwoPhaseWorkerClient(
             onConversionJobReceived: { job in
                 receivedPaths.append(job.source.path)
                 firstStarted.fulfill()
             },
             waitsForConversionCancellation: true
         )
-        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+        let resumedWorker = TwoPhaseWorkerClient(onConversionJobReceived: { job in
+            receivedPaths.append(job.source.path)
+            secondStarted.fulfill()
+        })
+        var factoryCalls = 0
+        let viewModel = ConversionViewModel(
+            clientFactory: {
+                factoryCalls += 1
+                return factoryCalls == 1 ? cancellingWorker : resumedWorker
+            },
+            durableQueueStore: queueStore
+        )
 
         let adoptedFirst = await viewModel.adoptPersistentQueueItem(first.id)
         let adoptedSecond = await viewModel.adoptPersistentQueueItem(second.id)
@@ -3210,6 +3408,14 @@ final class ConversionViewModelTests: XCTestCase {
         XCTAssertEqual(receivedPaths, [firstURL.path])
         XCTAssertFalse(viewModel.hasActiveWork)
         XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .notStarted])
+
+        let readopted = await viewModel.adoptPersistentQueueItem(second.id)
+        XCTAssertTrue(readopted)
+        await fulfillment(of: [secondStarted], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(receivedPaths, [firstURL.path, secondURL.path])
+        XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .completed])
     }
 
     @MainActor

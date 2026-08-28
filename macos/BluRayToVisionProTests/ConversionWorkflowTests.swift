@@ -848,6 +848,25 @@ final class ConversionWorkflowTests: XCTestCase {
         ))
     }
 
+    func testCurrentPhysicalDiscAcceptsLegacySourceWithoutStoredMediaIdentifier() {
+        let source = ConversionSource(
+            kind: .physicalDisc,
+            url: URL(fileURLWithPath: "/Volumes/Feature", isDirectory: true),
+            workerSourcePath: "/dev/disk9"
+        )
+
+        XCTAssertTrue(DiscSourceDetector.isCurrentPhysicalDisc(
+            source,
+            devicePathResolver: { _ in "/dev/disk9" },
+            mediaIdentifierResolver: { _ in "media-a" }
+        ))
+        XCTAssertFalse(DiscSourceDetector.isCurrentPhysicalDisc(
+            source,
+            devicePathResolver: { _ in "/dev/disk10" },
+            mediaIdentifierResolver: { _ in "media-a" }
+        ))
+    }
+
     func testInsertedDiscDetectionOmitsUnresolvedVolumes() throws {
         try withTemporaryDirectory { volumeURL in
             try FileManager.default.createDirectory(
