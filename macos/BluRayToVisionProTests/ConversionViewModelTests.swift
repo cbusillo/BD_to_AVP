@@ -3343,6 +3343,208 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAdoptingDifferentGroupDuringFailureDoesNotRebindActiveGroup() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let titles = ["A1", "A2", "B1"].enumerated().map { offset, name in
+            SourceTitle(
+                id: name,
+                name: name,
+                outputName: name,
+                durationSeconds: 100 - Double(offset),
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                mainFeature: offset == 0
+            )
+        }
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            titles: titles
+        )
+        let groupA = UUID()
+        let groupB = UUID()
+        let failure = DurableQueueFailure(code: "temporary", message: "Temporary", details: nil, retryable: true)
+        let items = titles.enumerated().map { offset, title in
+            let draft = ConversionDraft(
+                source: ConversionSource(kind: .discImage, url: sourceURL),
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions(),
+                selectedTitle: title
+            )
+            return DurableConversionQueueItem(
+                ordinal: offset,
+                groupID: offset < 2 ? groupA : groupB,
+                origin: .multiTitle,
+                intent: DurableQueueItemIntent(draft: draft),
+                inspection: inspection,
+                state: .failed,
+                failure: failure
+            )
+        }
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems(items)
+        let firstStarted = expectation(description: "group A started")
+        let secondStarted = expectation(description: "group B started")
+        let gate = QueueTestGate()
+        var convertedTitleIDs: [String] = []
+        let worker = ReorderableQueueWorkerClient(
+            inspectionDone: {},
+            conversionStarted: { job, conversionNumber in
+                convertedTitleIDs.append(job.source.titleID ?? "")
+                if conversionNumber == 1 {
+                    firstStarted.fulfill()
+                } else {
+                    secondStarted.fulfill()
+                }
+            },
+            failureOnConversionNumber: 1,
+            conversionGate: gate
+        )
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+
+        let adoptedA1 = await viewModel.adoptPersistentQueueItem(items[0].id)
+        let adoptedA2 = await viewModel.adoptPersistentQueueItem(items[1].id)
+        XCTAssertTrue(adoptedA1)
+        XCTAssertTrue(adoptedA2)
+        await fulfillment(of: [firstStarted], timeout: 2)
+        let adoptedB1 = await viewModel.adoptPersistentQueueItem(items[2].id)
+        XCTAssertTrue(adoptedB1)
+        await gate.open()
+        await fulfillment(of: [secondStarted], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(convertedTitleIDs, ["A1", "B1"])
+        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .stopped, .completed])
+    }
+
+    @MainActor
+    func testAdoptedTitlePublishesResultWithUnadoptedWaitingSibling() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let titles = ["One", "Two"].map {
+            SourceTitle(
+                id: $0,
+                name: $0,
+                outputName: $0,
+                durationSeconds: 100,
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                mainFeature: $0 == "One"
+            )
+        }
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            titles: titles
+        )
+        let groupID = UUID()
+        let items = titles.enumerated().map { offset, title in
+            DurableConversionQueueItem(
+                ordinal: offset,
+                groupID: groupID,
+                origin: .multiTitle,
+                intent: DurableQueueItemIntent(draft: ConversionDraft(
+                    source: ConversionSource(kind: .discImage, url: sourceURL),
+                    sourceDetails: inspection,
+                    profile: BuiltInProfile.balanced.profile,
+                    destinationURL: directoryURL,
+                    options: ConversionOptions(),
+                    selectedTitle: title
+                )),
+                inspection: inspection
+            )
+        }
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems(items)
+        let converted = expectation(description: "adopted title converted")
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { _ in converted.fulfill() })
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+
+        let adopted = await viewModel.adoptPersistentQueueItem(items[0].id)
+        XCTAssertTrue(adopted)
+        await fulfillment(of: [converted], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .waiting])
+        XCTAssertEqual(viewModel.completedBatchResults?.count, 1)
+        XCTAssertEqual(viewModel.completedBatchResults?.first?.outputPath, "/Movies/movie_AVP.mov")
+    }
+
+    @MainActor
+    func testMultiTitleWithoutGroupFailsClosedInsteadOfStalling() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let title = SourceTitle(
+            id: "One",
+            name: "One",
+            outputName: "One",
+            durationSeconds: 100,
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            mainFeature: true
+        )
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            titles: [title]
+        )
+        let item = DurableConversionQueueItem(
+            ordinal: 0,
+            origin: .multiTitle,
+            intent: DurableQueueItemIntent(draft: ConversionDraft(
+                source: ConversionSource(kind: .discImage, url: sourceURL),
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions(),
+                selectedTitle: title
+            )),
+            inspection: inspection,
+            state: .failed,
+            failure: DurableQueueFailure(code: "temporary", message: "Temporary", details: nil, retryable: true)
+        )
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems([item])
+        var factoryCalls = 0
+        let viewModel = ConversionViewModel(
+            clientFactory: {
+                factoryCalls += 1
+                return TwoPhaseWorkerClient()
+            },
+            durableQueueStore: queueStore
+        )
+
+        let adopted = await viewModel.adoptPersistentQueueItem(item.id)
+        XCTAssertTrue(adopted)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(factoryCalls, 0)
+        XCTAssertNotNil(viewModel.durableQueueRuntimeDiagnostic)
+        XCTAssertEqual(viewModel.state.phase, .failed)
+    }
+
+    @MainActor
     func testStopForQuitDoesNotLaunchLaterAdoptedSingleSource() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3416,6 +3618,56 @@ final class ConversionViewModelTests: XCTestCase {
 
         XCTAssertEqual(receivedPaths, [firstURL.path, secondURL.path])
         XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .completed])
+    }
+
+    @MainActor
+    func testAdoptionIsRejectedWhileStopSweepIsInFlight() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let activeURL = directoryURL.appendingPathComponent("active.mkv")
+        let laterURL = directoryURL.appendingPathComponent("later.mkv")
+        _ = FileManager.default.createFile(atPath: activeURL.path, contents: Data("video".utf8))
+        _ = FileManager.default.createFile(atPath: laterURL.path, contents: Data("video".utf8))
+        let inspection = SourceInspection(name: "Fixture", resolution: "1920x1080", frameRate: "24/1", interlaced: false)
+        let failure = DurableQueueFailure(code: "temporary", message: "Temporary", details: nil, retryable: true)
+        let makeItem: (URL, Int) -> DurableConversionQueueItem = { sourceURL, ordinal in
+            DurableConversionQueueItem(
+                ordinal: ordinal,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: ConversionDraft(
+                    source: ConversionSource(kind: .matroska, url: sourceURL),
+                    sourceDetails: inspection,
+                    profile: BuiltInProfile.balanced.profile,
+                    destinationURL: directoryURL,
+                    options: ConversionOptions()
+                )),
+                inspection: inspection,
+                state: .failed,
+                failure: failure
+            )
+        }
+        let activeItem = makeItem(activeURL, 0)
+        let laterItem = makeItem(laterURL, 1)
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems([activeItem, laterItem])
+        let activeStarted = expectation(description: "active item started")
+        let worker = TwoPhaseWorkerClient(
+            onConversionJobReceived: { _ in activeStarted.fulfill() },
+            waitsForConversionCancellation: true
+        )
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+
+        let adoptedActive = await viewModel.adoptPersistentQueueItem(activeItem.id)
+        XCTAssertTrue(adoptedActive)
+        await fulfillment(of: [activeStarted], timeout: 2)
+        viewModel.stopActiveWorker()
+        let adoptedDuringStop = await viewModel.adoptPersistentQueueItem(laterItem.id)
+        await viewModel.waitForBatchQueueSettled()
+
+        XCTAssertFalse(adoptedDuringStop)
+        XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .failed])
     }
 
     @MainActor
@@ -4198,6 +4450,7 @@ private final class ReorderableQueueWorkerClient: WorkerProcessRunning, @uncheck
     private let inspectionDone: () -> Void
     private let conversionStarted: (WorkerJobSpec, Int) -> Void
     private let blockedConversionNumber: Int
+    private let failureOnConversionNumber: Int?
     private let conversionGate: QueueTestGate
     private var conversionCount = 0
 
@@ -4205,11 +4458,13 @@ private final class ReorderableQueueWorkerClient: WorkerProcessRunning, @uncheck
         inspectionDone: @escaping () -> Void,
         conversionStarted: @escaping (WorkerJobSpec, Int) -> Void,
         blockedConversionNumber: Int = 1,
+        failureOnConversionNumber: Int? = nil,
         conversionGate: QueueTestGate
     ) {
         self.inspectionDone = inspectionDone
         self.conversionStarted = conversionStarted
         self.blockedConversionNumber = blockedConversionNumber
+        self.failureOnConversionNumber = failureOnConversionNumber
         self.conversionGate = conversionGate
     }
 
@@ -4253,6 +4508,22 @@ private final class ReorderableQueueWorkerClient: WorkerProcessRunning, @uncheck
         conversionStarted(job, conversionNumber)
         if conversionNumber == blockedConversionNumber {
             await conversionGate.wait()
+        }
+        if conversionNumber == failureOnConversionNumber {
+            let failed = WorkerEvent(
+                protocolVersion: WorkerJobSpec.protocolVersion,
+                type: .jobFailed,
+                jobID: job.jobID,
+                sequence: 1,
+                payload: WorkerEventPayload(error: WorkerFailure(
+                    code: "conversion_failed",
+                    message: "The queued conversion failed.",
+                    details: nil,
+                    retryable: false
+                ))
+            )
+            try await onEvent(failed)
+            return WorkerRunResult(terminalEvent: failed, exitStatus: 1, diagnostics: "")
         }
         let completed = WorkerEvent(
             protocolVersion: WorkerJobSpec.protocolVersion,

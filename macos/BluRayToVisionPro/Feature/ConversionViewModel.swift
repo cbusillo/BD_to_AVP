@@ -240,7 +240,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         _ itemID: UUID,
         recoveryChoice: WorkerRecoveryChoice? = nil
     ) async -> Bool {
-        guard let existing = durableQueueStore.items.first(where: { $0.id == itemID }),
+        guard !durableQueueStopRequested,
+              let existing = durableQueueStore.items.first(where: { $0.id == itemID }),
               let source = try? durableSource(for: existing),
               sourceAvailabilityResolver(source)
         else {
@@ -299,19 +300,20 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     throw ConversionQueueStoreError.invalidDocument
                 }
             }
-            durableQueueStopRequested = false
             adoptedItemIDs.insert(itemID)
             if let recoveryChoiceValue {
                 sourceFolderRecoveryChoices[itemID] = recoveryChoiceValue
             }
             if existing.origin == .multiTitle {
-                titleQueueGroupID = existing.groupID
                 titleQueueStopRequested = false
-                publishTitleQueueProjection()
+                if titleQueueGroupID == existing.groupID {
+                    publishTitleQueueProjection()
+                }
             } else if existing.origin == .sourceFolder {
-                sourceFolderQueueGroupID = existing.groupID
                 sourceFolderStopRequested = false
-                publishSourceFolderQueueProjection()
+                if sourceFolderQueueGroupID == existing.groupID {
+                    publishSourceFolderQueueProjection()
+                }
             }
             enqueueQueueTransition { [weak self] in
                 await self?.pumpDurableQueue()
@@ -753,9 +755,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         switch mode {
         case let .batchConversion(itemID):
-            return batchQueue?.activeItemID == itemID
-                && batchQueue?.activeItem?.source == draft.source
-                && batchQueue?.activeItem?.source == draft.source
+            return (batchQueue?.activeItemID == itemID
+                && batchQueue?.activeItem?.source == draft.source)
                 || durableQueueStore.items.contains(where: {
                     $0.id == itemID && $0.origin == .sourceFolder && $0.inspection != nil
                 })
@@ -857,7 +858,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         await self?.persistTitleQueueStop(itemID: activeQueueItemID)
                     }
                 }
-            case .singleInspection, .singleConversion, .durableSingleInspection, .durableSingleConversion, nil:
+            case .durableSingleInspection, .durableSingleConversion:
+                if let activeQueueItemID {
+                    enqueueQueueTransition { [weak self] in
+                        await self?.persistDurableSingleStop(itemID: activeQueueItemID)
+                    }
+                }
+            case .singleInspection, .singleConversion, nil:
                 break
             }
             return
@@ -908,6 +915,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
               let decision = state.recoveryDecision,
               decision.supportedChoices.contains(choice)
         else {
+            return false
+        }
+        if activeDurableQueueItem == nil, sourceFolderQueueGroupID != nil {
             return false
         }
         let decisionJobID = state.jobID
@@ -2275,9 +2285,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private func startDurableTitleQueueItem(_ item: DurableConversionQueueItem) async {
         guard !hasActiveWorker,
               activeQueueItemID == nil,
-              item.origin == .multiTitle,
-              let groupID = item.groupID
+              item.origin == .multiTitle
         else { return }
+        guard let groupID = item.groupID else {
+            failClosedTitleQueuePersistence(ConversionQueueStoreError.invalidDocument)
+            return
+        }
         titleQueueGroupID = groupID
 
         do {
@@ -2454,7 +2467,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     publishTitleQueueProjection()
                     publishCompletedTitleQueueResults()
                     runDeferredActionsIfIdle()
-                } else if currentTitleQueueItems.contains(where: { $0.state == .waiting }) {
+                } else if currentTitleQueueItems.contains(where: {
+                    adoptedItemIDs.contains($0.id) && $0.state == .waiting
+                }) {
                     await startNextDurableTitleQueueItem()
                 } else {
                     publishCompletedTitleQueueResults()
@@ -2500,6 +2515,25 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 items[index].decision = nil
             }
             publishTitleQueueProjection()
+        } catch {
+            durableQueueRuntimeDiagnostic = "Queue stop state could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistDurableSingleStop(itemID: UUID) async {
+        guard activeQueueItemID == itemID else {
+            return
+        }
+        do {
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == itemID }),
+                      items[index].origin == .singleSource
+                else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].state = .stopping
+                items[index].decision = nil
+            }
         } catch {
             durableQueueRuntimeDiagnostic = "Queue stop state could not be saved: \(error.localizedDescription)"
         }
