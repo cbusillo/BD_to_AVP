@@ -830,8 +830,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard hasStoppableWork else {
             return
         }
-        durableQueueStopRequested = true
-
         if hasActiveWorker {
             state.requestStop()
             recordDiagnosticWorkflow(name: "cancel.requested", mode: activeRunMode, jobID: state.jobID)
@@ -839,6 +837,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
             switch activeRunMode {
             case .batchInspection, .batchConversion:
+                durableQueueStopRequested = true
                 sourceFolderStopRequested = true
                 if var queue = batchQueue {
                     queue.stopRequested = true
@@ -852,6 +851,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     await self?.persistSourceFolderStopRequest()
                 }
             case .titleQueueInspection, .titleQueueConversion:
+                durableQueueStopRequested = true
                 titleQueueStopRequested = true
                 if let activeQueueItemID {
                     enqueueTitleQueueTransition { [weak self] in
@@ -859,6 +859,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     }
                 }
             case .durableSingleInspection, .durableSingleConversion:
+                durableQueueStopRequested = true
                 if let activeQueueItemID {
                     enqueueQueueTransition { [weak self] in
                         await self?.persistDurableSingleStop(itemID: activeQueueItemID)
@@ -870,6 +871,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
 
+        durableQueueStopRequested = true
         if batchQueue?.hasStarted == true {
             sourceFolderStopRequested = true
             if var queue = batchQueue {
@@ -1541,7 +1543,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 items[index].state = items[index].inspection == nil && kind?.supportsMetadataInspection == true
                     ? .inspecting
                     : .processing
-                items[index].attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
+                items[index].attempts.append(DurableQueueAttempt(
+                    startedAt: diagnosticClock(),
+                    recoveryChoice: sourceFolderRecoveryChoices.removeValue(forKey: item.id)
+                ))
             }
             activeQueueItemID = item.id
             let updated = try durableQueueItem(id: item.id)
@@ -1585,7 +1590,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         throw ConversionQueueStoreError.invalidDocument
                     }
                     items[index].state = .processing
-                    items[index].attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
+                    items[index].attempts.append(DurableQueueAttempt(
+                        startedAt: diagnosticClock(),
+                        recoveryChoice: sourceFolderRecoveryChoices.removeValue(forKey: item.id)
+                    ))
                 }
                 publishSourceFolderQueueProjection()
                 if sourceFolderStopRequested {
@@ -1899,10 +1907,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         do {
             var remainsRunnable = false
             var requiresDecision = false
+            var groupID: UUID?
             try await durableQueueStore.mutateItems { items in
                 guard let index = items.firstIndex(where: { $0.id == itemID }),
                       items[index].origin == .singleSource
                 else { throw ConversionQueueStoreError.invalidDocument }
+                groupID = items[index].groupID
                 if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
                     items[index].attempts[attemptIndex].endedAt = diagnosticClock()
                 }
@@ -1911,6 +1921,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 {
                     items[index].inspection = inspection
                     items[index].state = .waiting
+                    items[index].failure = nil
+                    items[index].decision = nil
                     remainsRunnable = true
                     return
                 }
@@ -1937,6 +1949,14 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             activeQueueItemID = nil
             if !remainsRunnable {
                 releaseAdoption(itemID)
+                if groupID != nil,
+                   titleQueueGroupID == groupID,
+                   !currentTitleQueueItems.contains(where: {
+                       adoptedItemIDs.contains($0.id) && $0.state == .waiting
+                   })
+                {
+                    publishCompletedTitleQueueResults()
+                }
             }
             await pumpDurableQueue()
         } catch {
@@ -2304,7 +2324,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 items[index].state = items[index].inspection == nil && sourceKind?.supportsMetadataInspection == true
                     ? .inspecting
                     : .processing
-                items[index].attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
+                items[index].attempts.append(DurableQueueAttempt(
+                    startedAt: diagnosticClock(),
+                    recoveryChoice: sourceFolderRecoveryChoices.removeValue(forKey: item.id)
+                ))
             }
         } catch {
             failClosedTitleQueuePersistence(error)
@@ -2821,7 +2844,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return item.intent.options.job.removeOriginalAfterSuccess
         }
         let groupItems = durableQueueStore.items.filter {
-            $0.groupID == groupID && $0.origin == .multiTitle
+            $0.groupID == groupID
+                && $0.origin == .multiTitle
+                && $0.intent.source.path == item.intent.source.path
+                && $0.intent.source.workerSourcePath == item.intent.source.workerSourcePath
+                && $0.intent.source.mediaIdentifier == item.intent.source.mediaIdentifier
         }
         let removalRequested = groupItems.contains {
             $0.intent.options.job.removeOriginalAfterSuccess
@@ -3002,7 +3029,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func queueStatus(for item: DurableConversionQueueItem) -> ConversionQueueItemStatus {
         switch item.state {
-        case .waiting, .notStarted, .interrupted:
+        case .waiting, .interrupted:
             .waiting
         case .inspecting, .processing, .stopping:
             .processing
@@ -3017,7 +3044,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             ))
         case .failed:
             .failed(item.failure?.message ?? "Conversion failed.")
-        case .stopped:
+        case .stopped, .notStarted:
             .cancelled
         }
     }

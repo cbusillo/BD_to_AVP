@@ -405,32 +405,56 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
+    private struct MultiTitleSourceRemovalKey: Hashable {
+        let groupID: UUID
+        let path: String
+        let workerSourcePath: String
+        let mediaIdentifier: String?
+    }
+
+    private static func multiTitleSourceRemovalKey(
+        for item: DurableConversionQueueItem
+    ) -> MultiTitleSourceRemovalKey? {
+        guard item.origin == .multiTitle, let groupID = item.groupID else {
+            return nil
+        }
+        return MultiTitleSourceRemovalKey(
+            groupID: groupID,
+            path: item.intent.source.path,
+            workerSourcePath: item.intent.source.workerSourcePath,
+            mediaIdentifier: item.intent.source.mediaIdentifier
+        )
+    }
+
     private static func multiTitleSourceRemovalRequests(
         in items: [DurableConversionQueueItem],
         groupIDs: Set<UUID>
-    ) -> [UUID: Bool] {
-        Dictionary(uniqueKeysWithValues: groupIDs.map { groupID in
+    ) -> [MultiTitleSourceRemovalKey: Bool] {
+        let keys = Set(items.compactMap { item -> MultiTitleSourceRemovalKey? in
+            guard let key = multiTitleSourceRemovalKey(for: item), groupIDs.contains(key.groupID) else {
+                return nil
+            }
+            return key
+        })
+        return Dictionary(uniqueKeysWithValues: keys.map { key in
             let requested = items.contains { item in
-                item.groupID == groupID
-                    && item.origin == .multiTitle
+                multiTitleSourceRemovalKey(for: item) == key
                     && item.intent.options.job.removeOriginalAfterSuccess
             }
-            return (groupID, requested)
+            return (key, requested)
         })
     }
 
     private static func normalizeMultiTitleSourceRemoval(
         in items: inout [DurableConversionQueueItem],
-        requests: [UUID: Bool]
+        requests: [MultiTitleSourceRemovalKey: Bool]
     ) {
-        for (groupID, requested) in requests {
+        for (key, requested) in requests {
             let finalWaitingItemID = items.last { item in
-                item.groupID == groupID
-                    && item.origin == .multiTitle
+                multiTitleSourceRemovalKey(for: item) == key
                     && item.state == .waiting
             }?.id
-            for index in items.indices where items[index].groupID == groupID
-                && items[index].origin == .multiTitle
+            for index in items.indices where multiTitleSourceRemovalKey(for: items[index]) == key
                 && items[index].state == .waiting
             {
                 items[index].intent.options.job.removeOriginalAfterSuccess = requested
