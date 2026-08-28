@@ -65,6 +65,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var completedBatchResults: [ConversionResult]?
     @Published private(set) var durableQueueRuntimeDiagnostic: String?
     @Published private(set) var setupQueueStartFailureItemIDs: Set<UUID> = []
+    @Published private(set) var persistentQueueRunState: PersistentQueueRunState = .idle
 
     private let clientFactory: ClientFactory
     private let diagnosticClock: () -> Date
@@ -313,24 +314,76 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     @discardableResult
-    func startPersistentQueue() async -> Int {
+    func startPersistentQueue() async -> PersistentQueueCommandOutcome {
+        guard !hasActiveWorker || activeDurableQueueItem != nil else {
+            return .rejected(.otherWorkIsActive)
+        }
+        if persistentQueueRunState == .running {
+            return .noChange(.running)
+        }
         let candidates = persistentQueueItems.filter { item in
             switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
                 true
-            case let .failed(failure):
-                failure.retryable
-            case .inspecting, .processing, .stopping, .attention, .completed:
+            case .inspecting, .processing, .stopping, .attention, .failed, .completed:
                 false
             }
         }
+        guard !candidates.isEmpty else {
+            return .rejected(.noEligibleItems)
+        }
+        parkActiveDurableQueueItemForResume()
+        persistentQueueRunState = .running
+        durableQueueStopRequested = false
         var adoptedCount = 0
         for item in candidates {
             if await adoptPersistentQueueItem(item.id) {
                 adoptedCount += 1
             }
         }
-        return adoptedCount
+        guard adoptedCount > 0 else {
+            persistentQueueRunState = .paused
+            return .rejected(.noEligibleItems)
+        }
+        return .accepted(.running)
+    }
+
+    @discardableResult
+    func pausePersistentQueueAfterCurrent() -> PersistentQueueCommandOutcome {
+        switch persistentQueueRunState {
+        case .pauseAfterCurrent:
+            return .noChange(.pauseAfterCurrent)
+        case .paused:
+            return .noChange(.paused)
+        case .idle:
+            return .rejected(.queueIsNotRunning)
+        case .running:
+            persistentQueueRunState = .pauseAfterCurrent
+            if !hasActiveWorker, activeQueueItemID == nil {
+                enqueueQueueTransition { [weak self] in
+                    await self?.pauseDurableQueueNow()
+                }
+            }
+            return .accepted(.pauseAfterCurrent)
+        }
+    }
+
+    @discardableResult
+    func stopCurrentPersistentQueueItem() -> PersistentQueueCommandOutcome {
+        guard persistentQueueRunState == .running || persistentQueueRunState == .pauseAfterCurrent else {
+            return .rejected(.queueIsNotRunning)
+        }
+        guard hasActiveWorker, let item = activeDurableQueueItem else {
+            return .rejected(.noActiveItem)
+        }
+        persistentQueueRunState = .paused
+        state.requestStop()
+        recordDiagnosticWorkflow(name: "cancel.requested", mode: activeRunMode, jobID: state.jobID)
+        client?.cancel()
+        enqueueQueueTransition { [weak self] in
+            await self?.persistCurrentDurableQueueStop(itemID: item.id)
+        }
+        return .accepted(.paused)
     }
 
     @discardableResult
@@ -409,6 +462,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 }
             }
             adoptedItemIDs.insert(itemID)
+            persistentQueueRunState = .running
             if let recoveryChoiceValue {
                 sourceFolderRecoveryChoices[itemID] = recoveryChoiceValue
             }
@@ -964,6 +1018,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard hasStoppableWork else {
             return
         }
+        persistentQueueRunState = .idle
         if hasActiveWorker {
             state.requestStop()
             recordDiagnosticWorkflow(name: "cancel.requested", mode: activeRunMode, jobID: state.jobID)
@@ -1033,6 +1088,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         enqueueQueueTransition { [weak self] in
             await self?.stopUnstartedAdoptedItems()
         }
+    }
+
+    @discardableResult
+    func stopAllPersistentQueue() -> PersistentQueueCommandOutcome {
+        guard hasStoppableWork else {
+            return .rejected(.noActiveItem)
+        }
+        stopActiveWorker()
+        return .accepted(.idle)
     }
 
     func prepareForRetry() {
@@ -1643,7 +1707,16 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private func pumpDurableQueue() async {
         if durableQueueStopRequested {
             await stopUnstartedAdoptedItems()
+            persistentQueueRunState = .idle
             finishSourceFolderQueueIfNeeded()
+            return
+        }
+        if persistentQueueRunState == .paused {
+            await pauseDurableQueueNow()
+            return
+        }
+        if persistentQueueRunState == .pauseAfterCurrent {
+            await pauseDurableQueueNow()
             return
         }
         guard !hasActiveWorker, activeQueueItemID == nil else {
@@ -1653,6 +1726,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             .filter({ adoptedItemIDs.contains($0.id) && $0.state == .waiting })
             .min(by: { $0.ordinal < $1.ordinal })
         else {
+            if persistentQueueRunState == .running {
+                persistentQueueRunState = .idle
+            }
             finishSourceFolderQueueIfNeeded()
             return
         }
@@ -2082,6 +2158,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             publishTitleQueueProjection()
             if requiresDecision {
+                persistentQueueRunState = .paused
                 return
             }
             activeQueueItemID = nil
@@ -2128,10 +2205,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 items[index].result = result
                 items[index].decision = nil
                 items[index].failure = nil
-            } else if let decision = snapshot.decision {
-                items[index].state = .failed
-                items[index].failure = snapshot.failure
-                items[index].decision = DurableQueueDecision(decision: decision)
+                } else if let decision = snapshot.decision {
+                    items[index].state = .attention
+                    items[index].failure = nil
+                    items[index].decision = DurableQueueDecision(decision: decision)
             } else {
                 items[index].state = .failed
                 items[index].failure = snapshot.failure
@@ -2542,6 +2619,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             publishTitleQueueProjection()
             if requiresDecision {
+                persistentQueueRunState = .paused
                 return
             }
             activeQueueItemID = nil
@@ -2639,7 +2717,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             case .decisionRequired:
                 publishTitleQueueProjection()
             case .cancelled, .failed:
-                try await stopWaitingTitleQueueItems()
+                if durableQueueStopRequested || titleQueueStopRequested {
+                    try await stopWaitingTitleQueueItems()
+                }
                 publishTitleQueueProjection()
                 activeQueueItemID = nil
                 releaseAdoption(itemID)
@@ -2659,6 +2739,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
         do {
+            var stoppedItemIDs: Set<UUID> = []
             try await durableQueueStore.mutateItems { items in
                 guard let index = items.firstIndex(where: { $0.id == itemID }) else {
                     throw ConversionQueueStoreError.invalidDocument
@@ -2686,6 +2767,25 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 items[index].state = .stopping
                 items[index].decision = nil
             }
+        } catch {
+            durableQueueRuntimeDiagnostic = "Queue stop state could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistCurrentDurableQueueStop(itemID: UUID) async {
+        guard activeQueueItemID == itemID else {
+            return
+        }
+        do {
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].state = .stopping
+                items[index].decision = nil
+            }
+            publishTitleQueueProjection()
+            publishSourceFolderQueueProjection()
         } catch {
             durableQueueRuntimeDiagnostic = "Queue stop state could not be saved: \(error.localizedDescription)"
         }
@@ -2843,6 +2943,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 ))
             }
             durableQueueStopRequested = false
+            persistentQueueRunState = .running
             state.prepareQueuedConversion(sourceURL: draft.source.url, inspection: draft.sourceDetails)
             source = draft.source
             _ = startConversion(draft: draft, mode: .durableSingleConversion(itemID: itemID))
@@ -2876,6 +2977,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 ))
             }
             publishTitleQueueProjection()
+            persistentQueueRunState = .running
             if titleQueueStopRequested {
                 await stopDurableTitleQueueBeforeSpawn(itemID: itemID)
                 return
@@ -3012,7 +3114,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         do {
             var origin: DurableQueueItemOrigin?
             var groupID: UUID?
-            var stoppedItemIDs: Set<UUID> = []
             try await durableQueueStore.mutateItems { items in
                 guard let index = items.firstIndex(where: { $0.id == itemID }) else {
                     throw ConversionQueueStoreError.invalidDocument
@@ -3030,18 +3131,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
                     items[index].attempts[attemptIndex].endedAt = diagnosticClock()
                 }
-                if items[index].origin == .multiTitle, let groupID {
-                    for pendingIndex in items.indices where items[pendingIndex].groupID == groupID && items[pendingIndex].state == .waiting {
-                        items[pendingIndex].state = .stopped
-                        stoppedItemIDs.insert(items[pendingIndex].id)
-                    }
-                }
             }
             activeQueueItemID = nil
             releaseAdoption(itemID)
-            for stoppedItemID in stoppedItemIDs {
-                releaseAdoption(stoppedItemID)
-            }
             state.failTransport(message: "The queued source is no longer available.", retryable: true)
             switch origin {
             case .multiTitle:
@@ -3071,6 +3163,35 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         adoptedItemIDs.remove(itemID)
         durableSingleJobIDs.removeValue(forKey: itemID)
         sourceFolderRecoveryChoices.removeValue(forKey: itemID)
+    }
+
+    private func parkActiveDurableQueueItemForResume() {
+        guard let item = activeDurableQueueItem,
+              item.state == .attention
+        else {
+            return
+        }
+        activeQueueItemID = nil
+        releaseAdoption(item.id)
+        if state.phase == .decisionRequired {
+            state.clear()
+        }
+    }
+
+    private func pauseDurableQueueNow() async {
+        guard !hasActiveWorker, activeQueueItemID == nil else {
+            return
+        }
+        let pendingItemIDs = durableQueueStore.items.compactMap { item in
+            adoptedItemIDs.contains(item.id) && item.state == .waiting ? item.id : nil
+        }
+        for itemID in pendingItemIDs {
+            releaseAdoption(itemID)
+        }
+        persistentQueueRunState = .paused
+        publishTitleQueueProjection()
+        publishSourceFolderQueueProjection()
+        finishSourceFolderQueueIfNeeded()
     }
 
     private func stopUnstartedAdoptedItems() async {

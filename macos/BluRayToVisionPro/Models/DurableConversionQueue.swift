@@ -23,10 +23,10 @@ struct ConversionQueueDocument: Codable, Equatable {
         self.init(version: Self.currentVersion, items: items)
     }
 
-    func restoredAfterLaunch() -> ConversionQueueDocument {
+    func restoredAfterLaunch(at restoredAt: Date = Date()) -> ConversionQueueDocument {
         ConversionQueueDocument(
             version: version,
-            items: items.map { $0.restoredAfterLaunch() }
+            items: items.map { $0.restoredAfterLaunch(at: restoredAt) }
         )
     }
 }
@@ -73,8 +73,11 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         self.resolutionTrace = resolutionTrace
     }
 
-    func restoredAfterLaunch() -> DurableConversionQueueItem {
+    func restoredAfterLaunch(at restoredAt: Date = Date()) -> DurableConversionQueueItem {
         var restored = self
+        for index in restored.attempts.indices where restored.attempts[index].endedAt == nil {
+            restored.attempts[index].endedAt = restoredAt
+        }
         switch state {
         case .inspecting, .processing, .stopping:
             restored.state = .interrupted

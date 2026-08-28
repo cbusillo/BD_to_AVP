@@ -3609,7 +3609,7 @@ final class ConversionViewModelTests: XCTestCase {
                 convertedTitleIDs.append(job.source.titleID ?? "")
                 if conversionNumber == 1 {
                     firstStarted.fulfill()
-                } else {
+                } else if job.source.titleID == "B1" {
                     secondStarted.fulfill()
                 }
             },
@@ -3629,8 +3629,8 @@ final class ConversionViewModelTests: XCTestCase {
         await fulfillment(of: [secondStarted], timeout: 2)
         while viewModel.hasActiveWork { await Task.yield() }
 
-        XCTAssertEqual(convertedTitleIDs, ["A1", "B1"])
-        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .stopped, .completed])
+        XCTAssertEqual(convertedTitleIDs, ["A1", "A2", "B1"])
+        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .completed, .completed])
     }
 
     @MainActor
@@ -4006,13 +4006,116 @@ final class ConversionViewModelTests: XCTestCase {
         XCTAssertEqual(queueStore.items.first?.state, .waiting)
         XCTAssertFalse(viewModel.hasActiveWork)
 
-        let adoptedCount = await viewModel.startPersistentQueue()
-        XCTAssertEqual(adoptedCount, 1)
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
         await fulfillment(of: [completed], timeout: 2)
         while viewModel.hasActiveWork { await Task.yield() }
 
         XCTAssertEqual(queueStore.items.count, 1)
         XCTAssertEqual(queueStore.items.first?.state, .completed)
+    }
+
+    @MainActor
+    func testPersistentQueueCommandsRejectInvalidTransitions() async throws {
+        let viewModel = ConversionViewModel(durableQueueStore: .inMemory())
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .rejected(.noEligibleItems))
+        XCTAssertEqual(viewModel.pausePersistentQueueAfterCurrent(), .rejected(.queueIsNotRunning))
+        XCTAssertEqual(viewModel.stopCurrentPersistentQueueItem(), .rejected(.queueIsNotRunning))
+        XCTAssertEqual(viewModel.stopAllPersistentQueue(), .rejected(.noActiveItem))
+    }
+
+    @MainActor
+    func testResumeSkipsParkedFailureAndRunsEligiblePeer() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        var failed = makePersistentQueueFixture(ordinal: 0, state: .failed)
+        failed.failure = DurableQueueFailure(
+            code: "temporary_failure",
+            message: "Temporary failure",
+            details: nil,
+            retryable: true
+        )
+        let waiting = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        try await queueStore.replaceItems([failed, waiting])
+        let completed = expectation(description: "eligible peer completed")
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { _ in completed.fulfill() })
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        await fulfillment(of: [completed], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .completed])
+    }
+
+    @MainActor
+    func testPauseAfterCurrentKeepsPendingRowsWaitingUntilResume() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let first = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        let second = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        try await queueStore.replaceItems([first, second])
+        let firstStarted = expectation(description: "first queue item started")
+        let secondStarted = expectation(description: "second queue item started")
+        secondStarted.isInverted = true
+        let gate = QueueTestGate()
+        let worker = ReorderableQueueWorkerClient(
+            inspectionDone: {},
+            conversionStarted: { _, conversionNumber in
+                if conversionNumber == 1 {
+                    firstStarted.fulfill()
+                } else {
+                    secondStarted.fulfill()
+                }
+            },
+            conversionGate: gate
+        )
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        await fulfillment(of: [firstStarted], timeout: 2)
+        XCTAssertEqual(viewModel.pausePersistentQueueAfterCurrent(), .accepted(.pauseAfterCurrent))
+        XCTAssertEqual(viewModel.pausePersistentQueueAfterCurrent(), .noChange(.pauseAfterCurrent))
+        await gate.open()
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        await fulfillment(of: [secondStarted], timeout: 0.1)
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .waiting])
+        XCTAssertEqual(viewModel.persistentQueueRunState, .paused)
+    }
+
+    @MainActor
+    func testStopCurrentPausesWithoutDemotingWaitingPeers() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let first = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        let second = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        try await queueStore.replaceItems([first, second])
+        let started = expectation(description: "queue item started")
+        let worker = CancellableInspectionWorkerClient(onStarted: { started.fulfill() })
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(viewModel.stopCurrentPersistentQueueItem(), .accepted(.paused))
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .waiting])
+        XCTAssertEqual(viewModel.persistentQueueRunState, .paused)
     }
 
     @MainActor
@@ -4158,7 +4261,7 @@ final class ConversionViewModelTests: XCTestCase {
         viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
         while viewModel.hasActiveWork { await Task.yield() }
 
-        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .stopped])
+        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .failed])
         XCTAssertEqual(queueStore.items.first?.failure?.message, RuntimePersistenceTestError.workerLaunchFailed.localizedDescription)
         XCTAssertNotNil(queueStore.items.first?.attempts.last?.endedAt)
     }
@@ -4455,8 +4558,8 @@ final class ConversionViewModelTests: XCTestCase {
         if case .failed = viewModel.queueItems[0].status {} else {
             XCTFail("The active queue item should be marked failed.")
         }
-        if case .cancelled = viewModel.queueItems[1].status {} else {
-            XCTFail("The pending queue item should be marked cancelled.")
+        if case .failed = viewModel.queueItems[1].status {} else {
+            XCTFail("The remaining queue item should park when its shared source becomes unavailable.")
         }
     }
 

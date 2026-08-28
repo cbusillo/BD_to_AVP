@@ -95,12 +95,12 @@ final class ConversionQueueStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testEphemeralStatesRestoreAsInterruptedWithoutChangingDurableStates() async throws {
+    func testEphemeralStatesRestoreAsInterruptedAndPersistClosedAttempts() async throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let fileURL = directoryURL.appendingPathComponent("queue.json")
         let states = DurableQueueItemState.allCases
-        let items = states.enumerated().map { offset, state in
+        var items = states.enumerated().map { offset, state in
             makeItem(
                 ordinal: offset,
                 sourcePath: "/tmp/source-\(offset).mkv",
@@ -123,6 +123,9 @@ final class ConversionQueueStoreTests: XCTestCase {
                 result: state == .completed ? DurableQueueResult(outputPath: "/tmp/output.mov") : nil
             )
         }
+        for index in items.indices where [.inspecting, .processing, .stopping].contains(items[index].state) {
+            items[index].attempts = [DurableQueueAttempt(startedAt: Date(timeIntervalSince1970: 1))]
+        }
         let store = ConversionQueueStore(fileURL: fileURL)
         try await store.replaceItems(items)
 
@@ -139,6 +142,15 @@ final class ConversionQueueStoreTests: XCTestCase {
         }
         let attention = try XCTUnwrap(restored.first(where: { $0.state == .attention }))
         XCTAssertTrue(try XCTUnwrap(attention.decision).staleAfterRestore)
+        XCTAssertTrue(restored
+            .filter { $0.state == .interrupted }
+            .allSatisfy { $0.attempts.allSatisfy { $0.endedAt != nil } })
+
+        let reopened = ConversionQueueStore(fileURL: fileURL).items
+        XCTAssertEqual(reopened.map(\.state), restored.map(\.state))
+        XCTAssertTrue(reopened
+            .filter { $0.state == .interrupted }
+            .allSatisfy { $0.attempts.allSatisfy { $0.endedAt != nil } })
     }
 
     @MainActor
