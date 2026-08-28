@@ -26,6 +26,7 @@ from scripts.release_milestone_context import (
     require_manifest_runner_sha,
     resolve_milestone_manifest_context,
     resolve_milestone_context,
+    verify_qualified_v2_bundle,
     verify_published_release_receipt,
 )
 from scripts.release_qualification_manifest import (
@@ -2606,6 +2607,22 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     base_branch="main",
                     qualified_v2_verifier=lambda _root, _tag, _base: {"class": "v2-captured"},
                 )
+
+    def test_qualified_v2_verifier_uses_worktree_and_write_once_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with (
+                patch(
+                    "scripts.release_evidence_v2.validate_v2_bundle",
+                    return_value={"class": "v2-qualified"},
+                ) as validate,
+                patch("scripts.release_evidence_v2.verify_write_once_history") as verify_history,
+            ):
+                result = verify_qualified_v2_bundle(root, "v1.0.0", "a" * 40)
+
+        self.assertEqual(result, {"class": "v2-qualified"})
+        validate.assert_called_once_with(root, "v1.0.0", worktree=True)
+        verify_history.assert_called_once_with(root, "a" * 40, worktree=True)
 
     def test_rejects_non_docs_changes_on_evidence_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
