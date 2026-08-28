@@ -507,7 +507,8 @@ qualification contract is recorded in
 Beta `0.3.3b1` is prepared as public tag and title `v0.3.3-beta.1` with global
 build `172`. Published Stable `0.3.2` build `171` is the immediate global
 predecessor and immutable Stable update and release-note base. The Beta item is
-eligible only on the Prerelease route. Failed builds `165` and `166` and
+eligible only on the Beta and Alpha update routes and is published through the
+Prerelease workflow. Failed builds `165` and `166` and
 cancelled build `168` remain burned. No Prerelease dispatch, signing approval,
 tag, release, draft, appcast, PyPI, or Homebrew mutation is authorized by this
 preparation. The preparation contract is recorded in
