@@ -216,6 +216,14 @@ the queue preserves those decisions for each source and will not start while
 any item still needs attention. Remembered choices are scoped to the matching
 source and Profile and can be forgotten from the resolution prompt.
 
+The macOS app opens to a persistent queue workspace even before a source is
+selected. Files, folders, disc images, and inserted discs can be appended with
+the native picker or drag and drop. Waiting videos can be selected, edited,
+reordered, moved next, removed, and restored with Undo while active and
+completed settings remain locked. Work restored after an app restart never
+starts automatically; interrupted or stopped videos require an explicit
+**Resume Queue**, **Restart Safely**, or recovery choice.
+
 ## Terminal Usage
 
 Navigate to the tool's directory in your terminal and execute the command with the required and optional parameters:

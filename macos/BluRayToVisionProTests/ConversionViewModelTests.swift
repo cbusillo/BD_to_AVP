@@ -3975,6 +3975,47 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentQueueAppendThenStartUsesExistingDurableRow() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("feature.mkv")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false
+        )
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: sourceURL),
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: directoryURL,
+            options: ConversionOptions()
+        )
+        let queueStore = ConversionQueueStore.inMemory()
+        let completed = expectation(description: "persistent queue conversion completed")
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { _ in completed.fulfill() })
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+
+        let appendResult = try await viewModel.appendPersistentQueueDrafts([draft])
+        XCTAssertEqual(appendResult.addedCount, 1)
+        XCTAssertEqual(queueStore.items.count, 1)
+        XCTAssertEqual(queueStore.items.first?.state, .waiting)
+        XCTAssertFalse(viewModel.hasActiveWork)
+
+        let adoptedCount = await viewModel.startPersistentQueue()
+        XCTAssertEqual(adoptedCount, 1)
+        await fulfillment(of: [completed], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.count, 1)
+        XCTAssertEqual(queueStore.items.first?.state, .completed)
+    }
+
+    @MainActor
     func testPersistentQueueProjectionIncludesEveryOriginAndPreservesSelection() async throws {
         let queueStore = ConversionQueueStore.inMemory()
         let viewModel = ConversionViewModel(durableQueueStore: queueStore)

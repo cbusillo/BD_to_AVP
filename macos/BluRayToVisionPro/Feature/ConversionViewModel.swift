@@ -208,12 +208,16 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         try await durableQueueStore.moveWaitingItem(itemID, before: targetID)
     }
 
+    func movePersistentQueueItem(_ itemID: UUID, after targetID: UUID) async throws {
+        try await durableQueueStore.moveWaitingItem(itemID, after: targetID)
+    }
+
     func movePersistentQueueItemNext(_ itemID: UUID) async throws {
         try await durableQueueStore.moveWaitingItemNext(itemID)
     }
 
     func removePersistentQueueItems(_ itemIDs: Set<UUID>) async throws -> PersistentQueueRemovalToken {
-        let token = try await durableQueueStore.removeWaitingItems(itemIDs)
+        let token = try await durableQueueStore.removeRemovableItems(itemIDs)
         for itemID in itemIDs {
             releaseAdoption(itemID)
         }
@@ -233,6 +237,100 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     func clearCompletedPersistentQueueItems() async throws -> PersistentQueueRemovalToken {
         try await durableQueueStore.clearCompletedItems()
+    }
+
+    func appendPersistentQueueDrafts(_ drafts: [ConversionDraft]) async throws -> SetupQueueAddResult {
+        let existingIdentities = Set(persistentQueueItems.map {
+            ConversionQueueItem.stablePreviewID(for: $0.draft)
+        })
+        var admittedIdentities = existingIdentities
+        var admittedDrafts: [ConversionDraft] = []
+        var duplicateDisplayNames: [String] = []
+        for draft in drafts {
+            let identity = ConversionQueueItem.stablePreviewID(for: draft)
+            guard admittedIdentities.insert(identity).inserted else {
+                duplicateDisplayNames.append(draft.selectedTitle?.name ?? draft.source.displayName)
+                continue
+            }
+            admittedDrafts.append(draft)
+        }
+        guard !admittedDrafts.isEmpty else {
+            return SetupQueueAddResult(addedCount: 0, duplicateDisplayNames: duplicateDisplayNames)
+        }
+
+        var groupIDsBySource: [QueueSourceIdentity: UUID] = [:]
+        let sourcesRequestingRemoval = Set(admittedDrafts.compactMap { draft in
+            draft.options.job.removeOriginalAfterSuccess
+                ? QueueSourceIdentity(source: draft.source)
+                : nil
+        })
+        var finalRemovalIndexBySource: [QueueSourceIdentity: Int] = [:]
+        for (offset, draft) in admittedDrafts.enumerated() {
+            let sourceIdentity = QueueSourceIdentity(source: draft.source)
+            if sourcesRequestingRemoval.contains(sourceIdentity) {
+                finalRemovalIndexBySource[sourceIdentity] = offset
+            }
+        }
+        let newItems = admittedDrafts.enumerated().map { offset, originalDraft in
+            var options = originalDraft.options
+            let sourceIdentity = QueueSourceIdentity(source: originalDraft.source)
+            options.job.removeOriginalAfterSuccess = finalRemovalIndexBySource[sourceIdentity] == offset
+            let draft = ConversionDraft(
+                source: originalDraft.source,
+                sourceDetails: originalDraft.sourceDetails,
+                profile: originalDraft.profile,
+                destinationURL: originalDraft.destinationURL,
+                options: options,
+                selectedTitle: originalDraft.selectedTitle
+            )
+            let origin: DurableQueueItemOrigin = draft.source.kind == .sourceFolder
+                ? .sourceFolder
+                : (draft.selectedTitle == nil ? .singleSource : .multiTitle)
+            let itemGroupID: UUID?
+            if origin == .singleSource {
+                itemGroupID = nil
+            } else {
+                itemGroupID = groupIDsBySource[sourceIdentity] ?? {
+                    let groupID = UUID()
+                    groupIDsBySource[sourceIdentity] = groupID
+                    return groupID
+                }()
+            }
+            return DurableConversionQueueItem(
+                ordinal: offset,
+                groupID: itemGroupID,
+                origin: origin,
+                intent: DurableQueueItemIntent(draft: draft),
+                inspection: draft.sourceDetails
+            )
+        }
+        try await durableQueueStore.appendWaitingItems(newItems)
+        selectedPersistentQueueItemID = newItems.first?.id
+        return SetupQueueAddResult(
+            addedCount: newItems.count,
+            duplicateDisplayNames: duplicateDisplayNames
+        )
+    }
+
+    @discardableResult
+    func startPersistentQueue() async -> Int {
+        let candidates = persistentQueueItems.filter { item in
+            switch item.status {
+            case .waiting, .interrupted, .stopped, .notStarted:
+                true
+            case let .failed(failure):
+                failure.retryable
+            case .inspecting, .processing, .stopping, .attention, .completed:
+                false
+            }
+        }
+        var adoptedCount = 0
+        for item in candidates {
+            if await adoptPersistentQueueItem(item.id) {
+                adoptedCount += 1
+            }
+        }
+        return adoptedCount
     }
 
     @discardableResult

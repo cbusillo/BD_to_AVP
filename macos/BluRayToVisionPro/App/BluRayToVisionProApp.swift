@@ -84,7 +84,7 @@ struct BluRayToVisionProApp: App {
                 resolutionMemoryStore: resolutionMemoryStore,
                 capabilities: capabilities
             )
-                .frame(minWidth: 820, minHeight: 680)
+                .frame(minWidth: 920, minHeight: 680)
                 .background(
                     WindowAccessor { window in
                         appDelegate.attach(window: window, workCoordinator: workCoordinator)

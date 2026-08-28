@@ -19,6 +19,22 @@ enum SourcePicker {
     }
 
     @MainActor
+    static func chooseQueueSources() -> [ConversionSource] {
+        let panel = NSOpenPanel()
+        panel.title = "Add Sources to Queue"
+        panel.prompt = "Add to Queue"
+        panel.message = "Choose one or more Blu-ray folders, ISO, MKV, MTS, or M2TS sources."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.resolvesAliases = true
+        guard panel.runModal() == .OK else {
+            return []
+        }
+        return panel.urls.compactMap { ConversionSource.infer(from: $0.standardizedFileURL) }
+    }
+
+    @MainActor
     static func chooseFile(kind: ConversionSourceKind) -> ConversionSource? {
         let panel = NSOpenPanel()
         panel.title = "Open \(kind.title)"

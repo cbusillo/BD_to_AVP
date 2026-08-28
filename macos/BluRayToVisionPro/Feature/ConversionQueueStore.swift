@@ -56,6 +56,29 @@ final class ConversionQueueStore: ObservableObject {
         document.items
     }
 
+    func appendWaitingItems(_ newItems: [DurableConversionQueueItem]) async throws {
+        guard !newItems.isEmpty else {
+            return
+        }
+        try await mutateItems { items in
+            let existingIDs = Set(items.map(\.id))
+            guard newItems.allSatisfy({ $0.state == .waiting }),
+                  Set(newItems.map(\.id)).count == newItems.count,
+                  newItems.allSatisfy({ !existingIDs.contains($0.id) })
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let affectedGroupIDs = Set(newItems.compactMap(\.groupID))
+            let requestedRemoval = Self.multiTitleSourceRemovalRequests(
+                in: items + newItems,
+                groupIDs: affectedGroupIDs
+            )
+            items.append(contentsOf: newItems)
+            Self.normalizeOrdinals(&items)
+            Self.normalizeMultiTitleSourceRemoval(in: &items, requests: requestedRemoval)
+        }
+    }
+
     func moveWaitingItem(_ itemID: UUID, before targetID: UUID) async throws {
         guard itemID != targetID else {
             return
@@ -103,6 +126,33 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
+    func moveWaitingItem(_ itemID: UUID, after targetID: UUID) async throws {
+        guard itemID != targetID else {
+            return
+        }
+        try await mutateItems { items in
+            guard let sourceIndex = items.firstIndex(where: { $0.id == itemID }),
+                  let targetIndex = items.firstIndex(where: { $0.id == targetID }),
+                  items[sourceIndex].state == .waiting,
+                  items[targetIndex].state == .waiting
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let affectedGroupIDs = Set([items[sourceIndex].groupID, items[targetIndex].groupID].compactMap { $0 })
+            let sourceRemovalRequests = Self.multiTitleSourceRemovalRequests(
+                in: items,
+                groupIDs: affectedGroupIDs
+            )
+            let item = items.remove(at: sourceIndex)
+            guard let adjustedTargetIndex = items.firstIndex(where: { $0.id == targetID }) else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            items.insert(item, at: adjustedTargetIndex + 1)
+            Self.normalizeOrdinals(&items)
+            Self.normalizeMultiTitleSourceRemoval(in: &items, requests: sourceRemovalRequests)
+        }
+    }
+
     func removeWaitingItems(_ itemIDs: Set<UUID>) async throws -> PersistentQueueRemovalToken {
         var removedItems: [DurableConversionQueueItem] = []
         let revision = try await mutateItems { items in
@@ -124,6 +174,35 @@ final class ConversionQueueStore: ObservableObject {
                 in: &items,
                 requests: sourceRemovalRequests
             )
+        }
+        return PersistentQueueRemovalToken(items: removedItems, revision: revision)
+    }
+
+    func removeRemovableItems(_ itemIDs: Set<UUID>) async throws -> PersistentQueueRemovalToken {
+        var removedItems: [DurableConversionQueueItem] = []
+        let revision = try await mutateItems { items in
+            let matchingItems = items.filter { itemIDs.contains($0.id) }
+            guard matchingItems.count == itemIDs.count,
+                  matchingItems.allSatisfy({ item in
+                      switch item.state {
+                      case .waiting, .interrupted, .attention, .failed, .stopped, .notStarted:
+                          true
+                      case .inspecting, .processing, .stopping, .completed:
+                          false
+                      }
+                  })
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let affectedGroupIDs = Set(matchingItems.compactMap(\.groupID))
+            let sourceRemovalRequests = Self.multiTitleSourceRemovalRequests(
+                in: items,
+                groupIDs: affectedGroupIDs
+            )
+            removedItems = matchingItems
+            items.removeAll { itemIDs.contains($0.id) }
+            Self.normalizeOrdinals(&items)
+            Self.normalizeMultiTitleSourceRemoval(in: &items, requests: sourceRemovalRequests)
         }
         return PersistentQueueRemovalToken(items: removedItems, revision: revision)
     }
