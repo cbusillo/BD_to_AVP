@@ -2,10 +2,12 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
 
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -20,10 +22,12 @@ from scripts.release_milestone_context import (
     _requires_unpublished_candidate_recovery,
     discover_milestone_manifest,
     discover_milestone_receipt,
+    discover_terminal_v2_qualification,
     require_manifest_evidence_baseline,
     require_manifest_runner_sha,
     resolve_milestone_manifest_context,
     resolve_milestone_context,
+    verify_qualified_v2_bundle,
     verify_published_release_receipt,
 )
 from scripts.release_qualification_manifest import (
@@ -2520,6 +2524,121 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 "docs/release-evidence/index-v2.json",
             ),
             "v0.3.0",
+        )
+
+    def test_terminal_v2_qualification_skips_legacy_milestone_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            release_tag = "v1.0.0"
+            bundle = root / "docs/release-evidence" / release_tag
+            bundle.mkdir(parents=True)
+            (bundle / "qualification-v2.json").write_text("{}\n", encoding="utf-8")
+            (root / "docs/release-evidence/index-v2.json").write_text("{}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "docs/release-evidence"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "add terminal v2 evidence"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            verified: list[tuple[Path, str, str]] = []
+
+            def verify(repo_root: Path, tag: str, verified_base_sha: str) -> Mapping[str, object]:
+                verified.append((repo_root, tag, verified_base_sha))
+                return {"class": "v2-qualified"}
+
+            discovered = discover_terminal_v2_qualification(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch=f"automation/release-evidence-{release_tag}",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+                qualified_v2_verifier=verify,
+            )
+
+        self.assertEqual(discovered, release_tag)
+        self.assertEqual(verified, [(root, release_tag, base_sha)])
+
+    def test_terminal_v2_qualification_rejects_nonqualified_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            release_tag = "v1.0.0"
+            bundle = root / "docs/release-evidence" / release_tag
+            bundle.mkdir(parents=True)
+            (bundle / "qualification-v2.json").write_text("{}\n", encoding="utf-8")
+            (root / "docs/release-evidence/index-v2.json").write_text("{}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "docs/release-evidence"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "add nonterminal v2 evidence"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "class 'v2-qualified'"):
+                discover_terminal_v2_qualification(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch=f"automation/release-evidence-{release_tag}",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    qualified_v2_verifier=lambda _root, _tag, _base: {"class": "v2-captured"},
+                )
+
+    def test_qualified_v2_verifier_uses_worktree_and_write_once_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='{"verified":[{"class":"v2-qualified","release_tag":"v1.0.0"}]}\n',
+                stderr="",
+            )
+            with patch("scripts.release_milestone_context.subprocess.run", return_value=completed) as run:
+                result = verify_qualified_v2_bundle(root, "v1.0.0", "a" * 40)
+
+        self.assertEqual(result, {"class": "v2-qualified", "release_tag": "v1.0.0"})
+        run.assert_called_once_with(
+            [
+                sys.executable,
+                "-m",
+                "scripts.release_evidence_v2",
+                "--repo-root",
+                str(root.resolve()),
+                "--tag",
+                "v1.0.0",
+                "--worktree",
+                "--base-revision",
+                "a" * 40,
+            ],
+            cwd=root.resolve(),
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     def test_rejects_non_docs_changes_on_evidence_branch(self) -> None:
