@@ -319,6 +319,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         if persistentQueueRunState == .running {
             return .noChange(.running)
         }
+        if persistentQueueRunState == .pauseAfterCurrent {
+            return .noChange(.pauseAfterCurrent)
+        }
         guard !hasActiveWorker || activeDurableQueueItem != nil else {
             return .rejected(.otherWorkIsActive)
         }
@@ -399,6 +402,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         _ itemID: UUID,
         recoveryChoice: WorkerRecoveryChoice? = nil
     ) async -> Bool {
+        if persistentQueueRunState == .pauseAfterCurrent, hasActiveWorker {
+            return false
+        }
         if hasActiveWorker {
             switch activeRunMode {
             case .singleInspection, .singleConversion, nil:
@@ -2379,6 +2385,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 sourceFolderRecoveryChoices[itemID] = recoveryChoice.rawValue
             }
             adoptedItemIDs.insert(itemID)
+            persistentQueueControlsActive = true
+            persistentQueueRunState = .running
             publishSourceFolderQueueProjection()
             await pumpSourceFolderQueue()
         } catch {

@@ -1471,6 +1471,10 @@ struct ContentView: View {
         _ item: PersistentQueueItem,
         recoveryChoice: WorkerRecoveryChoice?
     ) {
+        if viewModel.persistentQueueRunState == .pauseAfterCurrent, viewModel.hasActiveWorker {
+            persistentQueueErrorMessage = "Wait for the current video to finish and the queue to pause before restarting this item."
+            return
+        }
         Task { @MainActor in
             if !(await viewModel.adoptPersistentQueueItem(item.id, recoveryChoice: recoveryChoice)) {
                 persistentQueueErrorMessage = "This queued video could not be restarted. Review its source and recovery choice."

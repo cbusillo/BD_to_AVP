@@ -4146,6 +4146,60 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPauseAfterCurrentRejectsAttentionRetryUntilActiveItemFinishes() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let active = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        let waiting = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        var attention = makePersistentQueueFixture(ordinal: 2, state: .attention)
+        attention.decision = DurableQueueDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Retry without subtitles?",
+            choices: [WorkerRecoveryChoice.retryWithoutSubtitles.rawValue]
+        )
+        try await queueStore.replaceItems([active, waiting, attention])
+        let firstStarted = expectation(description: "active item started")
+        let secondStarted = expectation(description: "waiting item started")
+        secondStarted.isInverted = true
+        let gate = QueueTestGate()
+        let worker = ReorderableQueueWorkerClient(
+            inspectionDone: {},
+            conversionStarted: { _, conversionNumber in
+                if conversionNumber == 1 {
+                    firstStarted.fulfill()
+                } else {
+                    secondStarted.fulfill()
+                }
+            },
+            conversionGate: gate
+        )
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        await fulfillment(of: [firstStarted], timeout: 2)
+        XCTAssertEqual(viewModel.pausePersistentQueueAfterCurrent(), .accepted(.pauseAfterCurrent))
+
+        let retryAccepted = await viewModel.adoptPersistentQueueItem(
+            attention.id,
+            recoveryChoice: .retryWithoutSubtitles
+        )
+        XCTAssertFalse(retryAccepted)
+        XCTAssertEqual(viewModel.persistentQueueRunState, .pauseAfterCurrent)
+        XCTAssertEqual(queueStore.items[2].state, .attention)
+
+        await gate.open()
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        await fulfillment(of: [secondStarted], timeout: 0.1)
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .waiting, .attention])
+        XCTAssertEqual(viewModel.persistentQueueRunState, .paused)
+    }
+
+    @MainActor
     func testStopCurrentPausesWithoutDemotingWaitingPeers() async throws {
         let queueStore = ConversionQueueStore.inMemory()
         let first = makePersistentQueueFixture(ordinal: 0, state: .waiting)
