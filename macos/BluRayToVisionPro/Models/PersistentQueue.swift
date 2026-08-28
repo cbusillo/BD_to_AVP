@@ -35,7 +35,8 @@ struct PersistentQueueItem: Identifiable, Equatable {
                 kind: sourceKind,
                 url: URL(fileURLWithPath: item.intent.source.path),
                 displayName: item.intent.source.displayName,
-                workerSourcePath: item.intent.source.workerSourcePath
+                workerSourcePath: item.intent.source.workerSourcePath,
+                mediaIdentifier: item.intent.source.mediaIdentifier
             ),
             sourceDetails: item.inspection,
             profile: EncodingProfile(

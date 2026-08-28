@@ -757,7 +757,28 @@ final class ConversionWorkflowTests: XCTestCase {
             XCTAssertEqual(discs.first?.kind, .physicalDisc)
             XCTAssertEqual(discs.first?.url, volumeURL)
             XCTAssertEqual(discs.first?.workerSourcePath, "/dev/disk9")
+            XCTAssertNotNil(discs.first?.mediaIdentifier)
         }
+    }
+
+    func testCurrentPhysicalDiscRejectsReplacementWithReusedPathAndDevice() {
+        let source = ConversionSource(
+            kind: .physicalDisc,
+            url: URL(fileURLWithPath: "/Volumes/Feature", isDirectory: true),
+            workerSourcePath: "/dev/disk9",
+            mediaIdentifier: "media-a"
+        )
+
+        XCTAssertFalse(DiscSourceDetector.isCurrentPhysicalDisc(
+            source,
+            devicePathResolver: { _ in "/dev/disk9" },
+            mediaIdentifierResolver: { _ in "media-b" }
+        ))
+        XCTAssertTrue(DiscSourceDetector.isCurrentPhysicalDisc(
+            source,
+            devicePathResolver: { _ in "/dev/disk9" },
+            mediaIdentifierResolver: { _ in "media-a" }
+        ))
     }
 
     func testInsertedDiscDetectionOmitsUnresolvedVolumes() throws {

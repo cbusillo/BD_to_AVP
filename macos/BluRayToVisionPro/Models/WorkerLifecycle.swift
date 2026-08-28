@@ -152,6 +152,11 @@ struct WorkerLifecycleState: Equatable {
         resetJobState()
     }
 
+    mutating func restoreSource(_ sourceURL: URL, inspection: SourceInspection?) {
+        selectSource(sourceURL)
+        result = inspection
+    }
+
     mutating func begin(jobID: UUID, operationKind: WorkerOperationKind = .inspection) throws {
         guard sourceURL != nil else {
             throw WorkerLifecycleError.noSource

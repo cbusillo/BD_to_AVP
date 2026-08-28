@@ -84,12 +84,14 @@ struct ConversionSource: Equatable {
     let url: URL
     let displayName: String
     let workerSourcePath: String
+    let mediaIdentifier: String?
 
     init(
         kind: ConversionSourceKind,
         url: URL,
         displayName: String? = nil,
-        workerSourcePath: String? = nil
+        workerSourcePath: String? = nil,
+        mediaIdentifier: String? = nil
     ) {
         let normalizedURL = kind == .bluRayFolder
             ? DiscSourceDetector.bluRayRoot(for: url) ?? url.standardizedFileURL
@@ -98,6 +100,7 @@ struct ConversionSource: Equatable {
         self.url = normalizedURL
         self.displayName = displayName ?? Self.defaultDisplayName(for: normalizedURL)
         self.workerSourcePath = workerSourcePath ?? normalizedURL.path
+        self.mediaIdentifier = mediaIdentifier
     }
 
     var proposedOutputStem: String {
@@ -178,10 +181,45 @@ enum DiscSourceDetector {
                 kind: .physicalDisc,
                 url: volumeURL,
                 displayName: values?.volumeName ?? volumeURL.lastPathComponent,
-                workerSourcePath: devicePath
+                workerSourcePath: devicePath,
+                mediaIdentifier: mediaIdentifier(for: volumeURL, fileManager: fileManager)
             )
         }
         .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    static func isCurrentPhysicalDisc(
+        _ source: ConversionSource,
+        devicePathResolver: (URL) -> String? = physicalDevicePath(for:),
+        mediaIdentifierResolver: (URL) -> String? = { mediaIdentifier(for: $0) }
+    ) -> Bool {
+        guard source.kind == .physicalDisc,
+              let devicePath = devicePathResolver(source.url),
+              let expectedIdentifier = source.mediaIdentifier,
+              let currentIdentifier = mediaIdentifierResolver(source.url)
+        else {
+            return false
+        }
+        return devicePath == source.workerSourcePath && currentIdentifier == expectedIdentifier
+    }
+
+    private static func mediaIdentifier(
+        for volumeURL: URL,
+        fileManager: FileManager = .default
+    ) -> String? {
+        if let volumeUUID = try? volumeURL.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString {
+            return "uuid:\(volumeUUID)"
+        }
+        let indexURL = volumeURL
+            .appendingPathComponent("BDMV", isDirectory: true)
+            .appendingPathComponent("index.bdmv")
+        guard let attributes = try? fileManager.attributesOfItem(atPath: indexURL.path),
+              let size = attributes[.size] as? NSNumber,
+              let modified = attributes[.modificationDate] as? Date
+        else {
+            return nil
+        }
+        return "bdmv:\(size.int64Value):\(modified.timeIntervalSince1970)"
     }
 
     private static func physicalDevicePath(for volumeURL: URL) -> String? {

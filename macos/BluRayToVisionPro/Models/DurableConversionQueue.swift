@@ -132,12 +132,20 @@ struct DurableQueueSource: Codable, Equatable {
     let path: String
     let displayName: String
     let workerSourcePath: String
+    let mediaIdentifier: String?
 
-    init(kind: String, path: String, displayName: String, workerSourcePath: String) {
+    init(
+        kind: String,
+        path: String,
+        displayName: String,
+        workerSourcePath: String,
+        mediaIdentifier: String? = nil
+    ) {
         self.kind = kind
         self.path = path
         self.displayName = displayName
         self.workerSourcePath = workerSourcePath
+        self.mediaIdentifier = mediaIdentifier
     }
 
     init(source: ConversionSource) {
@@ -145,6 +153,7 @@ struct DurableQueueSource: Codable, Equatable {
         path = source.url.standardizedFileURL.path
         displayName = source.displayName
         workerSourcePath = source.workerSourcePath
+        mediaIdentifier = source.mediaIdentifier
     }
 }
 
