@@ -1122,6 +1122,7 @@ final class ConversionViewModelTests: XCTestCase {
         XCTAssertTrue(admission.canClear)
         XCTAssertEqual(queueStore.items.map(\.state), [.processing])
         XCTAssertNotNil(viewModel.durableQueueRuntimeDiagnostic)
+        XCTAssertFalse(viewModel.hasActiveWork)
     }
 
     @MainActor
@@ -3797,6 +3798,8 @@ final class ConversionViewModelTests: XCTestCase {
 
         viewModel.selectSource(inspectionURL)
         await fulfillment(of: [inspectionStarted], timeout: 2)
+        let adoptedWhileInspecting = await viewModel.adoptPersistentQueueItem(queuedItem.id)
+        XCTAssertFalse(adoptedWhileInspecting)
         viewModel.stopActiveWorker()
         await viewModel.waitForBatchQueueSettled()
 

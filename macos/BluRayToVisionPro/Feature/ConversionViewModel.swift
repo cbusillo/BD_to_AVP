@@ -240,6 +240,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         _ itemID: UUID,
         recoveryChoice: WorkerRecoveryChoice? = nil
     ) async -> Bool {
+        if hasActiveWorker {
+            switch activeRunMode {
+            case .singleInspection, .singleConversion, nil:
+                return false
+            case .titleQueueInspection, .titleQueueConversion, .batchInspection, .batchConversion,
+                 .durableSingleInspection, .durableSingleConversion:
+                break
+            }
+        }
         guard !durableQueueStopRequested,
               let existing = durableQueueStore.items.first(where: { $0.id == itemID }),
               let source = try? durableSource(for: existing),
@@ -2511,17 +2520,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 break
             }
         } catch {
-            durableQueueRuntimeDiagnostic = "Queue state could not be saved after the conversion finished: \(error.localizedDescription)"
-            publishSetupQueueStartFailure()
-            activeQueueItemID = nil
             publishCompletedTitleQueueResults()
-            titleQueueGroupID = nil
-            titleQueueStopRequested = false
-            state.failTransport(
-                message: durableQueueRuntimeDiagnostic ?? "Queue state could not be saved.",
-                retryable: false
-            )
-            runDeferredActionsIfIdle()
+            failClosedTitleQueuePersistence(error)
         }
     }
 
