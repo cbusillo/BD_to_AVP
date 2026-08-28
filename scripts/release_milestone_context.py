@@ -1794,14 +1794,37 @@ def _require_source_ancestor(repo_root: Path, source_sha: str) -> None:
 
 
 def verify_qualified_v2_bundle(repo_root: Path, release_tag: str, base_sha: str) -> Mapping[str, object]:
-    from scripts.release_evidence_v2 import ReleaseEvidenceV2Error, validate_v2_bundle, verify_write_once_history
-
+    repo_root = repo_root.resolve()
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.release_evidence_v2",
+            "--repo-root",
+            str(repo_root),
+            "--tag",
+            release_tag,
+            "--worktree",
+            "--base-revision",
+            base_sha,
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise ReleaseMilestoneContextError(f"Terminal v2 release evidence is invalid: {detail}")
     try:
-        result = validate_v2_bundle(repo_root, release_tag, worktree=True)
-        verify_write_once_history(repo_root, base_sha, worktree=True)
-    except ReleaseEvidenceV2Error as error:
-        raise ReleaseMilestoneContextError(f"Terminal v2 release evidence is invalid: {error}") from error
-    if result.get("class") != "v2-qualified":
+        payload = _mapping(json.loads(completed.stdout), "terminal v2 verifier output")
+    except json.JSONDecodeError as error:
+        raise ReleaseMilestoneContextError("Terminal v2 verifier output is invalid JSON.") from error
+    verified = _sequence(payload.get("verified"), "terminal v2 verified releases")
+    if len(verified) != 1:
+        raise ReleaseMilestoneContextError("Terminal v2 verifier must return exactly one release result.")
+    result = _mapping(verified[0], "terminal v2 verified release")
+    if result.get("release_tag") != release_tag or result.get("class") != "v2-qualified":
         raise ReleaseMilestoneContextError("Terminal v2 release evidence must have class 'v2-qualified'.")
     return result
 

@@ -2,6 +2,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -2611,18 +2612,34 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
     def test_qualified_v2_verifier_uses_worktree_and_write_once_base(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            with (
-                patch(
-                    "scripts.release_evidence_v2.validate_v2_bundle",
-                    return_value={"class": "v2-qualified"},
-                ) as validate,
-                patch("scripts.release_evidence_v2.verify_write_once_history") as verify_history,
-            ):
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='{"verified":[{"class":"v2-qualified","release_tag":"v1.0.0"}]}\n',
+                stderr="",
+            )
+            with patch("scripts.release_milestone_context.subprocess.run", return_value=completed) as run:
                 result = verify_qualified_v2_bundle(root, "v1.0.0", "a" * 40)
 
-        self.assertEqual(result, {"class": "v2-qualified"})
-        validate.assert_called_once_with(root, "v1.0.0", worktree=True)
-        verify_history.assert_called_once_with(root, "a" * 40, worktree=True)
+        self.assertEqual(result, {"class": "v2-qualified", "release_tag": "v1.0.0"})
+        run.assert_called_once_with(
+            [
+                sys.executable,
+                "-m",
+                "scripts.release_evidence_v2",
+                "--repo-root",
+                str(root.resolve()),
+                "--tag",
+                "v1.0.0",
+                "--worktree",
+                "--base-revision",
+                "a" * 40,
+            ],
+            cwd=root.resolve(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def test_rejects_non_docs_changes_on_evidence_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
