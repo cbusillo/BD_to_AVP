@@ -228,6 +228,16 @@ cancels only the active video and leaves pending work waiting for an explicit
 resume. Failed videos and items needing attention stay parked so unrelated
 eligible queue work can continue.
 
+Use **Start Later…** to arm one editable, cancellable off-peak window for the
+queue. The app must remain open: it does not schedule a system wake and does
+not keep the Mac awake merely because a window is armed. If the Mac wakes while
+the window is still open, the queue starts late; reopening the app after the
+start time or evaluating after the end marks the window missed and never starts
+it automatically. A video already running may finish after the end, but no new
+video starts outside the window. Sources are rechecked at launch time, and
+missing removable media or the wrong physical disc is parked while unrelated
+available work continues.
+
 ## Terminal Usage
 
 Navigate to the tool's directory in your terminal and execute the command with the required and optional parameters:

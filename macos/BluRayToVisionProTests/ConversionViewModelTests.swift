@@ -4781,6 +4781,156 @@ final class ConversionViewModelTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testOffPeakScheduleRequiresFutureStart() async throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems([
+            makePersistentQueueFixture(ordinal: 0, state: .waiting),
+        ])
+        let viewModel = ConversionViewModel(
+            diagnosticClock: { now },
+            durableQueueStore: queueStore
+        )
+
+        do {
+            try await viewModel.saveOffPeakSchedule(
+                startAt: now,
+                endAt: now.addingTimeInterval(60)
+            )
+            XCTFail("Expected an invalid scheduling window")
+        } catch let error as OffPeakScheduleStoreError {
+            XCTAssertEqual(error, .invalidWindow)
+        }
+    }
+
+    @MainActor
+    func testOffPeakStartParksMissingDiscPeersAndContinuesAvailableWork() async throws {
+        let now = Date(timeIntervalSince1970: 150)
+        let scheduleStore = OffPeakScheduleStore.inMemory()
+        let schedule = OffPeakQueueSchedule(
+            startAt: Date(timeIntervalSince1970: 100),
+            endAt: Date(timeIntervalSince1970: 200),
+            createdAt: Date(timeIntervalSince1970: 50)
+        )
+        try await scheduleStore.save(schedule)
+
+        let discURL = URL(fileURLWithPath: "/Volumes/FEATURE")
+        let localURL = URL(fileURLWithPath: "/tmp/available.mkv")
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            sizeBytes: 10
+        )
+        let groupID = UUID()
+        let discDraft = ConversionDraft(
+            source: ConversionSource(
+                kind: .physicalDisc,
+                url: discURL,
+                mediaIdentifier: "disc-a"
+            ),
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/Output"),
+            options: ConversionOptions()
+        )
+        let localDraft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: localURL),
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/Output"),
+            options: ConversionOptions()
+        )
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems([
+            DurableConversionQueueItem(
+                ordinal: 0,
+                groupID: groupID,
+                origin: .multiTitle,
+                intent: DurableQueueItemIntent(draft: discDraft)
+            ),
+            DurableConversionQueueItem(
+                ordinal: 1,
+                groupID: groupID,
+                origin: .multiTitle,
+                intent: DurableQueueItemIntent(draft: discDraft)
+            ),
+            DurableConversionQueueItem(
+                ordinal: 2,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: localDraft)
+            ),
+        ])
+        let converted = expectation(description: "available item converted")
+        var convertedPaths: [String] = []
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { job in
+            convertedPaths.append(job.source.path)
+            converted.fulfill()
+        })
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            diagnosticClock: { now },
+            durableQueueStore: queueStore,
+            offPeakScheduleStore: scheduleStore,
+            sourceAvailabilityResolver: { $0.kind != .physicalDisc }
+        )
+
+        let evaluation = await viewModel.evaluateOffPeakSchedule()
+        XCTAssertEqual(evaluation, .start(schedule))
+        await fulfillment(of: [converted], timeout: 2)
+        for _ in 0..<1_000 where queueStore.items.last?.state != .completed || viewModel.hasActiveWorker {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(convertedPaths, [localURL.path])
+        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .stopped, .completed])
+        XCTAssertEqual(queueStore.items.first?.failure?.code, "scheduled_disc_unavailable")
+    }
+
+    @MainActor
+    func testOffPeakWindowPausesBeforeStartingNextItem() async throws {
+        let clock = LockedTestDate(Date(timeIntervalSince1970: 150))
+        let scheduleStore = OffPeakScheduleStore.inMemory()
+        let schedule = OffPeakQueueSchedule(
+            startAt: Date(timeIntervalSince1970: 100),
+            endAt: Date(timeIntervalSince1970: 200),
+            createdAt: Date(timeIntervalSince1970: 50)
+        )
+        try await scheduleStore.save(schedule)
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems([
+            makePersistentQueueFixture(ordinal: 0, state: .waiting),
+            makePersistentQueueFixture(ordinal: 1, state: .waiting),
+        ])
+        var conversionCount = 0
+        let firstConverted = expectation(description: "first item converted")
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { _ in
+            conversionCount += 1
+            clock.value = schedule.endAt
+            firstConverted.fulfill()
+        })
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            diagnosticClock: { clock.value },
+            durableQueueStore: queueStore,
+            offPeakScheduleStore: scheduleStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+
+        let evaluation = await viewModel.evaluateOffPeakSchedule()
+        XCTAssertEqual(evaluation, .start(schedule))
+        await fulfillment(of: [firstConverted], timeout: 2)
+        for _ in 0..<1_000 where viewModel.persistentQueueRunState != .paused || viewModel.hasActiveWorker {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(conversionCount, 1)
+        XCTAssertEqual(viewModel.persistentQueueRunState, .paused)
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .waiting])
+    }
+
     private func makeCompletedHistoryItems(
         count: Int,
         draft: ConversionDraft
@@ -4868,6 +5018,24 @@ final class ConversionViewModelTests: XCTestCase {
                     JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
                 )
             }
+    }
+}
+
+private final class LockedTestDate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: Date
+
+    init(_ value: Date) {
+        storedValue = value
+    }
+
+    var value: Date {
+        get {
+            lock.withLock { storedValue }
+        }
+        set {
+            lock.withLock { storedValue = newValue }
+        }
     }
 }
 

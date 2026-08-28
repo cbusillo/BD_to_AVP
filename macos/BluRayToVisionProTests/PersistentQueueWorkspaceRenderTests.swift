@@ -30,12 +30,67 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         }
     }
 
+    func testOffPeakScheduleEditorRendersPhysicalDiscWarning() throws {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let content = OffPeakScheduleSheet(
+            startAt: .constant(start),
+            endAt: .constant(start.addingTimeInterval(8 * 60 * 60)),
+            isEditing: false,
+            hasPhysicalDiscItems: true,
+            errorMessage: nil,
+            cancel: {},
+            save: {}
+        )
+        .frame(width: 560, height: 430)
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 560, height: 430)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+
+        XCTAssertEqual(bitmap.pixelsWide, 560)
+        XCTAssertEqual(bitmap.pixelsHigh, 430)
+    }
+
+    func testOffPeakScheduleArmedAndMissedBannersRender() throws {
+        let items = try makeItems()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let schedule = OffPeakQueueSchedule(
+            startAt: start,
+            endAt: start.addingTimeInterval(8 * 60 * 60),
+            createdAt: start.addingTimeInterval(-60)
+        )
+        try render(
+            items: items,
+            selectedItem: items[1],
+            compact: false,
+            colorScheme: .light,
+            appearanceName: .aqua,
+            offPeakSchedule: schedule
+        )
+        try render(
+            items: items,
+            selectedItem: items[1],
+            compact: false,
+            colorScheme: .dark,
+            appearanceName: .darkAqua,
+            offPeakScheduleOutcome: .missed(
+                scheduleID: schedule.id,
+                reason: .windowEndedBeforeEvaluation,
+                at: schedule.endAt
+            )
+        )
+    }
+
     private func render(
         items: [PersistentQueueItem],
         selectedItem: PersistentQueueItem?,
         compact: Bool,
         colorScheme: ColorScheme,
-        appearanceName: NSAppearance.Name
+        appearanceName: NSAppearance.Name,
+        offPeakSchedule: OffPeakQueueSchedule? = nil,
+        offPeakScheduleOutcome: OffPeakScheduleOutcome? = nil
     ) throws {
         let content = HSplitView {
             PersistentQueueSidebarView(
@@ -51,6 +106,9 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 canPauseAfterCurrent: !items.isEmpty,
                 canStopCurrent: !items.isEmpty,
                 canUndo: true,
+                offPeakSchedule: offPeakSchedule,
+                offPeakScheduleOutcome: offPeakScheduleOutcome,
+                offPeakScheduleErrorMessage: nil,
                 addSources: {},
                 addSourceFolder: {},
                 addDisc: { _ in },
@@ -60,6 +118,10 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 clearCompleted: {},
                 undo: {},
                 start: {},
+                startLater: {},
+                editSchedule: {},
+                cancelSchedule: {},
+                dismissScheduleOutcome: {},
                 pauseAfterCurrent: {},
                 stopCurrent: {}
             )
