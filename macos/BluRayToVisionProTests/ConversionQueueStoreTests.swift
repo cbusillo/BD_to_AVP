@@ -429,6 +429,45 @@ final class ConversionQueueStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentQueueAppendAndMoveAfterPreserveExistingRows() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let completed = makeItem(
+            ordinal: 0,
+            sourcePath: "/tmp/completed.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/completed.mov")
+        )
+        let first = makeItem(ordinal: 0, sourcePath: "/tmp/first.mkv")
+        let second = makeItem(ordinal: 1, sourcePath: "/tmp/second.mkv")
+        try await store.replaceItems([completed])
+
+        try await store.appendWaitingItems([first, second])
+        XCTAssertEqual(store.items.map(\.id), [completed.id, first.id, second.id])
+        XCTAssertEqual(store.items.map(\.ordinal), [0, 1, 2])
+
+        try await store.moveWaitingItem(first.id, after: second.id)
+        XCTAssertEqual(store.items.map(\.id), [completed.id, second.id, first.id])
+        XCTAssertEqual(store.items.map(\.ordinal), [0, 1, 2])
+    }
+
+    @MainActor
+    func testPersistentQueueRemovalAllowsRecoverableTerminalRows() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let failed = makeItem(
+            ordinal: 0,
+            sourcePath: "/tmp/failed.mkv",
+            state: .failed,
+            failure: DurableQueueFailure(code: "temporary", message: "Temporary", details: nil, retryable: true)
+        )
+        try await store.replaceItems([failed])
+
+        let token = try await store.removeRemovableItems([failed.id])
+        XCTAssertTrue(store.items.isEmpty)
+        try await store.restoreRemovedItems(token)
+        XCTAssertEqual(store.items, [failed])
+    }
+
+    @MainActor
     func testPersistentQueueRemovalTokenRestoresOriginalOrderAndIntents() async throws {
         let store = ConversionQueueStore.inMemory()
         let items = (0 ..< 4).map { offset in

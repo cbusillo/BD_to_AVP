@@ -112,7 +112,12 @@ struct PersistentQueueItem: Identifiable, Equatable {
     }
 
     var canRemove: Bool {
-        status == .waiting
+        switch status {
+        case .waiting, .interrupted, .attention, .failed, .stopped, .notStarted:
+            true
+        case .inspecting, .processing, .stopping, .completed:
+            false
+        }
     }
 
     var canRetry: Bool {

@@ -24,6 +24,11 @@ struct ContentView: View {
     @State private var newProfileName = ""
     @State private var profileErrorMessage: String?
     @State private var queueAdmissionNoticeMessage: String?
+    @State private var persistentQueueErrorMessage: String?
+    @State private var persistentQueueRemovalToken: PersistentQueueRemovalToken?
+    @State private var queueItemBeingEdited: PersistentQueueItem?
+    @State private var compactPersistentQueueRows = false
+    @State private var isConfiguringQueueSource = false
     @State private var preserveEncodingOnNextProfileChange = false
     @State private var isShowingPreview = false
     @State private var pendingReviewedPreview: PreviewDraft?
@@ -76,15 +81,36 @@ struct ContentView: View {
         VStack(spacing: 0) {
             noticeContent
 
-            HSplitView {
-                sourceOrQueueColumn
-                setupColumn
-            }
+            workspaceContent
 
             Divider()
             statusFooter
 
             activityContent
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceContent: some View {
+        if usesPersistentQueueWorkspace {
+            HSplitView {
+                persistentQueueSidebar
+                    .frame(minWidth: 300, idealWidth: 330, maxWidth: 420)
+                PersistentQueueDetailView(
+                    item: viewModel.selectedPersistentQueueItem,
+                    activeProgress: viewModel.state.progress,
+                    activeElapsedText: viewModel.state.elapsedText,
+                    edit: { queueItemBeingEdited = $0 },
+                    changeDestination: changePersistentQueueDestination,
+                    retry: retryPersistentQueueItem
+                )
+                .frame(minWidth: 600, idealWidth: 760)
+            }
+        } else {
+            HSplitView {
+                sourceOrQueueColumn
+                setupColumn
+            }
         }
     }
 
@@ -130,7 +156,12 @@ struct ContentView: View {
                     .padding(8)
                     .allowsHitTesting(false)
                     .overlay {
-                        Label("Open this 3D Blu-ray source", systemImage: "arrow.down.doc.fill")
+                        Label(
+                            usesPersistentQueueWorkspace
+                                ? "Add these sources to the queue"
+                                : "Open this 3D Blu-ray source",
+                            systemImage: "arrow.down.doc.fill"
+                        )
                             .font(.title3.weight(.semibold))
                             .padding(14)
                             .background(.regularMaterial, in: Capsule())
@@ -152,6 +183,16 @@ struct ContentView: View {
         .onChange(of: viewModel.hasActiveWorker) { _, isActive in
             if !isActive {
                 refreshDiscs()
+            }
+        }
+        .onChange(of: viewModel.source) { _, source in
+            if source == nil {
+                isConfiguringQueueSource = false
+            }
+        }
+        .onChange(of: viewModel.persistentQueueItems) { previousItems, currentItems in
+            if persistentQueueRemovalToken != nil, currentItems.count >= previousItems.count {
+                persistentQueueRemovalToken = nil
             }
         }
         .onChange(of: viewModel.state.jobID) { previousJobID, currentJobID in
@@ -278,6 +319,20 @@ struct ContentView: View {
                 queueConflictForReview: heldConflictQueueAction
             )
         }
+        .sheet(item: $queueItemBeingEdited) { item in
+            SetupEditSheet(
+                initialProfile: item.draft.profile,
+                initialOptions: item.draft.options,
+                fallbackPipelineDefaults: defaultJobOptions.profilePipelineDefaults,
+                sourceKind: item.draft.source.kind,
+                profiles: profileStore.profiles,
+                profileStore: profileStore,
+                resolutionMemoryStore: resolutionMemoryStore,
+                applyToConversion: { profileID, editedOptions in
+                    updatePersistentQueueItem(item, profileID: profileID, options: editedOptions)
+                }
+            )
+        }
         .sheet(isPresented: $isShowingPreview, onDismiss: previewDidDismiss) {
             if let draft {
                 PreviewSheet(
@@ -327,6 +382,17 @@ struct ContentView: View {
         } message: {
             Text(queueAdmissionNoticeMessage ?? "This movie is already in the queue.")
         }
+        .alert(
+            "Queue Could Not Be Updated",
+            isPresented: Binding(
+                get: { persistentQueueErrorMessage != nil },
+                set: { if !$0 { persistentQueueErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(persistentQueueErrorMessage ?? "The queue could not be updated.")
+        }
     }
 
     @ViewBuilder
@@ -335,6 +401,53 @@ struct ContentView: View {
             queueSidebar
         } else {
             sourceWorkspace
+        }
+    }
+
+    private var usesPersistentQueueWorkspace: Bool {
+        !isConfiguringQueueSource
+            && (viewModel.source == nil || !viewModel.persistentQueueItems.isEmpty)
+            && viewModel.state.phase != .decisionRequired
+    }
+
+    private var persistentQueueSidebar: some View {
+        PersistentQueueSidebarView(
+            items: viewModel.persistentQueueItems,
+            selectedID: Binding(
+                get: { viewModel.selectedPersistentQueueItemID },
+                set: viewModel.selectPersistentQueueItem
+            ),
+            compactRows: $compactPersistentQueueRows,
+            insertedDiscs: insertedDiscs,
+            makeMKVAvailable: DiscSourceDetector.makeMKVAvailable,
+            activeProgress: viewModel.state.progress,
+            activeElapsedText: viewModel.state.elapsedText,
+            canStart: persistentQueueCanStart
+                && !viewModel.hasActiveWorker
+                && !previewViewModel.hasActiveWorker,
+            canUndo: persistentQueueRemovalToken != nil,
+            addSources: addSourcesToPersistentQueue,
+            addSourceFolder: addSourceFolderToPersistentQueue,
+            addDisc: { appendSourcesToPersistentQueue([$0]) },
+            move: movePersistentQueueItem,
+            moveNext: movePersistentQueueItemNext,
+            remove: removePersistentQueueItem,
+            clearCompleted: clearCompletedPersistentQueueItems,
+            undo: undoPersistentQueueRemoval,
+            start: startPersistentQueue
+        )
+    }
+
+    private var persistentQueueCanStart: Bool {
+        viewModel.persistentQueueItems.contains { item in
+            switch item.status {
+            case .waiting, .interrupted, .stopped, .notStarted:
+                true
+            case let .failed(failure):
+                failure.retryable
+            case .inspecting, .processing, .stopping, .attention, .completed:
+                false
+            }
         }
     }
 
@@ -556,8 +669,8 @@ struct ContentView: View {
             canAddToQueue: setupQueue.canAdd(drafts: conversionDrafts) && !viewModel.hasActiveWork,
             canStart: setupQueue.hasItems
                 ? setupQueue.canStart && !viewModel.hasActiveWork
-                : conversionCanStart,
-            showsStartAction: !setupQueue.hasItems
+                : conversionCanStart && viewModel.persistentQueueItems.isEmpty,
+            showsStartAction: !setupQueue.hasItems && viewModel.persistentQueueItems.isEmpty
         )
         .frame(minWidth: 500, idealWidth: 680)
     }
@@ -1078,6 +1191,9 @@ struct ContentView: View {
         guard canSelectSource else {
             return
         }
+        if !viewModel.persistentQueueItems.isEmpty {
+            isConfiguringQueueSource = true
+        }
         routeQualityState.reset()
         sourceResetMessage = nil
         if isNewSource(source) {
@@ -1113,6 +1229,35 @@ struct ContentView: View {
         selectSource(source)
     }
 
+    private func addSourcesToPersistentQueue() {
+        appendSourcesToPersistentQueue(SourcePicker.chooseQueueSources())
+    }
+
+    private func addSourceFolderToPersistentQueue() {
+        guard let source = SourcePicker.chooseFolder(kind: .sourceFolder) else {
+            return
+        }
+        appendSourcesToPersistentQueue([source])
+    }
+
+    private func appendSourcesToPersistentQueue(_ sources: [ConversionSource]) {
+        guard !sources.isEmpty else { return }
+        let drafts = sources.map { source in
+            var sourceOptions = options
+            if source.kind == .physicalDisc {
+                sourceOptions.job.removeOriginalAfterSuccess = false
+            }
+            return ConversionDraft(
+                source: source,
+                sourceDetails: nil,
+                profile: selectedProfile,
+                destinationURL: destinationURL,
+                options: sourceOptions
+            )
+        }
+        appendDraftsToPersistentQueue(drafts, clearConfiguredSource: false)
+    }
+
     private func chooseFile(_ kind: ConversionSourceKind) {
         guard canSelectSource, let source = SourcePicker.chooseFile(kind: kind) else {
             return
@@ -1134,13 +1279,17 @@ struct ContentView: View {
     }
 
     private func acceptDrop(_ urls: [URL], _ location: CGPoint) -> Bool {
-        guard canSelectSource,
-              let url = urls.first,
-              let source = ConversionSource.infer(from: url)
-        else {
+        let sources = urls.compactMap { ConversionSource.infer(from: $0) }
+        guard !sources.isEmpty else {
             return false
         }
-        selectSource(source)
+        if usesPersistentQueueWorkspace {
+            appendSourcesToPersistentQueue(sources)
+        } else if canSelectSource, let source = sources.first {
+            selectSource(source)
+        } else {
+            return false
+        }
         return true
     }
 
@@ -1185,8 +1334,150 @@ struct ContentView: View {
 
     private func addCurrentDraftsToQueue() {
         guard !conversionDrafts.isEmpty else { return }
-        let result = setupQueue.add(drafts: conversionDrafts)
-        queueAdmissionNoticeMessage = queueAdmissionMessage(for: result)
+        appendDraftsToPersistentQueue(conversionDrafts, clearConfiguredSource: true)
+    }
+
+    private func appendDraftsToPersistentQueue(
+        _ drafts: [ConversionDraft],
+        clearConfiguredSource: Bool
+    ) {
+        Task { @MainActor in
+            do {
+                let result = try await viewModel.appendPersistentQueueDrafts(drafts)
+                queueAdmissionNoticeMessage = queueAdmissionMessage(for: result)
+                if clearConfiguredSource, result.addedCount > 0 {
+                    viewModel.clearSource()
+                    isConfiguringQueueSource = false
+                }
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func movePersistentQueueItem(_ itemID: UUID, by offset: Int) {
+        let waitingItems = viewModel.persistentQueueItems.filter(\.canMove)
+        guard let index = waitingItems.firstIndex(where: { $0.id == itemID }) else { return }
+        let targetIndex = index + offset
+        guard waitingItems.indices.contains(targetIndex) else { return }
+        let targetID = waitingItems[targetIndex].id
+        Task { @MainActor in
+            do {
+                if offset < 0 {
+                    try await viewModel.movePersistentQueueItem(itemID, before: targetID)
+                } else {
+                    try await viewModel.movePersistentQueueItem(itemID, after: targetID)
+                }
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func movePersistentQueueItemNext(_ itemID: UUID) {
+        Task { @MainActor in
+            do {
+                try await viewModel.movePersistentQueueItemNext(itemID)
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func removePersistentQueueItem(_ itemID: UUID) {
+        Task { @MainActor in
+            do {
+                persistentQueueRemovalToken = try await viewModel.removePersistentQueueItems([itemID])
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func clearCompletedPersistentQueueItems() {
+        Task { @MainActor in
+            do {
+                persistentQueueRemovalToken = try await viewModel.clearCompletedPersistentQueueItems()
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func undoPersistentQueueRemoval() {
+        guard let token = persistentQueueRemovalToken else { return }
+        Task { @MainActor in
+            do {
+                try await viewModel.restorePersistentQueueItems(token)
+                persistentQueueRemovalToken = nil
+            } catch {
+                persistentQueueRemovalToken = nil
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func startPersistentQueue() {
+        Task { @MainActor in
+            if await viewModel.startPersistentQueue() == 0 {
+                persistentQueueErrorMessage = "No queued videos are currently ready to start."
+            }
+        }
+    }
+
+    private func retryPersistentQueueItem(
+        _ item: PersistentQueueItem,
+        recoveryChoice: WorkerRecoveryChoice?
+    ) {
+        Task { @MainActor in
+            if !(await viewModel.adoptPersistentQueueItem(item.id, recoveryChoice: recoveryChoice)) {
+                persistentQueueErrorMessage = "This queued video could not be restarted. Review its source and recovery choice."
+            }
+        }
+    }
+
+    private func updatePersistentQueueItem(
+        _ item: PersistentQueueItem,
+        profileID: String,
+        options editedOptions: ConversionOptions
+    ) {
+        let profile = profileStore.profile(withID: profileID)
+        let draft = ConversionDraft(
+            source: item.draft.source,
+            sourceDetails: item.draft.sourceDetails,
+            profile: profile,
+            destinationURL: item.draft.destinationURL,
+            options: editedOptions,
+            selectedTitle: item.draft.selectedTitle
+        )
+        Task { @MainActor in
+            do {
+                try await viewModel.updatePersistentQueueItem(item.id, draft: draft)
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func changePersistentQueueDestination(_ item: PersistentQueueItem) {
+        guard let destination = DestinationPicker.chooseDestination(startingAt: item.draft.destinationURL) else {
+            return
+        }
+        let draft = ConversionDraft(
+            source: item.draft.source,
+            sourceDetails: item.draft.sourceDetails,
+            profile: item.draft.profile,
+            destinationURL: destination,
+            options: item.draft.options,
+            selectedTitle: item.draft.selectedTitle
+        )
+        Task { @MainActor in
+            do {
+                try await viewModel.updatePersistentQueueItem(item.id, draft: draft)
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func queueAdmissionMessage(for result: SetupQueueAddResult) -> String? {
