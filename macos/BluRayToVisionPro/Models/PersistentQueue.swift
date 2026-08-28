@@ -1,5 +1,25 @@
 import Foundation
 
+enum PersistentQueueRunState: Equatable {
+    case idle
+    case running
+    case pauseAfterCurrent
+    case paused
+}
+
+enum PersistentQueueCommandOutcome: Equatable {
+    case accepted(PersistentQueueRunState)
+    case noChange(PersistentQueueRunState)
+    case rejected(PersistentQueueCommandRejection)
+}
+
+enum PersistentQueueCommandRejection: Equatable {
+    case noEligibleItems
+    case noActiveItem
+    case queueIsNotRunning
+    case otherWorkIsActive
+}
+
 enum PersistentQueueItemStatus: Equatable {
     case waiting
     case inspecting

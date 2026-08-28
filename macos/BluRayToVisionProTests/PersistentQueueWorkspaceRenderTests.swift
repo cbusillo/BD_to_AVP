@@ -46,7 +46,10 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 makeMKVAvailable: true,
                 activeProgress: WorkerProgress(currentStage: 3, totalStages: 5, stageFraction: 0.61),
                 activeElapsedText: "1:12:31",
+                runState: .running,
                 canStart: !items.isEmpty,
+                canPauseAfterCurrent: !items.isEmpty,
+                canStopCurrent: !items.isEmpty,
                 canUndo: true,
                 addSources: {},
                 addSourceFolder: {},
@@ -56,7 +59,9 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 remove: { _ in },
                 clearCompleted: {},
                 undo: {},
-                start: {}
+                start: {},
+                pauseAfterCurrent: {},
+                stopCurrent: {}
             )
             .frame(minWidth: 300, idealWidth: 330, maxWidth: 420)
             PersistentQueueDetailView(

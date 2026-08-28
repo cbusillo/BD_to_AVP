@@ -9,7 +9,10 @@ struct PersistentQueueSidebarView: View {
     let makeMKVAvailable: Bool
     let activeProgress: WorkerProgress?
     let activeElapsedText: String?
+    let runState: PersistentQueueRunState
     let canStart: Bool
+    let canPauseAfterCurrent: Bool
+    let canStopCurrent: Bool
     let canUndo: Bool
     let addSources: () -> Void
     let addSourceFolder: () -> Void
@@ -20,6 +23,8 @@ struct PersistentQueueSidebarView: View {
     let clearCompleted: () -> Void
     let undo: () -> Void
     let start: () -> Void
+    let pauseAfterCurrent: () -> Void
+    let stopCurrent: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -189,11 +194,25 @@ struct PersistentQueueSidebarView: View {
                         .buttonStyle(.borderless)
                 }
             }
-            Button(startButtonTitle, action: start)
-                .buttonStyle(.borderedProminent)
-                .disabled(!canStart)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .accessibilityIdentifier("persistent-queue-start")
+            VStack(alignment: .trailing, spacing: 8) {
+                Button(startButtonTitle, action: start)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canStart)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("persistent-queue-start")
+                    .accessibilityLabel(startButtonTitle)
+                HStack(spacing: 8) {
+                    Button("Pause After Current", action: pauseAfterCurrent)
+                        .disabled(!canPauseAfterCurrent)
+                        .accessibilityIdentifier("persistent-queue-pause-after-current")
+                        .accessibilityLabel("Pause queue after the current video")
+                    Button("Stop Current", role: .destructive, action: stopCurrent)
+                        .disabled(!canStopCurrent)
+                        .accessibilityIdentifier("persistent-queue-stop-current")
+                        .accessibilityLabel("Stop only the current video")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -209,10 +228,20 @@ struct PersistentQueueSidebarView: View {
         selectedID.flatMap { id in items.first(where: { $0.id == id }) }
     }
     private var startButtonTitle: String {
-        items.contains(where: { $0.isRestored || $0.status.isStopped }) ? "Resume Queue" : "Start Queue"
+        runState == .paused || items.contains(where: { $0.isRestored || $0.status.isStopped })
+            ? "Resume Queue"
+            : "Start Queue"
     }
 
     private var banner: (title: String, systemImage: String, tint: Color)? {
+        switch runState {
+        case .pauseAfterCurrent:
+            return ("Pause requested — the current video will finish before the queue pauses.", "pause.circle.fill", .orange)
+        case .paused:
+            return ("Queue paused — pending videos remain waiting until you resume.", "pause.circle.fill", .secondary)
+        case .idle, .running:
+            break
+        }
         if items.contains(where: \.isRestored) {
             return ("Queue restored — interrupted videos require an explicit restart.", "arrow.counterclockwise.circle.fill", .orange)
         }

@@ -430,9 +430,17 @@ struct ContentView: View {
             makeMKVAvailable: DiscSourceDetector.makeMKVAvailable,
             activeProgress: viewModel.state.progress,
             activeElapsedText: viewModel.state.elapsedText,
+            runState: viewModel.persistentQueueRunState,
             canStart: persistentQueueCanStart
+                && viewModel.persistentQueueRunState != .running
+                && viewModel.persistentQueueRunState != .pauseAfterCurrent
                 && !viewModel.hasActiveWorker
                 && !previewViewModel.hasActiveWorker,
+            canPauseAfterCurrent: viewModel.persistentQueueRunState == .running
+                && viewModel.hasActiveWorker,
+            canStopCurrent: (viewModel.persistentQueueRunState == .running
+                || viewModel.persistentQueueRunState == .pauseAfterCurrent)
+                && viewModel.hasActiveWorker,
             canUndo: persistentQueueRemovalToken != nil,
             addSources: addSourcesToPersistentQueue,
             addSourceFolder: addSourceFolderToPersistentQueue,
@@ -442,7 +450,9 @@ struct ContentView: View {
             remove: removePersistentQueueItem,
             clearCompleted: clearCompletedPersistentQueueItems,
             undo: undoPersistentQueueRemoval,
-            start: startPersistentQueue
+            start: startPersistentQueue,
+            pauseAfterCurrent: pausePersistentQueueAfterCurrent,
+            stopCurrent: stopCurrentPersistentQueueItem
         )
     }
 
@@ -451,9 +461,7 @@ struct ContentView: View {
             switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
                 true
-            case let .failed(failure):
-                failure.retryable
-            case .inspecting, .processing, .stopping, .attention, .completed:
+            case .inspecting, .processing, .stopping, .attention, .failed, .completed:
                 false
             }
         }
@@ -1427,9 +1435,35 @@ struct ContentView: View {
 
     private func startPersistentQueue() {
         Task { @MainActor in
-            if await viewModel.startPersistentQueue() == 0 {
-                persistentQueueErrorMessage = "No queued videos are currently ready to start."
+            let outcome = await viewModel.startPersistentQueue()
+            if case let .rejected(rejection) = outcome {
+                persistentQueueErrorMessage = persistentQueueCommandMessage(for: rejection)
             }
+        }
+    }
+
+    private func pausePersistentQueueAfterCurrent() {
+        if case let .rejected(rejection) = viewModel.pausePersistentQueueAfterCurrent() {
+            persistentQueueErrorMessage = persistentQueueCommandMessage(for: rejection)
+        }
+    }
+
+    private func stopCurrentPersistentQueueItem() {
+        if case let .rejected(rejection) = viewModel.stopCurrentPersistentQueueItem() {
+            persistentQueueErrorMessage = persistentQueueCommandMessage(for: rejection)
+        }
+    }
+
+    private func persistentQueueCommandMessage(for rejection: PersistentQueueCommandRejection) -> String {
+        switch rejection {
+        case .noEligibleItems:
+            "No queued videos are currently ready to start."
+        case .noActiveItem:
+            "No queue video is currently running."
+        case .queueIsNotRunning:
+            "Start or resume the queue before using this control."
+        case .otherWorkIsActive:
+            "Wait for the current conversion to finish before starting the queue."
         }
     }
 
@@ -1437,6 +1471,10 @@ struct ContentView: View {
         _ item: PersistentQueueItem,
         recoveryChoice: WorkerRecoveryChoice?
     ) {
+        if viewModel.persistentQueueRunState == .pauseAfterCurrent, viewModel.hasActiveWorker {
+            persistentQueueErrorMessage = "Wait for the current video to finish and the queue to pause before restarting this item."
+            return
+        }
         Task { @MainActor in
             if !(await viewModel.adoptPersistentQueueItem(item.id, recoveryChoice: recoveryChoice)) {
                 persistentQueueErrorMessage = "This queued video could not be restarted. Review its source and recovery choice."

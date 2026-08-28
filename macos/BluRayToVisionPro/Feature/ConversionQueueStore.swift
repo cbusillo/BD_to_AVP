@@ -13,6 +13,7 @@ final class ConversionQueueStore: ObservableObject {
     private let fileURL: URL?
     private let fileManager: FileManager
     private let dataReader: (URL) throws -> Data
+    private let dataWriter: @Sendable (Data, URL) throws -> Void
     private let dataMover: (URL, URL) throws -> Void
     private let writer: ConversionQueueFileWriter?
     private let mutationLock = ConversionQueueMutationLock()
@@ -31,6 +32,7 @@ final class ConversionQueueStore: ObservableObject {
     ) {
         self.fileManager = fileManager
         self.dataReader = dataReader
+        self.dataWriter = dataWriter
         self.dataMover = dataMover ?? { sourceURL, destinationURL in
             try fileManager.moveItem(at: sourceURL, to: destinationURL)
         }
@@ -382,7 +384,23 @@ final class ConversionQueueStore: ObservableObject {
             }
             let loadedDocument = try Self.decoder().decode(ConversionQueueDocument.self, from: data)
             try validate(loadedDocument.items)
-            document = loadedDocument.restoredAfterLaunch()
+            let restoredDocument = loadedDocument.restoredAfterLaunch()
+            try validate(restoredDocument.items)
+            document = restoredDocument
+            guard restoredDocument != loadedDocument else {
+                return
+            }
+            do {
+                try fileManager.createDirectory(
+                    at: fileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try dataWriter(Self.encoder().encode(restoredDocument), fileURL)
+                documentRevision += 1
+            } catch {
+                writesBlocked = true
+                loadErrorMessage = "Queue recovery could not be saved. Queue changes are disabled to avoid losing its interrupted state."
+            }
         } catch let error as ConversionQueueStoreError {
             if case let .unsupportedVersion(version) = error {
                 writesBlocked = true
