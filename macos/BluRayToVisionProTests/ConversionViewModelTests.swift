@@ -3108,6 +3108,62 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAdoptedResolvedSourceFolderTitleRestoresLifecycleState() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let title = SourceTitle(
+            id: "makemkv:0",
+            name: "Main Feature",
+            outputName: "Feature",
+            durationSeconds: 7_200,
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            mainFeature: true
+        )
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            titles: [title]
+        )
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .discImage, url: sourceURL),
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: directoryURL,
+            options: ConversionOptions(),
+            selectedTitle: title
+        )
+        let item = DurableConversionQueueItem(
+            ordinal: 0,
+            groupID: UUID(),
+            origin: .sourceFolder,
+            intent: DurableQueueItemIntent(draft: draft),
+            inspection: inspection,
+            state: .failed,
+            failure: DurableQueueFailure(code: "temporary", message: "Temporary", details: nil, retryable: true)
+        )
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems([item])
+        let completed = expectation(description: "restored resolved title completed")
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { _ in completed.fulfill() })
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+
+        let adopted = await viewModel.adoptPersistentQueueItem(item.id)
+        XCTAssertTrue(adopted)
+        await fulfillment(of: [completed], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.first?.state, .completed)
+        XCTAssertNil(queueStore.items.first?.failure)
+    }
+
+    @MainActor
     func testAttentionItemRequiresExplicitSupportedAdoptionChoice() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

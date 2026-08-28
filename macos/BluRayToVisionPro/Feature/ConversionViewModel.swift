@@ -1913,6 +1913,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard !hasActiveWorker else {
             throw ConversionQueueStoreError.invalidDocument
         }
+        state.prepareQueuedConversion(
+            sourceURL: conversionDraft.source.url,
+            inspection: updated.inspection
+        )
         _ = startConversion(draft: conversionDraft, mode: .batchConversion(itemID: itemID))
     }
 
