@@ -96,7 +96,11 @@ final class OffPeakScheduleStoreTests: XCTestCase {
         try await store.save(scheduled)
         _ = try await store.evaluate(at: date(150), appLaunched: false)
 
-        try await store.markStartedScheduleWithoutRunnableItems(scheduleID: scheduled.id, at: date(151))
+        try await store.markStartedScheduleMissed(
+            scheduleID: scheduled.id,
+            reason: .noRunnableItems,
+            at: date(151)
+        )
 
         XCTAssertEqual(store.lastOutcome?.kind, .missed)
         XCTAssertEqual(store.lastOutcome?.missReason, .noRunnableItems)

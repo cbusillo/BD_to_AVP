@@ -377,26 +377,40 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         {
             return .waiting(schedule)
         }
+        var consumedSchedule: OffPeakQueueSchedule?
         do {
             let evaluation = try await offPeakScheduleStore.evaluate(
                 at: diagnosticClock(),
                 appLaunched: appLaunched
             )
             offPeakScheduleErrorMessage = nil
-            guard case let .start(consumedSchedule) = evaluation else {
+            guard case let .start(startedSchedule) = evaluation else {
                 return evaluation
             }
+            consumedSchedule = startedSchedule
             try await parkUnavailableScheduledQueueItems()
-            let outcome = await startPersistentQueue(windowEnd: consumedSchedule.endAt)
-            if case .rejected = outcome {
+            let outcome = await startPersistentQueue(windowEnd: startedSchedule.endAt)
+            if case let .rejected(rejection) = outcome {
                 offPeakRunWindowEnd = nil
-                try await offPeakScheduleStore.markStartedScheduleWithoutRunnableItems(
-                    scheduleID: consumedSchedule.id,
+                let reason: OffPeakScheduleMissReason = rejection == .noEligibleItems
+                    ? .noRunnableItems
+                    : .queueBecameActive
+                try await offPeakScheduleStore.markStartedScheduleMissed(
+                    scheduleID: startedSchedule.id,
+                    reason: reason,
                     at: diagnosticClock()
                 )
             }
+            consumedSchedule = nil
             return evaluation
         } catch {
+            if let consumedSchedule {
+                try? await offPeakScheduleStore.markStartedScheduleMissed(
+                    scheduleID: consumedSchedule.id,
+                    reason: .queuePersistenceFailed,
+                    at: diagnosticClock()
+                )
+            }
             offPeakScheduleErrorMessage = error.localizedDescription
             return .none
         }
@@ -459,6 +473,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     items[index].state = offset == 0 ? .failed : .stopped
                     items[index].decision = nil
                     items[index].failure = offset == 0 ? failure : nil
+                    if offset == 0,
+                       let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil })
+                    {
+                        items[index].attempts[attemptIndex].endedAt = diagnosticClock()
+                    }
                     parkedItemIDs.insert(items[index].id)
                 }
             }

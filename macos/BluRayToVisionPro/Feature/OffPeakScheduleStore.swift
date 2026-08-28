@@ -18,6 +18,8 @@ struct OffPeakQueueSchedule: Codable, Equatable, Identifiable {
 enum OffPeakScheduleMissReason: String, Codable, Equatable {
     case appRelaunchedAfterStart
     case noRunnableItems
+    case queueBecameActive
+    case queuePersistenceFailed
     case windowEndedBeforeEvaluation
 
     var message: String {
@@ -26,6 +28,10 @@ enum OffPeakScheduleMissReason: String, Codable, Equatable {
             "The scheduled window was missed because the app was reopened after it started."
         case .noRunnableItems:
             "The scheduled window opened, but no queued videos were available to start."
+        case .queueBecameActive:
+            "The scheduled window opened, but other work became active before the queue could start."
+        case .queuePersistenceFailed:
+            "The scheduled window opened, but the queue could not be updated safely."
         case .windowEndedBeforeEvaluation:
             "The scheduled window was missed because the Mac was asleep or unavailable until after it ended."
         }
@@ -237,7 +243,11 @@ final class OffPeakScheduleStore: ObservableObject {
         }
     }
 
-    func markStartedScheduleWithoutRunnableItems(scheduleID: UUID, at date: Date) async throws {
+    func markStartedScheduleMissed(
+        scheduleID: UUID,
+        reason: OffPeakScheduleMissReason,
+        at date: Date
+    ) async throws {
         try await mutate { document in
             guard document.lastOutcome?.scheduleID == scheduleID,
                   document.lastOutcome?.kind == .started
@@ -246,7 +256,7 @@ final class OffPeakScheduleStore: ObservableObject {
             }
             document.lastOutcome = .missed(
                 scheduleID: scheduleID,
-                reason: .noRunnableItems,
+                reason: reason,
                 at: date
             )
         }

@@ -53,12 +53,44 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         XCTAssertEqual(bitmap.pixelsHigh, 430)
     }
 
+    func testOffPeakScheduleArmedAndMissedBannersRender() throws {
+        let items = try makeItems()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let schedule = OffPeakQueueSchedule(
+            startAt: start,
+            endAt: start.addingTimeInterval(8 * 60 * 60),
+            createdAt: start.addingTimeInterval(-60)
+        )
+        try render(
+            items: items,
+            selectedItem: items[1],
+            compact: false,
+            colorScheme: .light,
+            appearanceName: .aqua,
+            offPeakSchedule: schedule
+        )
+        try render(
+            items: items,
+            selectedItem: items[1],
+            compact: false,
+            colorScheme: .dark,
+            appearanceName: .darkAqua,
+            offPeakScheduleOutcome: .missed(
+                scheduleID: schedule.id,
+                reason: .windowEndedBeforeEvaluation,
+                at: schedule.endAt
+            )
+        )
+    }
+
     private func render(
         items: [PersistentQueueItem],
         selectedItem: PersistentQueueItem?,
         compact: Bool,
         colorScheme: ColorScheme,
-        appearanceName: NSAppearance.Name
+        appearanceName: NSAppearance.Name,
+        offPeakSchedule: OffPeakQueueSchedule? = nil,
+        offPeakScheduleOutcome: OffPeakScheduleOutcome? = nil
     ) throws {
         let content = HSplitView {
             PersistentQueueSidebarView(
@@ -74,8 +106,8 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 canPauseAfterCurrent: !items.isEmpty,
                 canStopCurrent: !items.isEmpty,
                 canUndo: true,
-                offPeakSchedule: nil,
-                offPeakScheduleOutcome: nil,
+                offPeakSchedule: offPeakSchedule,
+                offPeakScheduleOutcome: offPeakScheduleOutcome,
                 offPeakScheduleErrorMessage: nil,
                 addSources: {},
                 addSourceFolder: {},

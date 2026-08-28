@@ -94,6 +94,7 @@ struct PersistentQueueSidebarView: View {
                 Label(outcome.message, systemImage: "clock.badge.exclamationmark.fill")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.orange)
+                    .accessibilityIdentifier("off-peak-schedule-missed-message")
                 Spacer(minLength: 4)
                 Button(action: dismissScheduleOutcome) {
                     Image(systemName: "xmark")
@@ -257,6 +258,7 @@ struct PersistentQueueSidebarView: View {
                         .disabled(!canStart)
                         .frame(maxWidth: .infinity)
                         .accessibilityIdentifier("persistent-queue-start")
+                        .accessibilityLabel(offPeakSchedule == nil ? startButtonTitle : "Start Now")
                     if offPeakSchedule == nil {
                         Button("Start Later…", action: startLater)
                             .disabled(!canStart)
@@ -356,7 +358,11 @@ struct OffPeakScheduleSheet: View {
                 }
                 GridRow {
                     Text("Stop starting new videos")
-                    DatePicker("End", selection: $endAt, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker(
+                        "Stop starting new videos",
+                        selection: $endAt,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
                         .labelsHidden()
                         .accessibilityIdentifier("off-peak-end-date")
                 }

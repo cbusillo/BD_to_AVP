@@ -43,9 +43,9 @@ struct ContentView: View {
     @State private var offPeakScheduleEndAt: Date
     @State private var offPeakScheduleEditorError: String?
     @State private var didEvaluateOffPeakScheduleAtLaunch = false
+    @State private var offPeakScheduleTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     @StateObject private var routeQualityState: RouteQualityResolutionState
     @StateObject private var setupQueue = SetupQueueAdmission()
-    private let offPeakScheduleTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     init(
         viewModel: ConversionViewModel,
@@ -402,9 +402,7 @@ struct ContentView: View {
                 startAt: $offPeakScheduleStartAt,
                 endAt: $offPeakScheduleEndAt,
                 isEditing: isEditingOffPeakSchedule,
-                hasPhysicalDiscItems: viewModel.persistentQueueItems.contains {
-                    $0.draft.source.kind == .physicalDisc
-                },
+                hasPhysicalDiscItems: hasEligiblePhysicalDiscItems,
                 errorMessage: offPeakScheduleEditorError,
                 cancel: { isShowingOffPeakSchedule = false },
                 save: saveOffPeakSchedule
@@ -508,6 +506,18 @@ struct ContentView: View {
     private var persistentQueueCanStart: Bool {
         viewModel.persistentQueueItems.contains { item in
             switch item.status {
+            case .waiting, .interrupted, .stopped, .notStarted:
+                true
+            case .inspecting, .processing, .stopping, .attention, .failed, .completed:
+                false
+            }
+        }
+    }
+
+    private var hasEligiblePhysicalDiscItems: Bool {
+        viewModel.persistentQueueItems.contains { item in
+            guard item.draft.source.kind == .physicalDisc else { return false }
+            return switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
                 true
             case .inspecting, .processing, .stopping, .attention, .failed, .completed:
@@ -1484,6 +1494,10 @@ struct ContentView: View {
 
     private func startPersistentQueue() {
         Task { @MainActor in
+            guard !previewViewModel.hasActiveWorker else {
+                persistentQueueErrorMessage = "Wait for the preview to finish before starting the queue."
+                return
+            }
             if viewModel.offPeakSchedule != nil {
                 do {
                     try await viewModel.cancelOffPeakSchedule()
@@ -1552,8 +1566,8 @@ struct ContentView: View {
     }
 
     private func evaluateOffPeakSchedule(appLaunched: Bool = false) {
-        guard !previewViewModel.hasActiveWorker else { return }
         Task { @MainActor in
+            guard !previewViewModel.hasActiveWorker else { return }
             _ = await viewModel.evaluateOffPeakSchedule(appLaunched: appLaunched)
         }
     }
