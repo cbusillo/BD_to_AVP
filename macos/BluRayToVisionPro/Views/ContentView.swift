@@ -170,7 +170,7 @@ struct ContentView: View {
         }
     }
 
-    private var observedContent: some View {
+    private var lifecycleObservedContent: some View {
         baseContent
         .onAppear(perform: refreshDiscs)
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
@@ -195,6 +195,10 @@ struct ContentView: View {
                 persistentQueueRemovalToken = nil
             }
         }
+    }
+
+    private var settingsObservedContent: some View {
+        lifecycleObservedContent
         .onChange(of: viewModel.state.jobID) { previousJobID, currentJobID in
             if currentJobID != nil, currentJobID != previousJobID {
                 diagnosticReportViewModel.prepareForNewDiagnosticSession()
@@ -230,6 +234,10 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private var observedContent: some View {
+        settingsObservedContent
         .onChange(of: viewModel.state.conversionResult) { _, result in
             guard viewModel.batchQueue == nil,
                   let result,
