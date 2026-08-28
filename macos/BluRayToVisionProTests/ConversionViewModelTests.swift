@@ -3206,13 +3206,15 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDurableSingleDecisionPausesPumpAndRetriesOwnedItem() async throws {
+    func testDurableSingleDecisionParksItemContinuesPeerAndRetriesExplicitly() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let sourceURL = directoryURL.appendingPathComponent("feature.mkv")
+        let peerURL = directoryURL.appendingPathComponent("peer.mkv")
         _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        _ = FileManager.default.createFile(atPath: peerURL.path, contents: Data("peer".utf8))
         let inspection = SourceInspection(
             name: "Feature",
             resolution: "1920x1080",
@@ -3231,8 +3233,21 @@ final class ConversionViewModelTests: XCTestCase {
             origin: .singleSource,
             intent: DurableQueueItemIntent(draft: draft),
             inspection: inspection,
-            state: .failed,
-            failure: DurableQueueFailure(code: "temporary", message: "Temporary", details: nil, retryable: true)
+            state: .waiting
+        )
+        let peerDraft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: peerURL),
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: directoryURL,
+            options: ConversionOptions()
+        )
+        let peer = DurableConversionQueueItem(
+            ordinal: 1,
+            origin: .singleSource,
+            intent: DurableQueueItemIntent(draft: peerDraft),
+            inspection: inspection,
+            state: .waiting
         )
         let decision = WorkerDecision(
             identifier: "subtitle_decision_required",
@@ -3241,8 +3256,9 @@ final class ConversionViewModelTests: XCTestCase {
             details: nil
         )
         let queueStore = ConversionQueueStore.inMemory()
-        try await queueStore.replaceItems([item])
+        try await queueStore.replaceItems([item, peer])
         let firstStarted = expectation(description: "first conversion started")
+        let peerStarted = expectation(description: "eligible peer started")
         let retryStarted = expectation(description: "retry conversion started")
         var conversionCount = 0
         let worker = TwoPhaseWorkerClient(
@@ -3250,6 +3266,8 @@ final class ConversionViewModelTests: XCTestCase {
                 conversionCount += 1
                 if conversionCount == 1 {
                     firstStarted.fulfill()
+                } else if conversionCount == 2 {
+                    peerStarted.fulfill()
                 } else {
                     retryStarted.fulfill()
                 }
@@ -3258,25 +3276,23 @@ final class ConversionViewModelTests: XCTestCase {
         )
         let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
 
-        let adopted = await viewModel.adoptPersistentQueueItem(item.id)
-        XCTAssertTrue(adopted)
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
         await fulfillment(of: [firstStarted], timeout: 2)
-        while viewModel.state.phase != WorkerPhase.decisionRequired || queueStore.items.first?.state != .attention {
-            await Task.yield()
-        }
+        await fulfillment(of: [peerStarted], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
 
-        XCTAssertEqual(viewModel.state.recoveryDecision, decision)
-        let readoptedActiveItem = await viewModel.adoptPersistentQueueItem(
+        XCTAssertEqual(queueStore.items.map(\.state), [.attention, .completed])
+        XCTAssertNil(viewModel.state.recoveryDecision)
+        let readoptedParkedItem = await viewModel.adoptPersistentQueueItem(
             item.id,
             recoveryChoice: .retryWithoutSubtitles
         )
-        XCTAssertFalse(readoptedActiveItem)
-        XCTAssertEqual(queueStore.items.first?.state, .attention)
-        XCTAssertTrue(viewModel.resolveRecoveryChoice(.retryWithoutSubtitles))
+        XCTAssertTrue(readoptedParkedItem)
         await fulfillment(of: [retryStarted], timeout: 2)
         while viewModel.hasActiveWork { await Task.yield() }
 
-        XCTAssertEqual(queueStore.items.first?.state, .completed)
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .completed])
         XCTAssertEqual(queueStore.items.first?.intent.options.encoding.subtitles.mode, .off)
         XCTAssertEqual(queueStore.items.first?.attempts.count, 2)
     }
@@ -4101,6 +4117,36 @@ final class ConversionViewModelTests: XCTestCase {
         let second = makePersistentQueueFixture(ordinal: 1, state: .waiting)
         try await queueStore.replaceItems([first, second])
         let started = expectation(description: "queue item started")
+        let worker = CancellableInspectionWorkerClient(onStarted: { started.fulfill() })
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(viewModel.stopCurrentPersistentQueueItem(), .accepted(.paused))
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .waiting])
+        XCTAssertEqual(viewModel.persistentQueueRunState, .paused)
+        XCTAssertEqual(viewModel.stopCurrentPersistentQueueItem(), .noChange(.paused))
+    }
+
+    @MainActor
+    func testStopCurrentIdentifiesActiveSourceFolderItem() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let sourceFolderItem = makePersistentQueueFixture(
+            ordinal: 0,
+            groupID: UUID(),
+            origin: .sourceFolder,
+            state: .waiting
+        )
+        let waitingPeer = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        try await queueStore.replaceItems([sourceFolderItem, waitingPeer])
+        let started = expectation(description: "source folder queue item started")
         let worker = CancellableInspectionWorkerClient(onStarted: { started.fulfill() })
         let viewModel = ConversionViewModel(
             clientFactory: { worker },

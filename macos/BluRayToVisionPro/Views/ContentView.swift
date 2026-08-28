@@ -461,9 +461,7 @@ struct ContentView: View {
             switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
                 true
-            case let .failed(failure):
-                failure.retryable
-            case .inspecting, .processing, .stopping, .attention, .completed:
+            case .inspecting, .processing, .stopping, .attention, .failed, .completed:
                 false
             }
         }

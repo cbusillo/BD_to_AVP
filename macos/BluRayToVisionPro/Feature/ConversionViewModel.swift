@@ -315,11 +315,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     @discardableResult
     func startPersistentQueue() async -> PersistentQueueCommandOutcome {
-        guard !hasActiveWorker || activeDurableQueueItem != nil else {
-            return .rejected(.otherWorkIsActive)
-        }
         if persistentQueueRunState == .running {
             return .noChange(.running)
+        }
+        guard !hasActiveWorker || activeDurableQueueItem != nil else {
+            return .rejected(.otherWorkIsActive)
         }
         let candidates = persistentQueueItems.filter { item in
             switch item.status {
@@ -370,6 +370,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     @discardableResult
     func stopCurrentPersistentQueueItem() -> PersistentQueueCommandOutcome {
+        if persistentQueueRunState == .paused {
+            return .noChange(.paused)
+        }
         guard persistentQueueRunState == .running || persistentQueueRunState == .pauseAfterCurrent else {
             return .rejected(.queueIsNotRunning)
         }
@@ -1805,6 +1808,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         recoveryChoice: sourceFolderRecoveryChoices.removeValue(forKey: item.id)
                     ))
                 }
+                activeQueueItemID = item.id
                 publishSourceFolderQueueProjection()
                 if sourceFolderStopRequested {
                     await stopSourceFolderQueueBeforeSpawn(itemID: item.id)
@@ -1829,6 +1833,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     recoveryChoice: sourceFolderRecoveryChoices.removeValue(forKey: item.id)
                 ))
             }
+            activeQueueItemID = item.id
             publishSourceFolderQueueProjection()
             if sourceFolderStopRequested {
                 await stopSourceFolderQueueBeforeSpawn(itemID: item.id)
@@ -2068,10 +2073,16 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private func startPersistedSourceFolderConversion(itemID: UUID) async throws {
         let updated = sourceFolderQueueItem(id: itemID)
         guard let updated else {
+            if activeQueueItemID == itemID {
+                activeQueueItemID = nil
+            }
             await pumpSourceFolderQueue()
             return
         }
         guard updated.state == .processing else {
+            if activeQueueItemID == itemID {
+                activeQueueItemID = nil
+            }
             await pumpSourceFolderQueue()
             return
         }
@@ -2158,7 +2169,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             publishTitleQueueProjection()
             if requiresDecision {
-                persistentQueueRunState = .paused
+                if hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
+                    parkActiveDurableQueueItemForResume()
+                    await pumpDurableQueue()
+                }
                 return
             }
             activeQueueItemID = nil
@@ -2214,6 +2228,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 items[index].failure = snapshot.failure
                 items[index].decision = nil
             }
+        }
+        if activeQueueItemID == itemID {
+            activeQueueItemID = nil
         }
         releaseAdoption(itemID)
         publishSourceFolderQueueProjection()
@@ -2286,6 +2303,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             for stoppedItemID in stoppedItemIDs {
                 releaseAdoption(stoppedItemID)
+            }
+            if activeQueueItemID == itemID {
+                activeQueueItemID = nil
             }
             await stopUnstartedAdoptedItems()
             publishSourceFolderQueueProjection()
@@ -2487,6 +2507,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
         }
         sourceFolderQueueGroupID = nil
+        activeQueueItemID = nil
         sourceFolderStopRequested = false
         sourceFolderQueueCompletionPending = false
         adoptedItemIDs.removeAll()
@@ -2619,7 +2640,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             publishTitleQueueProjection()
             if requiresDecision {
-                persistentQueueRunState = .paused
+                if hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
+                    parkActiveDurableQueueItemForResume()
+                    await pumpDurableQueue()
+                }
                 return
             }
             activeQueueItemID = nil
@@ -2716,6 +2740,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 }
             case .decisionRequired:
                 publishTitleQueueProjection()
+                if hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
+                    parkActiveDurableQueueItemForResume()
+                    await pumpDurableQueue()
+                }
             case .cancelled, .failed:
                 if durableQueueStopRequested || titleQueueStopRequested {
                     try await stopWaitingTitleQueueItems()
@@ -3175,6 +3203,18 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         releaseAdoption(item.id)
         if state.phase == .decisionRequired {
             state.clear()
+        }
+    }
+
+    private func hasAdoptedWaitingDurableQueueItem(excluding itemID: UUID) -> Bool {
+        guard let parkedItem = durableQueueStore.items.first(where: { $0.id == itemID }) else {
+            return false
+        }
+        return durableQueueStore.items.contains { item in
+            item.id != itemID
+                && adoptedItemIDs.contains(item.id)
+                && item.state == .waiting
+                && item.intent.source.path != parkedItem.intent.source.path
         }
     }
 

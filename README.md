@@ -222,7 +222,11 @@ the native picker or drag and drop. Waiting videos can be selected, edited,
 reordered, moved next, removed, and restored with Undo while active and
 completed settings remain locked. Work restored after an app restart never
 starts automatically; interrupted or stopped videos require an explicit
-**Resume Queue**, **Restart Safely**, or recovery choice.
+**Resume Queue**, **Restart Safely**, or recovery choice. **Pause After Current**
+lets the active video finish without starting another, while **Stop Current**
+cancels only the active video and leaves pending work waiting for an explicit
+resume. Failed videos and items needing attention stay parked so unrelated
+eligible queue work can continue.
 
 ## Terminal Usage
 
