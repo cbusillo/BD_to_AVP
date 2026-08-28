@@ -3183,9 +3183,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     && items[peerIndex].state == .waiting
                     && items[peerIndex].intent.source.path == unavailableSourcePath
                 {
-                    items[peerIndex].state = .failed
+                    items[peerIndex].state = .stopped
                     items[peerIndex].decision = nil
-                    items[peerIndex].failure = failure
+                    items[peerIndex].failure = nil
                     parkedItemIDs.insert(items[peerIndex].id)
                 }
             }

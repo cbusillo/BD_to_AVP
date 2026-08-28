@@ -4693,8 +4693,8 @@ final class ConversionViewModelTests: XCTestCase {
         if case .failed = viewModel.queueItems[0].status {} else {
             XCTFail("The active queue item should be marked failed.")
         }
-        if case .failed = viewModel.queueItems[1].status {} else {
-            XCTFail("The remaining queue item should park when its shared source becomes unavailable.")
+        if case .cancelled = viewModel.queueItems[1].status {} else {
+            XCTFail("The remaining queue item should remain resumable when its shared source becomes unavailable.")
         }
         XCTAssertTrue(viewModel.restoredDurableQueueItems[1].attempts.isEmpty)
     }
