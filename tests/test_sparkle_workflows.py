@@ -1122,7 +1122,7 @@ printf '%s' "$CODESIGN_METADATA"
         )
         self.assertEqual(
             release_operations["qualificationRecordPath"],
-            "docs/qualification/v0.3.2-stable-signed-qualification-v1.json",
+            "docs/qualification/v0.3.3-beta.1-signed-qualification-v1.json",
         )
         self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
         self.assertIn(
