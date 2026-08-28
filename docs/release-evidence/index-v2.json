@@ -187,6 +187,56 @@
         }
       ],
       "release_tag": "v0.3.2-rc.1"
+    },
+    {
+      "evidence_class": "v2-qualified",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/capture-v2.json",
+          "sha256": "e31f399a09c253dc5fc42dd343e7aa04c4e93ade747cab84b2a9a059c9e40bad"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/clean-machine-signed-update-receipt.json",
+          "sha256": "398f593921ebfa2ffd04e7b0bf76ead2f028e74989883481c859ca55e7693756"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/installed-ui-accessibility-receipt.json",
+          "sha256": "60c46783f027078d08c56de6e69522f692e626eb420526321055f4878671dccd"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/live-qualification-v1.json",
+          "sha256": "637b7ad3e8d5f309b5cad40688e49e7388ea8dfc1c42e21373e33c4a95f5cc41"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/publication-record.json",
+          "sha256": "6371e34c16af51676cd02c5d2ebb940d702a72cb5e5e6348d8de95ad0e84e236"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/qualification-manifest.json",
+          "sha256": "0948527a3e4ee005e6f334ea0622db74bc6abc79675d49b65b6e65cf81a7de3d"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/qualification-record.json",
+          "sha256": "b0a6cdc5c6b5e5c3ca13a1802be62c3e145e064fe6d683e902987deafe537ea1"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/qualification-v2.json",
+          "sha256": "26afc56fed0601a4ac20e4ea0777b5f7c517e9a916b989a08ea503f3871b4137"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/release-receipt.json",
+          "sha256": "94bd0cf373da4c4e100973c94571f9de0e80a4e2044bd4c30fc5924a0f2d102d"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/signed-artifact-ui-receipt.json",
+          "sha256": "c43cce07774f42f22ae9524333501fed836918715714fef89d1da1d1f79bf036"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.1/signed-artifact-ui.zip",
+          "sha256": "6a966e790e1abf531eb2bc7e3c917b391015258c90598ae7e845e57d5dda6f3e"
+        }
+      ],
+      "release_tag": "v0.3.3-beta.1"
     }
   ],
   "schema_version": 2
