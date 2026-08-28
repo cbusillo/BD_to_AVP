@@ -2870,7 +2870,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
     }
 
-    private static func defaultSourceAvailability(_ source: ConversionSource) -> Bool {
+    nonisolated private static func defaultSourceAvailability(_ source: ConversionSource) -> Bool {
         guard FileManager.default.fileExists(atPath: source.url.path) else {
             return false
         }
