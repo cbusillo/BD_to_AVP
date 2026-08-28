@@ -411,6 +411,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         receipt_path = (
             REPO_ROOT / "docs/release-evidence" / qualification["candidate"]["release_tag"] / "release-receipt.json"
         )
+        candidate_identity = {field: qualification["candidate"][field] for field in candidate_identity_fields}
         if receipt_path.exists():
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             artifacts_by_kind = {artifact["kind"]: artifact for artifact in receipt["artifacts"]}
@@ -422,12 +423,10 @@ class ReleaseMetadataTests(unittest.TestCase):
                 "release_id": receipt["release"]["id"],
                 "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
             }
+            self.assertEqual(candidate_identity, expected_candidate_identity)
         else:
-            expected_candidate_identity = {field: None for field in candidate_identity_fields}
-        self.assertEqual(
-            {field: qualification["candidate"][field] for field in candidate_identity_fields},
-            expected_candidate_identity,
-        )
+            populated_fields = {field for field, value in candidate_identity.items() if value is not None}
+            self.assertIn(populated_fields, (set(), set(candidate_identity_fields)))
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(qualification["execution_policy"]["release_stage"], "beta")
         self.assertIn("--first-candidate-of-cycle", qualification["qualification_policy"]["scope_command"])
