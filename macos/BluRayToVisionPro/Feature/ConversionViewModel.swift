@@ -250,6 +250,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
         }
         guard !durableQueueStopRequested,
+              activeQueueItemID != itemID,
               let existing = durableQueueStore.items.first(where: { $0.id == itemID }),
               let source = try? durableSource(for: existing),
               sourceAvailabilityResolver(source)
@@ -549,6 +550,20 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         let resolutionTrace: DurableQueueResolutionTrace?
     }
 
+    private struct QueueSourceIdentity: Hashable {
+        let kind: ConversionSourceKind
+        let path: String
+        let workerSourcePath: String?
+        let mediaIdentifier: String?
+
+        init(source: ConversionSource) {
+            kind = source.kind
+            path = source.url.path
+            workerSourcePath = source.workerSourcePath
+            mediaIdentifier = source.mediaIdentifier
+        }
+    }
+
     private func startConversionQueue(entries: [QueueStartEntry], preserveSingleEntry: Bool) -> Bool {
         guard !hasActiveWork,
               !durableQueueStore.writesBlocked,
@@ -570,10 +585,22 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             setupQueueStartFailureItemIDs = []
         }
         let groupID = UUID()
-        let removeOriginalAfterFinalSuccess = entries.contains { $0.draft.options.job.removeOriginalAfterSuccess }
+        let sourcesRequestingRemoval = Set(entries.compactMap { entry in
+            entry.draft.options.job.removeOriginalAfterSuccess
+                ? QueueSourceIdentity(source: entry.draft.source)
+                : nil
+        })
+        var finalRemovalIndexBySource: [QueueSourceIdentity: Int] = [:]
+        for (offset, entry) in entries.enumerated() {
+            let sourceIdentity = QueueSourceIdentity(source: entry.draft.source)
+            if sourcesRequestingRemoval.contains(sourceIdentity) {
+                finalRemovalIndexBySource[sourceIdentity] = offset
+            }
+        }
         let normalizedEntries = entries.enumerated().map { offset, entry in
             var options = entry.draft.options
-            options.job.removeOriginalAfterSuccess = removeOriginalAfterFinalSuccess && offset == entries.count - 1
+            let sourceIdentity = QueueSourceIdentity(source: entry.draft.source)
+            options.job.removeOriginalAfterSuccess = finalRemovalIndexBySource[sourceIdentity] == offset
             let draft = ConversionDraft(
                 source: entry.draft.source,
                 sourceDetails: entry.draft.sourceDetails,

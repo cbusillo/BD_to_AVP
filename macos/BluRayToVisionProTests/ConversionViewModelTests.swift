@@ -2237,6 +2237,70 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testMixedSourceQueuePreservesRemovalIntentPerSource() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURLs = ["Feature A.iso", "Feature B.iso"].map {
+            directoryURL.appendingPathComponent($0)
+        }
+        for sourceURL in sourceURLs {
+            _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        }
+        let conversionsDone = expectation(description: "mixed-source conversions done")
+        conversionsDone.expectedFulfillmentCount = 4
+        var conversionJobs: [WorkerJobSpec] = []
+        let worker = TwoPhaseWorkerClient(onConversionJobReceived: { job in
+            conversionJobs.append(job)
+            conversionsDone.fulfill()
+        })
+        let viewModel = ConversionViewModel { worker }
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
+        let drafts = sourceURLs.flatMap { sourceURL in
+            let source = ConversionSource(kind: .discImage, url: sourceURL)
+            let titles = [
+                SourceTitle(id: "title-1", name: "One", outputName: "One", durationSeconds: 100, resolution: "1920x1080", frameRate: "24/1", mainFeature: true),
+                SourceTitle(id: "title-2", name: "Two", outputName: "Two", durationSeconds: 90, resolution: "1920x1080", frameRate: "24/1", mainFeature: false),
+            ]
+            let inspection = SourceInspection(
+                name: source.displayName,
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                interlaced: false,
+                titles: titles
+            )
+            return titles.map { title in
+                ConversionDraft(
+                    source: source,
+                    sourceDetails: inspection,
+                    profile: BuiltInProfile.balanced.profile,
+                    destinationURL: directoryURL,
+                    options: options,
+                    selectedTitle: title
+                )
+            }
+        }
+
+        viewModel.startConversionQueue(drafts: drafts)
+        await fulfillment(of: [conversionsDone], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(conversionJobs.map(\.source.path), [
+            sourceURLs[0].path,
+            sourceURLs[0].path,
+            sourceURLs[1].path,
+            sourceURLs[1].path,
+        ])
+        XCTAssertEqual(conversionJobs.map { $0.job?.removeOriginal }, [false, true, false, true])
+        XCTAssertEqual(
+            viewModel.restoredDurableQueueItems.map { $0.intent.options.job.removeOriginalAfterSuccess },
+            [false, true, false, true]
+        )
+    }
+
+    @MainActor
     func testMultiTitleQueueRunsSeriallyAndPreservesSourceUntilFinalJob() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3146,6 +3210,12 @@ final class ConversionViewModelTests: XCTestCase {
         }
 
         XCTAssertEqual(viewModel.state.recoveryDecision, decision)
+        let readoptedActiveItem = await viewModel.adoptPersistentQueueItem(
+            item.id,
+            recoveryChoice: .retryWithoutSubtitles
+        )
+        XCTAssertFalse(readoptedActiveItem)
+        XCTAssertEqual(queueStore.items.first?.state, .attention)
         XCTAssertTrue(viewModel.resolveRecoveryChoice(.retryWithoutSubtitles))
         await fulfillment(of: [retryStarted], timeout: 2)
         while viewModel.hasActiveWork { await Task.yield() }
