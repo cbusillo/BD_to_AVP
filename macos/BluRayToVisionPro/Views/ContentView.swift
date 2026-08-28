@@ -37,8 +37,15 @@ struct ContentView: View {
     @State private var isShowingTitleChooser = false
     @State private var isShowingDiagnosticReport = false
     @State private var isRefreshingDiscs = false
+    @State private var isShowingOffPeakSchedule = false
+    @State private var isEditingOffPeakSchedule = false
+    @State private var offPeakScheduleStartAt: Date
+    @State private var offPeakScheduleEndAt: Date
+    @State private var offPeakScheduleEditorError: String?
+    @State private var didEvaluateOffPeakScheduleAtLaunch = false
     @StateObject private var routeQualityState: RouteQualityResolutionState
     @StateObject private var setupQueue = SetupQueueAdmission()
+    private let offPeakScheduleTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     init(
         viewModel: ConversionViewModel,
@@ -70,6 +77,9 @@ struct ContentView: View {
         _selectedProfileID = State(initialValue: profile.id)
         _options = State(initialValue: initialOptions)
         _destinationURL = State(initialValue: settings.destinationURL)
+        let initialScheduleStart = Date().addingTimeInterval(15 * 60)
+        _offPeakScheduleStartAt = State(initialValue: initialScheduleStart)
+        _offPeakScheduleEndAt = State(initialValue: initialScheduleStart.addingTimeInterval(8 * 60 * 60))
         _routeQualityState = StateObject(wrappedValue: RouteQualityResolutionState())
     }
 
@@ -172,13 +182,32 @@ struct ContentView: View {
 
     private var lifecycleObservedContent: some View {
         baseContent
-        .onAppear(perform: refreshDiscs)
+        .onAppear {
+            refreshDiscs()
+            guard !didEvaluateOffPeakScheduleAtLaunch else { return }
+            didEvaluateOffPeakScheduleAtLaunch = true
+            evaluateOffPeakSchedule(appLaunched: true)
+        }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
             refreshDiscs()
         }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)) {
             notification in
             handleVolumeUnmount(notification)
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+            evaluateOffPeakSchedule()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            evaluateOffPeakSchedule()
+        }
+        .onReceive(offPeakScheduleTimer) { _ in
+            evaluateOffPeakSchedule()
+        }
+        .onChange(of: previewViewModel.hasActiveWorker) { _, isActive in
+            if !isActive {
+                evaluateOffPeakSchedule()
+            }
         }
         .onChange(of: viewModel.hasActiveWorker) { _, isActive in
             if !isActive {
@@ -368,6 +397,19 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingDiagnosticReport) {
             DiagnosticReportSheet(viewModel: diagnosticReportViewModel)
         }
+        .sheet(isPresented: $isShowingOffPeakSchedule) {
+            OffPeakScheduleSheet(
+                startAt: $offPeakScheduleStartAt,
+                endAt: $offPeakScheduleEndAt,
+                isEditing: isEditingOffPeakSchedule,
+                hasPhysicalDiscItems: viewModel.persistentQueueItems.contains {
+                    $0.draft.source.kind == .physicalDisc
+                },
+                errorMessage: offPeakScheduleEditorError,
+                cancel: { isShowingOffPeakSchedule = false },
+                save: saveOffPeakSchedule
+            )
+        }
         .alert(
             "Profile Could Not Be Saved",
             isPresented: Binding(
@@ -442,6 +484,9 @@ struct ContentView: View {
                 || viewModel.persistentQueueRunState == .pauseAfterCurrent)
                 && viewModel.hasActiveWorker,
             canUndo: persistentQueueRemovalToken != nil,
+            offPeakSchedule: viewModel.offPeakSchedule,
+            offPeakScheduleOutcome: viewModel.offPeakScheduleOutcome,
+            offPeakScheduleErrorMessage: viewModel.offPeakScheduleErrorMessage,
             addSources: addSourcesToPersistentQueue,
             addSourceFolder: addSourceFolderToPersistentQueue,
             addDisc: { appendSourcesToPersistentQueue([$0]) },
@@ -451,6 +496,10 @@ struct ContentView: View {
             clearCompleted: clearCompletedPersistentQueueItems,
             undo: undoPersistentQueueRemoval,
             start: startPersistentQueue,
+            startLater: presentNewOffPeakSchedule,
+            editSchedule: presentExistingOffPeakSchedule,
+            cancelSchedule: cancelOffPeakSchedule,
+            dismissScheduleOutcome: clearOffPeakScheduleOutcome,
             pauseAfterCurrent: pausePersistentQueueAfterCurrent,
             stopCurrent: stopCurrentPersistentQueueItem
         )
@@ -1435,10 +1484,77 @@ struct ContentView: View {
 
     private func startPersistentQueue() {
         Task { @MainActor in
+            if viewModel.offPeakSchedule != nil {
+                do {
+                    try await viewModel.cancelOffPeakSchedule()
+                } catch {
+                    persistentQueueErrorMessage = error.localizedDescription
+                    return
+                }
+            }
             let outcome = await viewModel.startPersistentQueue()
             if case let .rejected(rejection) = outcome {
                 persistentQueueErrorMessage = persistentQueueCommandMessage(for: rejection)
             }
+        }
+    }
+
+    private func presentNewOffPeakSchedule() {
+        let start = Date().addingTimeInterval(15 * 60)
+        offPeakScheduleStartAt = start
+        offPeakScheduleEndAt = start.addingTimeInterval(8 * 60 * 60)
+        offPeakScheduleEditorError = nil
+        isEditingOffPeakSchedule = false
+        isShowingOffPeakSchedule = true
+    }
+
+    private func presentExistingOffPeakSchedule() {
+        guard let schedule = viewModel.offPeakSchedule else { return }
+        offPeakScheduleStartAt = schedule.startAt
+        offPeakScheduleEndAt = schedule.endAt
+        offPeakScheduleEditorError = nil
+        isEditingOffPeakSchedule = true
+        isShowingOffPeakSchedule = true
+    }
+
+    private func saveOffPeakSchedule() {
+        Task { @MainActor in
+            do {
+                try await viewModel.saveOffPeakSchedule(
+                    startAt: offPeakScheduleStartAt,
+                    endAt: offPeakScheduleEndAt
+                )
+                isShowingOffPeakSchedule = false
+            } catch {
+                offPeakScheduleEditorError = error.localizedDescription
+            }
+        }
+    }
+
+    private func cancelOffPeakSchedule() {
+        Task { @MainActor in
+            do {
+                try await viewModel.cancelOffPeakSchedule()
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func clearOffPeakScheduleOutcome() {
+        Task { @MainActor in
+            do {
+                try await viewModel.clearOffPeakScheduleOutcome()
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func evaluateOffPeakSchedule(appLaunched: Bool = false) {
+        guard !previewViewModel.hasActiveWorker else { return }
+        Task { @MainActor in
+            _ = await viewModel.evaluateOffPeakSchedule(appLaunched: appLaunched)
         }
     }
 

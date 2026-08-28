@@ -30,6 +30,29 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         }
     }
 
+    func testOffPeakScheduleEditorRendersPhysicalDiscWarning() throws {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let content = OffPeakScheduleSheet(
+            startAt: .constant(start),
+            endAt: .constant(start.addingTimeInterval(8 * 60 * 60)),
+            isEditing: false,
+            hasPhysicalDiscItems: true,
+            errorMessage: nil,
+            cancel: {},
+            save: {}
+        )
+        .frame(width: 560, height: 430)
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 560, height: 430)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+
+        XCTAssertEqual(bitmap.pixelsWide, 560)
+        XCTAssertEqual(bitmap.pixelsHigh, 430)
+    }
+
     private func render(
         items: [PersistentQueueItem],
         selectedItem: PersistentQueueItem?,
@@ -51,6 +74,9 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 canPauseAfterCurrent: !items.isEmpty,
                 canStopCurrent: !items.isEmpty,
                 canUndo: true,
+                offPeakSchedule: nil,
+                offPeakScheduleOutcome: nil,
+                offPeakScheduleErrorMessage: nil,
                 addSources: {},
                 addSourceFolder: {},
                 addDisc: { _ in },
@@ -60,6 +86,10 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 clearCompleted: {},
                 undo: {},
                 start: {},
+                startLater: {},
+                editSchedule: {},
+                cancelSchedule: {},
+                dismissScheduleOutcome: {},
                 pauseAfterCurrent: {},
                 stopCurrent: {}
             )

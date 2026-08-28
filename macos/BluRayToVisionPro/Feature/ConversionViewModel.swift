@@ -66,6 +66,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var durableQueueRuntimeDiagnostic: String?
     @Published private(set) var setupQueueStartFailureItemIDs: Set<UUID> = []
     @Published private(set) var persistentQueueRunState: PersistentQueueRunState = .idle
+    @Published private(set) var offPeakSchedule: OffPeakQueueSchedule?
+    @Published private(set) var offPeakScheduleOutcome: OffPeakScheduleOutcome?
+    @Published private(set) var offPeakScheduleErrorMessage: String?
 
     private let clientFactory: ClientFactory
     private let diagnosticClock: () -> Date
@@ -73,6 +76,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private let diagnosticBundleBuilder: DiagnosticBundleBuilder
     private let observabilityEventStore: any ObservabilityEventPersisting
     private let durableQueueStore: ConversionQueueStore
+    private let offPeakScheduleStore: OffPeakScheduleStore
     private let sourceAvailabilityResolver: SourceAvailabilityResolver
     private let diagnosticRecorder = DiagnosticSessionRecorder()
     private var client: (any WorkerProcessRunning)?
@@ -98,6 +102,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var durableSingleJobIDs: [UUID: UUID] = [:]
     private var batchItemDiagnosticJobIDs: [UUID: UUID] = [:]
     private var durableQueueSubscription: AnyCancellable?
+    private var offPeakScheduleSubscription: AnyCancellable?
+    private var offPeakRunWindowEnd: Date?
 
     init(
         clientFactory: @escaping ClientFactory = {
@@ -108,6 +114,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         diagnosticBundleBuilder: DiagnosticBundleBuilder? = nil,
         observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared,
         durableQueueStore: ConversionQueueStore? = nil,
+        offPeakScheduleStore: OffPeakScheduleStore? = nil,
         sourceAvailabilityResolver: @escaping SourceAvailabilityResolver = ConversionViewModel.defaultSourceAvailability
     ) {
         self.clientFactory = clientFactory
@@ -117,10 +124,18 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             ?? DiagnosticBundleBuilder(storageProbe: diagnosticStorageProbe)
         self.observabilityEventStore = observabilityEventStore
         self.durableQueueStore = durableQueueStore ?? ConversionQueueStore.inMemory()
+        self.offPeakScheduleStore = offPeakScheduleStore ?? OffPeakScheduleStore.inMemory()
         self.sourceAvailabilityResolver = sourceAvailabilityResolver
         durableQueueSubscription = self.durableQueueStore.$document.sink { [weak self] document in
             self?.publishPersistentQueueProjection(items: document.items)
         }
+        offPeakScheduleSubscription = self.offPeakScheduleStore.$document.sink { [weak self] document in
+            self?.offPeakSchedule = document.schedule
+            self?.offPeakScheduleOutcome = document.lastOutcome
+        }
+        offPeakSchedule = self.offPeakScheduleStore.schedule
+        offPeakScheduleOutcome = self.offPeakScheduleStore.lastOutcome
+        offPeakScheduleErrorMessage = self.offPeakScheduleStore.loadErrorMessage
     }
 
     var isRunning: Bool {
@@ -314,8 +329,147 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         )
     }
 
+    func saveOffPeakSchedule(startAt: Date, endAt: Date) async throws {
+        guard !hasActiveWorker,
+              pendingQueueTransition == nil,
+              pendingBatchContinuation == nil,
+              !isBatchRunning,
+              state.phase != .decisionRequired,
+              persistentQueueRunState != .running,
+              persistentQueueRunState != .pauseAfterCurrent
+        else {
+            throw OffPeakScheduleStoreError.queueIsActive
+        }
+        guard durableQueueStore.items.contains(where: Self.isScheduleEligible) else {
+            throw OffPeakScheduleStoreError.noEligibleItems
+        }
+        guard startAt > diagnosticClock(), endAt > startAt else {
+            throw OffPeakScheduleStoreError.invalidWindow
+        }
+        try await offPeakScheduleStore.save(OffPeakQueueSchedule(
+            startAt: startAt,
+            endAt: endAt,
+            createdAt: diagnosticClock()
+        ))
+        offPeakScheduleErrorMessage = nil
+    }
+
+    func cancelOffPeakSchedule() async throws {
+        try await offPeakScheduleStore.cancel()
+        offPeakScheduleErrorMessage = nil
+    }
+
+    func clearOffPeakScheduleOutcome() async throws {
+        try await offPeakScheduleStore.clearOutcome()
+        offPeakScheduleErrorMessage = nil
+    }
+
     @discardableResult
-    func startPersistentQueue() async -> PersistentQueueCommandOutcome {
+    func evaluateOffPeakSchedule(appLaunched: Bool = false) async -> OffPeakScheduleEvaluation {
+        guard let schedule = offPeakScheduleStore.schedule else {
+            return .none
+        }
+        if hasActiveWorker
+            || pendingQueueTransition != nil
+            || state.phase == .decisionRequired
+            || persistentQueueRunState == .running
+            || persistentQueueRunState == .pauseAfterCurrent
+        {
+            return .waiting(schedule)
+        }
+        do {
+            let evaluation = try await offPeakScheduleStore.evaluate(
+                at: diagnosticClock(),
+                appLaunched: appLaunched
+            )
+            offPeakScheduleErrorMessage = nil
+            guard case let .start(consumedSchedule) = evaluation else {
+                return evaluation
+            }
+            try await parkUnavailableScheduledQueueItems()
+            let outcome = await startPersistentQueue(windowEnd: consumedSchedule.endAt)
+            if case .rejected = outcome {
+                offPeakRunWindowEnd = nil
+                try await offPeakScheduleStore.markStartedScheduleWithoutRunnableItems(
+                    scheduleID: consumedSchedule.id,
+                    at: diagnosticClock()
+                )
+            }
+            return evaluation
+        } catch {
+            offPeakScheduleErrorMessage = error.localizedDescription
+            return .none
+        }
+    }
+
+    private static func isScheduleEligible(_ item: DurableConversionQueueItem) -> Bool {
+        switch item.state {
+        case .waiting, .interrupted, .stopped, .notStarted:
+            true
+        case .inspecting, .processing, .stopping, .attention, .failed, .completed:
+            false
+        }
+    }
+
+    private func parkUnavailableScheduledQueueItems() async throws {
+        struct UnavailableSource: Hashable {
+            let kind: String
+            let path: String
+            let workerSourcePath: String?
+            let mediaIdentifier: String?
+        }
+
+        var unavailableSources: [UnavailableSource: DurableQueueFailure] = [:]
+        for item in durableQueueStore.items where Self.isScheduleEligible(item) {
+            let source = try? durableSource(for: item)
+            guard let source, sourceAvailabilityResolver(source) else {
+                let isPhysicalDisc = item.intent.source.kind == ConversionSourceKind.physicalDisc.rawValue
+                let sourceIdentity = UnavailableSource(
+                    kind: item.intent.source.kind,
+                    path: item.intent.source.path,
+                    workerSourcePath: item.intent.source.workerSourcePath,
+                    mediaIdentifier: item.intent.source.mediaIdentifier
+                )
+                unavailableSources[sourceIdentity] = DurableQueueFailure(
+                    code: isPhysicalDisc ? "scheduled_disc_unavailable" : "scheduled_source_unavailable",
+                    message: isPhysicalDisc
+                        ? "The required Blu-ray disc is not inserted."
+                        : "The scheduled source is no longer available.",
+                    details: item.intent.source.path,
+                    retryable: true
+                )
+                continue
+            }
+        }
+        guard !unavailableSources.isEmpty else {
+            return
+        }
+        var parkedItemIDs: Set<UUID> = []
+        try await durableQueueStore.mutateItems { items in
+            for (sourceIdentity, failure) in unavailableSources {
+                let matchingIndices = items.indices.filter { index in
+                    let source = items[index].intent.source
+                    return Self.isScheduleEligible(items[index])
+                        && source.kind == sourceIdentity.kind
+                        && source.path == sourceIdentity.path
+                        && source.workerSourcePath == sourceIdentity.workerSourcePath
+                        && source.mediaIdentifier == sourceIdentity.mediaIdentifier
+                }
+                for (offset, index) in matchingIndices.enumerated() {
+                    items[index].state = offset == 0 ? .failed : .stopped
+                    items[index].decision = nil
+                    items[index].failure = offset == 0 ? failure : nil
+                    parkedItemIDs.insert(items[index].id)
+                }
+            }
+        }
+        for itemID in parkedItemIDs {
+            releaseAdoption(itemID)
+        }
+    }
+
+    @discardableResult
+    func startPersistentQueue(windowEnd: Date? = nil) async -> PersistentQueueCommandOutcome {
         if persistentQueueRunState == .running {
             return .noChange(.running)
         }
@@ -338,7 +492,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         let previousRunState = persistentQueueRunState
         let previousControlsActive = persistentQueueControlsActive
+        let previousWindowEnd = offPeakRunWindowEnd
         parkActiveDurableQueueItemForResume()
+        offPeakRunWindowEnd = windowEnd
         persistentQueueControlsActive = true
         persistentQueueRunState = .running
         durableQueueStopRequested = false
@@ -351,6 +507,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard adoptedCount > 0 else {
             persistentQueueRunState = previousRunState
             persistentQueueControlsActive = previousControlsActive
+            offPeakRunWindowEnd = previousWindowEnd
             return .rejected(.noEligibleItems)
         }
         return .accepted(.running)
@@ -1738,6 +1895,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard !hasActiveWorker, activeQueueItemID == nil else {
             return
         }
+        if let offPeakRunWindowEnd, diagnosticClock() >= offPeakRunWindowEnd {
+            self.offPeakRunWindowEnd = nil
+            await pauseDurableQueueNow()
+            return
+        }
         guard let item = durableQueueStore.items
             .filter({ adoptedItemIDs.contains($0.id) && $0.state == .waiting })
             .min(by: { $0.ordinal < $1.ordinal })
@@ -1746,6 +1908,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 persistentQueueRunState = .idle
             }
             persistentQueueControlsActive = false
+            offPeakRunWindowEnd = nil
             finishSourceFolderQueueIfNeeded()
             return
         }
@@ -2512,6 +2675,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableQueueRuntimeDiagnostic = "Queue changes are unavailable: \(error.localizedDescription)"
         persistentQueueRunState = .idle
         persistentQueueControlsActive = false
+        offPeakRunWindowEnd = nil
         if let projected = batchQueue {
             if sourceFolderQueueGroupID == nil {
                 batchQueue = SourceFolderQueueState(
@@ -3375,6 +3539,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableQueueRuntimeDiagnostic = "Queue changes are unavailable: \(error.localizedDescription)"
         persistentQueueRunState = .idle
         persistentQueueControlsActive = false
+        offPeakRunWindowEnd = nil
         publishSetupQueueStartFailure()
         activeQueueItemID = nil
         titleQueueGroupID = nil
@@ -3397,6 +3562,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         queueItems.removeAll()
         persistentQueueRunState = .idle
         persistentQueueControlsActive = false
+        offPeakRunWindowEnd = nil
         activeQueueItemID = nil
         titleQueueGroupID = nil
         titleQueueStopRequested = false

@@ -14,6 +14,9 @@ struct PersistentQueueSidebarView: View {
     let canPauseAfterCurrent: Bool
     let canStopCurrent: Bool
     let canUndo: Bool
+    let offPeakSchedule: OffPeakQueueSchedule?
+    let offPeakScheduleOutcome: OffPeakScheduleOutcome?
+    let offPeakScheduleErrorMessage: String?
     let addSources: () -> Void
     let addSourceFolder: () -> Void
     let addDisc: (ConversionSource) -> Void
@@ -23,6 +26,10 @@ struct PersistentQueueSidebarView: View {
     let clearCompleted: () -> Void
     let undo: () -> Void
     let start: () -> Void
+    let startLater: () -> Void
+    let editSchedule: () -> Void
+    let cancelSchedule: () -> Void
+    let dismissScheduleOutcome: () -> Void
     let pauseAfterCurrent: () -> Void
     let stopCurrent: () -> Void
 
@@ -30,6 +37,7 @@ struct PersistentQueueSidebarView: View {
         VStack(spacing: 0) {
             header
             Divider()
+            scheduleBanner
             if let banner {
                 Label(banner.title, systemImage: banner.systemImage)
                     .font(.caption.weight(.medium))
@@ -50,6 +58,54 @@ struct PersistentQueueSidebarView: View {
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityIdentifier("persistent-queue-sidebar")
+    }
+
+    @ViewBuilder
+    private var scheduleBanner: some View {
+        if let errorMessage = offPeakScheduleErrorMessage {
+            Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.red)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.08))
+                .accessibilityIdentifier("off-peak-schedule-error")
+        } else if let schedule = offPeakSchedule {
+            VStack(alignment: .leading, spacing: 4) {
+                Label(
+                    "Scheduled \(schedule.startAt.formatted(date: .abbreviated, time: .shortened))–\(schedule.endAt.formatted(date: .omitted, time: .shortened))",
+                    systemImage: "clock.badge.checkmark.fill"
+                )
+                    .font(.caption.weight(.semibold))
+                Text("Keep the app open. The Mac is not kept awake or woken automatically.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.08))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("off-peak-schedule-banner")
+        } else if let outcome = offPeakScheduleOutcome, outcome.kind == .missed {
+            HStack(alignment: .top, spacing: 8) {
+                Label(outcome.message, systemImage: "clock.badge.exclamationmark.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.orange)
+                Spacer(minLength: 4)
+                Button(action: dismissScheduleOutcome) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss missed schedule notice")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Color.orange.opacity(0.08))
+            .accessibilityIdentifier("off-peak-schedule-missed")
+        }
     }
 
     private var header: some View {
@@ -195,12 +251,26 @@ struct PersistentQueueSidebarView: View {
                 }
             }
             VStack(alignment: .trailing, spacing: 8) {
-                Button(startButtonTitle, action: start)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canStart)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityIdentifier("persistent-queue-start")
-                    .accessibilityLabel(startButtonTitle)
+                HStack(spacing: 8) {
+                    Button(offPeakSchedule == nil ? startButtonTitle : "Start Now", action: start)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canStart)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("persistent-queue-start")
+                    if offPeakSchedule == nil {
+                        Button("Start Later…", action: startLater)
+                            .disabled(!canStart)
+                            .accessibilityIdentifier("off-peak-schedule-create")
+                    }
+                }
+                if offPeakSchedule != nil {
+                    HStack(spacing: 8) {
+                        Button("Edit Schedule…", action: editSchedule)
+                            .accessibilityIdentifier("off-peak-schedule-edit")
+                        Button("Cancel Schedule", role: .destructive, action: cancelSchedule)
+                            .accessibilityIdentifier("off-peak-schedule-cancel")
+                    }
+                }
                 HStack(spacing: 8) {
                     Button("Pause After Current", action: pauseAfterCurrent)
                         .disabled(!canPauseAfterCurrent)
@@ -256,6 +326,78 @@ struct PersistentQueueSidebarView: View {
             return ("Some videos need attention.", "exclamationmark.triangle.fill", .red)
         }
         return nil
+    }
+}
+
+struct OffPeakScheduleSheet: View {
+    @Binding var startAt: Date
+    @Binding var endAt: Date
+    let isEditing: Bool
+    let hasPhysicalDiscItems: Bool
+    let errorMessage: String?
+    let cancel: () -> Void
+    let save: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(isEditing ? "Edit Scheduled Window" : "Start Queue Later")
+                    .font(.title2.weight(.semibold))
+                Text("The app must remain open. This schedule does not wake the Mac or keep it awake.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 12) {
+                GridRow {
+                    Text("Start")
+                    DatePicker("Start", selection: $startAt, displayedComponents: [.date, .hourAndMinute])
+                        .labelsHidden()
+                        .accessibilityIdentifier("off-peak-start-date")
+                }
+                GridRow {
+                    Text("Stop starting new videos")
+                    DatePicker("End", selection: $endAt, displayedComponents: [.date, .hourAndMinute])
+                        .labelsHidden()
+                        .accessibilityIdentifier("off-peak-end-date")
+                }
+            }
+
+            Text("If the Mac sleeps, the queue can start late only while this window is still open. Reopening the app after the start time marks the schedule missed. A video already running may finish after the window ends.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if hasPhysicalDiscItems {
+                Label(
+                    "Physical-disc items run only if the same disc is inserted when the window opens. Missing discs are parked so other available videos can continue.",
+                    systemImage: "opticaldisc.fill"
+                )
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("off-peak-disc-warning")
+            }
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("off-peak-editor-error")
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Button(isEditing ? "Save Changes" : "Schedule Queue", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("off-peak-schedule-save")
+            }
+        }
+        .padding(24)
+        .frame(width: 560)
+        .accessibilityIdentifier("off-peak-schedule-sheet")
     }
 }
 

@@ -41,9 +41,11 @@ struct BluRayToVisionProApp: App {
         let resolutionMemoryStore = ResolutionMemoryStore()
         let profileStore = ProfileStore(resolutionMemoryStore: resolutionMemoryStore)
         let durableQueueStore = ConversionQueueStore()
+        let offPeakScheduleStore = OffPeakScheduleStore()
         let viewModel = ConversionViewModel(
             observabilityEventStore: observabilityEventStore,
-            durableQueueStore: durableQueueStore
+            durableQueueStore: durableQueueStore,
+            offPeakScheduleStore: offPeakScheduleStore
         )
         let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
