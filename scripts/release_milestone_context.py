@@ -36,6 +36,7 @@ MANIFEST_BASE_ADVANCE_ALLOWED_PATHS = frozenset({"scripts/release_milestone_cont
 MANIFEST_BASE_ADVANCE_ALLOWED_PREFIXES = ("tests/",)
 RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-receipt\.json$")
 MANIFEST_PATH_PATTERN = re.compile(rf"^docs/release-evidence/(v[^/]+)/{re.escape(MANIFEST_NAME)}$")
+QUALIFICATION_V2_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/qualification-v2\.json$")
 CHANGE_SCOPED_EVIDENCE_PATH_PATTERN = re.compile(r"^docs/qualification/(v[^/]+)-change-scoped-evidence-v1\.json$")
 FAILED_ATTEMPT_ROOT = Path("docs/release-attempts")
 RELEASE_EVIDENCE_ROOT = Path("docs/release-evidence")
@@ -252,6 +253,7 @@ class ReleaseMilestoneContextError(RuntimeError):
 
 
 PublishedReceiptVerifier = Callable[[Path, Mapping[str, Any], str], None]
+QualifiedV2Verifier = Callable[[Path, str, str], Mapping[str, object]]
 
 
 @dataclass(frozen=True)
@@ -1791,6 +1793,76 @@ def _require_source_ancestor(repo_root: Path, source_sha: str) -> None:
         )
 
 
+def verify_qualified_v2_bundle(repo_root: Path, release_tag: str, base_sha: str) -> Mapping[str, object]:
+    from scripts.release_evidence_v2 import ReleaseEvidenceV2Error, validate_v2_bundle, verify_write_once_history
+
+    try:
+        result = validate_v2_bundle(repo_root, release_tag, worktree=True)
+        verify_write_once_history(repo_root, base_sha, worktree=True)
+    except ReleaseEvidenceV2Error as error:
+        raise ReleaseMilestoneContextError(f"Terminal v2 release evidence is invalid: {error}") from error
+    if result.get("class") != "v2-qualified":
+        raise ReleaseMilestoneContextError("Terminal v2 release evidence must have class 'v2-qualified'.")
+    return result
+
+
+def discover_terminal_v2_qualification(
+    repo_root: Path,
+    *,
+    base_sha: str,
+    head_sha: str,
+    head_branch: str,
+    base_repo: str,
+    head_repo: str,
+    base_branch: str,
+    qualified_v2_verifier: QualifiedV2Verifier = verify_qualified_v2_bundle,
+) -> str | None:
+    if base_repo != EXPECTED_REPOSITORY or head_repo != EXPECTED_REPOSITORY or base_branch != EXPECTED_BASE_BRANCH:
+        raise ReleaseMilestoneContextError(
+            "Release evidence qualification requires a same-repository pull request targeting protected main."
+        )
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if changed.returncode != 0:
+        raise ReleaseMilestoneContextError("Unable to inspect pull-request evidence changes.")
+    changed_paths = tuple(path for path in changed.stdout.splitlines() if path)
+    matches = [
+        (path, match.group(1))
+        for path in changed_paths
+        if (match := QUALIFICATION_V2_PATH_PATTERN.fullmatch(path)) is not None
+    ]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ReleaseMilestoneContextError(
+            "A terminal v2 release evidence pull request must add exactly one qualification-v2 record."
+        )
+    _qualification_path, release_tag = matches[0]
+    expected_branch = f"automation/release-evidence-{release_tag}"
+    if head_branch != expected_branch:
+        raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
+    bundle_prefix = f"docs/release-evidence/{release_tag}/"
+    unexpected_paths = sorted(
+        path for path in changed_paths if path != RELEASE_V2_INDEX_PATH and not path.startswith(bundle_prefix)
+    )
+    if unexpected_paths:
+        raise ReleaseMilestoneContextError(
+            "Terminal v2 release evidence may change only its exact release bundle and index-v2.json: "
+            f"{unexpected_paths!r}."
+        )
+    if RELEASE_V2_INDEX_PATH not in changed_paths:
+        raise ReleaseMilestoneContextError("Terminal v2 release evidence must update index-v2.json.")
+    result = qualified_v2_verifier(repo_root, release_tag, base_sha)
+    if result.get("class") != "v2-qualified":
+        raise ReleaseMilestoneContextError("Terminal v2 release evidence must have class 'v2-qualified'.")
+    return release_tag
+
+
 def discover_milestone_receipt(
     repo_root: Path,
     *,
@@ -2355,7 +2427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ReleaseMilestoneContextError(
                     "Pull-request discovery requires head/base SHA, branch, and repository identity inputs."
                 )
-            manifest_path = discover_milestone_manifest(
+            terminal_v2_release_tag = discover_terminal_v2_qualification(
                 args.repo_root.resolve(),
                 base_sha=args.base_sha,
                 head_sha=args.head_sha,
@@ -2365,8 +2437,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 base_branch=args.base_branch,
             )
             receipt_path = None
-            if manifest_path is None:
-                receipt_path = discover_milestone_receipt(
+            manifest_path = None
+            if terminal_v2_release_tag is None:
+                manifest_path = discover_milestone_manifest(
                     args.repo_root.resolve(),
                     base_sha=args.base_sha,
                     head_sha=args.head_sha,
@@ -2375,6 +2448,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     head_repo=args.head_repo,
                     base_branch=args.base_branch,
                 )
+                if manifest_path is None:
+                    receipt_path = discover_milestone_receipt(
+                        args.repo_root.resolve(),
+                        base_sha=args.base_sha,
+                        head_sha=args.head_sha,
+                        head_branch=args.head_branch,
+                        base_repo=args.base_repo,
+                        head_repo=args.head_repo,
+                        base_branch=args.base_branch,
+                    )
         if manifest_path is not None:
             context = resolve_milestone_manifest_context(args.repo_root, manifest_path)
             if args.base_sha is not None:
