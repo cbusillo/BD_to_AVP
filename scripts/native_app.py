@@ -25,6 +25,8 @@ from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.artifact_identity import app_tree_sha256
 from scripts.build_mv_hevc_encoder_macos import build_encoder as build_mv_hevc_encoder
+from scripts.embedded_python import RUNTIME_ROOT as EMBEDDED_PYTHON_ROOT
+from scripts.embedded_python import prepare_runtime as prepare_embedded_python
 from scripts.production_identity import (
     PRODUCTION_BUNDLE_IDENTIFIER,
     PRODUCTION_DISTRIBUTION_CHANNEL,
@@ -42,13 +44,20 @@ PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 with PYPROJECT_PATH.open("rb") as pyproject_file:
     PYPROJECT = tomllib.load(pyproject_file)
 PROJECT_METADATA = PYPROJECT["project"]
-BRIEFCASE_METADATA = PYPROJECT["tool"]["briefcase"]
-BRIEFCASE_APP_METADATA = BRIEFCASE_METADATA["app"]["bd-to-avp"]
+APP_METADATA = PYPROJECT["tool"]["bd_to_avp"]
+SPARKLE_METADATA = APP_METADATA["sparkle"]
 NATIVE_PRODUCT_NAME = PRODUCTION_PRODUCT_NAME
 NATIVE_BUNDLE_IDENTIFIER = PRODUCTION_BUNDLE_IDENTIFIER
 NATIVE_SHORT_VERSION = str(PROJECT_METADATA["version"])
-NATIVE_UPDATE_INFO = dict(BRIEFCASE_APP_METADATA["macOS"]["info"])
-NATIVE_BUILD_VERSION = str(NATIVE_UPDATE_INFO["CFBundleVersion"])
+NATIVE_UPDATE_INFO = {
+    "CFBundleVersion": str(APP_METADATA["build_version"]),
+    "BDToAVPDistributionChannel": str(APP_METADATA["distribution_channel"]),
+    "SUFeedURL": str(SPARKLE_METADATA["feed_url"]),
+    "SUPublicEDKey": str(SPARKLE_METADATA["public_key"]),
+    "SUAllowsAutomaticUpdates": bool(SPARKLE_METADATA["allows_automatic_updates"]),
+    "SUVerifyUpdateBeforeExtraction": bool(SPARKLE_METADATA["verify_update_before_extraction"]),
+}
+NATIVE_BUILD_VERSION = str(APP_METADATA["build_version"])
 NATIVE_MINIMUM_SYSTEM_VERSION = "26.0"
 NATIVE_EXECUTABLE_NAME = NATIVE_PRODUCT_NAME
 PROJECT_PATH = MACOS_ROOT / f"{NATIVE_PROJECT_NAME}.xcodeproj"
@@ -56,7 +65,6 @@ SCHEME = NATIVE_PROJECT_NAME
 NATIVE_PACKAGE_CONFIGURATION = "Release"
 DERIVED_DATA = MACOS_ROOT / "build" / "DerivedData"
 NATIVE_APP_NAME = f"{NATIVE_PRODUCT_NAME}.app"
-BRIEFCASE_APP = REPO_ROOT / "build" / "bd-to-avp" / "macos" / "app" / "3D Blu-ray to Vision Pro.app"
 PACKAGE_ROOT = MACOS_ROOT / "build" / "package"
 PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
 CURRENT_BUILD_DIRECTORY_NAME = "BD to AVP Builds"
@@ -116,10 +124,9 @@ MACH_O_MAGICS = {
 
 
 def validate_repository_production_identity() -> None:
-    derived_bundle_identifier = f"{BRIEFCASE_METADATA['bundle']}.bd-to-avp"
     expected_values = {
-        "Briefcase product name": (str(BRIEFCASE_APP_METADATA["formal_name"]), PRODUCTION_PRODUCT_NAME),
-        "Briefcase bundle identifier": (derived_bundle_identifier, PRODUCTION_BUNDLE_IDENTIFIER),
+        "product name": (str(APP_METADATA["formal_name"]), PRODUCTION_PRODUCT_NAME),
+        "bundle identifier": (str(APP_METADATA["bundle_identifier"]), PRODUCTION_BUNDLE_IDENTIFIER),
         "distribution channel": (
             str(NATIVE_UPDATE_INFO.get("BDToAVPDistributionChannel", "")),
             PRODUCTION_DISTRIBUTION_CHANNEL,
@@ -280,12 +287,10 @@ def native_build_settings(configuration: str, environment: Mapping[str, str]) ->
     return build_settings
 
 
-def prepare_briefcase_runtime() -> None:
-    command = "update" if BRIEFCASE_APP.is_dir() else "create"
-    run([sys.executable, "-m", "scripts.briefcase_app", command, "--no-input"])
-    run([sys.executable, "-m", "scripts.briefcase_app", "build", "--no-input"])
-    if not BRIEFCASE_APP.is_dir():
-        raise RuntimeError(f"Briefcase did not create the expected runtime at {BRIEFCASE_APP}")
+def prepare_embedded_python_runtime() -> None:
+    runtime = prepare_embedded_python()
+    if runtime.root != EMBEDDED_PYTHON_ROOT or not runtime.root.is_dir():
+        raise RuntimeError(f"Embedded Python builder did not create the expected runtime at {EMBEDDED_PYTHON_ROOT}")
 
 
 def build_packaged_mv_hevc_encoder(output_path: Path = PACKAGED_MV_HEVC_ENCODER) -> Path:
@@ -315,23 +320,19 @@ def assemble_package(mv_hevc_encoder_path: Path) -> Path:
     PACKAGE_ROOT.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_app, PACKAGED_APP, symlinks=True)
 
-    source_contents = BRIEFCASE_APP / "Contents"
     destination_contents = PACKAGED_APP / "Contents"
     copy_tree(
-        source_contents / "Frameworks" / "Python.framework",
+        EMBEDDED_PYTHON_ROOT / "Frameworks" / "Python.framework",
         destination_contents / "Frameworks" / "Python.framework",
     )
-    for resource_name in ("app", "app_packages", "support"):
+    for resource_name in ("app", "app_packages"):
         copy_tree(
-            source_contents / "Resources" / resource_name,
+            EMBEDDED_PYTHON_ROOT / "Resources" / resource_name,
             destination_contents / "Resources" / resource_name,
         )
-    for internal_document in ("README.md", "pyproject.toml"):
-        (destination_contents / "Resources" / "app" / internal_document).unlink(missing_ok=True)
-    shutil.rmtree(destination_contents / "Resources" / "app_packages" / "bin", ignore_errors=True)
     install_mv_hevc_encoder(PACKAGED_APP, mv_hevc_encoder_path)
 
-    source_launcher = source_contents / "MacOS" / "3D Blu-ray to Vision Pro"
+    source_launcher = EMBEDDED_PYTHON_ROOT / "MacOS" / WORKER_EXECUTABLE_NAME
     worker_launcher = destination_contents / "MacOS" / WORKER_EXECUTABLE_NAME
     shutil.copy2(source_launcher, worker_launcher)
     worker_launcher.chmod(worker_launcher.stat().st_mode | 0o111)
@@ -692,6 +693,7 @@ def validate_mv_hevc_capability_probe(
 def smoke_packaged_worker(app_path: Path) -> None:
     app_path = app_path.resolve()
     contents = app_path / "Contents"
+    expected_worker_version, _ = bundle_versions(app_path)
     ffmpeg_path = contents / "Resources" / "app" / "bd_to_avp" / "bin" / "ffmpeg"
     worker_path = contents / "MacOS" / WORKER_EXECUTABLE_NAME
 
@@ -734,7 +736,7 @@ def smoke_packaged_worker(app_path: Path) -> None:
         )
         events: list[object] = [json.loads(line) for line in completed.stdout.splitlines()]
         try:
-            validate_smoke_events(events, job_id)
+            validate_smoke_events(events, job_id, expected_worker_version=expected_worker_version)
         except (TypeError, ValueError) as error:
             raise RuntimeError(
                 "Packaged worker smoke failed.\n"
@@ -755,7 +757,7 @@ def smoke_environment() -> dict[str, str]:
     return environment
 
 
-def validate_smoke_events(events: list[object], job_id: str) -> None:
+def validate_smoke_events(events: list[object], job_id: str, *, expected_worker_version: str | None = None) -> None:
     if len(events) < 4 or not all(isinstance(event, Mapping) for event in events):
         raise ValueError("Worker smoke did not return the required event stream.")
     typed_events = [cast(Mapping[str, Any], event) for event in events]
@@ -768,6 +770,13 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
     event_types = [event.get("type") for event in typed_events]
     if event_types[:3] != ["worker.ready", "job.started", "stage.started"]:
         raise ValueError("Worker smoke lifecycle prefix was incomplete.")
+    if expected_worker_version is not None:
+        ready_payload = typed_events[0].get("payload")
+        worker_version = ready_payload.get("worker_version") if isinstance(ready_payload, Mapping) else None
+        if worker_version != expected_worker_version:
+            raise ValueError(
+                f"Worker smoke version did not match {expected_worker_version!r}; found {worker_version!r}."
+            )
     if event_types[-1] != "job.completed":
         raise ValueError("Worker smoke did not complete.")
 
@@ -804,7 +813,7 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
 
 def package(identity: str, keychain: str | None = None) -> Path:
     mv_hevc_encoder_path = build_packaged_mv_hevc_encoder()
-    prepare_briefcase_runtime()
+    prepare_embedded_python_runtime()
     xcodebuild("build", NATIVE_PACKAGE_CONFIGURATION)
     app_path = assemble_package(mv_hevc_encoder_path)
     sign_package(app_path, identity, keychain)

@@ -1,0 +1,22 @@
+{
+  "action": "delete_abandoned_unpublished_draft",
+  "attempt_record_file_sha256": "644eab51ce9501c895165300d5947e01407d6132da129af40a0b409c43746eb0",
+  "attempt_record_path": "docs/release-attempts/v0.3.2-beta.6/cancelled-attempt-v1.json",
+  "authorization_actor": "cbusillo",
+  "authorization_fingerprint": "0ac759e7d6332cc2f3555083fd7ec74c0ec938afbb3f0be1005e5e0cbe4ce193",
+  "deleted_at": "2026-08-21T22:58:29Z",
+  "deleted_by": "cbusillo",
+  "deletion_reason": "explicitly_authorized_abandoned_draft_cleanup",
+  "draft_deleted": true,
+  "draft_exists": false,
+  "draft_release_id": 374538590,
+  "published_at": null,
+  "receipt_file_sha256": "f4641acb7b6dbff6936508171bf2d1d964b4c2c6fbb7d7d63524883654aedb2f",
+  "recorded_at": "2026-08-21T22:59:26Z",
+  "release_tag": "v0.3.2-beta.6",
+  "schema_version": 1,
+  "source_sha": "b4abf8829b6a539b40bb369bfd62dea504d35be1",
+  "status": "deleted_abandoned_unpublished_draft",
+  "tag_exists": false,
+  "verified_absent_at": "2026-08-21T22:59:21Z"
+}

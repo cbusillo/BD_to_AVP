@@ -1,0 +1,71 @@
+{
+  "accepted_case_receipts": {
+    "clean-machine-signed-update": {
+      "accepted_at": "2026-08-28T01:42:46Z",
+      "path": "docs/release-evidence/v0.3.3-beta.1/clean-machine-signed-update-receipt.json",
+      "sha256": "398f593921ebfa2ffd04e7b0bf76ead2f028e74989883481c859ca55e7693756",
+      "source": "tier3_automation_receipt"
+    },
+    "installed-ui-accessibility": {
+      "accepted_at": "2026-08-28T01:42:46Z",
+      "path": "docs/release-evidence/v0.3.3-beta.1/installed-ui-accessibility-receipt.json",
+      "sha256": "60c46783f027078d08c56de6e69522f692e626eb420526321055f4878671dccd",
+      "source": "tier3_automation_receipt"
+    },
+    "profile-save-action-accessibility": {
+      "accepted_at": "2026-08-28T01:42:46Z",
+      "path": "docs/release-evidence/v0.3.3-beta.1/signed-artifact-ui-receipt.json",
+      "sha256": "c43cce07774f42f22ae9524333501fed836918715714fef89d1da1d1f79bf036",
+      "source": "signed_artifact_receipt"
+    },
+    "sparkle-update-route": {
+      "accepted_at": "2026-08-28T01:42:46Z",
+      "path": "docs/release-evidence/v0.3.3-beta.1/live-qualification-v1.json",
+      "sha256": "637b7ad3e8d5f309b5cad40688e49e7388ea8dfc1c42e21373e33c4a95f5cc41",
+      "source": "signed_artifact_receipt"
+    }
+  },
+  "artifact": {
+    "artifact_id": 9671202907,
+    "name": "milestone-qualification-v0.3.3-beta.1-1.zip",
+    "run_attempt": 1,
+    "run_id": 33133456328,
+    "sha256": "24fad1b242b816654e8208d21da72ce767327420fd7b1ed1170dd1af31cb8205"
+  },
+  "capture": {
+    "path": "docs/release-evidence/v0.3.3-beta.1/capture-v2.json",
+    "sha256": "c83a70ccc572bc6167262c259850087da86ccdf458bd9349fd2efd9c3a304d34"
+  },
+  "profile_preservation": {
+    "case_id": "profile-save-action-accessibility",
+    "preserved": true,
+    "receipt_sha256": "c43cce07774f42f22ae9524333501fed836918715714fef89d1da1d1f79bf036"
+  },
+  "qualification_manifest": {
+    "path": "docs/release-evidence/v0.3.3-beta.1/qualification-manifest.json",
+    "sha256": "0948527a3e4ee005e6f334ea0622db74bc6abc79675d49b65b6e65cf81a7de3d"
+  },
+  "qualification_record": {
+    "path": "docs/release-evidence/v0.3.3-beta.1/qualification-record.json",
+    "sha256": "b0a6cdc5c6b5e5c3ca13a1802be62c3e145e064fe6d683e902987deafe537ea1"
+  },
+  "qualification_sha256": "548ba494dbfbbe8de3a48ce422c4f26b7b2cb019ee0f77461a545085d18fa707",
+  "qualified_at": "2026-08-28T01:43:08Z",
+  "record_type": "qualification",
+  "release_tag": "v0.3.3-beta.1",
+  "schema_version": 2,
+  "source_sha": "d9887254655c75c98373ab34a8c175af8a852c02",
+  "state": "QUALIFIED",
+  "successful_milestone": {
+    "actor": "cbusillo",
+    "path": ".github/workflows/milestone-qualification.yml",
+    "result": "success",
+    "run_attempt": 1,
+    "run_id": 33133456328
+  },
+  "updater_route": {
+    "case_id": "sparkle-update-route",
+    "receipt_sha256": "637b7ad3e8d5f309b5cad40688e49e7388ea8dfc1c42e21373e33c4a95f5cc41",
+    "result": "passed"
+  }
+}

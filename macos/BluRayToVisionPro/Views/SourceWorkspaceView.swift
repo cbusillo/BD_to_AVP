@@ -127,23 +127,32 @@ struct SourceWorkspaceView: View {
 
                 Divider()
 
-                Text("Other Sources")
+                Text("Add a Source")
                     .font(.headline)
 
                 VStack(spacing: 8) {
                     HStack(spacing: 8) {
-                        sourceButton("Open Disc Image…", systemImage: "opticaldiscdrive", action: openDiscImage)
-                        sourceButton("Open Blu-ray Folder…", systemImage: "folder.badge.gearshape", action: openBluRayFolder)
+                        sourceButton("Disc Image…", systemImage: "opticaldiscdrive", action: openDiscImage)
+                        sourceButton("Blu-ray Folder…", systemImage: "folder.badge.gearshape", action: openBluRayFolder)
                     }
                     HStack(spacing: 8) {
-                        sourceButton("Open 3D MKV…", systemImage: "film.stack", action: openMKV)
-                        sourceButton("Open Source Folder…", systemImage: "folder", action: openSourceFolder)
+                        sourceButton("3D MKV…", systemImage: "film.stack", action: openMKV)
+                        sourceButton("MTS or M2TS…", systemImage: "film", action: importTransportStream)
                     }
                 }
 
-                Button("Import MTS or M2TS transport stream…", action: importTransportStream)
-                    .buttonStyle(.link)
-                    .font(.callout)
+                Divider()
+
+                Text("Folder of Movies")
+                    .font(.headline)
+
+                sourceButton("Add Folder of Movies…", systemImage: "folder.badge.plus", action: openSourceFolder)
+                    .controlSize(.large)
+
+                Text("Adds every supported ISO, MKV, MTS, and M2TS movie in the folder to the conversion queue.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(4)
         } label: {
@@ -198,6 +207,10 @@ struct SourceWorkspaceView: View {
 
                 if source.kind == .sourceFolder {
                     Divider()
+                    if batchContainsDiscImages {
+                        batchTitleSelectionSection
+                        Divider()
+                    }
                     batchQueueSection
                 } else if state.phase.isRunning {
                     Divider()
@@ -363,7 +376,7 @@ struct SourceWorkspaceView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.source.displayName)
+                Text(item.displayName)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 Text(batchItemDetail(item, queue: queue))
@@ -402,7 +415,7 @@ struct SourceWorkspaceView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .accessibilityLabel("Retry \(item.source.displayName)")
+            .accessibilityLabel("Retry \(item.displayName)")
         } else if !recoveryChoices.isEmpty {
             Menu("Retry…") {
                 ForEach(recoveryChoices) { choice in
@@ -413,7 +426,7 @@ struct SourceWorkspaceView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .accessibilityLabel("Retry \(item.source.displayName)")
+            .accessibilityLabel("Retry \(item.displayName)")
         } else {
             Text("Needs Attention")
                 .font(.caption.weight(.medium))
@@ -541,9 +554,9 @@ struct SourceWorkspaceView: View {
                     HStack(spacing: 6) {
                         Text(profile.name)
                         if profileModified {
-                            Text("Modified")
+                            Text("For this conversion")
                                 .font(.caption.weight(.medium))
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -649,6 +662,10 @@ struct SourceWorkspaceView: View {
         isBatchRunning || state.phase.isRunning || state.phase == .decisionRequired
     }
 
+    private var batchContainsDiscImages: Bool {
+        batchQueue?.items.contains(where: { $0.source.kind.isDiscWorkflow }) == true
+    }
+
     private var routePlan: VideoRoutePlan {
         VideoRoutePlan(options: options)
     }
@@ -717,6 +734,37 @@ struct SourceWorkspaceView: View {
                 .accessibilityLabel("3D videos to convert: \(titleSelectionSummary)")
             }
             Text("\(result.titles.count) compatible 3D videos detected. Multiple selections are converted one at a time.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var batchTitleSelectionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LabeledContent("Disc images") {
+                Menu {
+                    Button(action: selectMainTitle) {
+                        selectionOption("Main Feature", selected: !titleSelection.isAll)
+                    }
+                    Button(action: selectAllTitles) {
+                        selectionOption("All 3D Videos", selected: titleSelection.isAll)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(titleSelection.isAll ? "All 3D Videos" : "Main Feature")
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .disabled(outputControlsLocked)
+                .accessibilityIdentifier("batch-title-selection-menu")
+                .accessibilityLabel(
+                    "3D videos to convert from each disc image: \(titleSelection.isAll ? "All 3D Videos" : "Main Feature")"
+                )
+            }
+            Text("Applies to ISO disc images in this folder. Other supported video files convert once.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

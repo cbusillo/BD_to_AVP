@@ -35,6 +35,46 @@
       "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
       "tag": "v0.3.1",
       "workflow_run_id": 31325968679
+    },
+    {
+      "publication_record": "docs/release-evidence/v0.3.2/publication-record.json",
+      "published_at": "2026-08-25T17:02:23Z",
+      "receipt": "docs/release-evidence/v0.3.2/release-receipt.json",
+      "receipt_file_sha256": "21e8d6fa0c4f8e014fd57565f993652cc76a4bb3a968e5752e2a4bcb2a1237b0",
+      "release_id": 376566532,
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "tag": "v0.3.2",
+      "workflow_run_id": 32872545337
+    },
+    {
+      "publication_record": "docs/release-evidence/v0.3.2-beta.2/publication-record.json",
+      "published_at": "2026-08-19T17:04:11Z",
+      "receipt": "docs/release-evidence/v0.3.2-beta.2/release-receipt.json",
+      "receipt_file_sha256": "f88259e5f82f5885f087adf1a284f47bda97741e99ad982ccbcd758efe829f19",
+      "release_id": 373212973,
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "tag": "v0.3.2-beta.2",
+      "workflow_run_id": 32277548249
+    },
+    {
+      "publication_record": "docs/release-evidence/v0.3.2-beta.7/publication-record.json",
+      "published_at": "2026-08-23T21:44:54Z",
+      "receipt": "docs/release-evidence/v0.3.2-beta.7/release-receipt.json",
+      "receipt_file_sha256": "6afe63b1212ce0b59d7b893f8b501297361c45e8fbf88484ab915e92f0b060b3",
+      "release_id": 375333598,
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "tag": "v0.3.2-beta.7",
+      "workflow_run_id": 32666346343
+    },
+    {
+      "publication_record": "docs/release-evidence/v0.3.2-rc.1/publication-record.json",
+      "published_at": "2026-08-25T01:38:46Z",
+      "receipt": "docs/release-evidence/v0.3.2-rc.1/release-receipt.json",
+      "receipt_file_sha256": "dec0546e8e4c7178fba99492911f12896277260c767f96e0c492d7cbfc3c1d54",
+      "release_id": 376092200,
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "tag": "v0.3.2-rc.1",
+      "workflow_run_id": 32796196439
     }
   ],
   "schema_version": 1

@@ -19,7 +19,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPO_ROOT / "vendor" / "sparkle-macos.toml"
 CACHE_ROOT = REPO_ROOT / ".vendor" / "sparkle"
-APP_PATH = REPO_ROOT / "build" / "bd-to-avp" / "macos" / "app" / "3D Blu-ray to Vision Pro.app"
+APP_PATH = REPO_ROOT / "macos" / "build" / "package" / "3D Blu-ray to Vision Pro.app"
 FRAMEWORK_RELATIVE_PATH = Path("Contents/Frameworks/Sparkle.framework")
 REQUIRED_FRAMEWORK_PATHS = (
     Path("Versions/B/Sparkle"),
@@ -193,7 +193,7 @@ def embed_sparkle(
     force_extract: bool = False,
 ) -> Path:
     if not app_path.is_dir():
-        raise SparkleBuildError(f"Briefcase app bundle not found: {app_path}")
+        raise SparkleBuildError(f"macOS app bundle not found: {app_path}")
     release = release or load_release()
     archive_path = download_archive(release, cache_root)
     source_framework = extract_archive(archive_path, release, cache_root, force=force_extract)
@@ -224,8 +224,8 @@ def sparkle_tool_path(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Embed the pinned Sparkle framework into the Briefcase app bundle.")
-    parser.add_argument("--app", type=Path, default=APP_PATH, help="Path to the Briefcase .app bundle.")
+    parser = argparse.ArgumentParser(description="Embed the pinned Sparkle framework into the macOS app bundle.")
+    parser.add_argument("--app", type=Path, default=APP_PATH, help="Path to the macOS .app bundle.")
     parser.add_argument("--cache", type=Path, default=CACHE_ROOT, help="Sparkle download and extraction cache.")
     parser.add_argument("--tool", help="Prepare Sparkle and print the path to a bundled command-line tool.")
     args = parser.parse_args()

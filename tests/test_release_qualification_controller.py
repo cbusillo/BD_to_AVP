@@ -393,16 +393,36 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             patch("scripts.release_qualification_status._require_checked_file"),
             patch("scripts.release_qualification_status.validate_manifest_evidence_history") as validate_history,
             patch("scripts.release_qualification_status._load_bound_policy", return_value=policy),
-            patch("scripts.release_qualification_status.load_evidence", return_value={"schema_version": 1}),
+            patch(
+                "scripts.release_qualification_status.load_evidence",
+                return_value={
+                    "schema_version": 1,
+                    "receipts": [
+                        {"receipt_id": "historical", "status": "accepted", "accepted_at": "2026-08-10T12:00:00Z"},
+                        {"receipt_id": "future", "status": "accepted", "accepted_at": "2026-08-18T12:00:00Z"},
+                        {"receipt_id": "historical-failed", "status": "failed", "accepted_at": "2026-08-10T13:00:00Z"},
+                        {"receipt_id": "future-failed", "status": "failed", "accepted_at": "2026-08-18T13:00:00Z"},
+                    ],
+                },
+            ),
             patch(
                 "scripts.release_qualification_status.load_qualification_overrides",
                 return_value=("qualification", {}),
             ),
-            patch("scripts.release_qualification_status.classify_release_scope", return_value=classification),
+            patch(
+                "scripts.release_qualification_status.classify_release_scope", return_value=classification
+            ) as classify,
         ):
             payload = build_status(REPO_ROOT, "v0.3.1", as_of=date(2026, 8, 10))
 
         validate_history.assert_called_once_with(manifest, repo_root=REPO_ROOT, base_revision="b" * 40)
+        self.assertEqual(
+            classify.call_args.args[1]["receipts"],
+            [
+                {"receipt_id": "historical", "status": "accepted", "accepted_at": "2026-08-10T12:00:00Z"},
+                {"receipt_id": "historical-failed", "status": "failed", "accepted_at": "2026-08-10T13:00:00Z"},
+            ],
+        )
         self.assertEqual(payload["evidence_binding"]["expected_evidence_ref"], "automation/release-evidence-v0.3.1")
         self.assertEqual(payload["overall_status"], "complete")
 

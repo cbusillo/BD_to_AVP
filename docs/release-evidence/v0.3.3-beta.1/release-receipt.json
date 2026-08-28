@@ -1,0 +1,75 @@
+{
+  "appcast": {
+    "live_pages_sha256": "68927af8e7720e9753db1dc6ab9373334f084ce2e79f8258c36380e38bcabc0b",
+    "live_pages_state": "pending_release_deploy",
+    "live_pages_url": "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+  },
+  "artifacts": [
+    {
+      "asset_id": 533097181,
+      "kind": "appcast",
+      "name": "appcast.xml",
+      "sha256": "68927af8e7720e9753db1dc6ab9373334f084ce2e79f8258c36380e38bcabc0b",
+      "size_bytes": 102694
+    },
+    {
+      "asset_id": 533096146,
+      "kind": "checksum",
+      "name": "SHA256SUMS",
+      "sha256": "7e72aa448f88e3a7dfc461dbcef99593facebe7722c0c54289ca1e8c1568c7df",
+      "size_bytes": 108
+    },
+    {
+      "asset_id": 533096068,
+      "kind": "dmg",
+      "name": "3D-Blu-ray-to-Vision-Pro-0.3.3-beta.1.dmg",
+      "sha256": "18e98863f5fc80078a79c467d7b71fd4d1e53d4ff9c01d1d0b206a3870e8d98f",
+      "size_bytes": 166767986
+    }
+  ],
+  "protected_branch": "main",
+  "receipt_sha256": "3d45bbdd34609329e50813c02f832a086478eceb89c12987e1d49189a73dff65",
+  "receipt_type": "bd-to-avp-release-engine",
+  "release": {
+    "created_at": "2026-08-28T01:27:42Z",
+    "id": 378212647,
+    "make_latest": false,
+    "name": "v0.3.3-beta.1",
+    "prerelease": true,
+    "tag": "v0.3.3-beta.1",
+    "target_sha": "d9887254655c75c98373ab34a8c175af8a852c02"
+  },
+  "release_route": "prerelease",
+  "repository": "cbusillo/BD_to_AVP",
+  "schema_version": 1,
+  "signed_app_tree_sha256": "88e567fdb37118b94ceb562a5717106af93d506f7a36a12067ac14903189cc83",
+  "source_sha": "d9887254655c75c98373ab34a8c175af8a852c02",
+  "tier1_case_references": [
+    "release-workflow-identity",
+    "signed-packaged-route-parity"
+  ],
+  "verification": {
+    "app_notarization": "passed",
+    "app_staple": "passed",
+    "appcast": "passed",
+    "asset_redownload": "passed",
+    "attestation": "passed",
+    "dmg_notarization": "passed",
+    "dmg_staple": "passed",
+    "gatekeeper": "passed",
+    "package_smoke": "passed"
+  },
+  "versions": {
+    "build": "172",
+    "package": "0.3.3b1",
+    "public": "0.3.3-beta.1"
+  },
+  "workflow": {
+    "actor": "shiny-code-bot",
+    "engine_path": ".github/workflows/release-engine.yml",
+    "name": "Prerelease",
+    "path": ".github/workflows/prerelease.yml",
+    "run_attempt": 1,
+    "run_id": 33131418448
+  }
+}

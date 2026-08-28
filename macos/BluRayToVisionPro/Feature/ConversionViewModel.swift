@@ -64,6 +64,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var selectedPersistentQueueItemID: UUID?
     @Published private(set) var completedBatchResults: [ConversionResult]?
     @Published private(set) var durableQueueRuntimeDiagnostic: String?
+    @Published private(set) var setupQueueStartFailureItemIDs: Set<UUID> = []
 
     private let clientFactory: ClientFactory
     private let diagnosticClock: () -> Date
@@ -81,6 +82,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var pendingBatchContinuation: Task<Void, Never>?
     private var actionsWaitingForIdle: [() -> Void] = []
     private var activeQueueItemID: UUID?
+    private var activeSetupQueueItemIDs: Set<UUID> = []
     private var titleQueueGroupID: UUID?
     private var titleQueueStopRequested = false
     private var pendingQueueTransition: Task<Void, Never>?
@@ -157,7 +159,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     var hasQueuedWork: Bool {
-        activeQueueItemID != nil || durableQueueStore.items.contains { item in
+        pendingQueueTransition != nil || activeQueueItemID != nil || durableQueueStore.items.contains { item in
             adoptedItemIDs.contains(item.id)
                 && (item.state == .waiting || item.state == .inspecting || item.state == .processing || item.state == .stopping)
         }
@@ -505,27 +507,66 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     func startConversionQueue(drafts: [ConversionDraft]) {
-        guard !hasActiveWork, let firstDraft = drafts.first
-        else {
-            return
+        _ = startConversionQueue(
+            entries: drafts.map { QueueStartEntry(id: UUID(), draft: $0, resolutionTrace: nil) },
+            preserveSingleEntry: false
+        )
+    }
+
+    @discardableResult
+    func startConversionQueue(admissionItems: [SetupQueueAdmissionItem]) -> Bool {
+        let entries = admissionItems.compactMap { item -> QueueStartEntry? in
+            guard item.state == .waiting, let draft = item.currentDraft else {
+                return nil
+            }
+            return QueueStartEntry(id: item.id, draft: draft, resolutionTrace: item.resolutionTrace)
         }
-        if drafts.count == 1 {
-            startConversion(draft: firstDraft)
-            return
+        guard entries.count == admissionItems.count else {
+            return false
+        }
+        return startConversionQueue(entries: entries, preserveSingleEntry: true)
+    }
+
+    private struct QueueStartEntry {
+        let id: UUID
+        let draft: ConversionDraft
+        let resolutionTrace: DurableQueueResolutionTrace?
+    }
+
+    private func startConversionQueue(entries: [QueueStartEntry], preserveSingleEntry: Bool) -> Bool {
+        guard !hasActiveWork,
+              !durableQueueStore.writesBlocked,
+              !entries.isEmpty,
+              entries.allSatisfy({ entry in
+                  if case .failure = RouteQualityEngine.validate(entry.draft.options) { return false }
+                  return true
+              }),
+              let firstEntry = entries.first
+        else {
+            return false
+        }
+        if entries.count == 1, !preserveSingleEntry {
+            startConversion(draft: firstEntry.draft)
+            return true
+        }
+        if preserveSingleEntry {
+            activeSetupQueueItemIDs = Set(entries.map(\.id))
+            setupQueueStartFailureItemIDs = []
         }
         let groupID = UUID()
-        let removeOriginalAfterFinalSuccess = drafts.contains { $0.options.job.removeOriginalAfterSuccess }
-        let normalizedDrafts = drafts.enumerated().map { offset, draft in
-            var options = draft.options
-            options.job.removeOriginalAfterSuccess = removeOriginalAfterFinalSuccess && offset == drafts.count - 1
-            return ConversionDraft(
-                source: draft.source,
-                sourceDetails: draft.sourceDetails,
-                profile: draft.profile,
-                destinationURL: draft.destinationURL,
+        let removeOriginalAfterFinalSuccess = entries.contains { $0.draft.options.job.removeOriginalAfterSuccess }
+        let normalizedEntries = entries.enumerated().map { offset, entry in
+            var options = entry.draft.options
+            options.job.removeOriginalAfterSuccess = removeOriginalAfterFinalSuccess && offset == entries.count - 1
+            let draft = ConversionDraft(
+                source: entry.draft.source,
+                sourceDetails: entry.draft.sourceDetails,
+                profile: entry.draft.profile,
+                destinationURL: entry.draft.destinationURL,
                 options: options,
-                selectedTitle: draft.selectedTitle
+                selectedTitle: entry.draft.selectedTitle
             )
+            return QueueStartEntry(id: entry.id, draft: draft, resolutionTrace: entry.resolutionTrace)
         }
         activeQueueItemID = nil
         titleQueueGroupID = groupID
@@ -540,13 +581,17 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 var admittedIDs: [UUID] = []
                 try await self.durableQueueStore.mutateItems { items in
                     let startingOrdinal = items.count
-                    let admitted = normalizedDrafts.enumerated().map { offset, draft in
+                    let admitted = normalizedEntries.enumerated().map { offset, entry in
                         let item = DurableConversionQueueItem(
+                            id: entry.id,
                             ordinal: startingOrdinal + offset,
                             groupID: groupID,
-                            origin: .multiTitle,
-                            intent: DurableQueueItemIntent(draft: draft),
-                            inspection: draft.sourceDetails
+                            origin: entry.draft.source.kind == .sourceFolder
+                                ? .sourceFolder
+                                : (entry.draft.selectedTitle == nil ? .singleSource : .multiTitle),
+                            intent: DurableQueueItemIntent(draft: entry.draft),
+                            inspection: entry.draft.sourceDetails,
+                            resolutionTrace: entry.resolutionTrace
                         )
                         admittedIDs.append(item.id)
                         return item
@@ -565,6 +610,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 self.failClosedTitleQueuePersistence(error)
             }
         }
+        return true
     }
 
     func moveWaitingQueueItem(_ itemID: UUID, before targetID: UUID) -> Bool {
@@ -632,6 +678,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             handleSynchronousRunFailure(mode)
             return false
         }
+        if case .titleQueueConversion = mode, let inspection = draft.sourceDetails {
+            state.prepareQueuedConversion(sourceURL: draft.source.url, inspection: inspection)
+        }
         let job = WorkerJobSpec(draft: draft, jobID: jobID)
         do {
             try state.begin(jobID: job.jobID, operationKind: .conversion)
@@ -690,6 +739,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         for draft: ConversionDraft,
         mode: ActiveRunMode
     ) -> Bool {
+        if case .titleQueueConversion = mode {
+            return draft.sourceDetails != nil
+        }
         guard state.sourceURL == draft.source.url, state.result != nil else {
             return false
         }
@@ -697,13 +749,18 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         case let .batchConversion(itemID):
             return batchQueue?.activeItemID == itemID
                 && batchQueue?.activeItem?.source == draft.source
+                && batchQueue?.activeItem?.source == draft.source
                 || durableQueueStore.items.contains(where: {
                     $0.id == itemID && $0.origin == .sourceFolder && $0.inspection != nil
                 })
-        case .singleConversion, .titleQueueConversion:
+        case .singleConversion:
             return source == draft.source
-        case .durableSingleConversion:
-            return true
+        case .titleQueueConversion:
+            return false
+        case let .durableSingleConversion(itemID):
+            return durableQueueStore.items.contains(where: {
+                $0.id == itemID && $0.origin == .singleSource && $0.inspection != nil
+            })
         case .singleInspection, .titleQueueInspection, .batchInspection, .durableSingleInspection:
             return false
         }
@@ -712,16 +769,27 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     func startBatchConversion(
         profile: EncodingProfile,
         destinationURL: URL,
-        options: ConversionOptions
+        options: ConversionOptions,
+        titleSelection: DiscTitleSelection = .main
     ) {
         guard !hasActiveWork,
               !isBatchRunning,
               let source,
               source.kind == .sourceFolder,
               var queue = batchQueue,
-              queue.folderSource == source,
-              !queue.items.isEmpty
+              queue.folderSource == source
         else {
+            return
+        }
+
+        if queue.hasStarted {
+            queue = SourceFolderQueueState(
+                folderSource: source,
+                sources: SourceFolderDiscovery.discoverSources(in: source.url)
+            )
+        }
+        guard !queue.items.isEmpty else {
+            batchQueue = queue
             return
         }
 
@@ -729,6 +797,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             failClosedSourceFolderQueuePersistence(ConversionQueueStoreError.recoveryRequired)
             return
         }
+
+        let discTitleSelection: SourceFolderDiscTitleSelection = titleSelection.isAll
+            ? .all3DVideos
+            : .mainFeature
 
         queue.prepareForRun(
             profile: profile,
@@ -742,7 +814,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         sourceFolderRecoveryChoices.removeAll()
         recordDiagnosticWorkflow(name: "batch.started", message: "source_folder")
         enqueueSourceFolderQueueTransition { [weak self] in
-            await self?.admitAndStartSourceFolderQueue()
+            await self?.admitAndStartSourceFolderQueue(titleSelection: discTitleSelection)
         }
     }
 
@@ -1316,7 +1388,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
     }
 
-    private func admitAndStartSourceFolderQueue() async {
+    private func admitAndStartSourceFolderQueue(titleSelection: SourceFolderDiscTitleSelection) async {
         guard let queue = batchQueue,
               queue.hasStarted,
               let source = self.source,
@@ -1339,7 +1411,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         ordinal: startingOrdinal + offset,
                         groupID: groupID,
                         origin: .sourceFolder,
-                        intent: DurableQueueItemIntent(draft: draft),
+                        intent: DurableQueueItemIntent(
+                            draft: draft,
+                            sourceFolderDiscTitleSelection: titleSelection
+                        ),
                         state: sourceFolderStopRequested ? .notStarted : .waiting
                     )
                 }
@@ -1424,7 +1499,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 await persistSourceUnavailable(itemID: item.id)
                 return
             }
-            state.restoreSource(source.url, inspection: updated.inspection)
+            state.prepareQueuedConversion(sourceURL: source.url, inspection: updated.inspection)
             self.source = source
             if updated.state == .inspecting {
                 startInspection(source: source, mode: .durableSingleInspection(itemID: item.id))
@@ -1452,6 +1527,25 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
         do {
+            if item.inspection != nil, item.intent.selectedTitle != nil {
+                try await durableQueueStore.mutateItems { items in
+                    guard let index = items.firstIndex(where: { $0.id == item.id }),
+                          items[index].groupID == groupID,
+                          items[index].state == .waiting
+                    else {
+                        throw ConversionQueueStoreError.invalidDocument
+                    }
+                    items[index].state = .processing
+                    items[index].attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
+                }
+                publishSourceFolderQueueProjection()
+                if sourceFolderStopRequested {
+                    await stopSourceFolderQueueBeforeSpawn(itemID: item.id)
+                    return
+                }
+                try await startPersistedSourceFolderConversion(itemID: item.id)
+                return
+            }
             try await durableQueueStore.mutateItems { items in
                 guard let index = items.firstIndex(where: { $0.id == item.id }),
                       items[index].groupID == groupID,
@@ -1484,7 +1578,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             if updated.state == .inspecting {
                 startInspection(source: source, mode: .batchInspection(itemID: item.id))
             } else {
-                state.restoreSource(source.url, inspection: updated.inspection)
+                state.prepareQueuedConversion(sourceURL: source.url, inspection: updated.inspection)
                 let draft = try conversionDraft(for: updated, preserveStoredSourceRemoval: true)
                 if !startConversion(draft: draft, mode: .batchConversion(itemID: item.id)) {
                     try await persistSourceFolderTerminal(
@@ -1540,10 +1634,49 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         item: DurableConversionQueueItem,
         inspection: SourceInspection
     ) async throws {
-        var draft = try conversionDraft(for: item, preserveStoredSourceRemoval: true)
-        draft = draft.withSourceDetails(inspection)
-        if draft.source.kind.isDiscWorkflow {
-            guard let mainTitle = inspection.mainTitle else {
+        let inspectedDraft = try conversionDraft(for: item, preserveStoredSourceRemoval: true)
+            .withSourceDetails(inspection)
+        let titleSelection = item.intent.sourceFolderDiscTitleSelection ?? .mainFeature
+        let resolvedDrafts: [(draft: ConversionDraft, titleIndex: Int?)]
+        if inspectedDraft.source.kind.isDiscWorkflow {
+            let resolvedTitles: [(offset: Int?, element: SourceTitle)]
+            if let titleIndex = item.intent.sourceFolderTitleIndex {
+                let previousTitle = item.intent.selectedTitle
+                let resolvedIndex = if let previousTitle {
+                    inspection.titles.firstIndex(where: { $0.id == previousTitle.id })
+                        ?? inspection.titles.firstIndex(where: { $0.outputName == previousTitle.outputName })
+                        ?? (previousTitle.mainFeature
+                            ? inspection.titles.firstIndex(where: \.mainFeature)
+                            : inspection.titles.firstIndex(where: { $0.name == previousTitle.name }))
+                } else {
+                    inspection.titles.indices.contains(titleIndex) ? titleIndex : nil
+                }
+                guard let resolvedIndex else {
+                    let failure = SourceFolderTerminalSnapshot(
+                        phase: .failed,
+                        inspection: inspection,
+                        decision: nil,
+                        failure: DurableQueueFailure(
+                            code: "title_unavailable",
+                            message: "The previously selected 3D video is no longer available.",
+                            details: "Analyze the source again after confirming the disc title list has not changed.",
+                            retryable: true
+                        ),
+                        result: nil
+                    )
+                    try await persistSourceFolderTerminal(itemID: itemID, snapshot: failure)
+                    await pumpSourceFolderQueue()
+                    return
+                }
+                resolvedTitles = [(resolvedIndex, inspection.titles[resolvedIndex])]
+            } else if titleSelection == .all3DVideos {
+                resolvedTitles = inspection.titles.enumerated().map { ($0.offset, $0.element) }
+            } else if let mainTitle = inspection.mainTitle {
+                resolvedTitles = [(nil, mainTitle)]
+            } else {
+                resolvedTitles = []
+            }
+            guard !resolvedTitles.isEmpty else {
                 let failure = SourceFolderTerminalSnapshot(
                     phase: .failed,
                     inspection: inspection,
@@ -1560,19 +1693,27 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 await pumpSourceFolderQueue()
                 return
             }
-            var inspectedOptions = draft.options
+            var inspectedOptions = inspectedDraft.options
             if inspection.titles.count > 1 {
                 inspectedOptions.job.removeOriginalAfterSuccess = false
             }
-            draft = ConversionDraft(
-                source: draft.source,
-                sourceDetails: inspection,
-                profile: draft.profile,
-                destinationURL: draft.destinationURL,
-                options: inspectedOptions,
-                selectedTitle: mainTitle
-            )
+            resolvedDrafts = resolvedTitles.map { titleIndex, title in
+                (
+                    ConversionDraft(
+                        source: inspectedDraft.source,
+                        sourceDetails: inspection,
+                        profile: inspectedDraft.profile,
+                        destinationURL: inspectedDraft.destinationURL,
+                        options: inspectedOptions,
+                        selectedTitle: title
+                    ),
+                    titleIndex
+                )
+            }
+        } else {
+            resolvedDrafts = [(inspectedDraft, nil)]
         }
+        var resolvedItemIDs: [UUID] = []
         try await durableQueueStore.mutateItems { items in
             guard let index = items.firstIndex(where: { $0.id == itemID }),
                   items[index].groupID == groupID,
@@ -1580,43 +1721,85 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             else {
                 throw ConversionQueueStoreError.invalidDocument
             }
-            let outputKey = draft.proposedOutputURL.standardizedFileURL.path.lowercased()
-            let conflictingItem = items.first { candidate in
-                candidate.id != itemID
-                    && candidate.groupID == groupID
-                    && candidate.origin == .sourceFolder
-                    && candidate.inspection != nil
-                    && candidate.state != .notStarted
-                    && candidate.state != .stopped
-                    && ((try? conversionDraft(for: candidate, preserveStoredSourceRemoval: true)
-                        .proposedOutputURL.standardizedFileURL.path.lowercased()) == outputKey)
-            }
-            if let conflictingItem {
-                items[index].state = .failed
-                items[index].inspection = inspection
-                items[index].failure = DurableQueueFailure(
-                    code: "output_collision",
-                    message: "Another queued source resolves to the same output file.",
-                    details: "\(draft.proposedOutputURL.path) is already reserved by \(conflictingItem.intent.source.displayName).",
-                    retryable: false
-                )
-            } else {
-                if let inspectionAttempt = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
-                    items[index].attempts[inspectionAttempt].endedAt = diagnosticClock()
-                }
-                items[index].inspection = inspection
-                items[index].intent = DurableQueueItemIntent(draft: draft)
-                items[index].state = .processing
-                items[index].decision = nil
-                items[index].failure = nil
-                items[index].attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
-            }
-            if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }),
-               items[index].state != .processing
+            var existingOutputOwners: [String: String] = [:]
+            for candidate in items where candidate.id != itemID
+                && candidate.groupID == groupID
+                && candidate.origin == .sourceFolder
+                && candidate.inspection != nil
+                && candidate.state != .notStarted
+                && candidate.state != .stopped
             {
-                items[index].attempts[attemptIndex].endedAt = diagnosticClock()
+                guard let candidateDraft = try? conversionDraft(for: candidate, preserveStoredSourceRemoval: true) else {
+                    continue
+                }
+                let outputKey = candidateDraft.proposedOutputURL.standardizedFileURL.path.lowercased()
+                existingOutputOwners[outputKey] = candidate.intent.selectedTitle.map {
+                    "\(candidate.intent.source.displayName) — \($0.name)"
+                } ?? candidate.intent.source.displayName
+            }
+
+            var outputCounts: [String: Int] = [:]
+            for resolved in resolvedDrafts {
+                let outputKey = resolved.draft.proposedOutputURL.standardizedFileURL.path.lowercased()
+                outputCounts[outputKey, default: 0] += 1
+            }
+
+            var resolvedItems: [DurableConversionQueueItem] = []
+            for (offset, resolved) in resolvedDrafts.enumerated() {
+                var resolvedItem = offset == 0
+                    ? items[index]
+                    : DurableConversionQueueItem(
+                        ordinal: items[index].ordinal + offset,
+                        groupID: groupID,
+                        origin: .sourceFolder,
+                        intent: DurableQueueItemIntent(
+                            draft: resolved.draft,
+                            sourceFolderDiscTitleSelection: titleSelection,
+                            sourceFolderTitleIndex: resolved.titleIndex
+                        ),
+                        inspection: inspection
+                    )
+                if offset == 0 {
+                    if let inspectionAttempt = resolvedItem.attempts.lastIndex(where: { $0.endedAt == nil }) {
+                        resolvedItem.attempts[inspectionAttempt].endedAt = diagnosticClock()
+                    }
+                    resolvedItem.inspection = inspection
+                    resolvedItem.intent = DurableQueueItemIntent(
+                        draft: resolved.draft,
+                        sourceFolderDiscTitleSelection: titleSelection,
+                        sourceFolderTitleIndex: resolved.titleIndex
+                    )
+                }
+                let outputURL = resolved.draft.proposedOutputURL.standardizedFileURL
+                let outputKey = outputURL.path.lowercased()
+                let conflictingOwner = existingOutputOwners[outputKey]
+                if outputCounts[outputKey, default: 0] > 1 || conflictingOwner != nil {
+                    resolvedItem.state = .failed
+                    resolvedItem.failure = DurableQueueFailure(
+                        code: "output_collision",
+                        message: "Another queued source resolves to the same output file.",
+                        details: conflictingOwner.map { "\(outputURL.path) is already reserved by \($0)." }
+                            ?? "Multiple 3D videos resolve to \(outputURL.path).",
+                        retryable: false
+                    )
+                } else {
+                    resolvedItem.state = offset == 0 ? .processing : .waiting
+                    resolvedItem.decision = nil
+                    resolvedItem.failure = nil
+                    if offset == 0 {
+                        resolvedItem.attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
+                    }
+                }
+                resolvedItems.append(resolvedItem)
+            }
+
+            items.replaceSubrange(index ... index, with: resolvedItems)
+            resolvedItemIDs = resolvedItems.map(\.id)
+            for itemIndex in items.indices {
+                items[itemIndex].ordinal = itemIndex
             }
         }
+        adoptedItemIDs.formUnion(resolvedItemIDs)
         publishSourceFolderQueueProjection()
         try await startPersistedSourceFolderConversion(itemID: itemID)
     }
@@ -1824,6 +2007,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 else {
                     throw ConversionQueueStoreError.invalidDocument
                 }
+                let discTitleSelection = items[index].intent.sourceFolderDiscTitleSelection
+                let titleIndex = items[index].intent.sourceFolderTitleIndex
                 var draft = try conversionDraft(for: items[index], preserveStoredSourceRemoval: true)
                 if let decision = items[index].decision {
                     guard let recoveryChoice,
@@ -1849,9 +2034,14 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     sourceDetails: nil,
                     profile: draft.profile,
                     destinationURL: draft.destinationURL,
-                    options: draft.options
+                    options: draft.options,
+                    selectedTitle: draft.selectedTitle
                 )
-                items[index].intent = DurableQueueItemIntent(draft: draft)
+                items[index].intent = DurableQueueItemIntent(
+                    draft: draft,
+                    sourceFolderDiscTitleSelection: discTitleSelection,
+                    sourceFolderTitleIndex: titleIndex
+                )
                 items[index].state = .waiting
                 items[index].decision = nil
                 items[index].failure = nil
@@ -2006,7 +2196,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return []
         }
         return durableQueueStore.items
-            .filter { $0.groupID == titleQueueGroupID && $0.origin == .multiTitle }
+            .filter { $0.groupID == titleQueueGroupID && $0.origin != .sourceFolder }
             .sorted { $0.ordinal < $1.ordinal }
     }
 
@@ -2057,7 +2247,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             await persistSourceUnavailable(itemID: item.id)
             return
         }
-        state.restoreSource(source.url, inspection: updated.inspection)
+        state.prepareQueuedConversion(sourceURL: source.url, inspection: updated.inspection)
         self.source = source
         if updated.state == .inspecting {
             startInspection(source: source, mode: .titleQueueInspection(itemID: item.id))
@@ -2205,6 +2395,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
         } catch {
             durableQueueRuntimeDiagnostic = "Queue state could not be saved after the conversion finished: \(error.localizedDescription)"
+            publishSetupQueueStartFailure()
             activeQueueItemID = nil
             publishCompletedTitleQueueResults()
             titleQueueGroupID = nil
@@ -2559,6 +2750,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return result
         }
         completedBatchResults = results.isEmpty ? nil : results
+        activeSetupQueueItemIDs = []
     }
 
     private func queueStatus(for item: DurableConversionQueueItem) -> ConversionQueueItemStatus {
@@ -2585,10 +2777,18 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func failClosedTitleQueuePersistence(_ error: Error) {
         durableQueueRuntimeDiagnostic = "Queue changes are unavailable: \(error.localizedDescription)"
+        publishSetupQueueStartFailure()
         activeQueueItemID = nil
         titleQueueGroupID = nil
         state.failTransport(message: durableQueueRuntimeDiagnostic ?? "Queue changes are unavailable.", retryable: false)
         runDeferredActionsIfIdle()
+    }
+
+    private func publishSetupQueueStartFailure() {
+        if !activeSetupQueueItemIDs.isEmpty {
+            setupQueueStartFailureItemIDs = activeSetupQueueItemIDs
+            activeSetupQueueItemIDs = []
+        }
     }
 
     private func resetQueue() {
@@ -2604,6 +2804,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableSingleJobIDs.removeAll()
         durableQueueStopRequested = false
         durableQueueRuntimeDiagnostic = nil
+        activeSetupQueueItemIDs = []
+        setupQueueStartFailureItemIDs = []
         completedBatchResults = nil
     }
 

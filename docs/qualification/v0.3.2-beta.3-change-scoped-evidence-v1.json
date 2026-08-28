@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "qualification_id": "v0.3.2-beta.3-change-scoped-evidence-v1",
+  "recorded_at": "2026-08-21T03:51:15Z",
+  "source": {
+    "build_version": "165",
+    "package_version": "0.3.2b3",
+    "public_version": "0.3.2-beta.3",
+    "release_tag": "v0.3.2-beta.3",
+    "source_sha": "e4bc85e2fa9fa75d17c2b84a5bc6510f7af1bfbd"
+  },
+  "failed_preparation_run": {
+    "run_id": null,
+    "run_attempt": null,
+    "conclusion": "not_dispatched",
+    "failed_job": null,
+    "release_identity_created": false,
+    "signing_started": false,
+    "reason": "Preparation and exact-source qualification were explicitly stopped before release dispatch."
+  },
+  "packaged_candidate": {
+    "app_tree_sha256": "834cf19090a133a62e0bc214d0a191f4d91ca4b9b59a6c8bb50947d806a762a5",
+    "architecture": "arm64",
+    "bundle_identifier": "com.shinycomputers.bd-to-avp",
+    "codesign_verification": "passed",
+    "package_command": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py package",
+    "preview_presentation_smoke": "passed",
+    "signing": "ad_hoc_local",
+    "worker_cancellation_smoke": "passed"
+  },
+  "evidence_source_semantics": {
+    "developer_id_or_notarization_claimed": false,
+    "index_source": "signed_artifact_receipt",
+    "meaning": "Change-scoped evidence from the exact locally packaged, code-signed app tree; production Developer ID signing remains owned by a separately authorized guarded release run.",
+    "project_precedent": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json"
+  },
+  "validation": {
+    "post_merge_ci": {
+      "commit": "e4bc85e2fa9fa75d17c2b84a5bc6510f7af1bfbd",
+      "run_id": 32444145523,
+      "status": "passed"
+    },
+    "post_merge_codeql": {
+      "commit": "e4bc85e2fa9fa75d17c2b84a5bc6510f7af1bfbd",
+      "run_id": 32444145459,
+      "status": "passed"
+    },
+    "native_tests": {
+      "command": "uv run python scripts/native_app.py test",
+      "failed": 0,
+      "passed": 484
+    },
+    "focused_python_tests": {
+      "command": "uv run python -m unittest tests.test_process_preflight tests.test_native_worker tests.test_process_runner tests.test_real_mvc_feature_qualification tests.test_release tests.test_qualify_release_scope",
+      "failed": 0,
+      "passed": 333
+    }
+  },
+  "cases": [
+    {
+      "case_id": "gui-preview-cancel-cleanup",
+      "observations": {
+        "cancelled_preview_removes_partial_workspace": true,
+        "owned_worker_and_descendant_processes_reaped": true,
+        "packaged_worker_cancellation_smoke": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCancelledPreviewRemovesPartialWorkspace",
+        "macos/BluRayToVisionProTests/WorkerProcessClientTests.swift:testCancellationAllowsWorkerToReapSeparateSessionChild",
+        "scripts/native_app.py:packaged worker cancellation smoke"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "gui-preview-failure-cleanup",
+      "observations": {
+        "destination_workspace_failure_is_actionable": true,
+        "empty_owned_destination_root_removed": true,
+        "transient_cleanup_failure_retried": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspacePreparationFailureIsActionable",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspaceCleanupRemovesEmptyHiddenRoot",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCleanupRetriesTransientRemovalFailure"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "network-generated-final-output",
+      "observations": {
+        "all_selected_disc_titles_receive_distinct_output_identity": true,
+        "non_disc_sources_convert_once": true,
+        "selected_titles_run_sequentially": true,
+        "source_removal_waits_for_final_selected_title": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testBatchAllTitlesConvertsEveryDiscTitleBeforeNextSource",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testMultiTitleQueueRunsSeriallyAndPreservesSourceUntilFinalJob",
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testDraftUsesSelectedTitleOutputName",
+        "tests/test_native_worker.py"
+      ],
+      "scope": {
+        "current_change_review": "The exact candidate preserves per-title output identities, sequential execution, ordinary-file fan-out, and final-source publication boundaries for mixed batch folders.",
+        "mounted_network_conversion_rerun": false,
+        "prior_real_network_evidence": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json",
+        "qualification_kind": "exact_candidate_change_scoped_regression"
+      },
+      "status": "passed"
+    },
+    {
+      "case_id": "overwrite-and-conversion-cancel",
+      "observations": {
+        "duplicate_generated_outputs_rejected": true,
+        "failed_title_retry_does_not_fan_out_again": true,
+        "owned_partial_outputs_removed_after_cancellation": true,
+        "rerun_rediscovers_original_sources": true
+      },
+      "proof": [
+        "tests/test_process_preflight.py:test_existing_output_aborts_before_workspace_mutation",
+        "tests/test_process_preflight.py:test_cancelled_conversion_cleans_owned_workspaces",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testBatchAllTitlesRetryDoesNotFanOutAgain",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testBatchAllTitlesRejectsDuplicateGeneratedOutputs",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testBatchAllTitlesRerunRediscoversSourcesInsteadOfProjectedRows"
+      ],
+      "status": "passed"
+    }
+  ],
+  "privacy": {
+    "diagnostic_tokens_recorded": false,
+    "private_hostnames_recorded": false,
+    "private_media_identifiers_recorded": false,
+    "private_paths_recorded": false
+  },
+  "acceptance": {
+    "blocking_case_ids": [],
+    "failed_case_count": 0,
+    "passed": true,
+    "passed_case_count": 4
+  },
+  "result": "accepted_public_safe_summary"
+}

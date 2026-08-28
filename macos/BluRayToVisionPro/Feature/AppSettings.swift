@@ -83,4 +83,5 @@ final class AppSettings: ObservableObject {
     func resetDestination() {
         destinationURL = fallbackDestinationURL
     }
+
 }

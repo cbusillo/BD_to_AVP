@@ -144,7 +144,7 @@ jobs:
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           python-version: "3.12"
@@ -287,11 +287,12 @@ jobs:
 
       - name: Preflight exact clean-machine qualification
         env:
+          BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
         run: |
           set -euo pipefail
           source qualification-inputs/paths.env
-          QUALIFICATION_ROOT="$HOME/Tier3-BD-to-AVP-Qualification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          QUALIFICATION_ROOT="$RUNNER_TEMP/Tier3-BD-to-AVP-Qualification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           test ! -e "$QUALIFICATION_ROOT"
           uv run python -m scripts.tier3_clean_machine preflight \
             --repo evidence \
@@ -301,15 +302,16 @@ jobs:
             --prior-dmg "$PRIOR_DMG" \
             --qualification-root "$QUALIFICATION_ROOT" \
             --route "$ROUTE" \
-            --environment-class restorable-location
+            --environment-class resettable-vm
 
       - name: Run exact clean-machine qualification
         env:
+          BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
         run: |
           set -euo pipefail
           source qualification-inputs/paths.env
-          QUALIFICATION_ROOT="$HOME/Tier3-BD-to-AVP-Qualification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          QUALIFICATION_ROOT="$RUNNER_TEMP/Tier3-BD-to-AVP-Qualification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           uv run python -m scripts.tier3_clean_machine run \
             --repo evidence \
             --candidate-release-receipt "evidence/docs/release-evidence/$CANDIDATE_TAG/release-receipt.json" \
@@ -318,10 +320,11 @@ jobs:
             --prior-dmg "$PRIOR_DMG" \
             --qualification-root "$QUALIFICATION_ROOT" \
             --route "$ROUTE" \
-            --environment-class restorable-location \
+            --environment-class resettable-vm \
             --output-receipt qualification-output/clean-machine-signed-update.json \
             --ui-output-receipt qualification-output/installed-ui-accessibility.json \
-            --evidence-directory qualification-output/clean-machine-signed-update-evidence
+            --evidence-directory qualification-output/clean-machine-signed-update-evidence \
+            --diagnostics-output qualification-output/sparkle-install-diagnostics.json
           uv run python -m scripts.tier3_receipt \
             --case-id clean-machine-signed-update \
             --receipt qualification-output/clean-machine-signed-update.json \
@@ -382,6 +385,15 @@ jobs:
             echo "- Blocking clean-machine receipt: \`$(jq -r .receipt_sha256 qualification-output/clean-machine-signed-update.json)\`"
             echo "- Blocking installed UI receipt: \`$(jq -r .receipt_sha256 qualification-output/installed-ui-accessibility.json)\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain bounded Sparkle installer diagnostics
+        if: ${{ failure() && hashFiles('qualification-output/sparkle-install-diagnostics.json') != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: milestone-sparkle-diagnostics-${{ inputs.candidate_tag }}-${{ github.run_attempt }}
+          path: qualification-output/sparkle-install-diagnostics.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Retain exact qualification receipts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

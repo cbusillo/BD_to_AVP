@@ -1,7 +1,7 @@
 import json
 import subprocess
 import tempfile
-import time
+import threading
 import unittest
 
 from pathlib import Path
@@ -191,9 +191,15 @@ class RealMVCFeatureQualificationTests(unittest.TestCase):
 
     def test_resource_sampler_surfaces_background_failures(self) -> None:
         sampler = ResourceSampler(QualificationEventSink(), interval_seconds=0.01)
-        with patch.object(feature, "thermal_state", side_effect=FeatureQualificationFailure("boom")):
+        failure_observed = threading.Event()
+
+        def fail_thermal_state() -> int:
+            failure_observed.set()
+            raise FeatureQualificationFailure("boom")
+
+        with patch.object(feature, "thermal_state", side_effect=fail_thermal_state):
             sampler.start()
-            time.sleep(0.05)
+            self.assertTrue(failure_observed.wait(timeout=5))
             with self.assertRaisesRegex(FeatureQualificationFailure, "Resource sampler failed"):
                 sampler.stop()
 

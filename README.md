@@ -88,6 +88,11 @@ release artifact and dependency policy.
 See [Production Release Routes](docs/release-routes.md) for Stable, RC, Beta,
 and Alpha update eligibility, version mapping, and publication policy.
 
+Prerelease testers evaluating the new repetition-first setup workflow should use
+the [Conversion Setup Beta Test Guide](docs/conversion-setup-beta-test-guide.md)
+so feedback covers the same setup, repeat-run, editing, conflict, queue, and
+rollback scenarios.
+
 See [Direct Pipeline Contracts](docs/direct-pipeline-contracts.md) for the
 automatic minimum-materialization behavior and the durable `--keep-files`
 stage contracts.
@@ -153,7 +158,8 @@ and install MakeMKV from the [MakeMKV] website.
 brew install ffmpeg python@3.12
 
 # Install the current macOS MakeMKV build from https://www.makemkv.com/.
-# The app bundle is detected automatically from /Applications/MakeMKV.app.
+# The app bundle is detected automatically from /Applications/MakeMKV.app
+# or /Applications/MakeMKV/MakeMKV.app.
 
 # Ensure Python 3.12 is correctly installed then create a virtual environment
 python3.12 -m pip install --upgrade pip
@@ -200,6 +206,15 @@ Audio-language filtering can reduce output payload when tracks are omitted,
 but this feature does not establish the cause of the output-size report in
 issue #202 and does not claim to fix any separately reported media-specific
 stall. Those observations remain separate diagnostic work.
+
+The native app keeps conversion setup centered on the selected source,
+Profile, destination, and estimated result. Use **Edit…** for per-conversion
+changes, then either apply them to the current conversion, update a custom
+Profile, or save a new Profile. If a source and Profile require a choice before
+they can run together, resolve it inline or use **Add to Queue for Review**;
+the queue preserves those decisions for each source and will not start while
+any item still needs attention. Remembered choices are scoped to the matching
+source and Profile and can be forgotten from the resolution prompt.
 
 ## Terminal Usage
 

@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 import json
 import os
@@ -58,6 +59,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_sparkle_bundle_uses_importable_module_entrypoint(self) -> None:
         workflow = load_release_engine()
         workflow_text = str(workflow)
+        production_preflight_text = str(load_workflow("production-preflight-engine.yml"))
         ci_text = str(load_workflow("ci.yml"))
         smoke_text = (REPO_ROOT / "docs" / "release-smoke.md").read_text(encoding="utf-8")
 
@@ -65,8 +67,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow_text.count("python -m scripts.sparkle_bundle"), 2)
         self.assertNotIn("python scripts/sparkle_bundle.py", smoke_text)
         self.assertNotIn("python scripts/briefcase_app.py", workflow_text + ci_text)
-        self.assertEqual((workflow_text + ci_text).count("python -m scripts.briefcase_app"), 2)
-        self.assertIn("python scripts/native_app.py package", workflow_text)
+        self.assertNotIn("python -m scripts.briefcase_app", workflow_text + ci_text)
+        self.assertIn("python scripts/native_app.py package", production_preflight_text)
+        self.assertIn("python scripts/native_app.py package", ci_text)
         self.assertIn("python -m scripts.macos_release", workflow_text)
 
         result = subprocess.run(
@@ -84,7 +87,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "Prerelease": load_workflow("prerelease.yml"),
         }
         workflow = load_release_engine()
+        production_preflight = load_workflow("production-preflight-engine.yml")
         prepare = workflow["jobs"]["prepare"]
+        pre_signing_policy = workflow["jobs"]["pre-signing-policy"]
+        pre_signing = workflow["jobs"]["pre-signing-package"]
         package = workflow["jobs"]["package"]
 
         self.assertEqual({operator["name"] for operator in operators.values()}, set(operators))
@@ -110,6 +116,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertIn("refs/heads/main", str(prepare))
         self.assertIn("refs/remotes/origin/main", str(prepare))
+        self.assertIn("--expected-fingerprint", str(pre_signing_policy))
+        self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertEqual(pre_signing["with"]["source_sha"], "${{ inputs.release_sha }}")
+        self.assertIn("refs/remotes/origin/main", str(production_preflight))
+        self.assertIn("scripts.production_preflight validate-source", str(production_preflight))
+        self.assertIn("pre-signing-package", package["needs"])
         self.assertIn("refs/remotes/origin/main", str(package))
         self.assertIn("moved after signing approval", str(package))
         self.assertGreaterEqual(str(package).count("refs/remotes/origin/main"), 4)
@@ -119,6 +131,105 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("refs/tags/$RELEASE_TAG^{}", str(prepare))
         self.assertIn("jq -r .name", str(prepare))
         self.assertNotIn("refs/heads/release", str(workflow))
+
+    def test_release_independent_production_preflight_is_secret_free_and_non_publishing(self) -> None:
+        manual = load_workflow("production-preflight.yml")
+        shared = load_workflow("production-preflight-engine.yml")
+        release_engine = load_release_engine()
+        manual_job = manual["jobs"]["preflight"]
+        shared_call = shared["on"]["workflow_call"]
+        shared_job = shared["jobs"]["preflight"]
+        release_job = release_engine["jobs"]["pre-signing-package"]
+        shared_text = (REPO_ROOT / ".github/workflows/production-preflight-engine.yml").read_text(encoding="utf-8")
+        manual_text = (REPO_ROOT / ".github/workflows/production-preflight.yml").read_text(encoding="utf-8")
+
+        self.assertEqual(manual["name"], "Production Preflight")
+        self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
+        source_input = manual["on"]["workflow_dispatch"]["inputs"]["source_sha"]
+        self.assertEqual(source_input["required"], "true")
+        self.assertEqual(source_input["type"], "string")
+        self.assertEqual(manual["permissions"], {})
+        self.assertEqual(manual_job["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertEqual(manual_job["with"]["source_sha"], "${{ inputs.source_sha }}")
+        self.assertEqual(manual_job["permissions"], {"contents": "read"})
+        self.assertNotIn("environment", manual_job)
+        self.assertNotIn("secrets", manual_job)
+
+        self.assertEqual(set(shared["on"]), {"workflow_call"})
+        self.assertEqual(set(shared_call["inputs"]), {"source_sha", "support_diagnostics_endpoint"})
+        self.assertNotIn("secrets", shared_call)
+        self.assertEqual(shared["permissions"], {"contents": "read"})
+        self.assertEqual(shared_job["permissions"], {"contents": "read"})
+        self.assertEqual(shared_job["runs-on"], "macos-26")
+        self.assertNotIn("environment", shared_job)
+        self.assertNotIn("secrets", shared_job)
+        self.assertNotIn("${{ secrets.", shared_text + manual_text)
+        self.assertNotIn("GH_TOKEN", shared_text)
+        self.assertNotIn("contents: write", shared_text + manual_text)
+        self.assertNotIn("id-token: write", shared_text + manual_text)
+        self.assertNotIn("attestations: write", shared_text + manual_text)
+        checkout = next(step for step in shared_job["steps"] if step.get("id") == "checkout")
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertNotEqual(checkout["with"]["ref"], "${{ inputs.source_sha }}")
+
+        self.assertEqual(release_job["uses"], manual_job["uses"])
+        self.assertEqual(release_job["with"]["source_sha"], "${{ inputs.release_sha }}")
+        self.assertEqual(release_job["permissions"], {"contents": "read"})
+        self.assertEqual(set(release_job["needs"]), {"pre-signing-policy"})
+        self.assertNotIn("environment", release_job)
+        self.assertNotIn("secrets", release_job)
+
+        forbidden_side_effects = (
+            "gh release",
+            "git tag",
+            "repos/$github_repository/releases",
+            "appcast.xml",
+            "sparkle-pages",
+            "notarytool",
+            "twine upload",
+            "pypi publish",
+        )
+        for forbidden in forbidden_side_effects:
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, shared_text.lower())
+
+        step_names = [step["name"] for step in shared_job["steps"]]
+        required_order = [
+            "Require an exact protected main input",
+            "Checkout requested main commit",
+            "Bind source and workflow identity",
+            "Verify pinned production runner",
+            "Install pinned XcodeGen",
+            "Set up uv",
+            "Install Python and locked dependencies",
+            "Build the production-shaped app with ad-hoc signing",
+            "Smoke exact packaged worker identity and protocol",
+            "Create, install, and qualify the preventive DMG",
+            "Bind bounded success evidence",
+        ]
+        self.assertEqual([name for name in step_names if name in required_order], required_order)
+        self.assertIn("^[0-9a-f]{40}$", shared_text)
+        self.assertIn("refs/heads/main", shared_text)
+        self.assertIn("refs/remotes/origin/main", shared_text)
+        self.assertIn("scripts.production_preflight validate-source", shared_text)
+        self.assertIn("scripts/native_app.py package --sign-identity -", shared_text)
+        self.assertIn("scripts/smoke_release_app.py", shared_text)
+        self.assertIn("--skip-spctl", shared_text)
+        self.assertIn("scripts.pre_signing_ui", shared_text)
+        self.assertIn("scripts.production_preflight finalize", shared_text)
+        self.assertIn("tail -c 262144", shared_text)
+
+        success_upload = next(step for step in shared_job["steps"] if step["name"] == "Retain bounded success evidence")
+        failure_upload = next(
+            step for step in shared_job["steps"] if step["name"] == "Retain bounded failure diagnostics"
+        )
+        self.assertEqual(success_upload["with"]["retention-days"], "7")
+        self.assertEqual(failure_upload["with"]["retention-days"], "7")
+        self.assertNotIn(".dmg", success_upload["with"]["path"])
+        self.assertNotIn(".app", success_upload["with"]["path"])
+        self.assertIn("${{ inputs.source_sha }}", success_upload["with"]["name"])
+        self.assertIn("${{ github.run_id }}", success_upload["with"]["name"])
+        self.assertIn("${{ github.run_id }}", failure_upload["with"]["name"])
 
     def test_reusable_engine_rejects_direct_invocation_and_policy_bypass(self) -> None:
         stable = load_workflow("briefcase.yml")
@@ -229,7 +340,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("release_route", policy["outputs"])
         self.assertIn("operator_workflow_path", policy["outputs"])
         self.assertEqual(workflow["jobs"]["prepare"]["needs"], "policy")
-        self.assertEqual(set(workflow["jobs"]["package"]["needs"]), {"policy", "prepare", "qualify-preparation"})
+        self.assertEqual(
+            set(workflow["jobs"]["package"]["needs"]),
+            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
+        )
         self.assertIn("--expected-fingerprint", str(workflow["jobs"]["package"]))
         self.assertIn("needs.policy.outputs.engine_workflow_ref", str(workflow["jobs"]["package"]))
 
@@ -271,14 +385,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('--release-tag "$BASE_SNAPSHOT_TAG"', str(prepare))
         self.assertIn('--release-tag "$LATEST_SNAPSHOT_TAG"', str(prepare))
 
-    def test_beta4_unfreeze_retains_release_preflight_guards(self) -> None:
+    def test_release_freeze_retains_release_preflight_guards(self) -> None:
         workflow = load_release_engine()
         prepare_steps = workflow["jobs"]["prepare"]["steps"]
         step_names = [step["name"] for step in prepare_steps]
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
 
         self.assertEqual(freeze_policy["schema"], "bd_to_avp.release_freezes")
-        self.assertEqual(freeze_policy["frozen_release_tags"], {})
+        self.assertEqual(
+            freeze_policy["frozen_release_tags"],
+            {
+                "v0.3.2-beta.6": {
+                    "issue": 609,
+                    "reason": (
+                        "Cancelled unpublished signed attempt; its draft was deleted under the authorized immutable "
+                        "disposition and build 168 is permanently non-reusable."
+                    ),
+                }
+            },
+        )
         self.assertLess(
             step_names.index("Validate route and summarize publication effects"),
             step_names.index("Reject existing release identity"),
@@ -329,7 +454,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cleanup_script = cleanup_step["run"]
         package_step = next(step for step in package["steps"] if step["name"] == "Package application for GitHub")
 
-        self.assertEqual(set(package["needs"]), {"policy", "prepare", "qualify-preparation"})
+        self.assertEqual(
+            set(package["needs"]),
+            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
+        )
         self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
         self.assertEqual(package["runs-on"], "macos-26")
@@ -792,8 +920,11 @@ printf '%s' "$CODESIGN_METADATA"
 
     def test_qualification_gates_block_signing_and_publication(self) -> None:
         workflow = load_release_engine()
+        production_preflight = load_workflow("production-preflight-engine.yml")
         jobs = workflow["jobs"]
         qualify_prep = jobs["qualify-preparation"]
+        pre_signing_policy = jobs["pre-signing-policy"]
+        pre_signing = jobs["pre-signing-package"]
         package = jobs["package"]
         verify_draft = jobs["verify-draft"]
         build_receipt = jobs["build-receipt"]
@@ -808,25 +939,44 @@ printf '%s' "$CODESIGN_METADATA"
             )
         )
         self.assertIn("qualify-preparation", set(jobs["package"]["needs"]))
+        self.assertIn("pre-signing-package", set(jobs["package"]["needs"]))
         self.assertIn("qualify-preparation", set(jobs["build-python"]["needs"]))
         self.assertEqual(set(qualify_prep["needs"]), {"prepare"})
+        self.assertEqual(set(pre_signing_policy["needs"]), {"policy", "prepare", "qualify-preparation"})
+        self.assertEqual(set(pre_signing["needs"]), {"pre-signing-policy"})
         self.assertIn("qualify-artifact", set(jobs["publish-release"]["needs"]))
         self.assertIn("signed-artifact-ui", set(jobs["publish-release"]["needs"]))
         self.assertIn("signed-artifact-ui", set(qualify_artifact["needs"]))
         self.assertIn("needs.signed-artifact-ui.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
         self.assertNotIn("environment", qualify_prep)
+        self.assertNotIn("environment", pre_signing_policy)
+        self.assertNotIn("environment", pre_signing)
         self.assertNotIn("environment", signed_ui)
         self.assertNotIn("environment", qualify_artifact)
         self.assertNotIn("secrets.", str(qualify_prep))
+        self.assertNotIn("secrets.", str(pre_signing_policy))
+        self.assertNotIn("secrets.", str(pre_signing))
         self.assertNotIn("secrets.", str(signed_ui))
         self.assertNotIn("secrets.", str(qualify_artifact))
         self.assertEqual(qualify_prep["permissions"], {"contents": "read"})
+        self.assertEqual(pre_signing_policy["permissions"], {"contents": "read"})
+        self.assertEqual(pre_signing["permissions"], {"contents": "read"})
         self.assertEqual(signed_ui["permissions"], {"contents": "read"})
         self.assertEqual(qualify_artifact["permissions"], {"contents": "read"})
         self.assertIn("steps.release_package.outputs.artifact-id", package["outputs"]["workflow_artifact_id"])
         self.assertIn("steps.receipt_artifact.outputs.artifact-id", build_receipt["outputs"]["receipt_artifact_id"])
         self.assertIn("qualify_release_scope", str(qualify_prep))
+        self.assertIn("--expected-fingerprint", str(pre_signing_policy))
+        self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertEqual(production_preflight["jobs"]["preflight"]["runs-on"], "macos-26")
+        self.assertIn("scripts/native_app.py package --sign-identity -", str(production_preflight))
+        self.assertIn("scripts/smoke_release_app.py", str(production_preflight))
+        self.assertIn("--skip-spctl", str(production_preflight))
+        self.assertIn("scripts.pre_signing_ui", str(production_preflight))
+        self.assertNotIn("notarytool", str(production_preflight))
+        self.assertNotIn("CERTIFICATE", str(production_preflight))
+        self.assertNotIn("APPLE_ID", str(production_preflight))
         self.assertIn("signed_artifact_ui", str(signed_ui))
         self.assertIn("signed-artifact-ui-receipt.json", str(signed_ui))
         self.assertNotIn("GH_TOKEN", str(signed_ui))
@@ -846,13 +996,21 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(
             workflow["env"]["RELEASE_QUALIFICATION_POLICY"], "docs/qualification/release-qualification-policy-v1.json"
         )
-        self.assertEqual(
-            workflow["env"]["RELEASE_QUALIFICATION_RECORD"],
-            "docs/qualification/stable-signed-qualification-v1.json",
-        )
+        self.assertNotIn("RELEASE_QUALIFICATION_RECORD", workflow["env"])
         self.assertIn("--candidate-sha", str(qualify_prep))
         self.assertIn("--release-stage", str(qualify_prep))
         self.assertIn("first_candidate_of_cycle", jobs["prepare"]["outputs"])
+        self.assertEqual(
+            jobs["prepare"]["outputs"]["qualification_record"],
+            "${{ steps.metadata.outputs.qualification_record }}",
+        )
+        self.assertEqual(
+            next(step for step in qualify_prep["steps"] if step.get("id") == "qualification")["env"][
+                "RELEASE_QUALIFICATION_RECORD"
+            ],
+            "${{ needs.prepare.outputs.qualification_record }}",
+        )
+        self.assertIn("needs.prepare.outputs.qualification_record", str(qualify_artifact))
         self.assertIn("--first-candidate-of-cycle", str(qualify_prep))
         self.assertIn("GITHUB_SHA", str(qualify_prep))
         self.assertIn("needs.prepare.outputs.channel", str(qualify_prep))
@@ -964,7 +1122,7 @@ printf '%s' "$CODESIGN_METADATA"
         )
         self.assertEqual(
             release_operations["qualificationRecordPath"],
-            "docs/qualification/stable-signed-qualification-v1.json",
+            "docs/qualification/v0.3.3-beta.1-signed-qualification-v1.json",
         )
         self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
         self.assertIn(
@@ -1002,14 +1160,17 @@ printf '%s' "$CODESIGN_METADATA"
         workflow = load_workflow("release-evidence.yml")
         jobs = workflow["jobs"]
         prepare = jobs["validate-and-prepare"]
-        create_pr = jobs["create-pr"]
+        publish = jobs["publish-evidence-branch"]
 
         self.assertEqual(set(workflow["on"]["workflow_run"]["workflows"]), {"Stable", "Prerelease"})
         self.assertEqual(prepare["permissions"], {"actions": "read", "contents": "read"})
-        self.assertEqual(create_pr["permissions"], {"contents": "write", "pull-requests": "write"})
+        self.assertEqual(publish["permissions"], {"contents": "write"})
         self.assertNotIn("environment", prepare)
-        self.assertNotIn("environment", create_pr)
+        self.assertNotIn("environment", publish)
         self.assertNotIn("secrets.", str(workflow))
+        self.assertNotIn("pull-requests", str(workflow))
+        self.assertNotIn("peter-evans/create-pull-request", str(workflow))
+        self.assertNotIn("delete-branch", str(workflow))
         self.assertIn("python -m scripts.release_evidence", str(prepare))
         self.assertIn("Stable PyPI recovery", str(prepare))
         self.assertIn('"name": "Stable PyPI recovery"', (REPO_ROOT / "scripts/release_evidence.py").read_text())
@@ -1027,11 +1188,16 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("checkpoint_source=main", str(prepare))
         self.assertIn("existing_branch_sha", str(prepare))
         self.assertIn("steps.reuse.outputs.checkpoint_source != 'main'", str(prepare))
+        capture_step = next(
+            step for step in prepare["steps"] if step["name"] == "Generate or validate durable capture-v2"
+        )
+        self.assertEqual(capture_step["if"], "steps.reuse.outputs.checkpoint_source != 'main'")
         self.assertIn("partial qualification checkpoint state", str(prepare))
         self.assertIn("expired before Release Evidence captured it", str(prepare))
         self.assertIn("scripts.release_qualification_manifest validate", str(prepare))
         self.assertIn("scripts.signed_artifact_receipt validate", str(prepare))
         self.assertIn("scripts.release qualification-base", str(prepare))
+        self.assertIn("--checked-receipts-root docs/release-evidence", str(prepare))
         self.assertIn("prior_tag", str(prepare))
         self.assertIn("sparkle_route", str(prepare))
         self.assertIn('--prior-tag "${{ steps.signed-ui.outputs.prior_tag }}"', str(prepare))
@@ -1040,60 +1206,232 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("--signed-ui-artifact-archive", str(prepare))
         self.assertIn("signed-artifact-ui.zip", str(prepare))
         self.assertIn("qualification-record.json", str(prepare))
-        self.assertIn("steps.reconcile.outputs.manifest_sha256", str(prepare))
+        self.assertIn("steps.final-outputs.outputs.manifest_sha256", str(prepare))
         self.assertIn(".immutable == true", str(prepare))
         self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
         self.assertIn("ROLLING_QUALIFICATION_PATH", str(prepare))
         self.assertIn("git diff --name-only --diff-filter=U", str(prepare))
         self.assertIn('git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"', str(prepare))
-        self.assertIn("EXPECTED_EXISTING_BRANCH_SHA", str(create_pr))
-        self.assertIn("Evidence branch moved after evidence preparation", str(create_pr))
-        self.assertNotIn("conflicting qualification manifest", str(create_pr))
-        self.assertIn("automation/release-evidence-", str(create_pr))
-        create_pr_steps = [
-            step for step in create_pr["steps"] if step.get("uses", "").startswith("peter-evans/create-pull-request@")
-        ]
-        self.assertEqual(len(create_pr_steps), 1)
-        create_pr_step = create_pr_steps[0]
-        create_pr_inputs = create_pr_step["with"]
-        self.assertEqual(create_pr_inputs["add-paths"], "docs")
-        self.assertEqual(
-            create_pr_inputs["branch"],
-            "automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}",
+        self.assertIn("EXPECTED_EXISTING_BRANCH_SHA", str(publish))
+        self.assertIn("Evidence branch moved after evidence preparation", str(publish))
+        self.assertNotIn("conflicting qualification manifest", str(publish))
+        self.assertIn("needs.validate-and-prepare.outputs.evidence_ref", str(publish))
+        conflict_step = next(
+            step for step in publish["steps"] if step["name"] == "Reject conflicting evidence on the idempotent branch"
         )
         self.assertEqual(
-            create_pr_inputs["commit-message"],
-            "Record immutable evidence for ${{ needs.validate-and-prepare.outputs.release_tag }}",
+            conflict_step["env"]["EXPECTED_MAIN_SHA"],
+            "${{ needs.validate-and-prepare.outputs.base_main_sha }}",
         )
-        self.assertEqual(create_pr_inputs["delete-branch"], "true")
+        actor_step = next(
+            step
+            for step in publish["steps"]
+            if step["name"] == "Prepare exact evidence branch parent and actor identity"
+        )
+        self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_ID"], "${{ github.actor_id }}")
+        self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_LOGIN"], "${{ github.actor }}")
+        self.assertIn("users.noreply.github.com", str(publish))
+        self.assertIn("git add -- docs", str(publish))
+        self.assertIn('git commit -m "Record immutable evidence for $RELEASE_TAG" -- docs', str(publish))
+        self.assertIn('git push origin "$COMMIT_SHA:refs/heads/$EVIDENCE_REF"', str(publish))
+        self.assertNotIn("--force", str(publish))
+        self.assertIn("Protected main moved before evidence publication", str(publish))
+        self.assertIn("Evidence branch moved before the evidence commit could be pushed", str(publish))
+        self.assertIn("Published evidence branch contains changes outside docs/", str(publish))
+        self.assertIn("Published evidence content differs", str(publish))
+        self.assertIn('.state == "CAPTURED"', str(publish))
+        self.assertIn("refs/remotes/origin/release-evidence-verified", str(publish))
+        release_operations = load_github_config()["releaseOperations"]
+        self.assertEqual(release_operations["evidenceBranchPattern"], "automation/release-evidence-<tag>")
         self.assertEqual(
-            create_pr_inputs["title"],
-            "Record immutable evidence for ${{ needs.validate-and-prepare.outputs.release_tag }}",
+            release_operations["evidenceCapturePath"],
+            "docs/release-evidence/<tag>/capture-v2.json",
         )
-        for body_fragment in (
-            "Records the deterministic public-safe receipt and publication evidence",
-            "Release run: `${{ needs.validate-and-prepare.outputs.release_run_id }}`",
-            "Source SHA: `${{ needs.validate-and-prepare.outputs.source_sha }}`",
-            "Receipt file SHA-256: `${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}`",
-            "Qualification manifest SHA-256: `${{ needs.validate-and-prepare.outputs.manifest_sha256 }}`",
-            "Signing and deployment secrets are not available to this workflow.",
-            "remains intentionally unmergeable",
-            "blocking live-artifact and automated Tier 3 receipt",
-            "Optional physical-hardware and native-window presentation",
-        ):
-            with self.subTest(body_fragment=body_fragment):
-                self.assertIn(body_fragment, create_pr_inputs["body"])
+        self.assertEqual(release_operations["evidenceCheckpointSemantics"], "branch_commit_plus_captured_v2")
+        self.assertEqual(release_operations["evidenceMergeSemantics"], "operator_opened_protected_pull_request")
 
-        step_names = [step["name"] for step in create_pr["steps"]]
-        create_pr_index = step_names.index("Create or update evidence pull request")
+        publish_steps = [step["name"] for step in publish["steps"]]
+        publish_index = publish_steps.index("Commit and push exact docs-only evidence")
         self.assertLess(
-            step_names.index("Reject protected-main movement during evidence transfer"),
-            create_pr_index,
+            publish_steps.index("Reject protected-main movement during evidence transfer"),
+            publish_index,
         )
         self.assertLess(
-            step_names.index("Reject conflicting evidence on the idempotent branch"),
-            create_pr_index,
+            publish_steps.index("Reject conflicting evidence on the idempotent branch"),
+            publish_index,
         )
+        self.assertLess(
+            publish_steps.index("Prepare exact evidence branch parent and actor identity"),
+            publish_index,
+        )
+
+    def test_release_evidence_direct_push_publishes_exact_actor_bound_capture(self) -> None:
+        workflow = load_workflow("release-evidence.yml")
+        publish_steps = workflow["jobs"]["publish-evidence-branch"]["steps"]
+        prepare_script = next(
+            step["run"]
+            for step in publish_steps
+            if step["name"] == "Prepare exact evidence branch parent and actor identity"
+        )
+        publish_script = next(
+            step["run"] for step in publish_steps if step["name"] == "Commit and push exact docs-only evidence"
+        )
+        release_tag = "v1.0.0"
+        evidence_ref = f"automation/release-evidence-{release_tag}"
+        actor_id = "1875516"
+        actor_login = "cbusillo"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            remote = root / "remote.git"
+            worktree = root / "worktree"
+            prepared = root / "prepared"
+            runner_temp = root / "runner-temp"
+            output_path = root / "github-output"
+            worktree.mkdir()
+            prepared.mkdir()
+            runner_temp.mkdir()
+            subprocess.run(["git", "init", "-q", "--bare", remote], check=True)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=worktree, check=True)
+            subprocess.run(["git", "config", "user.name", "Fixture"], cwd=worktree, check=True)
+            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=worktree, check=True)
+            (worktree / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=worktree, check=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=worktree, check=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=worktree, check=True)
+            subprocess.run(["git", "push", "-qu", "origin", "main"], cwd=worktree, check=True)
+            main_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            bundle = prepared / "docs" / "release-evidence" / release_tag
+            bundle.mkdir(parents=True)
+            receipt_bytes = b'{"release":"fixture"}\n'
+            signed_receipt_digest = "4" * 64
+            signed_archive_bytes = b"signed-ui-archive"
+            manifest_digest = "5" * 64
+            (bundle / "capture-v2.json").write_text(
+                json.dumps({"release_tag": release_tag, "state": "CAPTURED"}) + "\n",
+                encoding="utf-8",
+            )
+            (bundle / "qualification-manifest.json").write_text(
+                json.dumps({"manifest_sha256": manifest_digest}) + "\n",
+                encoding="utf-8",
+            )
+            (bundle / "release-receipt.json").write_bytes(receipt_bytes)
+            (bundle / "signed-artifact-ui-receipt.json").write_text(
+                json.dumps({"receipt_sha256": signed_receipt_digest}) + "\n",
+                encoding="utf-8",
+            )
+            (bundle / "signed-artifact-ui.zip").write_bytes(signed_archive_bytes)
+            environment = {
+                **os.environ,
+                "EVIDENCE_ACTOR_ID": actor_id,
+                "EVIDENCE_ACTOR_LOGIN": actor_login,
+                "EVIDENCE_REF": evidence_ref,
+                "EXPECTED_EXISTING_BRANCH_SHA": "",
+                "EXPECTED_MAIN_SHA": main_sha,
+                "RUNNER_TEMP": str(runner_temp),
+            }
+            subprocess.run(["bash", "-c", prepare_script], cwd=worktree, env=environment, check=True)
+            environment.update(
+                {
+                    "EXPECTED_MANIFEST_SHA256": manifest_digest,
+                    "EXPECTED_RECEIPT_FILE_SHA256": hashlib.sha256(receipt_bytes).hexdigest(),
+                    "EXPECTED_SIGNED_UI_RECEIPT_SHA256": signed_receipt_digest,
+                    "EXPECTED_SIGNED_UI_ARTIFACT_SHA256": hashlib.sha256(signed_archive_bytes).hexdigest(),
+                    "GITHUB_OUTPUT": str(output_path),
+                    "PREPARED_ROOT": str(prepared),
+                    "RELEASE_TAG": release_tag,
+                }
+            )
+            subprocess.run(["bash", "-c", publish_script], cwd=worktree, env=environment, check=True)
+            published_sha = subprocess.run(
+                ["git", "ls-remote", remote, f"refs/heads/{evidence_ref}"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.split()[0]
+
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=worktree,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip(),
+                published_sha,
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "show", "-s", "--format=%an <%ae>|%cn <%ce>", published_sha],
+                    cwd=worktree,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip(),
+                (
+                    f"{actor_login} <{actor_id}+{actor_login}@users.noreply.github.com>|"
+                    f"{actor_login} <{actor_id}+{actor_login}@users.noreply.github.com>"
+                ),
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "diff", "--name-only", f"{main_sha}...{published_sha}"],
+                    cwd=worktree,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.splitlines(),
+                sorted(path.relative_to(prepared).as_posix() for path in bundle.iterdir()),
+            )
+
+    def test_release_evidence_stage_is_noop_for_current_evidence_branch(self) -> None:
+        workflow = load_workflow("release-evidence.yml")
+        stage_script = next(
+            step["run"]
+            for step in workflow["jobs"]["validate-and-prepare"]["steps"]
+            if step["name"] == "Stage only generated evidence files"
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_path = root / "github-output"
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Fixture"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=root, check=True)
+            base_path = root / "docs/base.md"
+            base_path.parent.mkdir(parents=True)
+            base_path.write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+            subprocess.run(["git", "switch", "-qc", "automation/release-evidence-v1.0.0"], cwd=root, check=True)
+            evidence_path = root / "docs/release-evidence/v1.0.0/capture-v2.json"
+            evidence_path.parent.mkdir(parents=True)
+            evidence_path.write_text('{"state":"CAPTURED"}\n', encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "captured evidence"], cwd=root, check=True)
+
+            branch_only_paths = subprocess.run(
+                ["git", "diff", "--name-only", "main...HEAD", "--", "docs"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+            self.assertEqual(branch_only_paths, ["docs/release-evidence/v1.0.0/capture-v2.json"])
+
+            subprocess.run(
+                ["bash", "-c", stage_script],
+                cwd=root,
+                env={**os.environ, "GITHUB_OUTPUT": str(output_path)},
+                check=True,
+            )
+
+            self.assertEqual(output_path.read_text(encoding="utf-8"), "has_changes=false\n")
+            self.assertFalse(any((root / "prepared-evidence").rglob("*")))
 
     def test_release_evidence_merge_preserves_snapshot_and_accepts_later_rolling_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1175,6 +1513,8 @@ fi
         steps = qualify["steps"]
         checkout = steps[0]
         upload = steps[-1]
+        by_name = {step["name"]: step for step in steps}
+        diagnostics_upload = by_name["Retain bounded Sparkle installer diagnostics"]
         workflow_text = str(workflow)
 
         self.assertEqual(
@@ -1205,6 +1545,12 @@ fi
         self.assertIn("scripts.signed_artifact_receipt validate", workflow_text)
         self.assertIn("scripts.tier3_clean_machine preflight", workflow_text)
         self.assertIn("scripts.tier3_clean_machine run", workflow_text)
+        self.assertIn("BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT", workflow_text)
+        self.assertIn("runner.environment", workflow_text)
+        self.assertIn("$RUNNER_TEMP/Tier3-BD-to-AVP-Qualification", workflow_text)
+        self.assertNotIn("$HOME/Tier3-BD-to-AVP-Qualification", workflow_text)
+        self.assertEqual(workflow_text.count("--environment-class resettable-vm"), 2)
+        self.assertIn("--diagnostics-output qualification-output/sparkle-install-diagnostics.json", workflow_text)
         self.assertIn("scripts.tier3_receipt", workflow_text)
         self.assertIn("Blocking automated milestone qualification", workflow_text)
         self.assertIn("Qualification manifest", workflow_text)
@@ -1217,6 +1563,16 @@ fi
         self.assertNotRegex(workflow_text, r"\b(git push|git commit|gh release (upload|edit|delete))\b")
         self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
         self.assertEqual(upload["with"]["retention-days"], "30")
+        self.assertRegex(diagnostics_upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+        self.assertEqual(
+            diagnostics_upload["if"],
+            "${{ failure() && hashFiles('qualification-output/sparkle-install-diagnostics.json') != '' }}",
+        )
+        self.assertEqual(
+            diagnostics_upload["with"]["path"],
+            "qualification-output/sparkle-install-diagnostics.json",
+        )
+        self.assertEqual(diagnostics_upload["with"]["retention-days"], "30")
 
         config = load_github_config()
         self.assertIn("Milestone Qualification", config["importantWorkflows"])
@@ -1248,6 +1604,7 @@ fi
         enforce = by_name["Enforce post-publication milestone evidence"]
 
         self.assertEqual(context["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(context["env"], {"GH_TOKEN": "${{ github.token }}"})
         for step in (classify, upload, summarize, enforce):
             self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
         self.assertIn("scripts.release_milestone_context", context["run"])
@@ -1507,7 +1864,7 @@ fi
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
     def test_all_external_actions_are_pinned_to_commit_shas(self) -> None:
-        action_uses = []
+        action_uses: list[tuple[str, str]] = []
         workflow_directory = REPO_ROOT / ".github" / "workflows"
         workflow_paths = sorted(path for pattern in ("*.yml", "*.yaml") for path in workflow_directory.glob(pattern))
         for workflow_path in workflow_paths:

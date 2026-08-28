@@ -4,8 +4,11 @@ import tempfile
 import unittest
 
 from collections import defaultdict, deque
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any, cast
+from unittest.mock import Mock, patch
 
 from scripts.release_milestone_context import ReleaseMilestoneContext
 from scripts.release_qualification_apply import ApplyOutcome
@@ -20,8 +23,11 @@ from scripts.release_qualification_resume import (
     _checkpoint_lock,
     _checkpoint_payload,
     _dispatch,
+    _require_durable_capture_checkpoint,
     _require_no_active_exact_runs,
     _revalidate_remote_identity,
+    _run_matches,
+    _validate_checkpoint_rebind,
     _write_checkpoint,
     resume_qualification,
     safety_error_payload,
@@ -41,10 +47,6 @@ RUNS_ENDPOINT = (
     "?event=workflow_dispatch&branch=main&per_page=100"
 )
 RUNS_ENDPOINT_PAGE_2 = RUNS_ENDPOINT + "&page=2"
-PR_ENDPOINT = (
-    "repos/cbusillo/BD_to_AVP/pulls?state=open&base=main"
-    f"&head=cbusillo%3Aautomation%2Frelease-evidence-{RELEASE_TAG}&per_page=100"
-)
 
 
 class FakeGitHubAPI:
@@ -77,11 +79,11 @@ class FakeGitHubAPI:
     def post_json(
         self,
         endpoint: str,
-        payload: dict[str, object],
+        payload: Mapping[str, object],
         *,
         active_auth: bool = False,
     ) -> object:
-        self.posts.append((endpoint, MappingProxy(payload), active_auth))
+        self.posts.append((endpoint, MappingProxy(dict(payload)), active_auth))
         return None
 
     def get_bytes(
@@ -111,7 +113,7 @@ class FailOnGitHubAPI:
     def post_json(
         self,
         endpoint: str,
-        payload: dict[str, object],
+        payload: Mapping[str, object],
         *,
         active_auth: bool = False,
     ) -> object:
@@ -165,7 +167,7 @@ def binding(*, runner_sha: str = MAIN_SHA) -> EvidenceBinding:
     return EvidenceBinding(context=context, manifest=document, mode="manifest")
 
 
-def status_payload(*, blocking: bool = True) -> dict[str, object]:
+def status_payload(*, blocking: bool = True) -> dict[str, Any]:
     blockers = ["clean-machine-signed-update"] if blocking else []
     return {
         "release_tag": RELEASE_TAG,
@@ -177,35 +179,24 @@ def status_payload(*, blocking: bool = True) -> dict[str, object]:
     }
 
 
-def pull_request(*, number: int = 42, evidence_sha: str = EVIDENCE_SHA) -> dict[str, object]:
-    return {
-        "number": number,
-        "state": "open",
-        "head": {
-            "ref": EVIDENCE_REF,
-            "sha": evidence_sha,
-            "repo": {"full_name": "cbusillo/BD_to_AVP"},
-        },
-        "base": {"ref": "main", "repo": {"full_name": "cbusillo/BD_to_AVP"}},
-    }
-
-
 def workflow_run(
     run_id: int,
     *,
     status: str,
     conclusion: str | None,
     run_attempt: int = 1,
+    main_sha: str = MAIN_SHA,
+    manifest_sha: str = MANIFEST_SHA,
 ) -> dict[str, object]:
     return {
         "id": run_id,
         "run_attempt": run_attempt,
         "name": "Milestone Qualification",
         "path": ".github/workflows/milestone-qualification.yml",
-        "display_title": f"Milestone {RELEASE_TAG} {MANIFEST_SHA}",
+        "display_title": f"Milestone {RELEASE_TAG} {manifest_sha}",
         "event": "workflow_dispatch",
         "head_branch": "main",
-        "head_sha": MAIN_SHA,
+        "head_sha": main_sha,
         "actor": {"login": "cbusillo"},
         "triggering_actor": {"login": "cbusillo"},
         "status": status,
@@ -237,7 +228,6 @@ def identity() -> ResumeIdentity:
         evidence_ref=EVIDENCE_REF,
         evidence_sha=EVIDENCE_SHA,
         evidence_base_sha=BASE_SHA,
-        evidence_pr_number=42,
         release_receipt_file_sha256="5" * 64,
         signed_ui_artifact_id=456,
         signed_ui_artifact_sha256="6" * 64,
@@ -260,19 +250,58 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             f"repos/cbusillo/BD_to_AVP/git/ref/heads/automation%2Frelease-evidence-{RELEASE_TAG}",
             {"object": {"sha": EVIDENCE_SHA}},
         )
-        client.set(PR_ENDPOINT, [pull_request()])
         return client
+
+    def refreshed_runner_checkpoint(
+        self,
+        checkpoint: Path,
+        *,
+        conclusion: str,
+    ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        old_main_sha = "f" * 40
+        old_manifest_sha = "8" * 64
+        old_identity = replace(
+            identity(),
+            manifest_sha256=old_manifest_sha,
+            runner_sha=old_main_sha,
+            main_sha=old_main_sha,
+            evidence_sha="9" * 40,
+            evidence_base_sha=old_main_sha,
+            controller_runner_sha256="a" * 64,
+        )
+        previous_run = workflow_run(
+            101,
+            status="completed",
+            conclusion=conclusion,
+            main_sha=old_main_sha,
+            manifest_sha=old_manifest_sha,
+        )
+        old_manifest = manifest()
+        old_manifest["manifest_sha256"] = old_manifest_sha
+        old_manifest["runner_sha"] = old_main_sha
+        old_manifest["canonical_evidence"] = {"ref": EVIDENCE_REF, "base_sha": old_main_sha}
+        serialized = _checkpoint_payload(
+            old_identity,
+            state="observed",
+            high_water_run_id=100,
+            retry_of_run_id=None,
+            run_id=101,
+            run_attempt=1,
+        )
+        _write_checkpoint(checkpoint, serialized)
+        return previous_run, old_manifest, serialized
 
     def run_blocked(
         self,
         client: FakeGitHubAPI,
         checkpoint_path: Path,
-        **kwargs: object,
+        **kwargs: Any,
     ):
         with (
             patch("scripts.release_qualification_resume.build_status", return_value=status_payload()),
             patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
             patch("scripts.release_qualification_resume._require_local_evidence_checkout"),
+            patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
         ):
             return resume_qualification(
                 REPO_ROOT,
@@ -296,7 +325,8 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, EXIT_SUCCESS)
         self.assertEqual(result.payload["state"], "complete")
-        self.assertFalse(result.payload["checkpoint"]["present"])
+        checkpoint_payload = cast(Mapping[str, object], result.payload["checkpoint"])
+        self.assertFalse(checkpoint_payload["present"])
         self.assertFalse(checkpoint.exists())
 
     def test_malformed_checked_status_is_reported_as_resume_error(self) -> None:
@@ -335,29 +365,44 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(QualificationResumeSafetyError, "is active"):
             _require_no_active_exact_runs(client, identity())
 
-    def test_remote_identity_retries_transient_pull_request_head_lag(self) -> None:
+    def test_remote_identity_revalidates_pushed_branch_without_pull_request_lookup(self) -> None:
         client = self.configured_client()
         pushed_sha = "9" * 40
         client.set(
             f"repos/cbusillo/BD_to_AVP/git/ref/heads/automation%2Frelease-evidence-{RELEASE_TAG}",
             {"object": {"sha": pushed_sha}},
         )
-        client.set_sequence(
-            PR_ENDPOINT,
-            [
-                [pull_request(evidence_sha=EVIDENCE_SHA)],
-                [pull_request(evidence_sha=pushed_sha)],
-            ],
+
+        _revalidate_remote_identity(
+            client,
+            identity(),
+            expected_evidence_sha=pushed_sha,
         )
 
-        with patch("scripts.release_qualification_resume.time.sleep") as sleep:
-            _revalidate_remote_identity(
-                client,
-                identity(),
-                expected_evidence_sha=pushed_sha,
-            )
+        self.assertFalse(any("/pulls?" in endpoint for endpoint, _active_auth in client.gets))
 
-        sleep.assert_called_once_with(1.0)
+    def test_durable_capture_checkpoint_is_bound_to_exact_evidence_commit(self) -> None:
+        with patch(
+            "scripts.release_qualification_resume.validate_v2_bundle",
+            return_value={"class": "v2-captured"},
+        ) as validate:
+            _require_durable_capture_checkpoint(REPO_ROOT, identity())
+
+        validate.assert_called_once_with(
+            REPO_ROOT,
+            RELEASE_TAG,
+            verification_revision=EVIDENCE_SHA,
+        )
+
+    def test_failed_v2_disposition_is_not_an_active_capture_checkpoint(self) -> None:
+        with (
+            patch(
+                "scripts.release_qualification_resume.validate_v2_bundle",
+                return_value={"class": "v2-failed"},
+            ),
+            self.assertRaisesRegex(QualificationResumeSafetyError, "active CAPTURED"),
+        ):
+            _require_durable_capture_checkpoint(REPO_ROOT, identity())
 
     def test_exact_dispatch_is_checkpointed_and_adopts_visible_run(self) -> None:
         client = self.configured_client()
@@ -381,6 +426,8 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertEqual(result.exit_code, EXIT_SUCCESS)
         self.assertEqual(result.payload["state"], "running")
         self.assertEqual(mode, 0o600)
+        self.assertEqual(checkpoint_payload["schema_version"], 2)
+        self.assertNotIn("evidence_pr_number", checkpoint_payload["identity"])
         self.assertEqual(checkpoint_payload["dispatch"]["state"], "observed")
         self.assertEqual(checkpoint_payload["dispatch"]["run_id"], 101)
         self.assertEqual(len(client.posts), 1)
@@ -457,6 +504,8 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
                 high_water_run_id=100,
                 retry_of_run_id=None,
                 replace_prepared_checkpoint_sha256=None,
+                replace_observed_checkpoint_sha256=None,
+                replace_observed_run_conclusion=None,
                 status_payload=status_payload(),
                 poll_attempts=1,
                 poll_seconds=0,
@@ -576,13 +625,14 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         local_checkout.assert_not_called()
         self.assertEqual(client.posts, [])
 
-    def test_duplicate_open_pull_requests_fail_closed(self) -> None:
+    def test_blocked_resume_does_not_require_open_pull_request(self) -> None:
         client = self.configured_client()
-        client.set(PR_ENDPOINT, [pull_request(number=42), pull_request(number=43)])
+        client.set(RUNS_ENDPOINT, {"workflow_runs": []})
         with tempfile.TemporaryDirectory() as temporary_directory:
-            with self.assertRaisesRegex(QualificationResumeSafetyError, "exactly one open pull request"):
-                self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
+            result = self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
 
+        self.assertEqual(result.payload["state"], "dispatch_ready")
+        self.assertFalse(any("/pulls?" in endpoint for endpoint, _active_auth in client.gets))
         self.assertEqual(client.posts, [])
 
     def test_wrong_active_identity_fails_before_checkpoint_or_dispatch(self) -> None:
@@ -635,6 +685,443 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertEqual(result.payload["state"], "running")
         self.assertEqual(result.payload["run"]["id"], 102)
         self.assertEqual(len(client.posts), 1)
+
+    def test_refreshed_runner_requires_exact_checkpoint_rebind(self) -> None:
+        old_main_sha = "f" * 40
+        old_manifest_sha = "8" * 64
+        old_identity = replace(
+            identity(),
+            manifest_sha256=old_manifest_sha,
+            runner_sha=old_main_sha,
+            main_sha=old_main_sha,
+            evidence_sha="9" * 40,
+            evidence_base_sha=old_main_sha,
+            controller_runner_sha256="a" * 64,
+        )
+        failed = workflow_run(
+            101,
+            status="completed",
+            conclusion="failure",
+            main_sha=old_main_sha,
+            manifest_sha=old_manifest_sha,
+        )
+        client = self.configured_client()
+        client.set(RUNS_ENDPOINT, {"workflow_runs": [failed]})
+        client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", failed)
+        old_manifest = manifest()
+        old_manifest["manifest_sha256"] = old_manifest_sha
+        old_manifest["runner_sha"] = old_main_sha
+        old_manifest["canonical_evidence"] = {"ref": EVIDENCE_REF, "base_sha": old_main_sha}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            serialized = _checkpoint_payload(
+                old_identity,
+                state="observed",
+                high_water_run_id=100,
+                retry_of_run_id=None,
+                run_id=101,
+                run_attempt=1,
+            )
+            _write_checkpoint(checkpoint, serialized)
+            with (
+                patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                patch(
+                    "scripts.release_qualification_resume.manifest_sha256",
+                    side_effect=lambda document: document["manifest_sha256"],
+                ),
+            ):
+                result = self.run_blocked(client, checkpoint)
+
+        self.assertEqual(result.exit_code, EXIT_OPERATOR_REQUIRED)
+        self.assertEqual(result.payload["state"], "checkpoint_rebind_required")
+        self.assertIn("--retry-run-id 101", result.payload["next_action"])
+        self.assertIn(serialized["checkpoint_sha256"], result.payload["next_action"])
+        self.assertEqual(client.posts, [])
+
+    def test_refreshed_runner_rebind_dispatches_exact_retry(self) -> None:
+        old_main_sha = "f" * 40
+        old_manifest_sha = "8" * 64
+        old_identity = replace(
+            identity(),
+            manifest_sha256=old_manifest_sha,
+            runner_sha=old_main_sha,
+            main_sha=old_main_sha,
+            evidence_sha="9" * 40,
+            evidence_base_sha=old_main_sha,
+            controller_runner_sha256="a" * 64,
+        )
+        failed = workflow_run(
+            101,
+            status="completed",
+            conclusion="failure",
+            main_sha=old_main_sha,
+            manifest_sha=old_manifest_sha,
+        )
+        running = workflow_run(102, status="queued", conclusion=None)
+        client = self.configured_client()
+        client.set_sequence(
+            RUNS_ENDPOINT,
+            [
+                {"workflow_runs": [failed]},
+                {"workflow_runs": [failed]},
+                {"workflow_runs": [running, failed]},
+            ],
+        )
+        client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", failed)
+        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        old_manifest = manifest()
+        old_manifest["manifest_sha256"] = old_manifest_sha
+        old_manifest["runner_sha"] = old_main_sha
+        old_manifest["canonical_evidence"] = {"ref": EVIDENCE_REF, "base_sha": old_main_sha}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            serialized = _checkpoint_payload(
+                old_identity,
+                state="observed",
+                high_water_run_id=100,
+                retry_of_run_id=None,
+                run_id=101,
+                run_attempt=1,
+            )
+            _write_checkpoint(checkpoint, serialized)
+            with (
+                patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                patch(
+                    "scripts.release_qualification_resume.manifest_sha256",
+                    side_effect=lambda document: document["manifest_sha256"],
+                ),
+            ):
+                result = self.run_blocked(
+                    client,
+                    checkpoint,
+                    expected_main_sha=MAIN_SHA,
+                    expected_manifest_sha256=MANIFEST_SHA,
+                    retry_run_id=101,
+                    retry_checkpoint_sha256=serialized["checkpoint_sha256"],
+                )
+            updated = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.payload["state"], "running")
+        self.assertEqual(result.payload["run"]["id"], 102)
+        self.assertEqual(updated["identity"]["manifest_sha256"], MANIFEST_SHA)
+        self.assertEqual(updated["dispatch"]["retry_of_run_id"], 101)
+        self.assertEqual(len(client.posts), 1)
+
+    def test_completed_checkpoint_refresh_requires_exact_authorization(self) -> None:
+        client = self.configured_client()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            successful, old_manifest, serialized = self.refreshed_runner_checkpoint(
+                checkpoint,
+                conclusion="success",
+            )
+            client.set(RUNS_ENDPOINT, {"workflow_runs": [successful]})
+            client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", successful)
+            with (
+                patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                patch(
+                    "scripts.release_qualification_resume.manifest_sha256",
+                    side_effect=lambda document: document["manifest_sha256"],
+                ),
+            ):
+                result = self.run_blocked(client, checkpoint)
+
+        self.assertEqual(result.exit_code, EXIT_OPERATOR_REQUIRED)
+        self.assertEqual(result.payload["state"], "completed_checkpoint_refresh_required")
+        self.assertEqual(
+            result.payload["planned_mutation"]["operation"],
+            "completed_checkpoint_refresh_dispatch",
+        )
+        self.assertIn("--retry-run-id 101", result.payload["next_action"])
+        self.assertIn(serialized["checkpoint_sha256"], result.payload["next_action"])
+        self.assertEqual(client.posts, [])
+
+    def test_completed_checkpoint_refresh_dispatches_one_exact_run(self) -> None:
+        client = self.configured_client()
+        running = workflow_run(102, status="queued", conclusion=None)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            successful, old_manifest, serialized = self.refreshed_runner_checkpoint(
+                checkpoint,
+                conclusion="success",
+            )
+            client.set_sequence(
+                RUNS_ENDPOINT,
+                [
+                    {"workflow_runs": [successful]},
+                    {"workflow_runs": [successful]},
+                    {"workflow_runs": [running, successful]},
+                ],
+            )
+            client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", successful)
+            client.set("user", {"login": "cbusillo"}, active_auth=True)
+            with (
+                patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                patch(
+                    "scripts.release_qualification_resume.manifest_sha256",
+                    side_effect=lambda document: document["manifest_sha256"],
+                ),
+            ):
+                result = self.run_blocked(
+                    client,
+                    checkpoint,
+                    expected_main_sha=MAIN_SHA,
+                    expected_manifest_sha256=MANIFEST_SHA,
+                    retry_run_id=101,
+                    retry_checkpoint_sha256=serialized["checkpoint_sha256"],
+                )
+            updated = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.payload["state"], "running")
+        self.assertEqual(result.payload["run"]["id"], 102)
+        self.assertEqual(updated["identity"]["manifest_sha256"], MANIFEST_SHA)
+        self.assertEqual(updated["dispatch"]["retry_of_run_id"], 101)
+        self.assertEqual(len(client.posts), 1)
+
+    def test_completed_checkpoint_refresh_rejects_new_run_race(self) -> None:
+        client = self.configured_client()
+        competing = workflow_run(102, status="queued", conclusion=None)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            successful, old_manifest, serialized = self.refreshed_runner_checkpoint(
+                checkpoint,
+                conclusion="success",
+            )
+            client.set_sequence(
+                RUNS_ENDPOINT,
+                [
+                    {"workflow_runs": [successful]},
+                    {"workflow_runs": [competing, successful]},
+                ],
+            )
+            client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", successful)
+            client.set("user", {"login": "cbusillo"}, active_auth=True)
+            with (
+                patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                patch(
+                    "scripts.release_qualification_resume.manifest_sha256",
+                    side_effect=lambda document: document["manifest_sha256"],
+                ),
+                self.assertRaisesRegex(QualificationResumeSafetyError, "refreshed qualification run appeared"),
+            ):
+                self.run_blocked(
+                    client,
+                    checkpoint,
+                    expected_main_sha=MAIN_SHA,
+                    expected_manifest_sha256=MANIFEST_SHA,
+                    retry_run_id=101,
+                    retry_checkpoint_sha256=serialized["checkpoint_sha256"],
+                )
+            unchanged = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(unchanged["checkpoint_sha256"], serialized["checkpoint_sha256"])
+        self.assertEqual(client.posts, [])
+
+    def test_completed_checkpoint_refresh_rechecks_success_at_mutation_boundary(self) -> None:
+        client = self.configured_client()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            successful, old_manifest, serialized = self.refreshed_runner_checkpoint(
+                checkpoint,
+                conclusion="success",
+            )
+            changed = dict(successful)
+            changed["conclusion"] = "failure"
+            client.set_sequence(RUNS_ENDPOINT, [{"workflow_runs": [successful]}, {"workflow_runs": [successful]}])
+            client.set_sequence("repos/cbusillo/BD_to_AVP/actions/runs/101", [successful, changed])
+            client.set("user", {"login": "cbusillo"}, active_auth=True)
+            with (
+                patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                patch(
+                    "scripts.release_qualification_resume.manifest_sha256",
+                    side_effect=lambda document: document["manifest_sha256"],
+                ),
+                self.assertRaisesRegex(QualificationResumeSafetyError, "run changed"),
+            ):
+                self.run_blocked(
+                    client,
+                    checkpoint,
+                    expected_main_sha=MAIN_SHA,
+                    expected_manifest_sha256=MANIFEST_SHA,
+                    retry_run_id=101,
+                    retry_checkpoint_sha256=serialized["checkpoint_sha256"],
+                )
+            unchanged = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(unchanged["checkpoint_sha256"], serialized["checkpoint_sha256"])
+        self.assertEqual(client.posts, [])
+
+    def test_refreshed_runner_rebind_rejects_new_run_race(self) -> None:
+        old_main_sha = "f" * 40
+        old_manifest_sha = "8" * 64
+        old_identity = replace(
+            identity(),
+            manifest_sha256=old_manifest_sha,
+            runner_sha=old_main_sha,
+            main_sha=old_main_sha,
+            evidence_sha="9" * 40,
+            evidence_base_sha=old_main_sha,
+            controller_runner_sha256="a" * 64,
+        )
+        failed = workflow_run(
+            101,
+            status="completed",
+            conclusion="failure",
+            main_sha=old_main_sha,
+            manifest_sha=old_manifest_sha,
+        )
+        competing = workflow_run(102, status="queued", conclusion=None)
+        client = self.configured_client()
+        client.set_sequence(
+            RUNS_ENDPOINT,
+            [
+                {"workflow_runs": [failed]},
+                {"workflow_runs": [competing, failed]},
+            ],
+        )
+        client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", failed)
+        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        old_manifest = manifest()
+        old_manifest["manifest_sha256"] = old_manifest_sha
+        old_manifest["runner_sha"] = old_main_sha
+        old_manifest["canonical_evidence"] = {"ref": EVIDENCE_REF, "base_sha": old_main_sha}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            serialized = _checkpoint_payload(
+                old_identity,
+                state="observed",
+                high_water_run_id=100,
+                retry_of_run_id=None,
+                run_id=101,
+                run_attempt=1,
+            )
+            _write_checkpoint(checkpoint, serialized)
+            with (
+                patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                patch(
+                    "scripts.release_qualification_resume.manifest_sha256",
+                    side_effect=lambda document: document["manifest_sha256"],
+                ),
+                self.assertRaisesRegex(QualificationResumeSafetyError, "refreshed qualification run appeared"),
+            ):
+                self.run_blocked(
+                    client,
+                    checkpoint,
+                    expected_main_sha=MAIN_SHA,
+                    expected_manifest_sha256=MANIFEST_SHA,
+                    retry_run_id=101,
+                    retry_checkpoint_sha256=serialized["checkpoint_sha256"],
+                )
+            unchanged = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(unchanged["checkpoint_sha256"], serialized["checkpoint_sha256"])
+        self.assertEqual(client.posts, [])
+
+    def test_refreshed_runner_rebind_rejects_changed_release_identity(self) -> None:
+        previous = identity()
+        current = replace(identity(), release_id=999)
+
+        with self.assertRaisesRegex(QualificationResumeSafetyError, "immutable release fields"):
+            _validate_checkpoint_rebind(REPO_ROOT, previous, current, manifest())
+
+    def test_refreshed_runner_rebind_rejects_decision_input_drift(self) -> None:
+        previous = replace(
+            identity(),
+            manifest_sha256="8" * 64,
+            runner_sha="f" * 40,
+            main_sha="f" * 40,
+            evidence_sha="9" * 40,
+        )
+        old_manifest = manifest()
+        old_manifest["manifest_sha256"] = previous.manifest_sha256
+        old_manifest["runner_sha"] = previous.runner_sha
+        old_manifest["prior"] = {"release_tag": "v0.9.0"}
+
+        with (
+            patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+            patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+            patch(
+                "scripts.release_qualification_resume.manifest_sha256",
+                side_effect=lambda document: document["manifest_sha256"],
+            ),
+            self.assertRaisesRegex(QualificationResumeSafetyError, "decision-bearing manifest inputs"),
+        ):
+            _validate_checkpoint_rebind(REPO_ROOT, previous, identity(), manifest())
+
+    def test_refreshed_runner_rebind_rechecks_run_attempt_at_mutation_boundary(self) -> None:
+        old_main_sha = "f" * 40
+        old_manifest_sha = "8" * 64
+        old_identity = replace(
+            identity(),
+            manifest_sha256=old_manifest_sha,
+            runner_sha=old_main_sha,
+            main_sha=old_main_sha,
+            evidence_sha="9" * 40,
+            evidence_base_sha=old_main_sha,
+            controller_runner_sha256="a" * 64,
+        )
+        failed = workflow_run(
+            101,
+            status="completed",
+            conclusion="failure",
+            main_sha=old_main_sha,
+            manifest_sha=old_manifest_sha,
+        )
+        rerun = workflow_run(
+            101,
+            status="completed",
+            conclusion="failure",
+            run_attempt=2,
+            main_sha=old_main_sha,
+            manifest_sha=old_manifest_sha,
+        )
+        client = self.configured_client()
+        client.set(RUNS_ENDPOINT, {"workflow_runs": [failed]})
+        client.set_sequence("repos/cbusillo/BD_to_AVP/actions/runs/101", [failed, rerun])
+        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        old_manifest = manifest()
+        old_manifest["manifest_sha256"] = old_manifest_sha
+        old_manifest["runner_sha"] = old_main_sha
+        old_manifest["canonical_evidence"] = {"ref": EVIDENCE_REF, "base_sha": old_main_sha}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            serialized = _checkpoint_payload(
+                old_identity,
+                state="observed",
+                high_water_run_id=100,
+                retry_of_run_id=None,
+                run_id=101,
+                run_attempt=1,
+            )
+            _write_checkpoint(checkpoint, serialized)
+            with (
+                patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                patch(
+                    "scripts.release_qualification_resume.manifest_sha256",
+                    side_effect=lambda document: document["manifest_sha256"],
+                ),
+                self.assertRaisesRegex(QualificationResumeSafetyError, "run changed before"),
+            ):
+                self.run_blocked(
+                    client,
+                    checkpoint,
+                    expected_main_sha=MAIN_SHA,
+                    expected_manifest_sha256=MANIFEST_SHA,
+                    retry_run_id=101,
+                    retry_checkpoint_sha256=serialized["checkpoint_sha256"],
+                )
+            unchanged = json.loads(checkpoint.read_text(encoding="utf-8"))
+
+        self.assertEqual(unchanged["checkpoint_sha256"], serialized["checkpoint_sha256"])
+        self.assertEqual(client.posts, [])
 
     def test_successful_run_reports_available_artifact_without_download(self) -> None:
         client = self.configured_client()
@@ -734,7 +1221,6 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             state="reconciliation_applied",
             plan=plan,
             commit_sha="9" * 40,
-            comment_id=77,
         )
         with (
             tempfile.TemporaryDirectory() as temporary_directory,
@@ -756,7 +1242,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertEqual(result.exit_code, EXIT_SUCCESS)
         self.assertEqual(result.payload["state"], "reconciliation_applied")
         self.assertEqual(result.payload["reconciliation_result"]["commit_sha"], "9" * 40)
-        self.assertEqual(result.payload["reconciliation_result"]["comment_id"], 77)
+        self.assertEqual(set(result.payload["reconciliation_result"]), {"commit_sha"})
         apply.assert_called_once()
 
     def test_apply_checkpoint_continues_before_complete_early_return(self) -> None:
@@ -766,7 +1252,6 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             state="reconciliation_applied",
             plan=plan,
             commit_sha="9" * 40,
-            comment_id=77,
         )
         complete_status = status_payload()
         complete_status["groups"] = {"blocking": []}
@@ -778,12 +1263,16 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
                 patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
                 patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
                 patch(
+                    "scripts.release_qualification_resume._require_local_evidence_checkout"
+                ) as require_local_checkout,
+                patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
+                patch(
                     "scripts.release_qualification_resume.continue_reconciliation_apply",
                     return_value=outcome,
                 ) as continuation,
                 patch(
                     "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
-                    return_value={"present": True, "state": "commented", "plan_sha256": "8" * 64},
+                    return_value={"present": True, "state": "committed", "plan_sha256": "8" * 64},
                 ),
             ):
                 result = resume_qualification(
@@ -796,6 +1285,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
 
         self.assertEqual(result.payload["state"], "reconciliation_applied")
         continuation.assert_called_once()
+        require_local_checkout.assert_not_called()
 
     def test_apply_checkpoint_requires_exact_plan_echo(self) -> None:
         client = self.configured_client()
@@ -808,9 +1298,11 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             with (
                 patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
                 patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch("scripts.release_qualification_resume._require_local_evidence_checkout"),
+                patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
                 patch(
                     "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
-                    return_value={"present": True, "state": "pushed", "plan_sha256": "8" * 64},
+                    return_value={"present": True, "state": "committed", "plan_sha256": "8" * 64},
                 ),
             ):
                 result = resume_qualification(
@@ -835,6 +1327,8 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             with (
                 patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
                 patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch("scripts.release_qualification_resume._require_local_evidence_checkout"),
+                patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
             ):
                 with self.assertRaisesRegex(QualificationResumeSafetyError, "keys changed"):
                     resume_qualification(
@@ -851,7 +1345,6 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             state="reconciliation_applied",
             plan=plan,
             commit_sha="9" * 40,
-            comment_id=77,
         )
         complete_status = status_payload()
         complete_status["groups"] = {"blocking": []}
@@ -862,13 +1355,15 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             with (
                 patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
                 patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch("scripts.release_qualification_resume._require_local_evidence_checkout"),
+                patch("scripts.release_qualification_resume._require_durable_capture_checkpoint"),
                 patch(
                     "scripts.release_qualification_resume.continue_reconciliation_apply",
                     return_value=outcome,
                 ) as continuation,
                 patch(
                     "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
-                    return_value={"present": True, "state": "commented", "plan_sha256": "8" * 64},
+                    return_value={"present": True, "state": "pushed", "plan_sha256": "8" * 64},
                 ),
             ):
                 result = resume_qualification(
@@ -953,6 +1448,12 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             "run-name: Milestone ${{ inputs.candidate_tag }} ${{ inputs.manifest_sha256 }}",
             workflow,
         )
+
+    def test_dynamic_workflow_run_name_matches_the_bound_display_title(self) -> None:
+        run = workflow_run(101, status="completed", conclusion="failure")
+        run["name"] = f"Milestone {RELEASE_TAG} {MANIFEST_SHA}"
+
+        self.assertTrue(_run_matches(run, identity()))
 
 
 if __name__ == "__main__":

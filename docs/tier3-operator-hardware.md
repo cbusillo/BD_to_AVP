@@ -149,7 +149,8 @@ first baseline, receipt expiry, mapped invalidating changes, environment or
 device-family changes, or a maintainer-requested retest. The USB/MakeMKV case
 retains its first-RC baseline. A Stable milestone alone does not force any of
 the three physical cases, and missing, skipped, failed, or due physical evidence
-does not block publication, the evidence PR, or milestone closeout.
+does not block publication, evidence-branch reconciliation, or milestone
+closeout.
 
 ## Validation
 

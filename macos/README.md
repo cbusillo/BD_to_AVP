@@ -41,8 +41,8 @@ including the legacy `releaseCandidate` spelling, migrate to the canonical
 preference. Selecting a safer route applies only to future newer builds;
 Sparkle never downgrades the currently installed version.
 
-Create an ad-hoc signed package containing the Briefcase-managed Python
-runtime and conversion engine with:
+Create an ad-hoc signed package containing the pinned embedded Python runtime
+and conversion engine with:
 
 ```sh
 uv run python scripts/native_app.py package
@@ -61,7 +61,11 @@ English audio, while existing profile choices remain unchanged and version-1
 through version-3 profiles migrate to all-languages behavior. Profile document
 version 5 stores stable route-relative quality intent separately from retained
 Custom controls while continuing to write concrete compatibility fields.
-Version-1 through version-4 profiles migrate losslessly: exact production
+Profile document version 6 stores encoding options plus only reusable-intermediate
+policy and software-encoder pipeline defaults. Version-1 through version-5 profiles
+migrate without carrying restart, overwrite, source-removal, continue-on-error, or
+diagnostic command-output defaults forward. Version-1 through version-4 profiles
+migrate losslessly for encoding settings: exact production
 defaults become `Balanced`, while every other combination remains `Custom`.
 Mapping version 2 resolves all seven checked direct positions, only `Balanced`
 for generated MV-HEVC, and `Balanced` plus `Detailed` for stage-6 file upscale.

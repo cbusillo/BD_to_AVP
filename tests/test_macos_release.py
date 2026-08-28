@@ -123,6 +123,43 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
         smoke_tools.assert_called_once_with(app_path)
         smoke_worker.assert_called_once_with(app_path)
 
+    def test_verify_release_app_without_signatures_keeps_layout_validation(self) -> None:
+        app_path = Path("/tmp") / NATIVE_APP_NAME
+        metadata = release_metadata(app_path)
+
+        with (
+            patch("scripts.macos_release.verify_layout") as verify_layout,
+            patch("scripts.macos_release.inspect_app_bundle", return_value=metadata) as inspect_bundle,
+        ):
+            result = verify_release_app(app_path, verify_signatures=False)
+
+        self.assertEqual(result, metadata)
+        verify_layout.assert_called_once_with(app_path)
+        inspect_bundle.assert_called_once_with(app_path, verify_signatures=False)
+
+    def test_create_release_dmg_allows_explicit_unsigned_pre_signing_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app_path = root / NATIVE_APP_NAME
+            output_path = root / "release.dmg"
+            metadata = release_metadata(app_path)
+
+            def release_tool(command: list[str]) -> subprocess.CompletedProcess[str]:
+                if command[:4] == ["diskutil", "image", "create", "from"]:
+                    Path(command[-1]).write_bytes(b"dmg")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with (
+                patch("scripts.macos_release.verify_layout") as verify_layout,
+                patch("scripts.macos_release.inspect_app_bundle", return_value=metadata) as inspect_bundle,
+                patch("scripts.macos_release.run", side_effect=release_tool),
+            ):
+                result = create_release_dmg(app_path, output_path, verify_signatures=False)
+
+        self.assertEqual(result, output_path)
+        verify_layout.assert_called_once_with(app_path)
+        inspect_bundle.assert_called_once_with(app_path, verify_signatures=False)
+
     def test_native_app_smoke_uses_packaged_native_smoke(self) -> None:
         app_path = Path("/tmp") / NATIVE_APP_NAME
         with patch("scripts.macos_release.smoke_packaged_native_app") as packaged_smoke:

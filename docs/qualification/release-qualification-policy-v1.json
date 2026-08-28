@@ -36,7 +36,7 @@
       ".github/workflows/release-engine.yml",
       ".github/workflows/sparkle-pages.yml",
       "scripts/artifact_identity.py",
-      "scripts/briefcase_macos_signing.py",
+      "scripts/embedded_python.py",
       "scripts/github_release_run.py",
       "scripts/macos_release.py",
       "scripts/release.py",
@@ -57,10 +57,13 @@
     "packaged-worker": [
       "bd_to_avp/worker/**",
       "macos/BluRayToVisionPro/Worker/**",
-      "scripts/briefcase_app.py",
+      "pyproject.toml",
+      "scripts/embedded_python.py",
+      "vendor/python-runtime-macos-arm64.toml",
       "scripts/native_app.py",
       "scripts/smoke_release_app.py",
-      "scripts/verify_app_tools.py"
+      "scripts/verify_app_tools.py",
+      "uv.lock"
     ],
     "profile-storage": [
       "macos/BluRayToVisionPro/Feature/ProfileStore.swift",

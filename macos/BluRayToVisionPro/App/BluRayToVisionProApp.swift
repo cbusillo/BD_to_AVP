@@ -4,6 +4,21 @@ enum AppWindowID {
     static let settings = "settings"
 }
 
+struct ConversionSourceSelectionAction {
+    let perform: () -> Void
+}
+
+private struct ConversionSourceSelectionActionKey: FocusedValueKey {
+    typealias Value = ConversionSourceSelectionAction
+}
+
+extension FocusedValues {
+    var conversionSourceSelectionAction: ConversionSourceSelectionAction? {
+        get { self[ConversionSourceSelectionActionKey.self] }
+        set { self[ConversionSourceSelectionActionKey.self] = newValue }
+    }
+}
+
 @main
 struct BluRayToVisionProApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -12,7 +27,8 @@ struct BluRayToVisionProApp: App {
     @StateObject private var diagnosticReportViewModel: DiagnosticReportViewModel
     @StateObject private var updater: UpdateController
     @StateObject private var settings = AppSettings()
-    @StateObject private var profileStore = ProfileStore()
+    @StateObject private var profileStore: ProfileStore
+    @StateObject private var resolutionMemoryStore: ResolutionMemoryStore
     @StateObject private var durableQueueStore: ConversionQueueStore
 
     private let capabilities = AppCapabilities.current
@@ -22,6 +38,8 @@ struct BluRayToVisionProApp: App {
 
     init() {
         let observabilityEventStore = ObservabilityEventStore.automatic()
+        let resolutionMemoryStore = ResolutionMemoryStore()
+        let profileStore = ProfileStore(resolutionMemoryStore: resolutionMemoryStore)
         let durableQueueStore = ConversionQueueStore()
         let viewModel = ConversionViewModel(
             observabilityEventStore: observabilityEventStore,
@@ -47,6 +65,8 @@ struct BluRayToVisionProApp: App {
         _diagnosticReportViewModel = StateObject(wrappedValue: diagnosticReportViewModel)
         _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
         _durableQueueStore = StateObject(wrappedValue: durableQueueStore)
+        _profileStore = StateObject(wrappedValue: profileStore)
+        _resolutionMemoryStore = StateObject(wrappedValue: resolutionMemoryStore)
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
         suppressDefaultLaunch = AppDelegate.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments)
@@ -61,9 +81,10 @@ struct BluRayToVisionProApp: App {
                 diagnosticReportViewModel: diagnosticReportViewModel,
                 settings: settings,
                 profileStore: profileStore,
+                resolutionMemoryStore: resolutionMemoryStore,
                 capabilities: capabilities
             )
-                .frame(minWidth: 1_080, minHeight: 680)
+                .frame(minWidth: 820, minHeight: 680)
                 .background(
                     WindowAccessor { window in
                         appDelegate.attach(window: window, workCoordinator: workCoordinator)
@@ -82,14 +103,7 @@ struct BluRayToVisionProApp: App {
         .commands {
             SettingsWindowCommands()
             UpdateCommands(updater: updater)
-
-            CommandGroup(replacing: .newItem) {
-                Button("Add Source…") {
-                    chooseSource()
-                }
-                .keyboardShortcut("o")
-                .disabled(!viewModel.canSelectSource || previewViewModel.hasActiveWorker)
-            }
+            SourceCommands()
         }
 
         Window("Settings", id: AppWindowID.settings) {
@@ -103,15 +117,19 @@ struct BluRayToVisionProApp: App {
         .windowResizability(.contentMinSize)
     }
 
-    @MainActor
-    private func chooseSource() {
-        guard viewModel.canSelectSource, !previewViewModel.hasActiveWorker else {
-            return
+}
+
+private struct SourceCommands: Commands {
+    @FocusedValue(\.conversionSourceSelectionAction) private var sourceSelectionAction
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("Add Source…") {
+                sourceSelectionAction?.perform()
+            }
+            .keyboardShortcut("o")
+            .disabled(sourceSelectionAction == nil)
         }
-        guard let sourceURL = SourcePicker.chooseExistingSource() else {
-            return
-        }
-        viewModel.selectSource(sourceURL)
     }
 }
 

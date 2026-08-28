@@ -152,8 +152,10 @@ struct WorkerLifecycleState: Equatable {
         resetJobState()
     }
 
-    mutating func restoreSource(_ sourceURL: URL, inspection: SourceInspection?) {
-        selectSource(sourceURL)
+    mutating func prepareQueuedConversion(sourceURL: URL, inspection: SourceInspection?) {
+        self.sourceURL = sourceURL
+        phase = .ready
+        resetJobState()
         result = inspection
     }
 

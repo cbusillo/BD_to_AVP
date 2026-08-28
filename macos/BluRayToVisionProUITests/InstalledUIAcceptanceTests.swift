@@ -17,6 +17,33 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCUIApplication(bundleIdentifier: bundleIdentifier).terminate()
     }
 
+    func testMissingProfileDocumentIsValidFreshInstallState() throws {
+        let syntheticHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: syntheticHome) }
+
+        XCTAssertNil(try readProfileSummaryIfPresent(syntheticHome: syntheticHome))
+    }
+
+    func testSeededProfileDocumentReportsExistingLibrary() throws {
+        let syntheticHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: syntheticHome) }
+        let profileDirectory = syntheticHome
+            .appendingPathComponent("Library/Application Support/3D Blu-ray to Vision Pro", isDirectory: true)
+        try FileManager.default.createDirectory(at: profileDirectory, withIntermediateDirectories: true)
+        let profileDocument: [String: Any] = [
+            "profiles": [["name": "Seeded Profile"]],
+            "version": 6,
+        ]
+        try JSONSerialization.data(withJSONObject: profileDocument, options: [.sortedKeys])
+            .write(to: profileDirectory.appendingPathComponent("profiles.json"))
+
+        let summary = try XCTUnwrap(readProfileSummaryIfPresent(syntheticHome: syntheticHome))
+
+        XCTAssertEqual(summary.count, 1)
+        XCTAssertEqual(summary.names, ["Seeded Profile"])
+        XCTAssertEqual(summary.version, 6)
+    }
+
     func testPriorUpdaterControlsAndReleaseLinks() throws {
         let context = try QualificationContext.load(expectedPhase: "updater")
         let app = try launchInstalledApp(context: context, appearance: .light)
@@ -66,27 +93,41 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         let mainContent = lightApp.descendants(matching: .any)["main-window-content"]
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
 
+        let editAction = lightApp.buttons["edit-conversion-settings"]
+        XCTAssertTrue(editAction.waitForExistence(timeout: 20))
+        XCTAssertTrue(editAction.isEnabled)
+        editAction.click()
+
         let saveAction = lightApp.buttons["save-profile-action"]
         XCTAssertTrue(saveAction.waitForExistence(timeout: 20))
         XCTAssertEqual(saveAction.elementType, .button)
         XCTAssertEqual(saveAction.label, "Save current settings as new profile")
         XCTAssertTrue(saveAction.isEnabled)
 
+        let profileSummaryBefore = try readProfileSummaryIfPresent(syntheticHome: context.syntheticHome)
+        if let profileSummaryBefore {
+            XCTAssertEqual(profileSummaryBefore.version, 6)
+        }
+        let profilesBefore = profileSummaryBefore?.count ?? 0
         saveAction.click()
-        let nameField = lightApp.textFields["save-profile-name-field"]
+        let nameField = lightApp.textFields["setup-editor-new-profile-name"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 20))
         nameField.click()
         nameField.typeKey("a", modifierFlags: .command)
         nameField.typeText(Self.profileName)
-        let confirmButton = lightApp.buttons["save-profile-confirm"]
+        let confirmButton = lightApp.buttons["Save"].firstMatch
+        XCTAssertTrue(confirmButton.waitForExistence(timeout: 20))
         XCTAssertTrue(confirmButton.isEnabled)
         confirmButton.click()
         XCTAssertTrue(waitUntil(timeout: 20) { !nameField.exists })
 
         let profileSummary = try readProfileSummary(syntheticHome: context.syntheticHome)
-        XCTAssertEqual(profileSummary.version, 5)
-        XCTAssertEqual(profileSummary.count, 1)
-        XCTAssertEqual(profileSummary.name, Self.profileName)
+        XCTAssertEqual(profileSummary.version, 6)
+        XCTAssertEqual(profileSummary.count, profilesBefore + 1)
+        XCTAssertEqual(profileSummary.names.filter { $0 == Self.profileName }.count, 1)
+        for existingName in profileSummaryBefore?.names ?? [] {
+            XCTAssertTrue(profileSummary.names.contains(existingName))
+        }
 
         let lightWindow = lightApp.windows.firstMatch
         XCTAssertTrue(lightWindow.exists)
@@ -112,6 +153,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
                 "profile_save_accessible": true,
                 "profile_save_succeeded": true,
                 "profiles_after": profileSummary.count,
+                "profiles_before": profilesBefore,
                 "release_page_url": context.releasesURL,
                 "release_page_url_observed": true,
                 "schema_version": 1,
@@ -130,6 +172,49 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         let darkWindow = darkApp.windows.firstMatch
         XCTAssertTrue(darkWindow.waitForExistence(timeout: 30))
         attachScreenshot(darkWindow.screenshot(), name: "screenshot-dark.png")
+    }
+
+    func testDevelopmentSetupShell() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["BD_TO_AVP_UI_PHASE"] == "setup" else {
+            throw XCTSkip("Development setup-shell smoke is not requested.")
+        }
+        let appPath = try XCTUnwrap(environment["BD_TO_AVP_UI_APP_PATH"])
+        let syntheticHome = try XCTUnwrap(environment["BD_TO_AVP_UI_HOME"])
+        let app = XCUIApplication(url: URL(fileURLWithPath: appPath))
+        app.launchEnvironment = [
+            "HOME": syntheticHome,
+            "CFFIXED_USER_HOME": syntheticHome,
+        ]
+        app.launchArguments = QualificationAppearance.light.launchArguments
+        app.launch()
+        defer { app.terminate() }
+
+        let mainContent = app.descendants(matching: .any)["main-window-content"]
+        XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.descendants(matching: .any)["ready-source"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["ready-profile-picker"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["ready-destination"].exists)
+        XCTAssertTrue(app.buttons["ready-change-destination"].exists)
+        XCTAssertTrue(app.buttons["ready-preview"].exists)
+        XCTAssertTrue(app.buttons["ready-add-to-queue"].exists)
+        XCTAssertEqual(app.buttons.matching(identifier: "ready-start").count, 1)
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.exists)
+        XCTAssertGreaterThanOrEqual(window.frame.width, 820)
+        attachScreenshot(window.screenshot(), name: "setup-ready-light.png")
+
+        let edit = app.buttons["edit-conversion-settings"]
+        XCTAssertTrue(edit.isEnabled)
+        edit.click()
+        XCTAssertTrue(app.buttons["setup-editor-cancel"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["setup-editor-apply"].exists)
+        XCTAssertTrue(app.buttons["setup-editor-save-as-new"].exists)
+        let sheet = app.sheets.firstMatch
+        XCTAssertTrue(sheet.exists)
+        XCTAssertGreaterThanOrEqual(sheet.frame.width, 640)
+        attachScreenshot(window.screenshot(), name: "setup-editor-light.png")
     }
 
     private func launchInstalledApp(
@@ -313,22 +398,34 @@ private enum QualificationError: LocalizedError {
 
 private struct ProfileSummary {
     let count: Int
-    let name: String
+    let names: [String]
     let version: Int
 }
 
 private func readProfileSummary(syntheticHome: URL) throws -> ProfileSummary {
+    guard let summary = try readProfileSummaryIfPresent(syntheticHome: syntheticHome) else {
+        throw QualificationError.missingProfileDocument
+    }
+    return summary
+}
+
+private func readProfileSummaryIfPresent(syntheticHome: URL) throws -> ProfileSummary? {
     let profileURL = syntheticHome
         .appendingPathComponent("Library/Application Support/3D Blu-ray to Vision Pro", isDirectory: true)
         .appendingPathComponent("profiles.json")
+    guard FileManager.default.fileExists(atPath: profileURL.path) else {
+        return nil
+    }
     let data = try Data(contentsOf: profileURL)
     guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let version = root["version"] as? Int,
-          let profiles = root["profiles"] as? [[String: Any]],
-          let first = profiles.first,
-          let name = first["name"] as? String
+          let profiles = root["profiles"] as? [[String: Any]]
     else {
         throw QualificationError.missingProfileDocument
     }
-    return ProfileSummary(count: profiles.count, name: name, version: version)
+    let names = profiles.compactMap { $0["name"] as? String }
+    guard names.count == profiles.count else {
+        throw QualificationError.missingProfileDocument
+    }
+    return ProfileSummary(count: profiles.count, names: names, version: version)
 }

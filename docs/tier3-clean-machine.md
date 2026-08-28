@@ -8,18 +8,22 @@ environment, or changes the live appcast.
 
 ## Maintained Environment
 
-The first maintained lane is `restorable-location` on Apple Silicon macOS 26.
-The qualification root must not exist before the run and must be a dedicated
-location under the current user's home directory. The runner creates an
-isolated synthetic home with `HOME` and `CFFIXED_USER_HOME`, installs the app
-under that owned root, and deletes the complete root after bounded cleanup.
+Two maintained layouts run on Apple Silicon macOS 26. The local
+`restorable-location` lane requires a dedicated qualification root under the
+current user's home, creates an isolated synthetic home, installs the app under
+that owned root, and deletes the complete root after bounded cleanup. The
+workflow-only `resettable-vm` lane runs on GitHub-hosted macOS, keeps the
+runner's real account home unchanged, installs the signed app in normal
+`/Applications`, and keeps scratch data under `RUNNER_TEMP`. It fails before
+mutation on local or self-hosted machines, when the app destination already
+exists, or when app-owned state is already present in the runner home.
 
 The host must provide:
 
 - macOS 26 on `arm64`;
 - Accessibility control for the terminal or automation host;
-- Xcode with `xcodebuild`, plus `defaults`, `ditto`, `hdiutil`, `open`, and
-  `osascript`;
+- Xcode with `xcodebuild`, plus `defaults`, `ditto`, `hdiutil`, `log`, `open`,
+  and `osascript`;
 - enough free space for both DMGs, two candidate copies, and 2 GiB of working
   headroom;
 - no running production app process; and
@@ -27,8 +31,9 @@ The host must provide:
 
 When the operator workstation is not running the policy-required macOS major
 version, use the owner-dispatched `Milestone Qualification` workflow instead of
-weakening the environment check. The workflow runs the same collector on the
-GitHub-hosted `macos-26` image with read-only repository and Actions access. It
+weakening the environment check. The workflow runs the collector in the
+`resettable-vm` layout on the GitHub-hosted `macos-26` image with read-only
+repository and Actions access. It
 accepts only the canonical `automation/release-evidence-<tag>` branch at its
 exact remote head, rejects non-documentation differences from protected
 `main`, validates the checked qualification manifest by its self digest,
@@ -49,7 +54,13 @@ gh workflow run milestone-qualification.yml \
 
 The successful run uploads the validated signed-artifact UI receipt, both Tier
 3 receipts, normalized evidence, checked manifest digest, evidence branch SHA,
-and a bounded run summary with 30-day retention. Download those outputs,
+and a bounded run summary with 30-day retention. A failed pre-update validation
+or Sparkle installation uploads a separate `sparkle-install-diagnostics.json`
+artifact containing only fixed classifications, runtime-layout enums,
+directory-state enums, process state, and installed-build state; it excludes
+raw unified logs, paths, usernames, hostnames, process IDs, Accessibility
+output, and exception text.
+Download successful outputs,
 validate them again, and add the accepted receipts to the same evidence branch.
 The hosted collector proves the real Sparkle install/relaunch path, exact
 appcast-bound release-notes URL, and installed accessibility semantics. The
@@ -119,28 +130,45 @@ The runner performs this bounded sequence:
 
 1. Install the exact candidate from its DMG, verify bundle and signed app-tree
    identity, and run `scripts/smoke_release_app.py` from the installed copy.
-2. Clear the owned runtime location, install the exact prior release, and seed a
+2. Clear the owned smoke location, install the exact prior release, and seed a
    valid profile library plus route and unrelated preference sentinels in the
-   synthetic home.
+   selected runtime home. The hosted lane uses the real runner home; the local
+   lane uses its synthetic home.
 3. Run the installed-app XCUITest lane against the exact prior app, verifying
    Sparkle controls and the source-bound release-notes URL without installing.
 4. Revalidate the exact prior bundle and signed app tree immediately before
    updater interaction, invoke `Check for Updates…`, and drive Sparkle through
    an explicit bounded state machine. Identifier-scoped observations distinguish
-   downloading, staged install, install-and-relaunch, install-on-quit,
-   cancellation, terminal failure, and unknown states.
+   downloading, install-and-relaunch, install-on-quit, cancellation, terminal
+   failure, and unknown states. Sparkle 2.9.4's initial `Install Update` action
+   begins download/extraction and must not be mistaken for an already-staged
+   install or the final relaunch confirmation.
 5. Durably record each selected action inside the owned qualification root
-   before pressing it. Install-on-quit explicitly terminates the prior app,
-   waits for the exact candidate on disk, and launches that candidate; staged
-   installs remain bounded until Sparkle exposes the final action or relaunches.
-6. Verify the final candidate bundle, build, signed app tree, and running app,
-   then verify the selected route, unrelated preference, and byte-for-byte profile
-   library are preserved.
+   before pressing it. After the initial `Install Update`, tolerate the alert
+   closing while the exact prior app remains running, wait through download and
+   extraction, then require and press Sparkle's
+   `SUStatusInstallAndRelaunch` final action. Only then wait for the exact
+   candidate and replacement process. Install-on-quit explicitly terminates the
+   prior app, waits for the exact candidate on disk, and launches that
+   candidate. The harness never quits the app merely because the initial alert
+   disappeared.
+6. Verify the final candidate bundle, build, signed app tree, and replacement
+   running process, then verify the selected route and unrelated preference are
+   preserved. The harness seeds the version 5 profile fixture and accepts the
+   exact version 6 migration either when the prior release first launches or
+   during the candidate relaunch. It records which boundary performed the
+   migration and requires the exact expected version 6 document afterward,
+   preserving profile identity, encoding options, and safe pipeline defaults
+   while removing legacy per-run defaults that version 6 intentionally no
+   longer stores.
 7. Run the candidate installed-app XCUITest lane. It verifies main-window
    readiness, profile-save accessibility and success, updater settings, the
    public releases link, and cropped light/dark app-window screenshots.
 8. Quit the app, detach every mounted DMG, verify the cleanup ownership marker,
-   and delete the qualification root with raw XCTest and build output.
+   and delete the qualification root with raw XCTest and build output. The
+   hosted lane additionally removes only the exact verified prior/candidate app
+   and allowlisted app-owned home state. It refuses to delete an unknown or
+   partially replaced bundle and relies on VM teardown for containment.
 9. Emit normalized public-safe evidence and validated receipts for both policy
    cases with `cleanup.status = disposed`.
 
@@ -151,9 +179,15 @@ trees, XCTest logs, `.xcresult` bundles, local paths, and full-screen captures
 are deleted. Retained screenshots contain only the app window. A failed run
 does not emit either accepted receipt.
 
-The updater state machine prefers the Sparkle `SUUpdateAlert` window and
-`SPUUserUpdateChoiceInstall` action identifiers. A title fallback is permitted
-only inside the single owned updater window and is recorded in evidence. The
+Timeout failures include only bounded public-safe state context: the final
+state, action count, process relation, and ordered state enum history. They do
+not retain raw Accessibility output, paths, process IDs, usernames, or
+hostnames.
+
+The updater state machine prefers Sparkle's `SUUpdateAlert`,
+`SPUUserUpdateChoiceInstall`, and `SUStatusInstallAndRelaunch` identifiers. A
+title fallback is permitted only inside the single owned updater window and is
+recorded in evidence. The
 selected action, state, exact prior/candidate identities, attempt number, and
 transition history are atomically written and synced before an asynchronous
 press. That journal remains disposable; normalized `sparkle-update.json`
@@ -162,10 +196,12 @@ candidate-version fields plus the journal and intent SHA-256 digests. It never
 retains window text, local paths, usernames, hostnames, or raw AX output.
 
 One clean retry is allowed only for a classified pre-press application-start,
-update-menu, or update-window timeout. The first attempt must fully dispose its
-owned root and app process before retry. Cancellation, updater-reported failure,
-unknown UI, identity mismatch, preference/profile drift, action-limit failure,
-and every failure after a press are terminal. No other implicit retry occurs.
+update-menu, update-window timeout, or guarded state-change race where the
+updater changed after durable intent but before any action was pressed. The
+first attempt must fully dispose its owned root and app process before retry.
+Cancellation, updater-reported failure, unknown UI, identity mismatch,
+preference/profile drift, action-limit failure, and every failure after a press
+are terminal. No other implicit retry occurs.
 
 Native Sparkle-window presentation sampling remains visible operational
 evidence but is nonblocking. The state-machine result, exact release-note source,

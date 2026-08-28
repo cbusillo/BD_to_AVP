@@ -1,5 +1,8 @@
 # Protected-Main Release Process
 
+Release Evidence v2 record and offline-verification semantics are documented in
+[`release-evidence-v2.md`](release-evidence-v2.md).
+
 The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
@@ -20,8 +23,35 @@ records immutable publication, and [the RC 3 cut packet](0.3.0-rc.3-cut-packet.m
 records immutable publication plus its targeted qualification result. Stable
 `0.3.0` build `161` is published and immutable; its publication and bounded
 PyPI recovery are recorded in [the Stable cut packet](0.3.0-cut-packet.md).
-The next prepared identity is Stable `0.3.1` build `162`, tracked in
-[the 0.3.1 cut packet](0.3.1-cut-packet.md) and issue #520.
+Stable `0.3.1` build `162` is published and immutable; its publication is
+recorded in [the 0.3.1 cut packet](0.3.1-cut-packet.md). Beta `0.3.2b1` build
+`163` and Beta `0.3.2b2` build `164` are published and immutable, tracked in
+[the 0.3.2 Beta 1 cut packet](0.3.2-beta.1-cut-packet.md),
+[the 0.3.2 Beta 2 cut packet](0.3.2-beta.2-cut-packet.md), issues #584 and #593.
+Beta `0.3.2b3` build `165` is a failed unpublished signed attempt and its
+identity is permanently burned, as recorded in
+[the 0.3.2 Beta 3 cut packet](0.3.2-beta.3-cut-packet.md). Beta `0.3.2b4`
+build `166` is also a failed unpublished signed attempt and permanently burned,
+as recorded in [the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md). Beta
+`0.3.2b5` build `167` is published and immutable, but its post-publication
+exact-artifact qualification is blocked because the packaged worker reported
+`0.0.0` instead of `0.3.2b5`; the publication and qualification boundary are
+tracked in [the 0.3.2 Beta 5 cut packet](0.3.2-beta.5-cut-packet.md) and its
+immutable failed-post-publication disposition. The next corrective identity,
+Beta `0.3.2b6` build `168`, became a cancelled unpublished signed attempt after
+draft creation and is permanently burned, as recorded in
+[the 0.3.2 Beta 6 cut packet](0.3.2-beta.6-cut-packet.md) and
+`docs/release-attempts/v0.3.2-beta.6/cancelled-attempt-v1.json`. Its abandoned
+draft was deleted only after explicit authorization, with the immutable
+disposition at `docs/release-attempts/v0.3.2-beta.6/draft-deletion-v1.json`.
+Issue #609 closed published and fully qualified Beta `0.3.2b7`, public tag
+`v0.3.2-beta.7`, and build `169`. Issue #613 closed published and fully
+qualified RC `0.3.2rc1`, public tag `v0.3.2-rc.1`, and build `170` under
+feature freeze. Issue #614 closed published Stable `0.3.2`, public tag
+`v0.3.2`, and build `171`. Issue #659 owns prepared successor Beta `0.3.3b1`,
+public tag `v0.3.3-beta.1`, and build `172`. Its metadata and preregistered
+qualification are preparation-only; Prerelease dispatch, signing approval, and
+publication remain separately authorized boundaries.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
@@ -33,10 +63,38 @@ category is explicitly not applicable rather than failed. Metadata
 preparation and review do not authorize dispatch; run-bound signing approval
 remains a separate verified boundary.
 
+Before a successor version or build identity is prepared, dispatch
+`Production Preflight` from protected `main` with the exact full current
+40-character `main` SHA. The release-independent workflow rejects abbreviated,
+non-`main`, mismatched, or stale SHAs before qualifying the package. It has
+read-only repository permission, uses no signing environment or secret, and
+cannot create a tag, release, draft, appcast deployment, or package publication.
+Its seven-day workflow artifact contains only source-bound validation, package
+smoke, installed-UI evidence, and a bounded success manifest; failure artifacts
+contain bounded source/workflow context and diagnostic tails rather than the app
+or preventive DMG. A passing run is readiness evidence for that exact SHA, not
+release authorization or signed-artifact evidence. If `main` moves, rerun the
+preflight before preparing metadata.
+
+Before the `macos-signing` environment can request approval, the reusable
+release engine invokes the same `.github/workflows/production-preflight-engine.yml`
+implementation again for its exact protected-`main` SHA. The shared job builds
+the production package with ad-hoc signing, runs the complete maintained
+release-app smoke (including exact embedded worker version and protocol
+readiness), creates and installs a production-shaped preventive DMG, and
+exercises the shared installed UI accessibility fixture. Failure, cancellation,
+or skipped execution prevents the signing job from starting. The later
+Developer ID, notarization, signed-DMG, exact-artifact UI, appcast, and
+post-publication gates remain mandatory; production preflight moves fixture and
+packaged-runtime feedback earlier without substituting for release evidence.
+
 ## Release Preparation
 
 Every release version and Sparkle build number is committed through a normal
-pull request before release orchestration runs. Use the repository command:
+pull request before release orchestration runs. First record a successful
+`Production Preflight` run for the exact protected `main` SHA that will be the
+base of the metadata change; do not consume the successor identity when that
+run is absent, failed, or stale. Then use the repository command:
 
 ```sh
 uv run python -m scripts.release prepare \
@@ -86,7 +144,7 @@ must continue increasing `CFBundleVersion` from this sequence.
 
 Review and commit all resulting changes. CI runs
 `scripts/release.py validate`, the unit suite, Python package builds, and the
-Briefcase create/build smoke. Do not dispatch a release from an unmerged branch
+embedded-runtime and native-package smoke. Do not dispatch a release from an unmerged branch
 or from a stale main commit.
 
 ## Release Orchestration
@@ -206,11 +264,14 @@ The workflow performs these ordered boundaries:
    and newest durable snapshot are both checked.
 3. Run the secret-free `qualify-preparation` gate. Classify the candidate
    against the checked `docs/qualification/release-evidence-v1.json` evidence
-   and `docs/qualification/stable-signed-qualification-v1.json` qualification file
+   and the exact `qualificationRecordPath` selected in `.github/github.json`
    for the `preparation` phase, using the exact `github.sha` and committed
-   Sparkle channel as the release stage. The preparation report is uploaded as
-   an Actions artifact with 30-day retention before enforcement. macOS signing
-   approval cannot be requested until this gate passes.
+   Sparkle channel as the release stage. `scripts.release validate` requires
+   that path to identify the unique `*-signed-qualification-v1.json` record for
+   the committed tag, version, build, DMG, workflow, and release stage. The
+   preparation report is uploaded as an Actions artifact with 30-day retention
+   before enforcement. macOS signing approval cannot be requested until this
+   gate passes.
 4. After the single release approval, build, sign, notarize, and
    Gatekeeper-validate the SwiftUI macOS app and DMG without a write-capable
    repository token. Record its exact name, byte size, SHA-256, and
@@ -280,25 +341,32 @@ The workflow performs these ordered boundaries:
    `docs/release-evidence/<tag>/`, atomically snapshots the updated qualification
    as immutable `qualification-record.json`, writes a deterministic public-safe
    `qualification-manifest.json`, writes the publication record and release
-   ledger, updates the rolling qualification and cut packet, and opens or
-   updates `automation/release-evidence-<tag>`. Protected CI validates the
-   checked manifest/receipt identities and runs the `milestone` qualification
-   phase. The PR remains intentionally unmergeable until every blocking
-   live-publication and automated Tier 3 receipt has been added to that same
-   idempotent branch and the milestone report passes. Physical hardware and
-   manual Sparkle-window evidence remains visible as passed, failed, skipped,
-   missing, or due, but it does not block reconciliation. Branch protection,
-   review, and normal merge policy remain in force. A reconciliation or
+   ledger, updates the rolling qualification and cut packet, writes the durable
+   v2 `CAPTURED` bundle, and directly creates or advances
+   `automation/release-evidence-<tag>` with an actor-bound non-force push. The
+   branch commit plus `capture-v2.json` is the durable capture checkpoint; the
+   workflow uses only `contents: write`, verifies the exact remote SHA and file
+   bytes after pushing, and does not create, comment on, or delete a pull
+   request. Physical hardware and manual Sparkle-window evidence remains visible
+   as passed, failed, skipped, missing, or due, but it does not block
+   reconciliation. When the evidence is ready to merge, an operator opens the
+   normal protected docs-only pull request from the automation branch. Protected
+   CI validates the checked manifest/receipt identities and runs the `milestone`
+   qualification phase; branch protection, review, and normal merge policy remain
+   in force. A reconciliation or
    milestone failure does not rebuild, replace, or invalidate the correctly
-   published release. If protected `main` advances while the evidence PR is
-   open, rerunning Release Evidence first validates the prior manifest against
+   published release. If protected `main` advances while the evidence branch is
+   active, rerunning Release Evidence first validates the prior manifest against
    its immutable qualification snapshot and the controller, policy, route table,
    and case classifications stored at its recorded runner SHA, then refreshes
    only reviewed-main policy and checkpoint fields while preserving exact
    release and artifact identity. If the rolling qualification changed on both
    branches, the workflow resolves only that path in favor of protected main;
    any other merge conflict fails closed while the per-release snapshot remains
-   unchanged. If
+   unchanged. Manifest preparation selects the newest prior published ancestor
+   that already has a checked immutable release receipt; an unreconciled prior
+   release remains immutable history but cannot serve as a qualification base.
+   If
    the signed UI artifact expires before the first successful capture, the
    workflow stops explicitly because that immutable evidence cannot be
    reconstructed; it never substitutes a rebuilt or operator-authored receipt.
@@ -339,7 +407,7 @@ The workflow performs these ordered boundaries:
    bounded collection failed, and exit `3` means the operator cancelled with no
    public state written.
 
-   When blocking automated cases remain on an open canonical evidence branch,
+   When blocking automated cases remain on the canonical evidence branch,
    run the bounded resume observer from the exact checked
    `automation/release-evidence-<tag>` branch head:
 
@@ -348,10 +416,10 @@ The workflow performs these ordered boundaries:
      --release-tag <tag>
    ```
 
-   The first invocation is observational. It verifies the same-repository
-   evidence PR, remote evidence head, protected `main`, manifest runner and
-   digest, docs-only branch diff, prior dispatches, job conclusion, and retained
-   artifact metadata. If dispatch is the only safe next transition, the JSON
+   The first invocation is observational. It verifies the remote evidence head,
+   protected `main`, manifest runner and digest, docs-only branch diff, prior
+   dispatches, job conclusion, and retained artifact metadata. No open pull
+   request is required or queried. If dispatch is the only safe next transition, the JSON
    response reports the exact required `main` and manifest values. Authorize
    that one workflow dispatch by repeating the command with both values:
 
@@ -395,7 +463,7 @@ The workflow performs these ordered boundaries:
    exits `20` with the canonical plan and its SHA-256; `reconciliation_current`
    exits `0` when every proposed destination and evidence-index record is
    already identical. Planning creates no repository files, commits, pushes,
-   comments, or pull requests.
+   or pull requests.
 
    Apply an exact reviewed plan by echoing its digest:
 
@@ -406,25 +474,27 @@ The workflow performs these ordered boundaries:
    ```
 
    Apply requires the active GitHub identity `cbusillo`, the exact canonical
-   evidence worktree and pull request, an unchanged protected `main`, no active
-   exact Milestone Qualification run, and a clean worktree. Before changing
+   evidence worktree, an unchanged protected `main`, no active exact Milestone
+   Qualification run, and a clean worktree. Before changing
    files it freezes the authorized plan and exact target bytes in a mode-`0600`,
    self-digested apply checkpoint adjacent to the dispatch checkpoint. It then
    uses per-file atomic replacement plus resumable verification for only the
    planned qualification receipts and append-only evidence index, creates one
    commit containing the plan and run identities,
-   performs a non-force fast-forward push, and posts one marker-bound pull-request
-   comment. Every transition is adopted rather than duplicated after an
-   interruption, including a commit or push whose response was lost. Reruns must
-   repeat the exact `--apply-plan-sha256`; `reconciliation_apply_pending` reports
-   that requirement and `reconciliation_applied` exits `0` after the commit,
-   push, and comment are all durable.
+   performs a non-force fast-forward push, and revalidates the exact remote
+   commit and content. Every transition is adopted rather than duplicated after
+   an interruption, including a commit or push whose response was lost. Reruns
+   must repeat the exact `--apply-plan-sha256` unless the serialized state is
+   already `pushed`; `reconciliation_apply_pending` reports that requirement and
+   `reconciliation_applied` exits `0` after the pushed commit is durable. The
+   result contains the pushed commit SHA and no pull-request comment or comment
+   ID.
 
    The apply checkpoint is
    `<git-common-dir>/bd-to-avp/release-qualification/<tag>.apply.json` and shares
    the dispatch checkpoint lock. Never delete it while an apply transition is
    incomplete; the controller removes it only after the pushed commit and exact
-   marker comment are revalidated as durable. `artifact_expired` permits a new run only after explicit retry
+   remote branch state are revalidated as durable. `artifact_expired` permits a new run only after explicit retry
    authorization when no validated apply checkpoint or equivalent durable state
    exists; checked receipts already accepted by `status` remain a no-op after
    Actions transport expires.
@@ -449,9 +519,9 @@ or embedded HTML for information required in the Sparkle dialog.
 
 The accepted SwiftUI/AppKit interface is packaged by the reusable
 `.github/workflows/release-engine.yml` production engine, called by the Stable
-`.github/workflows/briefcase.yml` operator entry. Briefcase remains the staging
-mechanism for the embedded Python engine, but its Python GUI is not the shipping
-interface. The Xcode `Release` configuration owns the production name, bundle
+`.github/workflows/briefcase.yml` operator entry. The repository-owned runtime
+builder stages the embedded Python engine; the workflow filename remains the
+Stable/PyPI identity. The Xcode `Release` configuration owns the production name, bundle
 identifier, macOS 26 deployment target, and Sparkle metadata.
 
 The signing job runs on GitHub's Apple-Silicon `macos-26` image, selects Xcode
@@ -537,6 +607,16 @@ diagnostic and retry evidence. If a newer immutable release supersedes a failed
 draft and no exact-commit retry remains useful, verify the published tag and
 assets, then delete only the abandoned draft through the GitHub Releases UI.
 Maintainers may otherwise see that draft pinned above newer published releases.
+An intentionally cancelled signed attempt uses an immutable
+`cancelled-attempt-v1.json` record while its draft remains present. That record
+must bind the checked receipt, all draft asset IDs and digests, the cancellation
+boundary, and the run-bound signing approval. Freeze the release tag immediately.
+A later deletion requires fresh explicit authorization and a separate immutable
+`draft-deletion-v1.json` disposition record. The disposition must bind the
+cancelled-attempt file digest, checked receipt digest, draft release ID, source
+SHA, authorization actor and canonical fingerprint, deletion actor and time, and
+subsequent absence of both draft and tag. Never rewrite the cancelled-attempt
+record to claim that the draft was deleted.
 
 To restore an earlier last-good cumulative feed, dispatch `Manage Sparkle Pages`
 from `main` with `restore` and the selected published release tag. The workflow

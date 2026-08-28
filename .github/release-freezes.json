@@ -1,5 +1,10 @@
 {
   "schema": "bd_to_avp.release_freezes",
   "schema_version": 1,
-  "frozen_release_tags": {}
+  "frozen_release_tags": {
+    "v0.3.2-beta.6": {
+      "issue": 609,
+      "reason": "Cancelled unpublished signed attempt; its draft was deleted under the authorized immutable disposition and build 168 is permanently non-reusable."
+    }
+  }
 }

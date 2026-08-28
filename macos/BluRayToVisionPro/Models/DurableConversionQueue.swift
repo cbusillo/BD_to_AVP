@@ -1,7 +1,7 @@
 import Foundation
 
 struct ConversionQueueDocument: Codable, Equatable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     let version: Int
     var items: [DurableConversionQueueItem]
@@ -9,6 +9,18 @@ struct ConversionQueueDocument: Codable, Equatable {
     init(version: Int = currentVersion, items: [DurableConversionQueueItem] = []) {
         self.version = version
         self.items = items
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, items }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try values.decode(Int.self, forKey: .version)
+        let items = try values.decode([DurableConversionQueueItem].self, forKey: .items)
+        guard version == 1 || version == Self.currentVersion else {
+            throw ConversionQueueStoreError.unsupportedVersion(version)
+        }
+        self.init(version: Self.currentVersion, items: items)
     }
 
     func restoredAfterLaunch() -> ConversionQueueDocument {
@@ -31,6 +43,7 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
     var decision: DurableQueueDecision?
     var failure: DurableQueueFailure?
     var result: DurableQueueResult?
+    var resolutionTrace: DurableQueueResolutionTrace?
 
     init(
         id: UUID = UUID(),
@@ -43,7 +56,8 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         attempts: [DurableQueueAttempt] = [],
         decision: DurableQueueDecision? = nil,
         failure: DurableQueueFailure? = nil,
-        result: DurableQueueResult? = nil
+        result: DurableQueueResult? = nil,
+        resolutionTrace: DurableQueueResolutionTrace? = nil
     ) {
         self.id = id
         self.ordinal = ordinal
@@ -56,6 +70,7 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         self.decision = decision
         self.failure = failure
         self.result = result
+        self.resolutionTrace = resolutionTrace
     }
 
     func restoredAfterLaunch() -> DurableConversionQueueItem {
@@ -78,10 +93,34 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
     }
 }
 
+struct DurableQueueResolutionTrace: Codable, Equatable {
+    let conflictID: String
+    let resolutionID: String
+    let qualityOutcome: String
+    let fileOutcome: String
+
+    init(
+        conflictID: String,
+        resolutionID: String,
+        qualityOutcome: String,
+        fileOutcome: String
+    ) {
+        self.conflictID = conflictID
+        self.resolutionID = resolutionID
+        self.qualityOutcome = qualityOutcome
+        self.fileOutcome = fileOutcome
+    }
+}
+
 enum DurableQueueItemOrigin: String, Codable, Equatable {
     case singleSource
     case multiTitle
     case sourceFolder
+}
+
+enum SourceFolderDiscTitleSelection: String, Codable, Equatable {
+    case mainFeature
+    case all3DVideos
 }
 
 enum DurableQueueItemState: String, Codable, Equatable, CaseIterable {
@@ -103,27 +142,39 @@ struct DurableQueueItemIntent: Codable, Equatable {
     var destinationPath: String
     var options: ConversionOptions
     var selectedTitle: SourceTitle?
+    var sourceFolderDiscTitleSelection: SourceFolderDiscTitleSelection?
+    var sourceFolderTitleIndex: Int?
 
     init(
         source: DurableQueueSource,
         profile: DurableQueueProfile,
         destinationPath: String,
         options: ConversionOptions,
-        selectedTitle: SourceTitle? = nil
+        selectedTitle: SourceTitle? = nil,
+        sourceFolderDiscTitleSelection: SourceFolderDiscTitleSelection? = nil,
+        sourceFolderTitleIndex: Int? = nil
     ) {
         self.source = source
         self.profile = profile
         self.destinationPath = destinationPath
         self.options = options
         self.selectedTitle = selectedTitle
+        self.sourceFolderDiscTitleSelection = sourceFolderDiscTitleSelection
+        self.sourceFolderTitleIndex = sourceFolderTitleIndex
     }
 
-    init(draft: ConversionDraft) {
+    init(
+        draft: ConversionDraft,
+        sourceFolderDiscTitleSelection: SourceFolderDiscTitleSelection? = nil,
+        sourceFolderTitleIndex: Int? = nil
+    ) {
         source = DurableQueueSource(source: draft.source)
         profile = DurableQueueProfile(profile: draft.profile)
         destinationPath = draft.destinationURL.standardizedFileURL.path
         options = draft.options
         selectedTitle = draft.selectedTitle
+        self.sourceFolderDiscTitleSelection = sourceFolderDiscTitleSelection
+        self.sourceFolderTitleIndex = sourceFolderTitleIndex
     }
 }
 

@@ -24,15 +24,16 @@ jobs:
       contents: read
     outputs:
       base_main_sha: ${{ steps.base.outputs.sha }}
+      evidence_ref: ${{ steps.sanitize.outputs.evidence_ref }}
       existing_branch_sha: ${{ steps.reuse.outputs.existing_branch_sha }}
       has_changes: ${{ steps.stage.outputs.has_changes }}
-      manifest_sha256: ${{ steps.reconcile.outputs.manifest_sha256 }}
-      receipt_file_sha256: ${{ steps.reconcile.outputs.receipt_file_sha256 }}
-      release_run_id: ${{ steps.reconcile.outputs.release_run_id }}
-      release_tag: ${{ steps.reconcile.outputs.release_tag }}
-      signed_ui_receipt_sha256: ${{ steps.reconcile.outputs.signed_ui_receipt_sha256 }}
-      signed_ui_artifact_sha256: ${{ steps.reconcile.outputs.signed_ui_artifact_sha256 }}
-      source_sha: ${{ steps.reconcile.outputs.source_sha }}
+      manifest_sha256: ${{ steps.final-outputs.outputs.manifest_sha256 }}
+      receipt_file_sha256: ${{ steps.final-outputs.outputs.receipt_file_sha256 }}
+      release_run_id: ${{ steps.final-outputs.outputs.release_run_id }}
+      release_tag: ${{ steps.sanitize.outputs.release_tag }}
+      signed_ui_receipt_sha256: ${{ steps.final-outputs.outputs.signed_ui_receipt_sha256 }}
+      signed_ui_artifact_sha256: ${{ steps.final-outputs.outputs.signed_ui_artifact_sha256 }}
+      source_sha: ${{ steps.final-outputs.outputs.source_sha }}
     steps:
       - name: Checkout current protected main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -82,6 +83,7 @@ jobs:
           fi
 
       - name: Resolve the immutable release and receipt
+        id: publication
         env:
           EXPECTED_RUN_ID: ${{ steps.source.outputs.release_run_id }}
           EXPECTED_SOURCE_SHA: ${{ steps.source.outputs.release_source_sha }}
@@ -126,14 +128,25 @@ jobs:
             --connect-timeout 10 --max-time 60 \
             "https://cbusillo.github.io/BD_to_AVP/appcast.xml" \
             --output live-appcast.xml
+          echo "live_appcast_verified_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      - name: Sanitize release evidence tag and ref
+        id: sanitize
+        run: |
+          set -euo pipefail
+          python -m scripts.release_evidence_v2 sanitize \
+            --release-receipt release-receipt.json \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Preserve an existing idempotent evidence branch
         id: reuse
+        env:
+          EVIDENCE_REF: ${{ steps.sanitize.outputs.evidence_ref }}
+          RELEASE_TAG: ${{ steps.sanitize.outputs.release_tag }}
         run: |
           set -euo pipefail
           RECEIPT_FILE_SHA256=$(sha256sum release-receipt.json | awk '{print $1}')
-          RELEASE_TAG=$(jq -r .release.tag release-receipt.json)
-          BRANCH_NAME="automation/release-evidence-$RELEASE_TAG"
+          BRANCH_NAME="$EVIDENCE_REF"
           MANIFEST_PATH="docs/release-evidence/$RELEASE_TAG/qualification-manifest.json"
           QUALIFICATION_RECORD_PATH="docs/release-evidence/$RELEASE_TAG/qualification-record.json"
           SIGNED_UI_ARCHIVE_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui.zip"
@@ -318,6 +331,7 @@ jobs:
             --release-tag "$CANDIDATE_TAG" \
             --releases-json releases-pages.json \
             --head-ref "$CANDIDATE_SHA" \
+            --checked-receipts-root docs/release-evidence \
             --github-output "$GITHUB_OUTPUT"
           PRIOR_TAG=$(sed -n 's/^prior_tag=//p' "$GITHUB_OUTPUT" | tail -1)
           if [ -z "$PRIOR_TAG" ]; then
@@ -347,7 +361,7 @@ jobs:
             --signed-ui-artifact-archive "${{ steps.signed-ui.outputs.archive_path }}" \
             --signed-ui-receipt "${{ steps.signed-ui.outputs.receipt_path }}" \
             --signed-ui-receipt-file-sha256 "${{ steps.signed-ui.outputs.receipt_file_sha256 }}" \
-            --evidence-ref "automation/release-evidence-$(jq -er .release.tag release-receipt.json)" \
+            --evidence-ref "${{ steps.sanitize.outputs.evidence_ref }}" \
             --evidence-base-sha "${{ steps.base.outputs.sha }}" \
             --runner-sha "${{ steps.base.outputs.sha }}" \
             --sparkle-route "${{ steps.signed-ui.outputs.sparkle_route }}" \
@@ -355,21 +369,78 @@ jobs:
             "${RECOVERY_ARGS[@]}" \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Generate or validate durable capture-v2
+        id: capture-v2
+        if: steps.reuse.outputs.checkpoint_source != 'main'
+        env:
+          CAPTURE_TIMESTAMP: ${{ steps.publication.outputs.live_appcast_verified_at }}
+          CAPTURE_WORKFLOW_ACTOR: ${{ github.actor }}
+          CAPTURE_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CAPTURE_WORKFLOW_RUN_ID: ${{ github.run_id }}
+          EVIDENCE_REF: ${{ steps.sanitize.outputs.evidence_ref }}
+          RELEASE_TAG: ${{ steps.sanitize.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          BUNDLE="docs/release-evidence/$RELEASE_TAG"
+          python -m scripts.release_evidence_v2 capture \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --release-receipt "$BUNDLE/release-receipt.json" \
+            --release release.json \
+            --qualification-record "$BUNDLE/qualification-record.json" \
+            --qualification-manifest "$BUNDLE/qualification-manifest.json" \
+            --signed-ui-archive "$BUNDLE/signed-artifact-ui.zip" \
+            --signed-ui-receipt "$BUNDLE/signed-artifact-ui-receipt.json" \
+            --live-appcast live-appcast.xml \
+            --captured-at "$CAPTURE_TIMESTAMP" \
+            --live-appcast-verified-at "$CAPTURE_TIMESTAMP" \
+            --capture-workflow-actor "$CAPTURE_WORKFLOW_ACTOR" \
+            --capture-workflow-path .github/workflows/release-evidence.yml \
+            --capture-workflow-run-id "$CAPTURE_WORKFLOW_RUN_ID" \
+            --capture-workflow-run-attempt "$CAPTURE_WORKFLOW_RUN_ATTEMPT" \
+            --evidence-ref "$EVIDENCE_REF" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Generate and check durable index-v2
+        run: |
+          set -euo pipefail
+          python -m scripts.release_evidence_v2 index --write --repo-root "$GITHUB_WORKSPACE"
+          python -m scripts.release_evidence_v2 index --check --worktree --repo-root "$GITHUB_WORKSPACE"
+
+      - name: Publish complete evidence outputs
+        id: final-outputs
+        env:
+          RELEASE_TAG: ${{ steps.sanitize.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          BUNDLE="docs/release-evidence/$RELEASE_TAG"
+          {
+            echo "manifest_sha256=$(jq -er .manifest_sha256 "$BUNDLE/qualification-manifest.json")"
+            echo "receipt_file_sha256=$(sha256sum "$BUNDLE/release-receipt.json" | awk '{print $1}')"
+            echo "release_run_id=$(jq -er .workflow.run_id "$BUNDLE/release-receipt.json")"
+            echo "signed_ui_receipt_sha256=$(jq -er .receipt_sha256 "$BUNDLE/signed-artifact-ui-receipt.json")"
+            echo "signed_ui_artifact_sha256=$(sha256sum "$BUNDLE/signed-artifact-ui.zip" | awk '{print $1}')"
+            echo "source_sha=$(jq -er .source_sha "$BUNDLE/release-receipt.json")"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Stage only generated evidence files
         id: stage
         run: |
           set -euo pipefail
           mkdir -p prepared-evidence
           {
-            git diff --name-only main...HEAD -- docs
             git diff --name-only -- docs
             git ls-files --others --exclude-standard -- docs
-          } | LC_ALL=C sort -u > evidence-files.txt
-          if [ ! -s evidence-files.txt ]; then
+          } | LC_ALL=C sort -u > new-evidence-files.txt
+          if [ ! -s new-evidence-files.txt ]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          {
+            git diff --name-only main...HEAD -- docs
+            git diff --name-only -- docs
+            git ls-files --others --exclude-standard -- docs
+          } | LC_ALL=C sort -u > evidence-files.txt
           while IFS= read -r path; do
             rsync -R "$path" prepared-evidence/
           done < evidence-files.txt
@@ -383,20 +454,20 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  create-pr:
-    name: Open or update release evidence pull request
+  publish-evidence-branch:
+    name: Commit and push durable release evidence branch
     needs: validate-and-prepare
     if: needs.validate-and-prepare.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
-      pull-requests: write
     steps:
-      - name: Checkout current protected main
+      - name: Checkout exact protected-main evidence base
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          persist-credentials: false
+          fetch-depth: 0
+          persist-credentials: true
           ref: main
 
       - name: Reject protected-main movement during evidence transfer
@@ -405,20 +476,27 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$(git rev-parse HEAD)" != "$EXPECTED_MAIN_SHA" ]; then
+            echo "Checked release evidence base differs from the prepared protected-main SHA." >&2
+            exit 1
+          fi
+          REMOTE_MAIN_SHA=$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')
+          if [ "$REMOTE_MAIN_SHA" != "$EXPECTED_MAIN_SHA" ]; then
             echo "Protected main moved after evidence preparation; rerun against the new base." >&2
             exit 1
           fi
 
       - name: Reject conflicting evidence on the idempotent branch
         env:
-          BRANCH_NAME: automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}
+          EVIDENCE_REF: ${{ needs.validate-and-prepare.outputs.evidence_ref }}
           EXPECTED_EXISTING_BRANCH_SHA: ${{ needs.validate-and-prepare.outputs.existing_branch_sha }}
+          EXPECTED_MAIN_SHA: ${{ needs.validate-and-prepare.outputs.base_main_sha }}
           EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}
           EXPECTED_SIGNED_UI_RECEIPT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_receipt_sha256 }}
           EXPECTED_SIGNED_UI_ARTIFACT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_artifact_sha256 }}
           RELEASE_TAG: ${{ needs.validate-and-prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
+          BRANCH_NAME="$EVIDENCE_REF"
           REMOTE_BRANCH_SHA=$(git ls-remote --heads origin "refs/heads/$BRANCH_NAME" | awk '{print $1}')
           if [ "$REMOTE_BRANCH_SHA" != "$EXPECTED_EXISTING_BRANCH_SHA" ]; then
             echo "Evidence branch moved after evidence preparation; rerun against its current head." >&2
@@ -426,10 +504,16 @@ jobs:
           fi
           if [ -n "$REMOTE_BRANCH_SHA" ]; then
             git fetch --no-tags origin "refs/heads/$BRANCH_NAME:refs/remotes/origin/release-evidence-existing"
+            if git diff --name-only "$EXPECTED_MAIN_SHA"...refs/remotes/origin/release-evidence-existing \
+              | grep -Ev '^docs/' | grep -q .; then
+              echo "Existing evidence branch contains changes outside docs/." >&2
+              exit 1
+            fi
             RECEIPT_PATH="docs/release-evidence/$RELEASE_TAG/release-receipt.json"
             if git cat-file -e "refs/remotes/origin/release-evidence-existing:$RECEIPT_PATH" 2>/dev/null; then
-              git show "refs/remotes/origin/release-evidence-existing:$RECEIPT_PATH" > existing-release-receipt.json
-              if [ "$(sha256sum existing-release-receipt.json | awk '{print $1}')" \
+              git show "refs/remotes/origin/release-evidence-existing:$RECEIPT_PATH" \
+                > "$RUNNER_TEMP/existing-release-receipt.json"
+              if [ "$(sha256sum "$RUNNER_TEMP/existing-release-receipt.json" | awk '{print $1}')" \
                 != "$EXPECTED_RECEIPT_FILE_SHA256" ]; then
                 echo "Existing evidence branch contains a conflicting receipt for the immutable release." >&2
                 exit 1
@@ -447,8 +531,8 @@ jobs:
             SIGNED_UI_ARCHIVE_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui.zip"
             if git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_ARCHIVE_PATH" 2>/dev/null; then
               git show "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_ARCHIVE_PATH" \
-                > existing-signed-artifact-ui.zip
-              if [ "$(sha256sum existing-signed-artifact-ui.zip | awk '{print $1}')" \
+                > "$RUNNER_TEMP/existing-signed-artifact-ui.zip"
+              if [ "$(sha256sum "$RUNNER_TEMP/existing-signed-artifact-ui.zip" | awk '{print $1}')" \
                 != "$EXPECTED_SIGNED_UI_ARTIFACT_SHA256" ]; then
                 echo "Existing evidence branch contains a conflicting signed UI artifact archive." >&2
                 exit 1
@@ -456,28 +540,158 @@ jobs:
             fi
           fi
 
+      - name: Prepare exact evidence branch parent and actor identity
+        env:
+          EVIDENCE_ACTOR_ID: ${{ github.actor_id }}
+          EVIDENCE_ACTOR_LOGIN: ${{ github.actor }}
+          EVIDENCE_REF: ${{ needs.validate-and-prepare.outputs.evidence_ref }}
+          EXPECTED_EXISTING_BRANCH_SHA: ${{ needs.validate-and-prepare.outputs.existing_branch_sha }}
+          EXPECTED_MAIN_SHA: ${{ needs.validate-and-prepare.outputs.base_main_sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$EVIDENCE_ACTOR_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "GitHub evidence actor ID is invalid." >&2
+            exit 1
+          fi
+          if [ -z "$EVIDENCE_ACTOR_LOGIN" ] || [[ "$EVIDENCE_ACTOR_LOGIN" == *[!A-Za-z0-9_-]* ]]; then
+            echo "GitHub evidence actor login is invalid." >&2
+            exit 1
+          fi
+          ACTOR_EMAIL="$EVIDENCE_ACTOR_ID+$EVIDENCE_ACTOR_LOGIN@users.noreply.github.com"
+          git config user.name "$EVIDENCE_ACTOR_LOGIN"
+          git config user.email "$ACTOR_EMAIL"
+          git config commit.gpgsign false
+          if [ -n "$EXPECTED_EXISTING_BRANCH_SHA" ]; then
+            if [ "$(git rev-parse refs/remotes/origin/release-evidence-existing)" \
+              != "$EXPECTED_EXISTING_BRANCH_SHA" ]; then
+              echo "Fetched evidence branch differs from its prepared SHA." >&2
+              exit 1
+            fi
+            git switch -C "$EVIDENCE_REF" refs/remotes/origin/release-evidence-existing
+            if ! git merge --no-edit "$EXPECTED_MAIN_SHA"; then
+              ROLLING_QUALIFICATION_PATH=$(jq -er .releaseOperations.qualificationRecordPath .github/github.json)
+              CONFLICTS=$(git diff --name-only --diff-filter=U)
+              CONFLICT_COUNT=$(printf '%s\n' "$CONFLICTS" | sed '/^$/d' | wc -l | tr -d ' ')
+              if [ "$CONFLICT_COUNT" = "1" ] && [ "$CONFLICTS" = "$ROLLING_QUALIFICATION_PATH" ]; then
+                git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"
+                git add "$ROLLING_QUALIFICATION_PATH"
+                git commit --no-edit
+              else
+                printf 'Existing evidence branch has unsupported merge conflicts:\n%s\n' "$CONFLICTS" >&2
+                git merge --abort
+                exit 1
+              fi
+            fi
+          else
+            git switch -c "$EVIDENCE_REF" "$EXPECTED_MAIN_SHA"
+          fi
+          if git diff --name-only "$EXPECTED_MAIN_SHA"...HEAD | grep -Ev '^docs/' | grep -q .; then
+            echo "Prepared evidence branch contains changes outside docs/." >&2
+            exit 1
+          fi
+
       - name: Download prepared evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-evidence-${{ github.event.workflow_run.id }}
-          path: .
+          path: ${{ runner.temp }}/prepared-evidence
 
-      - name: Create or update evidence pull request
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
-        with:
-          add-paths: docs
-          branch: automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}
-          commit-message: Record immutable evidence for ${{ needs.validate-and-prepare.outputs.release_tag }}
-          delete-branch: true
-          title: Record immutable evidence for ${{ needs.validate-and-prepare.outputs.release_tag }}
-          body: |
-            Records the deterministic public-safe receipt and publication evidence for `${{ needs.validate-and-prepare.outputs.release_tag }}`.
-
-            - Release run: `${{ needs.validate-and-prepare.outputs.release_run_id }}`
-            - Source SHA: `${{ needs.validate-and-prepare.outputs.source_sha }}`
-            - Receipt file SHA-256: `${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}`
-            - Qualification manifest SHA-256: `${{ needs.validate-and-prepare.outputs.manifest_sha256 }}`
-
-            The release workflow, immutable asset identities, signed artifact UI receipt, live Pages appcast, qualification manifest, qualification record, release ledger, and cut packet were revalidated before this branch was prepared. Signing and deployment secrets are not available to this workflow.
-
-            Publication is immutable, but this PR remains intentionally unmergeable until its post-publication milestone qualification check has accepted every blocking live-artifact and automated Tier 3 receipt. Optional physical-hardware and native-window presentation outcomes remain visible without blocking reconciliation. Add validated receipts to this idempotent branch; do not rebuild, retag, or replace the published release.
+      - name: Commit and push exact docs-only evidence
+        id: publish
+        env:
+          EVIDENCE_REF: ${{ needs.validate-and-prepare.outputs.evidence_ref }}
+          EXPECTED_EXISTING_BRANCH_SHA: ${{ needs.validate-and-prepare.outputs.existing_branch_sha }}
+          EXPECTED_MAIN_SHA: ${{ needs.validate-and-prepare.outputs.base_main_sha }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.validate-and-prepare.outputs.manifest_sha256 }}
+          EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}
+          EXPECTED_SIGNED_UI_RECEIPT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_receipt_sha256 }}
+          EXPECTED_SIGNED_UI_ARTIFACT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_artifact_sha256 }}
+          PREPARED_ROOT: ${{ runner.temp }}/prepared-evidence
+          RELEASE_TAG: ${{ needs.validate-and-prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if find "$PREPARED_ROOT" -mindepth 1 ! -type d ! -type f -print -quit | grep -q .; then
+            echo "Prepared evidence artifact contains an unsupported filesystem entry." >&2
+            exit 1
+          fi
+          : > "$RUNNER_TEMP/prepared-evidence-files.txt"
+          while IFS= read -r -d '' prepared_path; do
+            relative_path=${prepared_path#"$PREPARED_ROOT/"}
+            case "$relative_path" in
+              docs/*) ;;
+              *)
+                echo "Prepared evidence artifact contains a path outside docs/: $relative_path" >&2
+                exit 1
+                ;;
+            esac
+            printf '%s\n' "$relative_path" >> "$RUNNER_TEMP/prepared-evidence-files.txt"
+            mkdir -p "$(dirname "$relative_path")"
+            cp "$prepared_path" "$relative_path"
+          done < <(find "$PREPARED_ROOT" -type f -print0 | LC_ALL=C sort -z)
+          if [ ! -s "$RUNNER_TEMP/prepared-evidence-files.txt" ]; then
+            echo "Prepared evidence artifact is empty." >&2
+            exit 1
+          fi
+          git add -- docs
+          git diff --cached --name-only > "$RUNNER_TEMP/staged-evidence-files.txt"
+          if [ ! -s "$RUNNER_TEMP/staged-evidence-files.txt" ]; then
+            echo "Prepared evidence produced no branch changes." >&2
+            exit 1
+          fi
+          if grep -Ev '^docs/' "$RUNNER_TEMP/staged-evidence-files.txt" | grep -q .; then
+            echo "Evidence commit attempted to stage a path outside docs/." >&2
+            exit 1
+          fi
+          git commit -m "Record immutable evidence for $RELEASE_TAG" -- docs
+          COMMIT_SHA=$(git rev-parse HEAD)
+          REMOTE_MAIN_SHA=$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')
+          if [ "$REMOTE_MAIN_SHA" != "$EXPECTED_MAIN_SHA" ]; then
+            echo "Protected main moved before evidence publication; refusing the push." >&2
+            exit 1
+          fi
+          REMOTE_BRANCH_SHA=$(git ls-remote --heads origin "refs/heads/$EVIDENCE_REF" | awk '{print $1}')
+          if [ "$REMOTE_BRANCH_SHA" != "$EXPECTED_EXISTING_BRANCH_SHA" ]; then
+            echo "Evidence branch moved before the evidence commit could be pushed." >&2
+            exit 1
+          fi
+          git push origin "$COMMIT_SHA:refs/heads/$EVIDENCE_REF"
+          PUBLISHED_SHA=$(git ls-remote --heads origin "refs/heads/$EVIDENCE_REF" | awk '{print $1}')
+          if [ "$PUBLISHED_SHA" != "$COMMIT_SHA" ]; then
+            echo "Evidence branch did not resolve to the pushed commit." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin \
+            "refs/heads/$EVIDENCE_REF:refs/remotes/origin/release-evidence-verified"
+          if [ "$(git rev-parse refs/remotes/origin/release-evidence-verified)" != "$COMMIT_SHA" ]; then
+            echo "Fetched evidence branch does not match the pushed commit." >&2
+            exit 1
+          fi
+          if git diff --name-only "$EXPECTED_MAIN_SHA"...refs/remotes/origin/release-evidence-verified \
+            | grep -Ev '^docs/' | grep -q .; then
+            echo "Published evidence branch contains changes outside docs/." >&2
+            exit 1
+          fi
+          while IFS= read -r relative_path; do
+            git show "refs/remotes/origin/release-evidence-verified:$relative_path" \
+              > "$RUNNER_TEMP/published-evidence-file"
+            if ! cmp -s "$PREPARED_ROOT/$relative_path" "$RUNNER_TEMP/published-evidence-file"; then
+              echo "Published evidence content differs for $relative_path." >&2
+              exit 1
+            fi
+          done < "$RUNNER_TEMP/prepared-evidence-files.txt"
+          BUNDLE="docs/release-evidence/$RELEASE_TAG"
+          git show "refs/remotes/origin/release-evidence-verified:$BUNDLE/capture-v2.json" \
+            | jq -e --arg tag "$RELEASE_TAG" '.state == "CAPTURED" and .release_tag == $tag' >/dev/null
+          test "$(git show "refs/remotes/origin/release-evidence-verified:$BUNDLE/qualification-manifest.json" \
+            | jq -er .manifest_sha256)" = "$EXPECTED_MANIFEST_SHA256"
+          git show "refs/remotes/origin/release-evidence-verified:$BUNDLE/release-receipt.json" \
+            > "$RUNNER_TEMP/published-release-receipt.json"
+          test "$(sha256sum "$RUNNER_TEMP/published-release-receipt.json" | awk '{print $1}')" \
+            = "$EXPECTED_RECEIPT_FILE_SHA256"
+          test "$(git show "refs/remotes/origin/release-evidence-verified:$BUNDLE/signed-artifact-ui-receipt.json" \
+            | jq -er .receipt_sha256)" = "$EXPECTED_SIGNED_UI_RECEIPT_SHA256"
+          git show "refs/remotes/origin/release-evidence-verified:$BUNDLE/signed-artifact-ui.zip" \
+            > "$RUNNER_TEMP/published-signed-artifact-ui.zip"
+          test "$(sha256sum "$RUNNER_TEMP/published-signed-artifact-ui.zip" | awk '{print $1}')" \
+            = "$EXPECTED_SIGNED_UI_ARTIFACT_SHA256"
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"

@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from scripts.release_qualification_apply import (
@@ -27,44 +28,6 @@ from scripts.release_qualification_resume import ResumeIdentity
 RELEASE_TAG = "v1.0.0"
 EVIDENCE_REF = f"automation/release-evidence-{RELEASE_TAG}"
 ACTOR_ID = 1_875_516
-
-
-class FakeGitHubAPI:
-    def __init__(self) -> None:
-        self.comments: list[dict[str, object]] = []
-        self.gets: list[str] = []
-        self.posts: list[tuple[str, dict[str, object]]] = []
-        self.fail_post_after_store = False
-
-    def get_json(self, endpoint: str, *, active_auth: bool = False) -> object:
-        self.gets.append(endpoint)
-        if "/issues/comments/" in endpoint:
-            comment_id = int(endpoint.rsplit("/", 1)[1])
-            return next(comment for comment in self.comments if comment["id"] == comment_id)
-        if "/comments?" not in endpoint:
-            raise AssertionError(f"Unexpected GitHub GET: {endpoint}")
-        page = int(endpoint.rsplit("page=", 1)[1])
-        start = (page - 1) * 100
-        return self.comments[start : start + 100]
-
-    def post_json(
-        self,
-        endpoint: str,
-        payload: dict[str, object],
-        *,
-        active_auth: bool = False,
-    ) -> object:
-        self.posts.append((endpoint, dict(payload)))
-        comment = {
-            "id": len(self.comments) + 1,
-            "body": payload["body"],
-            "user": {"id": ACTOR_ID, "login": "cbusillo"},
-        }
-        self.comments.append(comment)
-        if self.fail_post_after_store:
-            self.fail_post_after_store = False
-            raise QualificationApplyError("simulated lost comment response")
-        return comment
 
 
 class ApplyFixture:
@@ -94,7 +57,6 @@ class ApplyFixture:
             evidence_ref=EVIDENCE_REF,
             evidence_sha=self.base_sha,
             evidence_base_sha="e" * 40,
-            evidence_pr_number=42,
             release_receipt_file_sha256="5" * 64,
             signed_ui_artifact_id=456,
             signed_ui_artifact_sha256="6" * 64,
@@ -155,7 +117,6 @@ class ApplyFixture:
         ).hexdigest()
         self.bundle = ReconciliationBundle(plan=plan, files=self.files)
         self.checkpoint = root.parent / "apply.json"
-        self.client = FakeGitHubAPI()
         self.revalidations: list[str] = []
         self.active_checks = 0
 
@@ -199,7 +160,6 @@ class ApplyFixture:
                 identity=self.identity,
                 bundle=self.bundle,
                 expected_plan_sha256=self.bundle.plan["plan_sha256"],
-                client=self.client,
                 checkpoint_path=self.checkpoint,
                 revalidate_remote=self.revalidate,
                 ensure_no_active_runs=self.ensure_no_active,
@@ -216,7 +176,6 @@ class ApplyFixture:
                 repo_root=self.root,
                 identity=self.identity,
                 expected_plan_sha256=self.bundle.plan["plan_sha256"],
-                client=self.client,
                 checkpoint_path=self.checkpoint,
                 revalidate_remote=self.revalidate,
                 ensure_no_active_runs=self.ensure_no_active,
@@ -226,7 +185,7 @@ class ApplyFixture:
 
 
 class ReleaseQualificationApplyTests(unittest.TestCase):
-    def test_apply_writes_commits_pushes_and_comments_once(self) -> None:
+    def test_apply_writes_commits_pushes_and_removes_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory) / "work"
             root.mkdir()
@@ -237,10 +196,10 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
 
             self.assertEqual(outcome.state, "reconciliation_applied")
             self.assertEqual(fixture.remote_sha(), outcome.commit_sha)
-            self.assertEqual(len(fixture.client.comments), 1)
             self.assertIsNone(checkpoint)
             self.assertFalse(fixture.checkpoint.exists())
             self.assertGreaterEqual(fixture.active_checks, 3)
+            self.assertNotIn("comment_id", outcome.__dataclass_fields__)
 
     def test_push_response_loss_adopts_remote_commit_without_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -269,7 +228,6 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
             self.assertIsNone(checkpoint)
             self.assertNotEqual(fixture.remote_sha(), fixture.base_sha)
             self.assertEqual(outcome.commit_sha, fixture.remote_sha())
-            self.assertEqual(len(fixture.client.comments), 1)
 
     def test_push_race_to_unrelated_commit_is_safety_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -304,37 +262,27 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
                 with self.assertRaisesRegex(QualificationApplySafetyError, "moved while"):
                     fixture.start()
 
-    def test_comment_response_loss_adopts_marker_without_duplicate(self) -> None:
+    def test_checkpoint_removal_interruption_adopts_pushed_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory) / "work"
             root.mkdir()
             fixture = ApplyFixture(root)
-            fixture.client.fail_post_after_store = True
 
-            with self.assertRaisesRegex(QualificationApplyError, "lost comment response"):
-                fixture.start()
+            with patch("pathlib.Path.unlink", side_effect=OSError("simulated checkpoint removal interruption")):
+                with self.assertRaisesRegex(QualificationApplyError, "remove completed"):
+                    fixture.start()
             checkpoint = load_reconciliation_checkpoint(fixture.checkpoint)
+            if checkpoint is None:
+                self.fail("pushed apply checkpoint was not preserved")
+            self.assertEqual(checkpoint["schema_version"], 2)
             self.assertEqual(checkpoint["progress"]["state"], "pushed")
+            self.assertNotIn("comment_id", checkpoint["progress"])
             self.assertEqual(stat.S_IMODE(fixture.checkpoint.stat().st_mode), 0o600)
-            self.assertEqual(len(fixture.client.comments), 1)
 
             outcome = fixture.continue_apply()
 
             self.assertEqual(outcome.state, "reconciliation_applied")
-            self.assertEqual(len(fixture.client.comments), 1)
-
-    def test_comment_marker_with_wrong_actor_id_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory) / "work"
-            root.mkdir()
-            fixture = ApplyFixture(root)
-            fixture.client.fail_post_after_store = True
-            with self.assertRaises(QualificationApplyError):
-                fixture.start()
-            fixture.client.comments[0]["user"] = {"id": 99, "login": "cbusillo"}
-
-            with self.assertRaisesRegex(QualificationApplySafetyError, "comment conflicts"):
-                fixture.continue_apply()
+            self.assertFalse(fixture.checkpoint.exists())
 
     def test_commit_created_before_checkpoint_update_is_adopted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -342,7 +290,7 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
             root.mkdir()
             fixture = ApplyFixture(root)
 
-            def fail_committed_transition(path, checkpoint, *, state, commit_sha, comment_id):
+            def fail_committed_transition(path, checkpoint, *, state, commit_sha):
                 if state == "committed":
                     raise QualificationApplyError("simulated checkpoint write interruption")
                 return _replace_progress(
@@ -350,7 +298,6 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
                     checkpoint,
                     state=state,
                     commit_sha=commit_sha,
-                    comment_id=comment_id,
                 )
 
             with (
@@ -363,6 +310,8 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
                 with self.assertRaisesRegex(QualificationApplyError, "checkpoint write interruption"):
                     fixture.start()
             checkpoint = load_reconciliation_checkpoint(fixture.checkpoint)
+            if checkpoint is None:
+                self.fail("files-written apply checkpoint was not preserved")
             self.assertEqual(checkpoint["progress"]["state"], "files_written")
             self.assertNotEqual(fixture.git("rev-parse", "HEAD"), fixture.base_sha)
 
@@ -385,8 +334,7 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
                         repo_root=root,
                         identity=fixture.identity,
                         bundle=fixture.bundle,
-                        expected_plan_sha256=fixture.bundle.plan["plan_sha256"],
-                        client=fixture.client,
+                        expected_plan_sha256=cast(str, fixture.bundle.plan["plan_sha256"]),
                         checkpoint_path=fixture.checkpoint,
                         revalidate_remote=fixture.revalidate,
                         ensure_no_active_runs=active,
@@ -414,9 +362,9 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
             root = Path(temporary_directory) / "work"
             root.mkdir()
             fixture = ApplyFixture(root)
-            fixture.client.fail_post_after_store = True
-            with self.assertRaises(QualificationApplyError):
-                fixture.start()
+            with patch("pathlib.Path.unlink", side_effect=OSError("simulated checkpoint removal interruption")):
+                with self.assertRaises(QualificationApplyError):
+                    fixture.start()
             payload = json.loads(fixture.checkpoint.read_text(encoding="utf-8"))
             payload["plan_sha256"] = "0" * 64
             fixture.checkpoint.write_text(json.dumps(payload), encoding="utf-8")
@@ -482,30 +430,6 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
         self.assertIn("https://github.com/cbusillo/BD_to_AVP.git", arguments)
         self.assertNotIn("GH_TOKEN", environment)
         self.assertNotIn("GITHUB_TOKEN", environment)
-
-    def test_comment_marker_on_second_page_is_adopted(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory) / "work"
-            root.mkdir()
-            fixture = ApplyFixture(root)
-            fixture.client.comments = [
-                {
-                    "id": index + 1,
-                    "body": f"comment {index}",
-                    "user": {"id": 99, "login": "someone"},
-                }
-                for index in range(100)
-            ]
-            fixture.client.fail_post_after_store = True
-            with self.assertRaises(QualificationApplyError):
-                fixture.start()
-            stored = fixture.client.comments[-1]
-            fixture.client.comments = [*fixture.client.comments[:100], stored]
-
-            outcome = fixture.continue_apply()
-
-            self.assertEqual(outcome.comment_id, stored["id"])
-            self.assertTrue(any("page=2" in endpoint for endpoint in fixture.client.gets))
 
 
 if __name__ == "__main__":

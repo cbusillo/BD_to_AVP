@@ -1,0 +1,358 @@
+{
+  "artifacts": {
+    "appcast": {
+      "asset_id": 526670551,
+      "kind": "appcast",
+      "name": "appcast.xml",
+      "sha256": "18bcadc222adb37c1215d64520d97ad7876b03e1640c7142605e4188890ed1db",
+      "size_bytes": 85820
+    },
+    "checksum": {
+      "asset_id": 526669503,
+      "kind": "checksum",
+      "name": "SHA256SUMS",
+      "sha256": "c24a90863e8f787fcf997f4181c7cd0387ff10d1d893fafd89dd19628dadcc80",
+      "size_bytes": 108
+    },
+    "dmg": {
+      "asset_id": 526669420,
+      "kind": "dmg",
+      "name": "3D-Blu-ray-to-Vision-Pro-0.3.2-beta.7.dmg",
+      "sha256": "76b74c7bf692879a4fe78b38e24a7f2d25bac034673e09861fd4f14c7ef966fc",
+      "size_bytes": 166897522
+    },
+    "signed_app_tree_sha256": "9e778470b4bbffc16e5600b6e5d8ee33a06b85c3391e92bb40f23b9bd54d9da6"
+  },
+  "candidate": {
+    "build_version": "169",
+    "package_version": "0.3.2b7",
+    "public_version": "0.3.2-beta.7",
+    "release_tag": "v0.3.2-beta.7",
+    "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290"
+  },
+  "canonical_evidence": {
+    "base_sha": "7b795f8d3862cf8c73088b5c7402f8a87cbd5380",
+    "ref": "automation/release-evidence-v0.3.2-beta.7"
+  },
+  "case_classifications": [
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "storage-capacity",
+        "support-diagnostics"
+      ],
+      "id": "capacity-known-low",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "storage-capacity",
+        "support-diagnostics"
+      ],
+      "id": "capacity-unknown-and-conflicting",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "tier3_automation_receipt"
+      ],
+      "blocking_phase": "milestone",
+      "contracts": [
+        "packaged-worker",
+        "profile-storage",
+        "release-engine",
+        "sparkle-update",
+        "tier3-evidence"
+      ],
+      "id": "clean-machine-signed-update",
+      "release_blocking": true,
+      "tier": 3
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "conversion-ownership",
+        "preview-lifecycle"
+      ],
+      "id": "gui-preview-cancel-cleanup",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "conversion-ownership",
+        "preview-lifecycle"
+      ],
+      "id": "gui-preview-failure-cleanup",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "preview-lifecycle",
+        "storage-capacity"
+      ],
+      "id": "gui-preview-low-local-ample-destination",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "tier3_automation_receipt"
+      ],
+      "blocking_phase": "milestone",
+      "contracts": [
+        "preview-lifecycle",
+        "profile-storage",
+        "sparkle-update",
+        "support-diagnostics",
+        "tier3-evidence"
+      ],
+      "id": "installed-ui-accessibility",
+      "release_blocking": true,
+      "tier": 3
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "subtitle-recovery"
+      ],
+      "id": "malformed-pgs-parser-recovery",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "milestone",
+      "contracts": [
+        "sparkle-update"
+      ],
+      "id": "native-sparkle-release-notes",
+      "release_blocking": false,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "conversion-ownership",
+        "storage-capacity"
+      ],
+      "id": "network-generated-final-output",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "conversion-ownership"
+      ],
+      "id": "overwrite-and-conversion-cancel",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "publication",
+      "contracts": [
+        "profile-storage"
+      ],
+      "id": "profile-save-action-accessibility",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "tier3_operator_receipt"
+      ],
+      "blocking_phase": "milestone",
+      "contracts": [
+        "conversion-ownership",
+        "packaged-worker",
+        "storage-capacity",
+        "subtitle-recovery",
+        "tier3-evidence"
+      ],
+      "id": "protected-real-media-conversion",
+      "release_blocking": false,
+      "tier": 3
+    },
+    {
+      "allowed_evidence_sources": [
+        "field_observation"
+      ],
+      "blocking_phase": "none",
+      "contracts": [
+        "support-diagnostics"
+      ],
+      "id": "public-diagnostics-and-field-closure",
+      "release_blocking": false,
+      "tier": 4
+    },
+    {
+      "allowed_evidence_sources": [
+        "release_run_receipt"
+      ],
+      "blocking_phase": "publication",
+      "contracts": [
+        "release-engine"
+      ],
+      "id": "release-workflow-identity",
+      "release_blocking": true,
+      "tier": 1
+    },
+    {
+      "allowed_evidence_sources": [
+        "release_run_receipt"
+      ],
+      "blocking_phase": "publication",
+      "contracts": [
+        "packaged-worker",
+        "release-engine"
+      ],
+      "id": "signed-packaged-route-parity",
+      "release_blocking": true,
+      "tier": 1
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "milestone",
+      "contracts": [
+        "sparkle-update"
+      ],
+      "id": "sparkle-update-route",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "signed_artifact_receipt"
+      ],
+      "blocking_phase": "release_candidate",
+      "contracts": [
+        "subtitle-recovery",
+        "support-diagnostics"
+      ],
+      "id": "subtitle-partial-output-diagnostics",
+      "release_blocking": true,
+      "tier": 2
+    },
+    {
+      "allowed_evidence_sources": [
+        "tier3_operator_receipt"
+      ],
+      "blocking_phase": "milestone",
+      "contracts": [
+        "conversion-ownership",
+        "packaged-worker",
+        "tier3-evidence"
+      ],
+      "id": "usb-bluray-makemkv",
+      "release_blocking": false,
+      "tier": 3
+    },
+    {
+      "allowed_evidence_sources": [
+        "tier3_operator_receipt"
+      ],
+      "blocking_phase": "milestone",
+      "contracts": [
+        "packaged-worker",
+        "tier3-evidence",
+        "vision-pro-playback"
+      ],
+      "id": "vision-pro-physical-playback",
+      "release_blocking": false,
+      "tier": 3
+    }
+  ],
+  "input_digests": {
+    "controller_runner": "7d4c5a096bf7fd1956a90bc4827cd09befbaa634b7a0a4acadb04b13303a6626",
+    "evidence_index_base": "41ef9efebb48b463268a5bd6d0b92536ce9b4db7661630aad8e16888111beef3",
+    "policy": "448f803fff707ef740a5d0ab0ac7327bc345a029499915fd0e80d5f0af648770",
+    "policy_checkpoint": "08ed612be96bd754c28b655a7398780a43d5cfdc35d2af60a7e8789f72907d47",
+    "qualification_record": "4fb7b10ed15b3c3f341b3386ba9502f3a0d126040916a912e8e8950b188786e0",
+    "route_table": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214"
+  },
+  "manifest_sha256": "db5a5a56ee21143b0999719342b29559b310ba87555410478d39570a7e480a2a",
+  "manifest_type": "bd-to-avp-release-qualification",
+  "paths": {
+    "controller_runner": ".github/workflows/milestone-qualification.yml",
+    "evidence_index": "docs/qualification/release-evidence-v1.json",
+    "policy": "docs/qualification/release-qualification-policy-v1.json",
+    "qualification": "docs/release-evidence/v0.3.2-beta.7/qualification-record.json",
+    "route_table": "docs/qualification/video-quality-route-table-v2.json"
+  },
+  "prior": {
+    "release_receipt": {
+      "file_sha256": "81e1568ff93c0fad946dff59c5d4e00c97008162db93218cc4f58dcd2ad8af6c",
+      "path": "docs/release-evidence/v0.3.2-beta.5/release-receipt.json",
+      "receipt_sha256": "9ab74f3ef369ed64de0f5e25297f025c88aeeeb811bb4c73525e3a25f5db1b89"
+    },
+    "release_tag": "v0.3.2-beta.5",
+    "source_sha": "f6ce414db07030e2ad2c081a9d4287639a113446"
+  },
+  "release": {
+    "id": 375333598,
+    "route": "prerelease",
+    "sparkle_route": "beta"
+  },
+  "release_receipt": {
+    "asset_id": 526671145,
+    "file_sha256": "6afe63b1212ce0b59d7b893f8b501297361c45e8fbf88484ab915e92f0b060b3",
+    "path": "docs/release-evidence/v0.3.2-beta.7/release-receipt.json",
+    "receipt_sha256": "c07a484c8ffd087625acf5ae4fcb8a0373bd216997f36bc1e36e5380eb344b6d"
+  },
+  "runner_sha": "7b795f8d3862cf8c73088b5c7402f8a87cbd5380",
+  "schema_version": 1,
+  "signed_ui_artifact": {
+    "archive_path": "docs/release-evidence/v0.3.2-beta.7/signed-artifact-ui.zip",
+    "artifact_id": 9500688540,
+    "artifact_sha256": "e6fb978a0f90ae5e448210c0c7a4c7356b9bae2bfcd2f2befb7827b3279cd9f0",
+    "receipt_file_sha256": "452e5098b1de521b09ab67b96afa5a7cf88e1161383f3f0fe8d2a9705ad8da7f",
+    "receipt_path": "docs/release-evidence/v0.3.2-beta.7/signed-artifact-ui-receipt.json",
+    "receipt_sha256": "a750280dd94f26418b097b18158c2e0e927b777eae520b314ff9ea736af95215"
+  },
+  "workflow": {
+    "actor": "shiny-code-bot",
+    "engine_path": ".github/workflows/release-engine.yml",
+    "name": "Prerelease",
+    "path": ".github/workflows/prerelease.yml",
+    "run_attempt": 1,
+    "run_id": 32666346343
+  }
+}

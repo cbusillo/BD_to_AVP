@@ -12,7 +12,7 @@ from typing import ClassVar, Iterable
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
-from bd_to_avp.modules.util import get_pyproject_data
+from bd_to_avp.modules.util import get_bundled_app_version, get_pyproject_data
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_quality_defaults import DEFAULT_AV1_CRF, DEFAULT_UPSCALE_QUALITY
 
@@ -21,7 +21,10 @@ SCRIPT_PATH = Path(__file__).parent.parent
 SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"
 HOMEBREW_PREFIX = Path("/opt/homebrew")
 HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX / "bin"
-MAKEMKV_APP_BUNDLE_BIN = Path("/Applications/MakeMKV.app/Contents/MacOS")
+MAKEMKV_APP_BUNDLE_BINS = (
+    Path("/Applications/MakeMKV.app/Contents/MacOS"),
+    Path("/Applications/MakeMKV/MakeMKV.app/Contents/MacOS"),
+)
 
 
 def tool_env_var(tool_name: str) -> str:
@@ -58,8 +61,8 @@ def resolve_tool_path(
 
 
 def resolve_makemkvcon_path() -> Path:
-    app_bundle_tool = MAKEMKV_APP_BUNDLE_BIN / "makemkvcon"
-    return resolve_tool_path("makemkvcon", extra_paths=[app_bundle_tool])
+    app_bundle_tools = [bundle_bin / "makemkvcon" for bundle_bin in MAKEMKV_APP_BUNDLE_BINS]
+    return resolve_tool_path("makemkvcon", extra_paths=app_bundle_tools)
 
 
 class Stage(Enum):
@@ -118,8 +121,8 @@ class Config:
     class App:
         def __init__(self) -> None:
             try:
-                project, briefcase = get_pyproject_data()
-                self.fullname = briefcase.get("project_name", "3D Blu-ray to Vision Pro")
+                project, app_metadata = get_pyproject_data()
+                self.fullname = app_metadata.get("project_name", "3D Blu-ray to Vision Pro")
                 self.shortname = project.get("name", "bd_to_avp")
             except FileNotFoundError:
                 self.fullname = "3D Blu-ray to Vision Pro"
@@ -137,6 +140,10 @@ class Config:
 
         @property
         def code_version(self) -> str:
+            bundled_version = get_bundled_app_version()
+            if bundled_version is not None:
+                return bundled_version
+
             try:
                 project, _ = get_pyproject_data()
                 return project["version"]

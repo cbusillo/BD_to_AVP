@@ -1,4 +1,5 @@
 import tomllib
+import plistlib
 from datetime import datetime, timedelta
 
 from pathlib import Path
@@ -26,9 +27,28 @@ def get_pyproject_data() -> tuple[dict, dict]:
 
     project = pyproject_data.get("project", {})
     tool = pyproject_data.get("tool", {})
-    briefcase = tool.get("briefcase", {})
+    app = tool.get("bd_to_avp", {})
 
-    return project, briefcase
+    return project, app
+
+
+def get_bundled_app_version(source_path: Path = Path(__file__)) -> str | None:
+    for parent in source_path.resolve().parents:
+        if parent.name != "Contents":
+            continue
+        info_path = parent / "Info.plist"
+        if not info_path.is_file():
+            return None
+        try:
+            with info_path.open("rb") as info_file:
+                info = plistlib.load(info_file)
+        except (OSError, plistlib.InvalidFileException):
+            return None
+        if info.get("BluRayToVisionProEngineBundled") is not True:
+            return None
+        version = info.get("CFBundleShortVersionString")
+        return version if isinstance(version, str) and version else None
+    return None
 
 
 def load_data_from_pyproject() -> dict | None:

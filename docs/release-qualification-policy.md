@@ -71,6 +71,15 @@ installed UI receipts. Other Tier 2 invalidations continue to block preparation
 and require another reviewed candidate rather than being deferred through
 publication.
 
+The release engine also runs a secret-free macOS package/UI qualification after
+preparation classification and before the `macos-signing` environment job. It
+uses an ad-hoc signed production package and production-shaped DMG to exercise
+worker identity, startup, cancellation, preview, bundled tools, clean-library
+profile creation, DMG installation, and installed accessibility behavior. This
+gate is preventive rather than evidentiary: it must pass before signing can
+begin, while the exact Developer ID signed artifact still requires fresh
+artifact and milestone receipts.
+
 ```sh
 uv run python -m scripts.qualify_release_scope \
   --candidate-sha "$CANDIDATE_SHA" \
@@ -80,6 +89,44 @@ uv run python -m scripts.qualify_release_scope \
   --workflow-phase preparation \
   --require-evidence
 ```
+
+When a published candidate's post-publication evidence branch cannot merge
+through its protected pull request, a reviewed successor preparation may add
+that release's exact checked receipt
+without claiming milestone completion. This narrow carry-forward is accepted
+only when the receipt was absent from the base, matches the immutable GitHub
+release asset and successful guarded workflow run, validates against its release
+tag commit, exactly matches the successor qualification's
+`immutable_history.previous_beta`, and is the only `docs/release-evidence/`
+addition. The branch must be the exact `prepare/<candidate-tag>` branch, and
+GitHub config may change only to advance `qualificationRecordPath`. The change
+may not modify the evidence index, release ledger, policy, route table,
+publication record, qualification snapshot, or milestone manifest. The
+receipt makes the real prior artifact available to `qualification-base` and the
+next exact-artifact route; it does not convert a failed milestone result into
+accepted evidence.
+
+When exact post-publication qualification fails after a release is already
+immutable, record the terminal result in
+`docs/release-evidence/<tag>/failed-post-publication-qualification-v1.json`.
+The canonical, self-digested record binds the checked receipt and every release
+asset, the successful publication workflow, the exact failed qualification
+run/job/step and observation, successor-only remediation, actors, timestamps,
+and the prohibition on rebuilding, retagging, replacing, unpublishing, or
+claiming qualification success. Validate a tracked record directly with:
+
+```sh
+uv run python -m scripts.release_milestone_context \
+  --failed-post-publication-tag <published-tag>
+```
+
+This disposition preserves failed qualification truth. It is not an accepted
+qualification receipt, does not make the failed evidence branch eligible to
+merge, and does not authorize successor preparation or release operations.
+Workflow and publication timestamps are revalidated from GitHub before record
+creation, then locked by the exact run/release identifiers, canonical file, and
+disposition self-digest; the release receipt itself does not carry those
+timestamps.
 
 Carry-forward is allowed only when an accepted named receipt exists and the
 diff from that receipt's source SHA contains no path covered by the case's
@@ -147,13 +194,18 @@ satisfy a blocking assertion. Blocking cases reject failed or skipped index
 entries. Only a passed receipt may be indexed as accepted release evidence.
 
 The maintained clean-machine, Sparkle, and installed UI/accessibility collector is documented in
-[`docs/tier3-clean-machine.md`](tier3-clean-machine.md). It uses an isolated
-synthetic home in a runner-owned disposable location, reuses the installed-app
-package smoke, revalidates the exact prior signed app immediately before an
-identifier-scoped bounded updater state machine, permits one clean retry only
-for classified pre-press environmental startup failures, verifies the final
-candidate identity, and emits checked `clean-machine-signed-update` and
-`installed-ui-accessibility` receipts.
+[`docs/tier3-clean-machine.md`](tier3-clean-machine.md). Its local
+`restorable-location` lane uses an isolated synthetic home in a runner-owned
+location. Its GitHub-hosted `resettable-vm` lane uses the runner's real home and
+normal `/Applications`, with strict hosted-runner, clean-state, exact-bundle
+cleanup, and bounded diagnostic guards. Both reuse the installed-app package
+smoke, revalidate the exact prior signed app immediately before an
+identifier-scoped bounded updater state machine, permit one clean retry only
+for classified pre-press environmental startup failures or a guarded state
+change before any action is pressed, detects exact candidate relaunches and
+application-process turnover between UI polls, verifies the final candidate
+identity, and emits checked
+`clean-machine-signed-update` and `installed-ui-accessibility` receipts.
 
 Physical drive, protected-media conversion, and Vision Pro playback evidence
 uses the guided collector and bounded receipt builder documented in
@@ -205,11 +257,21 @@ configured qualification record and every immutable candidate field remains
 present with an explicit JSON `null`. The candidate must advance from the bound
 published Stable identity to a newer derived Stable version and global build,
 and the evidence index may only
-append receipts without modifying or deleting accepted history. Any mutation
-under `docs/release-evidence/`, any evidence-index change without that validated
-preparation transition, or any qualification record carrying release IDs, run
-IDs, source SHA, artifact digests, or appcast digest still requires exactly one
-canonical checked release receipt on the idempotent
+append receipts without modifying or deleting accepted history.
+
+A Beta preparation remediation may also append change-scoped Tier 2 receipts
+without resetting the Stable qualification record. This lane requires the exact
+`qualify/<beta-tag>` branch, one new public-safe
+`docs/qualification/<beta-tag>-change-scoped-evidence-v1.json` document, receipts
+bound to the pull-request base SHA and that document's digest, and policy cases
+owned by the `release_candidate` phase. It rejects artifact-owned, live
+publication, milestone, Tier 1, and Tier 3 evidence, and it cannot claim
+Developer ID signing, notarization, or a created release identity.
+
+Any mutation under `docs/release-evidence/`, any other evidence-index change
+without a validated preparation transition, or any qualification record carrying
+release IDs, run IDs, source SHA, artifact digests, or appcast digest still
+requires exactly one canonical checked release receipt on the idempotent
 `automation/release-evidence-<tag>` branch.
 
 **Early gate (`qualify-preparation`)** runs after `prepare` and before `package`
@@ -421,14 +483,15 @@ including legacy v0.3.1, return `complete` without contacting GitHub or writing 
 checkpoint.
 
 Before offering dispatch, the controller verifies the repository identity,
-remote `main`, evidence ref and SHA, exactly one same-repository open evidence
-PR, docs-only branch diff, manifest self digest, runner SHA, candidate and
-release identities, signed UI artifact, policy/checkpoint/route/controller
-digests, and existing exact workflow runs through the same active GitHub
-identity used for dispatch. The workflow display title includes
+remote `main`, evidence ref and SHA, docs-only branch diff, manifest self digest,
+runner SHA, candidate and release identities, signed UI artifact,
+policy/checkpoint/route/controller digests, and existing exact workflow runs
+through the same active GitHub identity used for dispatch. The branch commit and
+its validated v2 `CAPTURED` bundle are durable without an open pull request. The
+workflow display title includes
 the release tag and full manifest digest because `workflow_dispatch` returns no
 run ID. More than one active exact run, a moved ref, a mismatched checkpoint, a
-fork PR, a skipped qualification job, partial identity, or any non-documentation
+skipped qualification job, partial identity, or any non-documentation
 evidence-branch change fails closed.
 
 The initial command reports `dispatch_ready` and the exact values required for
@@ -448,24 +511,35 @@ After successful job and artifact observation, `resume` automatically
 revalidates the exact artifact metadata, downloads the byte-bounded ZIP, rejects
 unsafe or unexpected members, validates its receipts against the runner-pinned
 policy and checked manifest, and emits a deterministic reconciliation plan.
+The plan writes the two Tier 3 receipts, indexes the existing exact signed UI
+receipt for `profile-save-action-accessibility`, and derives the live
+`sparkle-update-route` record from the validated update, profile, release,
+publication, manifest, and artifact bindings.
+Fixed tag-case Tier 3 paths are first-write destinations. If a later exact run
+produces different valid bytes, reconciliation preserves the accepted fixed
+file and index record, then writes and indexes the new receipt at a deterministic
+run-scoped path only when the fixed file has an exact accepted immutable index
+binding.
 `--observe-only` stops at `artifact_available` without downloading.
 `reconciliation_planned` requires an explicit rerun with
 `--apply-plan-sha256 <plan-sha256>`;
 `reconciliation_current` means the checked destinations and evidence records
 are already identical. Planning deliberately does not mutate evidence refs,
-files, commits, comments, or pull requests.
+files, or commits.
 
 Apply freezes the full authorized plan and exact target file bytes in a separate
 mode-`0600`, self-digested checkpoint while sharing the per-release dispatch
 lock. Before every mutation it revalidates protected `main`, the canonical
-evidence ref and same-repository pull request, the active `cbusillo` identity,
-and the absence of an active exact Milestone Qualification run. It writes only
-the planned qualification receipts and append-only evidence index, creates one
-identity-bound commit, performs a non-force fast-forward push, and posts one
-marker-bound pull-request comment. Prepared, files-written, committed, pushed,
-and commented states are adopted after interruption rather than repeated.
-Conflicting local content, unrelated worktree changes, moved refs, changed pull
-requests, duplicate markers, or a non-fast-forward push fail closed.
+evidence ref, the active `cbusillo` identity, and the absence of an active exact
+Milestone Qualification run. It writes only the planned qualification receipts
+and append-only evidence index, creates one identity-bound commit, performs a
+non-force fast-forward push, and revalidates the exact remote commit and content.
+Prepared, files-written, committed, and pushed states are adopted after
+interruption rather than repeated. Conflicting local content, unrelated
+worktree changes, moved refs, or a non-fast-forward push fail closed. Once the
+pushed commit is revalidated, the apply checkpoint is removed and the outcome
+contains the commit SHA; no pull-request comment or comment ID is created or
+persisted.
 
 Expired milestone transport may trigger an explicitly authorized fresh
 qualification run only when no validated apply checkpoint or equivalent durable
@@ -473,17 +547,34 @@ commit exists; it never reconstructs receipts. If equivalent receipts are
 already committed and accepted, `status` reports no blockers and `resume`
 returns `complete` regardless of Actions retention.
 
-The initial evidence PR is expected to remain unmergeable while blocking
+When a failed observed milestone run exposes a qualification-runner defect, a
+reviewed protected-main fix may refresh the canonical evidence manifest without
+changing the immutable release, receipt, or signed UI artifact. The controller
+does not silently discard the old checkpoint. It requires the exact failed run
+ID and attempt, the old checkpoint self-digest, and the refreshed main and
+manifest digests; it revalidates the historical run under the old identity,
+requires the new main to descend from the old runner, rejects changes to every
+decision-bearing manifest input and immutable release binding, rescans for a
+competing refreshed run at the mutation boundary, and atomically replaces only
+that observed checkpoint before dispatching the new runner identity.
+The same fail-closed replacement is available after an exact successful run
+when a later protected-main reconciliation enhancement requires one fresh run
+bound to the refreshed runner. It uses the same exact run ID, checkpoint digest,
+main digest, manifest digest, ancestry, immutable-binding, projection, and
+duplicate-run checks; it never reuses the earlier artifact under the new
+manifest identity.
+
+The durable evidence branch may remain without a pull request while blocking
 live-artifact or automated Tier 3 receipts are absent. Collectors add validated
 receipts to that same idempotent branch. Optional physical and native-window
 presentation outcomes remain visible in the report. A blocking milestone
 failure never rebuilds, retags, re-signs, replaces, or unpublishes the immutable
 release; it blocks evidence reconciliation and milestone completion until the
-checked blocking evidence passes.
-CI discovers checked manifest or release-receipt changes from the pull-request
-diff and requires a same-repository PR targeting `main`, the exact
-`automation/release-evidence-<tag>` branch, and a docs-only diff, so a fork or a
-copied evidence branch cannot skip the milestone gate.
+checked blocking evidence passes. When evidence is ready to merge, an operator
+opens the normal same-repository pull request from the exact
+`automation/release-evidence-<tag>` branch to `main`. Protected CI derives the
+checked manifest or release-receipt changes from that docs-only pull-request
+diff, and all protected-main review and required-check rules remain in force.
 
 The `--output` flag writes the JSON report before the enforcement exit,
 so the `if: always()` upload step captures it even when enforcement fails. The
@@ -501,9 +592,12 @@ After the operator workflow completes, `.github/workflows/release-evidence.yml`
 validates the successful `workflow_dispatch` run, approved actor, protected
 source SHA, immutable release fields, asset IDs and sizes, receipt digest, live
 Pages appcast, and the same-run signed UI artifact metadata and receipt while
-the Actions artifact is still available. It then opens or updates one
-task-branch PR containing the release receipt, signed UI receipt, qualification
-manifest, publication record, release ledger, qualification fields, and cut
-packet status. The workflow has no signing, notarization, Sparkle private-key,
-PyPI, or deployment secrets. The evidence PR cannot merge until protected CI's
-milestone report passes.
+the Actions artifact is still available. It then creates or advances the exact
+`automation/release-evidence-<tag>` branch with a direct actor-bound, non-force
+push containing the release receipt, signed UI receipt, durable v2 capture,
+qualification manifest, publication record, release ledger, qualification
+fields, and cut packet status. The workflow uses only `contents: write`, has no
+signing, notarization, Sparkle private-key, PyPI, deployment, or pull-request
+credential, and verifies the remote SHA and published bytes after the push. It
+does not open or delete a pull request. A later operator-opened merge pull
+request remains blocked until protected CI's milestone report passes.

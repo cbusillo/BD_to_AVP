@@ -119,6 +119,11 @@ def test_app(root: Path, payload: bytes = b"current build") -> Path:
 
 
 class NativeAppPackagingTests(unittest.TestCase):
+    def test_package_defaults_to_ad_hoc_signing(self) -> None:
+        args = parse_args(["package"])
+
+        self.assertEqual(args.sign_identity, "-")
+
     def test_worker_smoke_uses_current_protocol_version(self) -> None:
         self.assertEqual(WORKER_PROTOCOL_VERSION, PROTOCOL_VERSION)
 
@@ -129,8 +134,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
-        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.1")
-        self.assertEqual(NATIVE_BUILD_VERSION, "162")
+        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.3b1")
+        self.assertEqual(NATIVE_BUILD_VERSION, "172")
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
         self.assertEqual(MV_HEVC_ENCODER_NAME, "mv-hevc-encoder")
 
@@ -212,9 +217,15 @@ class NativeAppPackagingTests(unittest.TestCase):
         debug_settings = target_settings["configs"]["Debug"]
         release_settings = target_settings["configs"]["Release"]
         sparkle_manifest = tomllib.loads((REPO_ROOT / "vendor" / "sparkle-macos.toml").read_text(encoding="utf-8"))
-        briefcase_info = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["briefcase"][
-            "app"
-        ]["bd-to-avp"]["macOS"]["info"]
+        app_metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["bd_to_avp"]
+        sparkle_metadata = app_metadata["sparkle"]
+        expected_update_info = {
+            "BDToAVPDistributionChannel": app_metadata["distribution_channel"],
+            "SUAllowsAutomaticUpdates": sparkle_metadata["allows_automatic_updates"],
+            "SUFeedURL": sparkle_metadata["feed_url"],
+            "SUPublicEDKey": sparkle_metadata["public_key"],
+            "SUVerifyUpdateBeforeExtraction": sparkle_metadata["verify_update_before_extraction"],
+        }
         debug_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info.plist").read_bytes())
         release_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info-Release.plist").read_bytes())
         app_source = (MACOS_ROOT / "BluRayToVisionPro" / "App" / "BluRayToVisionProApp.swift").read_text(
@@ -258,7 +269,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         }
         for key in update_keys:
             self.assertNotIn(key, debug_info)
-            self.assertEqual(release_info[key], briefcase_info[key])
+            self.assertEqual(release_info[key], expected_update_info[key])
         self.assertEqual(debug_info, {key: value for key, value in release_info.items() if key not in update_keys})
         self.assertEqual(release_settings["INFOPLIST_FILE"], "BluRayToVisionPro/Info-Release.plist")
         self.assertNotIn("SUEnableAutomaticChecks", release_info)
@@ -282,13 +293,20 @@ class NativeAppPackagingTests(unittest.TestCase):
         conversion_options = (MACOS_ROOT / "BluRayToVisionPro" / "Models" / "ConversionOptions.swift").read_text(
             encoding="utf-8"
         )
-        conversion_ui = setup_view + encoding_editor + quality_editor + language_picker + conversion_options
+        conversion_workflow = (MACOS_ROOT / "BluRayToVisionPro" / "Models" / "ConversionWorkflow.swift").read_text(
+            encoding="utf-8"
+        )
+        conversion_ui = (
+            setup_view + encoding_editor + quality_editor + language_picker + conversion_options + conversion_workflow
+        )
 
         self.assertIn('.accessibilityLabel("\\(purpose.label): \\(selection.displayName)")', language_picker)
         self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
-        self.assertIn("Import MTS or M2TS transport stream", source_view)
+        self.assertIn("MTS or M2TS…", source_view)
+        self.assertIn("Add Folder of Movies…", source_view)
+        self.assertIn("Adds every supported ISO, MKV, MTS, and M2TS movie", source_view)
         self.assertIn('Label("Save current settings as new profile", systemImage: "plus.square.on.square")', setup_view)
         self.assertIn('.accessibilityLabel("Save current settings as new profile")', setup_view)
         self.assertNotIn('Button("Save Current Settings as New Profile…", action: saveAsNewProfile)', setup_view)
@@ -296,7 +314,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("state.phase.isRunning || state.phase == .decisionRequired", source_view)
         self.assertLess(
             source_view.index("Convert a 3D Blu-ray Disc"),
-            source_view.index("Import MTS or M2TS transport stream"),
+            source_view.index("MTS or M2TS…"),
         )
         for label in (
             "Video quality",
@@ -319,7 +337,7 @@ class NativeAppPackagingTests(unittest.TestCase):
             "Subtitle handling",
             "Subtitle language",
             "Start stage",
-            "Create reusable intermediate files",
+            "The finished movie plus reusable files",
             "Continue processing after recoverable errors",
             "Use software HEVC encoder",
             "Overwrite an existing output file",
@@ -550,7 +568,7 @@ Load command 3
         app_path = Path("/tmp") / NATIVE_APP_NAME
         with (
             patch("scripts.native_app.build_packaged_mv_hevc_encoder", return_value=encoder_path) as build_encoder,
-            patch("scripts.native_app.prepare_briefcase_runtime") as prepare_runtime,
+            patch("scripts.native_app.prepare_embedded_python_runtime") as prepare_runtime,
             patch("scripts.native_app.xcodebuild") as xcodebuild_mock,
             patch("scripts.native_app.assemble_package", return_value=app_path) as assemble,
             patch("scripts.native_app.sign_package") as sign,
@@ -1253,7 +1271,7 @@ Load command 3
                 "type": "worker.ready",
                 "job_id": job_id,
                 "sequence": 0,
-                "payload": {"process_group_id": 123},
+                "payload": {"worker_version": NATIVE_SHORT_VERSION, "process_group_id": 123},
             },
             {
                 "protocol_version": WORKER_PROTOCOL_VERSION,
@@ -1292,7 +1310,57 @@ Load command 3
             },
         ]
 
-        validate_smoke_events(events, job_id)
+        validate_smoke_events(events, job_id, expected_worker_version=NATIVE_SHORT_VERSION)
+
+    def test_rejects_packaged_worker_version_mismatch(self) -> None:
+        job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
+        events: list[object] = [
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "worker.ready",
+                "job_id": job_id,
+                "sequence": 0,
+                "payload": {"worker_version": "0.0.0", "process_group_id": 123},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "job.started",
+                "job_id": job_id,
+                "sequence": 1,
+                "payload": {},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "stage.started",
+                "job_id": job_id,
+                "sequence": 2,
+                "payload": {},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "observability",
+                "job_id": job_id,
+                "sequence": 3,
+                "payload": {"event": canonical_ffprobe_event(job_id)},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "job.completed",
+                "job_id": job_id,
+                "sequence": 4,
+                "payload": {
+                    "result": {
+                        "resolution": "160x90",
+                        "frame_rate": "24/1",
+                        "interlaced": False,
+                        "size_bytes": 1024,
+                    }
+                },
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "Worker smoke version did not match"):
+            validate_smoke_events(events, job_id, expected_worker_version=NATIVE_SHORT_VERSION)
 
     def test_worker_smoke_resolves_relative_app_path_before_changing_directory(self) -> None:
         job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
@@ -1315,6 +1383,8 @@ Load command 3
                     if event_type == "job.completed"
                     else {"event": canonical_ffprobe_event(job_id)}
                     if event_type == "observability"
+                    else {"worker_version": NATIVE_SHORT_VERSION, "process_group_id": 123}
+                    if event_type == "worker.ready"
                     else {}
                 ),
             }
@@ -1332,6 +1402,10 @@ Load command 3
             relative_app_path = Path("package") / NATIVE_APP_NAME
             absolute_app_path = temporary_path / relative_app_path
             absolute_app_path.mkdir(parents=True)
+            info_path = absolute_app_path / "Contents" / "Info.plist"
+            info_path.parent.mkdir(parents=True)
+            with info_path.open("wb") as info_file:
+                plistlib.dump(production_info(), info_file)
             resolved_app_path = absolute_app_path.resolve()
             with (
                 chdir(temporary_path),

@@ -152,7 +152,6 @@ celerybeat.pid
 # Environments
 .env
 .venv
-.briefcase-wheelhouse/
 .vendor/
 bd_to_avp/bin/ffmpeg
 bd_to_avp/bin/ffprobe

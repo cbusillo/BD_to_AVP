@@ -109,6 +109,11 @@ private struct ProfilesSettingsPane: View {
                     .foregroundStyle(.orange)
             }
 
+            if let migrationNoticeMessage = profileStore.migrationNoticeMessage {
+                Label(migrationNoticeMessage, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+
             HSplitView {
                 profileList
                     .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
@@ -133,12 +138,21 @@ private struct ProfilesSettingsPane: View {
             settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)
         }
         .sheet(item: $editorRequest) { request in
-            ProfileEditorSheet(request: request) { mode, name, options in
+            ProfileEditorSheet(request: request) { mode, name, options, pipelineDefaults in
                 switch mode {
                 case .create:
-                    selectedProfileID = try profileStore.createProfile(name: name, options: options)
+                    selectedProfileID = try profileStore.createProfile(
+                        name: name,
+                        options: options,
+                        pipelineDefaults: pipelineDefaults
+                    )
                 case let .update(identifier):
-                    try profileStore.updateProfile(identifier, name: name, options: options)
+                    try profileStore.updateProfile(
+                        identifier,
+                        name: name,
+                        options: options,
+                        pipelineDefaults: pipelineDefaults
+                    )
                     selectedProfileID = identifier
                 }
             }
@@ -200,7 +214,8 @@ private struct ProfilesSettingsPane: View {
                     editorRequest = ProfileEditorRequest(
                         mode: .create,
                         name: "New Profile",
-                        options: BuiltInProfile.balanced.options
+                        options: BuiltInProfile.balanced.options,
+                        pipelineDefaults: nil
                     )
                 } label: {
                     Label("New Profile", systemImage: "plus")
@@ -286,7 +301,8 @@ private struct ProfilesSettingsPane: View {
                             editorRequest = ProfileEditorRequest(
                                 mode: .update(profile.id),
                                 name: profile.name,
-                                options: profile.options
+                                options: profile.options,
+                                pipelineDefaults: profile.pipelineDefaults
                             )
                         }
                         .buttonStyle(.borderedProminent)
@@ -347,7 +363,8 @@ private struct ProfilesSettingsPane: View {
         editorRequest = ProfileEditorRequest(
             mode: .create,
             name: profileStore.suggestedDuplicateName(for: profile.name),
-            options: profile.options
+            options: profile.options,
+            pipelineDefaults: profile.pipelineDefaults
         )
     }
 
@@ -471,7 +488,7 @@ private struct ProfileEncodingSummaryView: View {
         let route = VideoRoutePlan(encoding: options)
         var items = [
             ProfileSummaryItem(title: "Format", value: options.videoOutputMode.title),
-            ProfileSummaryItem(title: "Quality", value: options.videoQuality.displayTitle),
+            ProfileSummaryItem(title: "Quality", value: route.qualityTitle),
             ProfileSummaryItem(title: "Route", value: route.title),
         ]
         switch route.kind {
@@ -625,21 +642,24 @@ private struct ProfileEditorRequest: Identifiable {
     let mode: Mode
     let name: String
     let options: EncodingOptions
+    let pipelineDefaults: ProfilePipelineDefaults?
 }
 
 private struct ProfileEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     let request: ProfileEditorRequest
-    let save: (ProfileEditorRequest.Mode, String, EncodingOptions) throws -> Void
+    let save: (ProfileEditorRequest.Mode, String, EncodingOptions, ProfilePipelineDefaults?) throws -> Void
 
     @State private var name: String
     @State private var options: EncodingOptions
     @State private var selectedSection = EncodingOptionsSection.video
     @State private var errorMessage: String?
+    @State private var isShowingDiscardConfirmation = false
+    @StateObject private var routeQualityState = RouteQualityResolutionState()
 
     init(
         request: ProfileEditorRequest,
-        save: @escaping (ProfileEditorRequest.Mode, String, EncodingOptions) throws -> Void
+        save: @escaping (ProfileEditorRequest.Mode, String, EncodingOptions, ProfilePipelineDefaults?) throws -> Void
     ) {
         self.request = request
         self.save = save
@@ -652,7 +672,7 @@ private struct ProfileEditorSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(editorTitle)
                     .font(.title2.weight(.semibold))
-                Text("Profiles save media-result settings only. Job, recovery, and destructive choices remain explicit per conversion.")
+                Text(ProfilePersistenceCopy.summary)
                     .foregroundStyle(.secondary)
             }
 
@@ -667,18 +687,21 @@ private struct ProfileEditorSheet: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            EncodingOptionsEditor(options: $options, section: selectedSection)
+            EncodingOptionsEditor(
+                options: $options,
+                section: selectedSection,
+                routeQualityState: routeQualityState
+            )
 
             HStack {
                 Spacer()
                 Button("Cancel") {
                     dismiss()
                 }
-                .keyboardShortcut(.cancelAction)
 
                 Button("Save") {
                     do {
-                        try save(request.mode, name, options)
+                        try save(request.mode, name, options, request.pipelineDefaults)
                         dismiss()
                     } catch {
                         errorMessage = error.localizedDescription
@@ -686,7 +709,10 @@ private struct ProfileEditorSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || routeQualityState.blockReason != nil
+                )
             }
         }
         .padding(24)
@@ -698,6 +724,21 @@ private struct ProfileEditorSheet: View {
             idealHeight: 620,
             maxHeight: 760
         )
+        .onExitCommand {
+            if isDirty {
+                isShowingDiscardConfirmation = true
+            } else {
+                dismiss()
+            }
+        }
+        .alert("Discard Unsaved Changes?", isPresented: $isShowingDiscardConfirmation) {
+            Button("Discard Changes", role: .destructive) {
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your unsaved settings will be discarded.")
+        }
         .alert(
             "Profile Could Not Be Saved",
             isPresented: Binding(
@@ -718,6 +759,10 @@ private struct ProfileEditorSheet: View {
         case .update:
             "Edit Profile"
         }
+    }
+
+    private var isDirty: Bool {
+        name != request.name || options != request.options
     }
 }
 
@@ -789,7 +834,15 @@ private struct AdvancedSettingsPane: View {
 
             Section("Defaults for New Jobs") {
                 Toggle("Default to the software encoder", isOn: $settings.useSoftwareEncoder)
-                Toggle("Create reusable intermediate files by default", isOn: reusableIntermediatesBinding)
+                Picker("Output files", selection: reusableFileOutcomeBinding) {
+                    ForEach(ReusableFileOutcome.allCases) { outcome in
+                        Text(outcome.title).tag(outcome)
+                    }
+                }
+                Text(ReusableFileOutcome(policy: settings.intermediatePolicy).detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Diagnostics") {
@@ -805,11 +858,11 @@ private struct AdvancedSettingsPane: View {
         .formStyle(.grouped)
     }
 
-    private var reusableIntermediatesBinding: Binding<Bool> {
+    private var reusableFileOutcomeBinding: Binding<ReusableFileOutcome> {
         Binding(
-            get: { settings.intermediatePolicy.createsReusableArtifacts },
-            set: { enabled in
-                settings.intermediatePolicy = enabled ? .reusable : .automatic
+            get: { ReusableFileOutcome(policy: settings.intermediatePolicy) },
+            set: { outcome in
+                settings.intermediatePolicy = outcome.policy
             }
         )
     }

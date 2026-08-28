@@ -40,7 +40,7 @@ jobs:
 
       - name: Set up uv
         # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
 
@@ -93,6 +93,27 @@ jobs:
       - name: Unit smoke tests
         run: uv run python -m unittest discover -s tests -t .
 
+      - name: Verify committed release evidence
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE_SHA="$PR_BASE_SHA"
+          elif [[ "$EVENT_NAME" == "push" && "$PUSH_BASE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$PUSH_BASE_SHA"
+          else
+            BASE_SHA=$(git rev-parse HEAD^)
+          fi
+          uv run python -m scripts.release_evidence_v2 \
+            --all-tags \
+            --worktree \
+            --base-revision "$BASE_SHA"
+
+      - name: Verify release evidence index
+        run: uv run python -m scripts.release_evidence_v2 index --check --worktree
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -128,18 +149,14 @@ jobs:
       - name: Build Python package
         run: uv build
 
-      - name: Briefcase create smoke
-        run: uv run python -m scripts.briefcase_app create --no-input
-
-      - name: Briefcase build smoke
-        run: uv run python -m scripts.briefcase_app build --no-input
-
       - name: Verify bundled tools and deployment targets
         run: uv run python scripts/verify_app_tools.py
 
       - name: Resolve post-publication milestone context
         id: milestone-context
         if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           uv run python -m scripts.release_milestone_context \

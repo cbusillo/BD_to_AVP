@@ -21,20 +21,22 @@ The prototype proves a narrower source contract:
 
 ## Build
 
-The development build requires Apple Silicon macOS, `pkg-config`, libbluray
-`1.4.1`, and libudfread `1.2.0`:
+The development build requires Apple Silicon macOS, `pkg-config`, libbluray,
+and libudfread:
 
 ```bash
 brew install libbluray pkgconf
 uv run python scripts/build_ssif_probe_macos.py
 ```
 
-The build intentionally enforces those exact development-library versions. A
-Homebrew formula update therefore fails CI until the recorded compatibility
-baseline is reviewed and updated.
+The dynamic development build accepts the installed Homebrew libraries when the
+probe compiles, links, and passes its synthetic and real-media behavior checks.
+The manifest records checksum-pinned known-good source archives for a future
+hermetic distributable build; those source versions are provenance, not a
+requirement imposed on the host package manager.
 
 The binary is written to `build/ssif-probe/ssif_probe`, which is ignored and is
-not included in wheels, Briefcase staging, or the production macOS app.
+not included in wheels, embedded-runtime staging, or the production macOS app.
 
 ## Commands
 
@@ -145,8 +147,8 @@ Ordinary CI uses synthetic M2TS packets and does not require copyrighted media.
 ## Packaging And Licensing
 
 The tested development binary dynamically links Homebrew libraries and must not
-be distributed. libbluray and libudfread are LGPL-2.1-or-later; their tested
-versions, source URLs, and source-archive checksums are recorded in
+be distributed. libbluray and libudfread are LGPL-2.1-or-later; known-good
+source versions, URLs, and source-archive checksums are recorded in
 `vendor/ssif-probe-macos-arm64.toml`.
 
 A distributable implementation must build arm64 dylibs from the pinned sources,
@@ -154,7 +156,7 @@ target the app's supported minimum macOS, place the replaceable libraries in the
 app bundle, rewrite install names to bundle-relative paths, include LGPL notices
 and source/relinking obligations, sign every Mach-O, and pass notarization and
 Gatekeeper checks. The current Homebrew dylibs target macOS 26 and are unsuitable
-for the production macOS 14 Briefcase line.
+for the historical production macOS 14 packaging line.
 
 ## Promotion Gates
 

@@ -60,7 +60,8 @@ smoke without requiring MKVToolNix or Tesseract.
 External dependencies must be visible to the user and recoverable without
 reinstalling BD_to_AVP.
 
-- MakeMKV is currently external and expected at `/Applications/MakeMKV.app`.
+- MakeMKV is currently external and detected at `/Applications/MakeMKV.app` or
+  `/Applications/MakeMKV/MakeMKV.app`.
 - A missing external dependency should produce a message that names the external
   app/tool and explains the next step.
 - A missing bundled dependency should be treated as a release blocker or linked
@@ -74,14 +75,15 @@ It builds from the stable GitHub tag, consumes the committed `uv.lock`, depends
 on Homebrew FFmpeg and Python 3.12, and omits the PySide6 GUI packages. The base
 PyPI package follows the same CLI-only boundary; users who intentionally want
 the legacy Python GUI may install the `gui` extra. The production DMG uses the
-SwiftUI interface while retaining Briefcase only to stage the embedded Python
-engine and its dependencies.
+SwiftUI interface while retaining a process-isolated embedded Python
+worker engine and its non-GUI dependencies. Legacy Qt GUI packages are excluded
+from the production DMG runtime.
 
 The formula does not depend on a MakeMKV cask. MakeMKV is optional for existing
 MKV, MTS, and M2TS inputs, remains external for disc extraction, and should be
 installed from its current supported macOS distribution. A Homebrew cask for
 BD_to_AVP is not maintained because it would duplicate the signed DMG channel
-without providing a reliable CLI link for the Briefcase launcher.
+without providing a reliable CLI link for the embedded worker launcher.
 
 Terminal dependency changes should not weaken the GUI policy. If a tool is
 required by the GUI, the release workflow should either bundle and verify it or

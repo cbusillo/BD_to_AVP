@@ -128,6 +128,13 @@ struct SourceFolderQueueItem: Identifiable, Equatable {
     var canRetry: Bool {
         status == .failed && (failureRetryable || recoveryDecision != nil)
     }
+
+    var displayName: String {
+        guard let selectedTitle = draft?.selectedTitle else {
+            return source.displayName
+        }
+        return "\(source.displayName) — \(selectedTitle.name)"
+    }
 }
 
 struct SourceFolderQueueState: Equatable {
@@ -224,7 +231,7 @@ struct SourceFolderQueueState: Equatable {
         }
         if isRunning, let activeItem {
             let position = (activeItemIndex ?? 0) + 1
-            return "Item \(position) of \(totalCount): \(activeItem.source.displayName)"
+            return "Item \(position) of \(totalCount): \(activeItem.displayName)"
         }
         if isFinished {
             if failedCount > 0 || stoppedCount > 0 || notStartedCount > 0 {

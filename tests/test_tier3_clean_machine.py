@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import platform
 import plistlib
 import shutil
@@ -23,14 +24,20 @@ from scripts.tier3_clean_machine import (
     CleanMachineError,
     EnvironmentFacts,
     MacOSOperations,
+    PROFILE_FIXTURE_V6_PATH,
+    PROFILE_RELATIVE_PATH,
     QualificationConfig,
     QualificationOperations,
     RELEASES_URL,
     ReleaseArtifact,
+    RESETTABLE_VM_ENVIRONMENT_CLASS,
+    RuntimeLayout,
+    SparkleDiagnosticFacts,
     SparkleUpdateFailure,
     SparkleUpdateState,
     SPARKLE_INSTALL_ACTIONS,
     UpdateObservation,
+    classify_sparkle_log_output,
     file_sha256,
     parse_feed_candidate,
     preflight_report,
@@ -60,8 +67,9 @@ class FakeOperations(QualificationOperations):
         cancelled: bool = False,
         tamper_prior_before_update: bool = False,
         wrong_running_path: bool = False,
-        staged_repeats_after_press: int = 0,
-        press_state_changed: bool = False,
+        press_state_change_failures: int = 0,
+        install_update_wait_observations: int = 1,
+        install_update_process_exits_before_ready: bool = False,
         oscillate_non_actionable: bool = False,
         sentinel_failure: bool = False,
         tamper_marker: bool = False,
@@ -77,8 +85,9 @@ class FakeOperations(QualificationOperations):
         self.cancelled = cancelled
         self.tamper_prior_before_update = tamper_prior_before_update
         self.wrong_running_path = wrong_running_path
-        self.staged_repeats_after_press = staged_repeats_after_press
-        self.press_state_changed = press_state_changed
+        self.press_state_change_failures = press_state_change_failures
+        self.install_update_wait_observations = install_update_wait_observations
+        self.install_update_process_exits_before_ready = install_update_process_exits_before_ready
         self.oscillate_non_actionable = oscillate_non_actionable
         self.sentinel_failure = sentinel_failure
         self.tamper_marker = tamper_marker
@@ -93,9 +102,16 @@ class FakeOperations(QualificationOperations):
         self.current_synthetic_home: Path | None = None
         self.launch_calls = 0
         self.quit_calls = 0
+        self.quit_calls_at_press: list[int] = []
         self.running_app_path: Path | None = None
-        self.post_staged_observations = 0
+        self.running_process_id: int | None = None
+        self.next_process_id = 1000
         self.observation_calls = 0
+        self.post_install_update_observations = 0
+        self.checkpoint_root: Path | None = None
+        self.profile_after_relaunch = PROFILE_FIXTURE_V6_PATH.read_bytes()
+        self.migrate_profile_during_updater_ui = False
+        self.tamper_profile_before_update = False
 
     def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts:
         return EnvironmentFacts(
@@ -113,7 +129,8 @@ class FakeOperations(QualificationOperations):
     def fetch_live_feed(self) -> bytes:
         return self.feed_bytes
 
-    def install_app(self, dmg_path: Path, destination: Path) -> None:
+    def install_app(self, dmg_path: Path, destination: Path, mount_point: Path) -> None:
+        del mount_point
         shutil.copytree(self.app_sources[dmg_path], destination, symlinks=True)
 
     def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
@@ -131,10 +148,16 @@ class FakeOperations(QualificationOperations):
     def read_preference(self, synthetic_home: Path, key: str) -> str:
         return self.preferences[key]
 
+    def clear_preferences(self, runtime_home: Path) -> None:
+        del runtime_home
+        self.preferences.clear()
+
     def launch_app(self, app_path: Path, synthetic_home: Path) -> None:
         self.launch_calls += 1
         self.running = True
         self.running_app_path = app_path
+        self.running_process_id = self.next_process_id
+        self.next_process_id += 1
 
     def open_updater(self, app_path: Path, synthetic_home: Path) -> None:
         self.launch_app(app_path, synthetic_home)
@@ -166,13 +189,6 @@ class FakeOperations(QualificationOperations):
                 window_match="identifier",
                 action_identifier="SPUUserUpdateChoiceInstall",
                 action_title="Install Update",
-            )
-        if self.post_press_failure and self.pressed_actions:
-            raise SparkleUpdateFailure(
-                "simulated post-press failure",
-                reason_code="updater-script-failure",
-                state=SparkleUpdateState.INSTALLING,
-                action_pressed=True,
             )
         if self.terminal_failure:
             return UpdateObservation(
@@ -206,22 +222,32 @@ class FakeOperations(QualificationOperations):
             ),
         }
         if self.install_action == "Install Update":
-            staged_observation = UpdateObservation(
-                state=SparkleUpdateState.STAGED_INSTALL,
-                window_match="identifier",
-                action_identifier="SPUUserUpdateChoiceInstall",
-                action_title="Install Update",
-            )
             if not self.pressed_actions:
-                observation = staged_observation
-            elif self.post_staged_observations < self.staged_repeats_after_press:
-                self.post_staged_observations += 1
-                observation = staged_observation
+                observation = UpdateObservation(
+                    state=SparkleUpdateState.READY_INSTALL_UPDATE,
+                    window_match="identifier",
+                    action_identifier="SPUUserUpdateChoiceInstall",
+                    action_title="Install Update",
+                )
+            elif len(self.pressed_actions) == 1 and (
+                self.post_install_update_observations < self.install_update_wait_observations
+            ):
+                self.post_install_update_observations += 1
+                if self.install_update_process_exits_before_ready:
+                    self.running = False
+                    self.running_app_path = None
+                    self.running_process_id = None
+                observation = UpdateObservation(
+                    state=SparkleUpdateState.WAITING_FOR_WINDOW,
+                    window_match="none",
+                    action_identifier="",
+                    action_title="",
+                )
             else:
                 observation = UpdateObservation(
                     state=SparkleUpdateState.READY_INSTALL_RELAUNCH,
-                    window_match="identifier",
-                    action_identifier="SPUUserUpdateChoiceInstall",
+                    window_match="button-identifier",
+                    action_identifier="SUStatusInstallAndRelaunch",
                     action_title="Install and Relaunch",
                 )
         elif self.install_action in action_states:
@@ -244,19 +270,29 @@ class FakeOperations(QualificationOperations):
     def press_updater_action(self, observation: UpdateObservation) -> None:
         if self.current_app_path is None or self.current_synthetic_home is None:
             raise AssertionError("fake updater was pressed before it was opened")
-        checkpoint_path = self.current_synthetic_home.parent / ".bd-to-avp-sparkle-update.json"
+        checkpoint_root = self.checkpoint_root or self.current_synthetic_home.parent
+        checkpoint_path = checkpoint_root / ".bd-to-avp-sparkle-update.json"
         checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         transitions = checkpoint["transitions"]
         self.intent_seen_before_press = bool(transitions and transitions[-1]["phase"] == "intent")
-        if self.press_state_changed:
+        if self.press_state_change_failures > 0:
+            self.press_state_change_failures -= 1
             raise SparkleUpdateFailure(
                 "simulated updater state change",
                 reason_code="updater-state-changed",
                 state=observation.state,
                 action_pressed=False,
             )
+        self.quit_calls_at_press.append(self.quit_calls)
         self.pressed_actions.append(observation)
-        if observation.state == SparkleUpdateState.STAGED_INSTALL:
+        if self.post_press_failure:
+            raise SparkleUpdateFailure(
+                "simulated post-press failure",
+                reason_code="updater-script-failure",
+                state=SparkleUpdateState.INSTALLING,
+                action_pressed=True,
+            )
+        if observation.state == SparkleUpdateState.READY_INSTALL_UPDATE:
             return
         if self.tamper_marker:
             marker_path = self.current_synthetic_home.parent / ".bd-to-avp-tier3-owned.json"
@@ -266,6 +302,10 @@ class FakeOperations(QualificationOperations):
         shutil.copytree(self.candidate_source, app_path, symlinks=True)
         self.running = True
         self.running_app_path = self.candidate_source if self.wrong_running_path else app_path
+        self.running_process_id = self.next_process_id
+        self.next_process_id += 1
+        profile_path = self.current_synthetic_home / PROFILE_RELATIVE_PATH
+        profile_path.write_bytes(self.profile_after_relaunch)
 
     def collect_ui_evidence(
         self,
@@ -279,6 +319,14 @@ class FakeOperations(QualificationOperations):
     ) -> None:
         if phase == "updater" and self.tamper_prior_before_update:
             (app_path / "tampered-before-updater").write_text("changed\n", encoding="utf-8")
+        if phase == "updater" and self.migrate_profile_during_updater_ui:
+            profile_path = synthetic_home / PROFILE_RELATIVE_PATH
+            profile_path.write_bytes(PROFILE_FIXTURE_V6_PATH.read_bytes())
+        if phase == "updater" and self.tamper_profile_before_update:
+            profile_path = synthetic_home / PROFILE_RELATIVE_PATH
+            profile_document = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile_document["profiles"][0]["name"] = "Changed Before Update"
+            profile_path.write_text(json.dumps(profile_document, sort_keys=True), encoding="utf-8")
         del repo, app_path, synthetic_home
         output_directory.mkdir(parents=True, exist_ok=True)
         if phase == "updater":
@@ -303,10 +351,11 @@ class FakeOperations(QualificationOperations):
             json.dumps(
                 {
                     "main_window_ready": True,
-                    "profile_document_version": 5,
+                    "profile_document_version": 6,
                     "profile_save_accessible": True,
                     "profile_save_succeeded": True,
-                    "profiles_after": 1,
+                    "profiles_after": 2,
+                    "profiles_before": 1,
                     "release_page_url": RELEASES_URL,
                     "release_page_url_observed": True,
                     "schema_version": 1,
@@ -366,13 +415,107 @@ class FakeOperations(QualificationOperations):
             return False
         return app_path is None or self.running_app_path == app_path
 
+    def app_process_id(self, app_path: Path | None = None) -> int | None:
+        if not self.app_running(app_path):
+            return None
+        return self.running_process_id
+
     def quit_app(self) -> None:
         self.quit_calls += 1
         self.running = False
         self.running_app_path = None
+        self.running_process_id = None
+
+    def collect_sparkle_diagnostics(self, runtime_home: Path) -> SparkleDiagnosticFacts:
+        del runtime_home
+        return SparkleDiagnosticFacts(
+            cache_root_state="writable",
+            classifications=("installation-cache-create-failed",),
+            home_library_state="writable",
+            log_event_count=1,
+            log_query_status="passed",
+        )
 
 
 class Tier3CleanMachineTests(unittest.TestCase):
+    def test_classify_sparkle_log_output_is_bounded_to_public_categories(self) -> None:
+        output = (
+            "Failed to create installation cache directory: Operation not permitted\n"
+            "Couldn't access its bundle info for app-bound domains"
+        )
+
+        self.assertEqual(
+            classify_sparkle_log_output(output),
+            (
+                "app-bound-domain-provenance-failed",
+                "installation-cache-create-failed",
+                "permission-denied",
+            ),
+        )
+
+    def test_install_app_refuses_to_replace_existing_destination(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            destination = root / "Install" / "Applications" / APP_NAME
+            destination.mkdir(parents=True)
+            mount_point = root / "SourceMount"
+            candidate = mount_point / APP_NAME
+            (candidate / "Contents").mkdir(parents=True)
+            (candidate / "Contents" / "Info.plist").write_bytes(
+                plistlib.dumps(
+                    {
+                        "BDToAVPDistributionChannel": "direct",
+                        "CFBundleIdentifier": BUNDLE_IDENTIFIER,
+                        "CFBundleShortVersionString": "1.0",
+                        "CFBundleVersion": "1",
+                        "SUFeedURL": "https://example.test/appcast.xml",
+                    }
+                )
+            )
+            with (
+                patch.object(MacOSOperations, "_mount_dmg", return_value=mount_point),
+                patch.object(MacOSOperations, "_detach_mounts"),
+            ):
+                with self.assertRaisesRegex(CleanMachineError, "destination already exists"):
+                    operations.install_app(root / "release.dmg", destination, root / "Mount")
+
+    def test_install_app_uses_explicit_owned_mount_point(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            destination = root / "Applications" / APP_NAME
+            mount_point = root / "Qualification" / "Mount"
+
+            def mount(dmg_path: Path, requested_mount_point: Path) -> Path:
+                del dmg_path
+                self.assertEqual(requested_mount_point, mount_point)
+                candidate = requested_mount_point / APP_NAME
+                (candidate / "Contents").mkdir(parents=True)
+                (candidate / "Contents" / "Info.plist").write_bytes(
+                    plistlib.dumps(
+                        {
+                            "BDToAVPDistributionChannel": "direct",
+                            "CFBundleIdentifier": BUNDLE_IDENTIFIER,
+                            "CFBundleShortVersionString": "1.0",
+                            "CFBundleVersion": "1",
+                            "SUFeedURL": "https://example.test/appcast.xml",
+                        }
+                    )
+                )
+                return requested_mount_point
+
+            with (
+                patch.object(MacOSOperations, "_mount_dmg", side_effect=mount),
+                patch.object(MacOSOperations, "_detach_mounts"),
+                patch.object(
+                    MacOSOperations,
+                    "_run",
+                    return_value=subprocess.CompletedProcess([], 0, "", ""),
+                ),
+            ):
+                operations.install_app(root / "release.dmg", destination, mount_point)
+
     def test_extract_ui_attachments_accepts_xcresult_generated_names(self) -> None:
         operations = MacOSOperations()
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -789,6 +932,119 @@ class Tier3CleanMachineTests(unittest.TestCase):
         self.assertEqual(report["feed"]["route"], "rc")
         self.assertNotIn("hostname", json.dumps(report).lower())
 
+    def test_resettable_vm_preflight_requires_github_hosted_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            runner_temp = root / "RunnerTemp"
+            runner_temp.mkdir()
+            applications = root / "Applications"
+            applications.mkdir()
+            config = replace(
+                config,
+                environment_class=RESETTABLE_VM_ENVIRONMENT_CLASS,
+                qualification_root=runner_temp / "Qualification",
+            )
+            with (
+                patch.dict(os.environ, {"RUNNER_TEMP": str(runner_temp)}, clear=False),
+                patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
+            ):
+                with self.assertRaisesRegex(CleanMachineError, "requires an ephemeral GitHub-hosted"):
+                    preflight_report(config, operations)
+
+    def test_resettable_vm_preflight_uses_real_home_and_system_applications(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            runner_temp = root / "RunnerTemp"
+            runner_temp.mkdir()
+            applications = root / "Applications"
+            applications.mkdir()
+            config = replace(
+                config,
+                environment_class=RESETTABLE_VM_ENVIRONMENT_CLASS,
+                qualification_root=runner_temp / "Qualification",
+            )
+            runner_environment = {
+                "BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT": "github-hosted",
+                "CI": "true",
+                "GITHUB_ACTIONS": "true",
+                "HOME": str(Path.home()),
+                "RUNNER_OS": "macOS",
+                "RUNNER_TEMP": str(runner_temp),
+            }
+            with (
+                patch.dict(os.environ, runner_environment, clear=False),
+                patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
+                patch("scripts.tier3_clean_machine._managed_real_home_paths", return_value=()),
+            ):
+                report = preflight_report(config, operations)
+
+        self.assertEqual(report["environment"]["environment_class"], RESETTABLE_VM_ENVIRONMENT_CLASS)
+        self.assertEqual(report["developer_state"]["runtime_layout"], "system-applications-real-home")
+
+    def test_resettable_vm_preflight_rejects_overridden_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            runner_temp = root / "RunnerTemp"
+            runner_temp.mkdir()
+            applications = root / "Applications"
+            applications.mkdir()
+            config = replace(
+                config,
+                environment_class=RESETTABLE_VM_ENVIRONMENT_CLASS,
+                qualification_root=runner_temp / "Qualification",
+            )
+            runner_environment = {
+                "BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT": "github-hosted",
+                "CI": "true",
+                "GITHUB_ACTIONS": "true",
+                "HOME": str(root / "SyntheticHome"),
+                "RUNNER_OS": "macOS",
+                "RUNNER_TEMP": str(runner_temp),
+            }
+            with (
+                patch.dict(os.environ, runner_environment, clear=False),
+                patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
+            ):
+                with self.assertRaisesRegex(CleanMachineError, "unchanged real home"):
+                    preflight_report(config, operations)
+
+    def test_preflight_rejects_diagnostics_inside_evidence_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            config = replace(config, diagnostics_output=config.evidence_directory / "diagnostics.json")
+
+            with self.assertRaisesRegex(CleanMachineError, "outside the evidence directory"):
+                preflight_report(config, operations)
+
+    def test_resettable_vm_run_preserves_unrelated_home_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            config = replace(config, environment_class=RESETTABLE_VM_ENVIRONMENT_CLASS)
+            operations.checkpoint_root = config.qualification_root
+            runner_home = root / "RunnerHome"
+            runner_home.mkdir()
+            unrelated = runner_home / "unrelated.txt"
+            unrelated.write_text("preserve\n", encoding="utf-8")
+            system_applications = root / "SystemApplications"
+            system_applications.mkdir()
+            layout = RuntimeLayout(
+                app_path=system_applications / APP_NAME,
+                home=runner_home,
+                kind="system-applications-real-home",
+                smoke_home=config.qualification_root / "SmokeHome",
+            )
+            with patch("scripts.tier3_clean_machine._runtime_layout", return_value=layout):
+                run_qualification(config, operations)
+
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "preserve\n")
+            self.assertFalse(layout.app_path.exists())
+            self.assertFalse(config.qualification_root.exists())
+
     def test_run_emits_valid_receipt_and_disposes_owned_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -825,8 +1081,98 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertIn("ready-install-relaunch", update_evidence["states_observed"])
             self.assertRegex(update_evidence["intent_checkpoint_sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(update_evidence["journal_sha256"], r"^[0-9a-f]{64}$")
+            profile_evidence = json.loads(
+                (config.evidence_directory / "profile-snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(profile_evidence["profile_migration"], "v5-to-v6-during-update")
+            self.assertTrue(profile_evidence["profile_migration_matched"])
+            self.assertTrue(profile_evidence["profile_identity_preserved"])
+            self.assertTrue(profile_evidence["profile_encoding_options_preserved"])
+            self.assertTrue(profile_evidence["profile_safe_pipeline_defaults_preserved"])
+            self.assertTrue(profile_evidence["unsafe_legacy_run_defaults_removed"])
+            self.assertEqual(profile_evidence["profile_version_before"], 5)
+            self.assertEqual(profile_evidence["profile_version_after"], 6)
+            self.assertEqual(profile_evidence["profile_version_seeded"], 5)
+            self.assertNotEqual(
+                profile_evidence["profile_before_sha256"],
+                profile_evidence["profile_after_sha256"],
+            )
+            self.assertRegex(profile_evidence["profile_before_semantic_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(profile_evidence["profile_after_semantic_sha256"], r"^[0-9a-f]{64}$")
             self.assertTrue(operations.intent_seen_before_press)
             self.assertFalse(operations.app_running())
+
+    def test_run_rejects_profile_mutation_beyond_expected_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            mutated_document = json.loads(PROFILE_FIXTURE_V6_PATH.read_text(encoding="utf-8"))
+            mutated_document["profiles"][0]["name"] = "Changed"
+            operations.profile_after_relaunch = json.dumps(mutated_document, sort_keys=True).encode()
+
+            with self.assertRaisesRegex(
+                CleanMachineError,
+                "did not match the expected version 6 state",
+            ):
+                run_qualification(config, operations)
+
+            self.assertFalse(config.evidence_directory.exists())
+
+    def test_run_rejects_profile_mutation_before_sparkle_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            config = replace(config, diagnostics_output=root / "sparkle-install-diagnostics.json")
+            operations.migrate_profile_during_updater_ui = True
+            operations.tamper_profile_before_update = True
+
+            with self.assertRaisesRegex(
+                CleanMachineError,
+                "Profile library changed before the Sparkle update began",
+            ):
+                run_qualification(config, operations)
+
+            self.assertFalse(operations.pressed_actions)
+            self.assertFalse(config.evidence_directory.exists())
+            diagnostics = json.loads(config.diagnostics_output.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics["failure_stage"], "prior-profile-baseline")
+            self.assertEqual(diagnostics["reason_code"], "pre-update-validation-failed")
+            self.assertEqual(diagnostics["status"], "failed")
+
+    def test_run_accepts_profile_migrated_by_prior_release_before_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.migrate_profile_during_updater_ui = True
+
+            run_qualification(config, operations)
+
+            profile_evidence = json.loads(
+                (config.evidence_directory / "profile-snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(profile_evidence["profile_migration"], "v5-to-v6-before-update")
+            self.assertTrue(profile_evidence["profile_migration_matched"])
+            self.assertEqual(profile_evidence["profile_version_seeded"], 5)
+            self.assertEqual(profile_evidence["profile_version_before"], 6)
+            self.assertEqual(profile_evidence["profile_version_after"], 6)
+            self.assertEqual(
+                profile_evidence["profile_before_sha256"],
+                profile_evidence["profile_after_sha256"],
+            )
+
+    def test_run_rejects_invalid_profile_document_after_relaunch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.profile_after_relaunch = b"not-json\n"
+
+            with self.assertRaisesRegex(
+                CleanMachineError,
+                "Profile library after Sparkle relaunch is missing or invalid JSON",
+            ):
+                run_qualification(config, operations)
+
+            self.assertFalse(config.evidence_directory.exists())
 
     def test_run_accepts_supported_sparkle_install_actions(self) -> None:
         for install_action in SPARKLE_INSTALL_ACTIONS:
@@ -889,7 +1235,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertEqual(operations.launch_calls, 2)
             self.assertTrue(operations.intent_seen_before_press)
 
-    def test_run_records_staged_install_before_final_relaunch_action(self) -> None:
+    def test_run_treats_install_update_as_install_and_relaunch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
@@ -902,27 +1248,38 @@ class Tier3CleanMachineTests(unittest.TestCase):
             )
             self.assertEqual(
                 [observation.state for observation in operations.pressed_actions],
-                [SparkleUpdateState.STAGED_INSTALL, SparkleUpdateState.READY_INSTALL_RELAUNCH],
+                [
+                    SparkleUpdateState.READY_INSTALL_UPDATE,
+                    SparkleUpdateState.READY_INSTALL_RELAUNCH,
+                ],
+            )
+            self.assertEqual(
+                [observation.action_identifier for observation in operations.pressed_actions],
+                ["SPUUserUpdateChoiceInstall", "SUStatusInstallAndRelaunch"],
             )
             self.assertEqual(update_evidence["outcome"], "install-and-relaunch")
             self.assertEqual(
                 update_evidence["states_observed"],
-                ["staged-install", "installing", "ready-install-relaunch"],
+                ["ready-install-update", "downloading", "waiting-for-window", "ready-install-relaunch"],
             )
+            self.assertEqual(operations.quit_calls_at_press, [2, 2])
 
-    def test_run_does_not_press_a_repeated_staged_action(self) -> None:
+    def test_run_fails_if_app_exits_before_final_install_action(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
             operations.install_action = "Install Update"
-            operations.staged_repeats_after_press = 2
+            operations.install_update_process_exits_before_ready = True
 
-            run_qualification(config, operations)
+            with self.assertRaisesRegex(CleanMachineError, "terminated before Sparkle exposed the final install"):
+                run_qualification(config, operations)
 
             self.assertEqual(
                 [observation.state for observation in operations.pressed_actions],
-                [SparkleUpdateState.STAGED_INSTALL, SparkleUpdateState.READY_INSTALL_RELAUNCH],
+                [SparkleUpdateState.READY_INSTALL_UPDATE],
             )
+            self.assertEqual(operations.quit_calls_at_press, [2])
+            self.assertFalse(config.evidence_directory.exists())
 
     def test_run_retries_one_clean_attempt_for_pre_press_environmental_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -943,6 +1300,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
+            config = replace(config, diagnostics_output=root / "sparkle-install-diagnostics.json")
             operations.install_action = "Install Update"
             operations.post_press_failure = True
 
@@ -952,17 +1310,38 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertEqual(operations.update_attempts, 1)
             self.assertEqual(len(operations.pressed_actions), 1)
             self.assertFalse(config.evidence_directory.exists())
+            diagnostics = json.loads(config.diagnostics_output.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics["failure_stage"], "updater-state-machine")
+            self.assertEqual(diagnostics["reason_code"], "updater-script-failure")
+            self.assertEqual(diagnostics["classifications"], ["installation-cache-create-failed"])
+            self.assertNotIn(str(root), json.dumps(diagnostics))
 
-    def test_run_fails_closed_when_updater_changes_after_intent_recording(self) -> None:
+    def test_run_retries_when_updater_changes_after_intent_recording(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
-            operations.press_state_changed = True
+            operations.press_state_change_failures = 1
+
+            run_qualification(config, operations)
+
+            update_evidence = json.loads(
+                (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(operations.update_attempts, 2)
+            self.assertTrue(operations.intent_seen_before_press)
+            self.assertEqual(update_evidence["attempt"], 2)
+            self.assertEqual(update_evidence["retry_reason_code"], "updater-state-changed")
+
+    def test_run_fails_closed_after_repeated_updater_state_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.press_state_change_failures = 2
 
             with self.assertRaisesRegex(CleanMachineError, "changed after intent"):
                 run_qualification(config, operations)
 
-            self.assertEqual(operations.update_attempts, 1)
+            self.assertEqual(operations.update_attempts, 2)
             self.assertTrue(operations.intent_seen_before_press)
             self.assertFalse(operations.pressed_actions)
             self.assertFalse(config.evidence_directory.exists())
@@ -1161,9 +1540,12 @@ class Tier3CleanMachineTests(unittest.TestCase):
         self.assertIn('attribute "AXIdentifier"', observe_script)
         self.assertIn('"SUUpdateAlert"', observe_script)
         self.assertIn('"SPUUserUpdateChoiceInstall"', observe_script)
+        self.assertIn('"SUStatusInstallAndRelaunch"', observe_script)
         self.assertIn("enabled of selectedButton", observe_script)
         self.assertIn('selectedTitle is "Install Update"', observe_script)
+        self.assertNotIn('return "staged-install"', observe_script)
         self.assertIn('selectedTitle is "Install on Quit"', observe_script)
+        self.assertIn('"ready-install-update"', observe_script)
         self.assertIn('"ready-install-relaunch"', observe_script)
         self.assertIn('perform action "AXPress" of selectedButton', press_script)
         self.assertIn("actualWindowMatch is not expectedWindowMatch", press_script)

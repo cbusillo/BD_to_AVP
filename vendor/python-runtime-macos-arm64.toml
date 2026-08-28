@@ -1,0 +1,20 @@
+schema_version = 1
+python_version = "3.12.10"
+python_abi = "3.12"
+architecture = "arm64"
+minimum_macos_version = "11.0"
+framework_source_path = "Python.xcframework/macos-arm64_x86_64/Python.framework"
+
+[support]
+revision = 9
+url = "https://briefcase-support.s3.amazonaws.com/python/3.12/macOS/Python-3.12-macOS-support.b9.tar.gz"
+sha256 = "824f6c6905d5359a2076b35c3ddc4f0af863793f408083f6d2302c0d8f9640e4"
+source_repository = "https://github.com/beeware/Python-Apple-support"
+source_tag = "3.12-b9"
+
+[launcher]
+revision = 14
+url = "https://briefcase-support.s3.amazonaws.com/python/3.12/macOS/GUI-Stub-3.12-b14.zip"
+sha256 = "cec142630ec596bcfd75640bed557334a808b8c8078795550a1a1771f16fac16"
+archive_member = "Stub"
+source_repository = "https://github.com/beeware/briefcase-macOS-Xcode-template"

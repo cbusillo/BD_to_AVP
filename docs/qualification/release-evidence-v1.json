@@ -341,6 +341,472 @@
       "source": "tier3_automation_receipt",
       "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
       "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "gui-preview-cancel-cleanup",
+      "receipt_id": "v0.3.2-beta.1:gui-preview-cancel-cleanup:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "gui-preview-failure-cleanup",
+      "receipt_id": "v0.3.2-beta.1:gui-preview-failure-cleanup:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "network-generated-final-output",
+      "receipt_id": "v0.3.2-beta.1:network-generated-final-output:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "overwrite-and-conversion-cancel",
+      "receipt_id": "v0.3.2-beta.1:overwrite-and-conversion-cancel:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "malformed-pgs-parser-recovery",
+      "receipt_id": "v0.3.2-beta.1:malformed-pgs-parser-recovery:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "subtitle-partial-output-diagnostics",
+      "receipt_id": "v0.3.2-beta.1:subtitle-partial-output-diagnostics:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "gui-preview-low-local-ample-destination",
+      "receipt_id": "v0.3.2-beta.2:gui-preview-low-local-ample-destination:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "gui-preview-cancel-cleanup",
+      "receipt_id": "v0.3.2-beta.2:gui-preview-cancel-cleanup:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "gui-preview-failure-cleanup",
+      "receipt_id": "v0.3.2-beta.2:gui-preview-failure-cleanup:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "capacity-known-low",
+      "receipt_id": "v0.3.2-beta.2:capacity-known-low:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "capacity-unknown-and-conflicting",
+      "receipt_id": "v0.3.2-beta.2:capacity-unknown-and-conflicting:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "network-generated-final-output",
+      "receipt_id": "v0.3.2-beta.2:network-generated-final-output:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "overwrite-and-conversion-cancel",
+      "receipt_id": "v0.3.2-beta.2:overwrite-and-conversion-cancel:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "malformed-pgs-parser-recovery",
+      "receipt_id": "v0.3.2-beta.2:malformed-pgs-parser-recovery:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "subtitle-partial-output-diagnostics",
+      "receipt_id": "v0.3.2-beta.2:subtitle-partial-output-diagnostics:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T17:04:11Z",
+      "case_id": "release-workflow-identity",
+      "receipt_id": "v0.3.2-beta.2:release-workflow-identity",
+      "reference": "docs/release-evidence/v0.3.2-beta.2/release-receipt.json",
+      "release_run_id": 32277548249,
+      "sha256": "f88259e5f82f5885f087adf1a284f47bda97741e99ad982ccbcd758efe829f19",
+      "source": "release_run_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-19T17:04:11Z",
+      "case_id": "signed-packaged-route-parity",
+      "receipt_id": "v0.3.2-beta.2:signed-packaged-route-parity",
+      "reference": "docs/release-evidence/v0.3.2-beta.2/release-receipt.json",
+      "release_run_id": 32277548249,
+      "sha256": "f88259e5f82f5885f087adf1a284f47bda97741e99ad982ccbcd758efe829f19",
+      "source": "release_run_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-20T21:38:16Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.2-beta.2:clean-machine-signed-update:32420026539",
+      "reference": "docs/qualification/v0.3.2-beta.2-clean-machine-signed-update-v1.json",
+      "sha256": "f881a94b400fc438a46bb4214f2f6bec4d626a7d7955c506996704fec6604810",
+      "source": "tier3_automation_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-20T21:38:16Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.2-beta.2:installed-ui-accessibility:32420026539",
+      "reference": "docs/qualification/v0.3.2-beta.2-installed-ui-accessibility-v1.json",
+      "sha256": "0ab883dfa0a7899cf55b6bd4590b6a7c18758811e377dbbc52e1d34c00ae5ba9",
+      "source": "tier3_automation_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-20T21:38:16Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.2-beta.2:profile-save-action-accessibility:32277548249",
+      "reference": "docs/release-evidence/v0.3.2-beta.2/signed-artifact-ui-receipt.json",
+      "sha256": "3dfe3230c0fec7f1e0e6066e4dacde02d355b51e1074507cfb276c9ef278fec0",
+      "source": "signed_artifact_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-20T21:38:16Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.2-beta.2:sparkle-update-route:32420026539",
+      "reference": "docs/qualification/v0.3.2-beta.2-live-qualification-v1.json",
+      "sha256": "758d71ba804c2e5fa058e1b6c6ab8fc5ac67f868ca41509b4b071727071e9b2a",
+      "source": "signed_artifact_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-21T03:51:15Z",
+      "case_id": "gui-preview-cancel-cleanup",
+      "receipt_id": "v0.3.2-beta.3:gui-preview-cancel-cleanup:e4bc85e",
+      "reference": "docs/qualification/v0.3.2-beta.3-change-scoped-evidence-v1.json",
+      "sha256": "fdbb883f5d708bf95132d6c3bab39ccf502cbf65099c52786b70d61e2201faeb",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e4bc85e2fa9fa75d17c2b84a5bc6510f7af1bfbd",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-21T03:51:15Z",
+      "case_id": "gui-preview-failure-cleanup",
+      "receipt_id": "v0.3.2-beta.3:gui-preview-failure-cleanup:e4bc85e",
+      "reference": "docs/qualification/v0.3.2-beta.3-change-scoped-evidence-v1.json",
+      "sha256": "fdbb883f5d708bf95132d6c3bab39ccf502cbf65099c52786b70d61e2201faeb",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e4bc85e2fa9fa75d17c2b84a5bc6510f7af1bfbd",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-21T03:51:15Z",
+      "case_id": "network-generated-final-output",
+      "receipt_id": "v0.3.2-beta.3:network-generated-final-output:e4bc85e",
+      "reference": "docs/qualification/v0.3.2-beta.3-change-scoped-evidence-v1.json",
+      "sha256": "fdbb883f5d708bf95132d6c3bab39ccf502cbf65099c52786b70d61e2201faeb",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e4bc85e2fa9fa75d17c2b84a5bc6510f7af1bfbd",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-21T03:51:15Z",
+      "case_id": "overwrite-and-conversion-cancel",
+      "receipt_id": "v0.3.2-beta.3:overwrite-and-conversion-cancel:e4bc85e",
+      "reference": "docs/qualification/v0.3.2-beta.3-change-scoped-evidence-v1.json",
+      "sha256": "fdbb883f5d708bf95132d6c3bab39ccf502cbf65099c52786b70d61e2201faeb",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e4bc85e2fa9fa75d17c2b84a5bc6510f7af1bfbd",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-23T21:44:54Z",
+      "case_id": "release-workflow-identity",
+      "receipt_id": "v0.3.2-beta.7:release-workflow-identity",
+      "reference": "docs/release-evidence/v0.3.2-beta.7/release-receipt.json",
+      "release_run_id": 32666346343,
+      "sha256": "6afe63b1212ce0b59d7b893f8b501297361c45e8fbf88484ab915e92f0b060b3",
+      "source": "release_run_receipt",
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-23T21:44:54Z",
+      "case_id": "signed-packaged-route-parity",
+      "receipt_id": "v0.3.2-beta.7:signed-packaged-route-parity",
+      "reference": "docs/release-evidence/v0.3.2-beta.7/release-receipt.json",
+      "release_run_id": 32666346343,
+      "sha256": "6afe63b1212ce0b59d7b893f8b501297361c45e8fbf88484ab915e92f0b060b3",
+      "source": "release_run_receipt",
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-23T23:35:24Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.2-beta.7:clean-machine-signed-update:32673822559",
+      "reference": "docs/qualification/v0.3.2-beta.7-clean-machine-signed-update-v1.json",
+      "sha256": "983db6d8328119a09d729639ae9b3c2641714e5f885d77f6e18d6bb5c68c8946",
+      "source": "tier3_automation_receipt",
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-23T23:35:24Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.2-beta.7:installed-ui-accessibility:32673822559",
+      "reference": "docs/qualification/v0.3.2-beta.7-installed-ui-accessibility-v1.json",
+      "sha256": "b48d796fa3be9494024b0dfc97bb8adc9d0d79e2cb0b157901416d9495787026",
+      "source": "tier3_automation_receipt",
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-24T01:35:12Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.2-beta.7:clean-machine-signed-update:32680024505",
+      "reference": "docs/qualification/v0.3.2-beta.7-clean-machine-signed-update-run-32680024505-v1.json",
+      "sha256": "bb9b326708f37ba38a9845f854cdb4feab4eb614e3f03f50a1210e82e54dbdf6",
+      "source": "tier3_automation_receipt",
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-24T01:35:12Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.2-beta.7:installed-ui-accessibility:32680024505",
+      "reference": "docs/qualification/v0.3.2-beta.7-installed-ui-accessibility-run-32680024505-v1.json",
+      "sha256": "7cf484ffdba3520845c8e0ba491582d292bffea334a3a1ec5f67d7ea8d70fae4",
+      "source": "tier3_automation_receipt",
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-24T01:35:12Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.2-beta.7:profile-save-action-accessibility:32666346343",
+      "reference": "docs/release-evidence/v0.3.2-beta.7/signed-artifact-ui-receipt.json",
+      "sha256": "452e5098b1de521b09ab67b96afa5a7cf88e1161383f3f0fe8d2a9705ad8da7f",
+      "source": "signed_artifact_receipt",
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-24T01:35:12Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.2-beta.7:sparkle-update-route:32680024505",
+      "reference": "docs/qualification/v0.3.2-beta.7-live-qualification-v1.json",
+      "sha256": "c20a3897081e61abf3b1aabc2c12d19a021261b77eab7f40975f5b14825c7494",
+      "source": "signed_artifact_receipt",
+      "source_sha": "d994ce11f9d4a669f068c89dc8e51ca269710290",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T01:38:46Z",
+      "case_id": "release-workflow-identity",
+      "receipt_id": "v0.3.2-rc.1:release-workflow-identity",
+      "reference": "docs/release-evidence/v0.3.2-rc.1/release-receipt.json",
+      "release_run_id": 32796196439,
+      "sha256": "dec0546e8e4c7178fba99492911f12896277260c767f96e0c492d7cbfc3c1d54",
+      "source": "release_run_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-25T01:38:46Z",
+      "case_id": "signed-packaged-route-parity",
+      "receipt_id": "v0.3.2-rc.1:signed-packaged-route-parity",
+      "reference": "docs/release-evidence/v0.3.2-rc.1/release-receipt.json",
+      "release_run_id": 32796196439,
+      "sha256": "dec0546e8e4c7178fba99492911f12896277260c767f96e0c492d7cbfc3c1d54",
+      "source": "release_run_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-25T02:10:09Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.2-rc.1:clean-machine-signed-update:32799964483",
+      "reference": "docs/qualification/v0.3.2-rc.1-clean-machine-signed-update-v1.json",
+      "sha256": "66ee6f0ee679f75d4ae3787015072ddb60ad68f7e79c4b5c9827b86f277a578f",
+      "source": "tier3_automation_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T02:10:09Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.2-rc.1:installed-ui-accessibility:32799964483",
+      "reference": "docs/qualification/v0.3.2-rc.1-installed-ui-accessibility-v1.json",
+      "sha256": "04fa78aa5e28b941ea64c4c1c05b4993e328f7db50b1450571b73833d2ee7b91",
+      "source": "tier3_automation_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T02:10:09Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.2-rc.1:profile-save-action-accessibility:32796196439",
+      "reference": "docs/release-evidence/v0.3.2-rc.1/signed-artifact-ui-receipt.json",
+      "sha256": "9f3a0cf76896b8a7fa70e4ce5fc715e482e8fbbd4e30bffaac8bf0562b7e7fa1",
+      "source": "signed_artifact_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T02:10:09Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.2-rc.1:sparkle-update-route:32799964483",
+      "reference": "docs/qualification/v0.3.2-rc.1-live-qualification-v1.json",
+      "sha256": "6714e43d8cd879bd3b6efeceffb5887e1d146d2d43e877620157c61414f88ada",
+      "source": "signed_artifact_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T17:02:23Z",
+      "case_id": "release-workflow-identity",
+      "receipt_id": "v0.3.2:release-workflow-identity",
+      "reference": "docs/release-evidence/v0.3.2/release-receipt.json",
+      "release_run_id": 32872545337,
+      "sha256": "21e8d6fa0c4f8e014fd57565f993652cc76a4bb3a968e5752e2a4bcb2a1237b0",
+      "source": "release_run_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-25T17:02:23Z",
+      "case_id": "signed-packaged-route-parity",
+      "receipt_id": "v0.3.2:signed-packaged-route-parity",
+      "reference": "docs/release-evidence/v0.3.2/release-receipt.json",
+      "release_run_id": 32872545337,
+      "sha256": "21e8d6fa0c4f8e014fd57565f993652cc76a4bb3a968e5752e2a4bcb2a1237b0",
+      "source": "release_run_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-25T18:10:21Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.2:clean-machine-signed-update:32881574927",
+      "reference": "docs/qualification/v0.3.2-clean-machine-signed-update-v1.json",
+      "sha256": "90e8561e6a804ec1de0a606b56a6925238572f782122aa02b9b17a816cdd6335",
+      "source": "tier3_automation_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T18:10:21Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.2:installed-ui-accessibility:32881574927",
+      "reference": "docs/qualification/v0.3.2-installed-ui-accessibility-v1.json",
+      "sha256": "e64e72a192edf50050845ce141fa9f129587cea7cdaca2227938072c65e7b073",
+      "source": "tier3_automation_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T18:10:21Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.2:profile-save-action-accessibility:32872545337",
+      "reference": "docs/release-evidence/v0.3.2/signed-artifact-ui-receipt.json",
+      "sha256": "db546c6b94b4676ea65b6f829be5331fbcfc288476d5ec29d7bea6479ffbe248",
+      "source": "signed_artifact_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T18:10:21Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.2:sparkle-update-route:32881574927",
+      "reference": "docs/qualification/v0.3.2-live-qualification-v1.json",
+      "sha256": "533bdea5224fbe0766794fb41618af034cc0d1208096a078cdcc08dbb3c9bc33",
+      "source": "signed_artifact_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted"
     }
   ],
   "schema_version": 1

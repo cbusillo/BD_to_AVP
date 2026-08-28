@@ -12,10 +12,20 @@ burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
 (`0.3.0b9`, build `154`) was never published. RC 1 (`0.3.0rc1`, build `158`),
 RC 2 (`0.3.0rc2`, build `159`), and RC 3 (`0.3.0rc3`, build `160`) are
 published and immutable. Stable `0.3.0` build `161` is also published and
-immutable. The next prepared target is Stable `0.3.1` build `162`; issue #520
-owns publication and exact-artifact qualification.
-Run-bound signing approval
-remains a separate authorization boundary.
+immutable. Stable `0.3.1` build `162`, Beta `0.3.2b1` build `163`, and Beta
+`0.3.2b2` build `164` and Beta `0.3.2b5` build `167` are published and
+immutable. Beta `0.3.2b3` build `165` and Beta `0.3.2b4` build `166` are failed
+unpublished signed attempts and their identities are burned. Beta 5's
+post-publication exact-artifact qualification is blocked by packaged worker
+version metadata. Corrective Beta `0.3.2b6` build `168` is a cancelled,
+unpublished signed attempt whose draft `374538590` was deleted through the
+authorized immutable-disposition path; its tag and build are permanently
+non-reusable. Beta `0.3.2b7` build `169` and RC `0.3.2rc1` build `170` are
+published, immutable, and fully qualified. Stable `0.3.2` build `171` is
+published and immutable. Issue #659 owns prepared successor Beta `0.3.3b1`
+build `172`; Prerelease dispatch, signing approval, and publication remain
+separately authorized. Run-bound signing approval remains a separate
+authorization boundary.
 
 ## Production Identity
 
@@ -322,9 +332,9 @@ The reviewed metadata, release notes, publication effects, recovery history,
 and exact qualification evidence are in
 [the Stable cut packet](0.3.0-cut-packet.md).
 
-## Stable 0.3.1 Prepared Target
+## Published Stable 0.3.1
 
-The repository is prepared for review of the guarded `v0.3.1` Stable workflow:
+Stable `v0.3.1` is published and immutable:
 
 - internal and public version `0.3.1`;
 - public tag and title `v0.3.1`;
@@ -335,15 +345,174 @@ The repository is prepared for review of the guarded `v0.3.1` Stable workflow:
 - the same production product, bundle, feed, key, signing team, and diagnostics
   endpoint as Stable `0.3.0`.
 
-Publication must place Stable `0.3.1` above immutable Stable `0.3.0` build
-`161` and all earlier history. Stable, RC, Beta, and Alpha clients can all
-select the newer Stable item without changing their saved route.
+Publication placed Stable `0.3.1` above immutable Stable `0.3.0` build `161`
+and all earlier history. Stable, RC, Beta, and Alpha clients can all select the
+newer Stable item without changing their saved route. The release targets exact
+source SHA `22982d5037e3b2bd03bbc9fa25332be2c8b04c97`; its checked receipt and
+publication record remain immutable.
 
-The repository has no freeze entry for this exact tag and no conflicting tag,
-draft, release, PyPI version, Homebrew pull request, or appcast item. Dispatch
-requires explicit release authorization under a fixed-`main` merge hold. The
-reviewed metadata, release-note seed, publication effects, and post-publication
-qualification boundary are in [the 0.3.1 cut packet](0.3.1-cut-packet.md).
+The reviewed metadata, release notes, publication effects, and exact receipt are
+in [the 0.3.1 cut packet](0.3.1-cut-packet.md).
+
+## 0.3.2 Beta 1 Published Release
+
+Published `v0.3.2-beta.1` has:
+
+- internal version `0.3.2b1` and public version `0.3.2-beta.1`;
+- public tag and title `v0.3.2-beta.1`;
+- global build `163`;
+- Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Stable `0.3.1`.
+
+Publication placed Beta 1 above immutable Stable `0.3.1` build `162` and all
+earlier history. Stable and RC clients exclude the Beta item; Beta and Alpha
+clients can select it because build `163` is newer. The release targets exact
+source SHA `1a204ef26a02d63d5ca872f38db4aa82e0aa409f` and remains immutable.
+
+The reviewed metadata, release-note seed, focused Beta scope, and qualification
+boundary are in
+[the 0.3.2 Beta 1 cut packet](0.3.2-beta.1-cut-packet.md).
+
+## 0.3.2 Beta 2 Published History
+
+Published `v0.3.2-beta.2` has:
+
+- internal version `0.3.2b2` and public version `0.3.2-beta.2`;
+- public tag and title `v0.3.2-beta.2`;
+- global build `164`;
+- Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Beta `0.3.2b1`.
+
+Publication placed Beta 2 above immutable Beta 1 build `163`, Stable `0.3.1`
+build `162`, and all earlier history. Stable and RC clients exclude the Beta
+item; Beta and Alpha clients can select it because build `164` is newer. The
+release targets exact source SHA
+`da307689f38ee696c872b98c7c784a17e9fe9d19` and remains immutable.
+
+The reviewed metadata, release-note seed, scope freeze, and qualification
+evidence are in
+[the 0.3.2 Beta 2 cut packet](0.3.2-beta.2-cut-packet.md).
+
+## 0.3.2 Beta 3 Failed Attempt
+
+Beta 3 is failed, unpublished, and permanently burned:
+
+- internal version `0.3.2b3` and public version `0.3.2-beta.3`;
+- public tag and title `v0.3.2-beta.3`;
+- global build `165`;
+- Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Beta `0.3.2b2`.
+
+Guarded Prerelease run `32446869702` built, Developer ID signed, notarized, and
+packaged build `165` from source SHA
+`d2d455fdbedfde19b40a3be9c86e98997ec42981`. The run failed before publication
+in the signed-artifact UI accessibility lane because the installer call omitted
+its required DMG mount point. No public tag, release, appcast item, Pages state,
+PyPI version, or Homebrew change was created.
+
+The unpublished draft and its asset identities were recorded, then the draft
+was deleted after explicit recovery authorization. The corrected source
+advances to Beta 4 build `166` rather than reusing either Beta 3 identity. The
+failed-attempt details are in
+[the 0.3.2 Beta 3 cut packet](0.3.2-beta.3-cut-packet.md).
+
+## 0.3.2 Beta 4 Failed Attempt
+
+Beta 4 is failed, unpublished, and permanently burned:
+
+- internal version `0.3.2b4` and public version `0.3.2-beta.4`;
+- public tag and title `v0.3.2-beta.4`;
+- global build `166`;
+- Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Beta `0.3.2b2`.
+
+Guarded Prerelease run `32453767766` built, Developer ID signed, notarized, and
+packaged build `166` from source SHA
+`1473d14ea86562ff743da6f3d78f230361b7de23`. The run failed before publication
+in the signed-artifact UI accessibility lane because the standalone fresh
+install had no pre-save `profiles.json`, which the qualification test
+incorrectly treated as an error. No public tag, release, appcast item, Pages
+state, PyPI version, or Homebrew change was created.
+
+The unpublished draft and its asset identities were recorded, then the draft
+was deleted after explicit recovery authorization. PR #620 corrected the
+qualification contract, and the successor advances to Beta 5 build `167`
+rather than reusing either Beta 4 identity. The failed-attempt details are in
+[the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md).
+
+## 0.3.2 Beta 5 Publication And Cancelled Beta 6 Attempt
+
+Guarded Prerelease run `32488665999` published immutable
+`v0.3.2-beta.5` build `167` on August 21, 2026 from source SHA
+`f6ce414db07030e2ad2c081a9d4287639a113446`. Its exact DMG and appcast remain
+valid public artifacts, but post-publication qualification found that the
+embedded worker reported `0.0.0` instead of `0.3.2b5`. PR #623 corrects that
+diagnostics identity and strengthens the pre-signing package gate. Superseded
+success-shaped evidence PR #622 was closed without merge after the accurate
+failed-post-publication disposition merged.
+
+The reviewed Beta 6 identity was:
+
+- internal version `0.3.2b6` and public version `0.3.2-beta.6`;
+- public tag and title `v0.3.2-beta.6`;
+- global build `168`;
+- Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as published Beta `0.3.2b5`.
+
+Guarded Prerelease run `32502068709` built, Developer ID signed, notarized, and
+verified build `168` from source SHA
+`b4abf8829b6a539b40bb369bfd62dea504d35be1`. It created unpublished draft
+`374538590`, cumulative appcast assets, and an immutable release receipt, then
+was intentionally cancelled in the installed candidate UI accessibility lane
+before exact-artifact qualification, Pages deployment, or publication.
+
+No Git tag, public release, Pages appcast item, PyPI version, or Homebrew change
+was created. The deleted draft was diagnostic evidence only. The exact asset
+identities, checked receipt, and authorized deletion disposition are recorded under
+`docs/release-attempts/v0.3.2-beta.6/`; `.github/release-freezes.json` prevents
+redispatch of the Beta 6 tag. Build `168` must remain absent from future updater
+feeds. Explicit authorization was granted and draft `374538590` was deleted at
+`2026-08-21T22:58:29Z`; the checked `draft-deletion-v1.json` disposition records
+verified absence of both draft and tag. A newer successor identity is expected
+to begin at Beta 7/build `169`. Milestone-context validation accepts the
+cancelled candidate only after that disposition validates, then still requires
+build `168` in the successor qualification's burned-build list.
+
+Beta 7 is published and immutable as internal version `0.3.2b7`, public tag and
+title `v0.3.2-beta.7`, and global build `169`. Guarded Prerelease run
+`32666346343` published release `375333598` from source and tag SHA
+`d994ce11f9d4a669f068c89dc8e51ca269710290`. Final qualification passed with
+zero blocking or operator-required cases; the immutable publication and
+qualification contract is recorded in
+[the 0.3.2 Beta 7 cut packet](0.3.2-beta.7-cut-packet.md).
+
+RC 1 is published and immutable as internal version `0.3.2rc1`, public tag and
+title `v0.3.2-rc.1`, and global build `170`. Guarded Prerelease run
+`32796196439` published release `376092200` from source and tag SHA
+`1d691a6db7c18d09f55a425ec77a01ab6d917d80`. Final qualification passed with
+zero blocking cases and 15 completed cases. Its immutable publication and
+qualification contract is recorded in
+[the 0.3.2 RC 1 cut packet](0.3.2-rc.1-cut-packet.md).
+
+Beta `0.3.3b1` is prepared as public tag and title `v0.3.3-beta.1` with global
+build `172`. Published Stable `0.3.2` build `171` is the immediate global
+predecessor and immutable Stable update and release-note base. The Beta item is
+eligible only on the Beta and Alpha update routes and is published through the
+Prerelease workflow. Failed builds `165` and `166` and
+cancelled build `168` remain burned. No Prerelease dispatch, signing approval,
+tag, release, draft, appcast, PyPI, or Homebrew mutation is authorized by this
+preparation. The preparation contract is recorded in
+[the 0.3.3 Beta 1 cut packet](0.3.3-beta.1-cut-packet.md).
 
 ## Historical Boundaries
 
@@ -374,7 +543,17 @@ prerelease flag; prerelease-form tags marked Stable are never accepted.
 
 ## Operator Boundaries
 
-Operators receive two manual entry workflows:
+`Production Preflight` is a separate manual, non-authorizing workflow. It accepts
+only an exact full current protected-`main` SHA and runs the production-shaped
+ad-hoc package, exact packaged-worker smoke, preventive DMG installation, and
+shared installed-UI qualification before a successor identity is prepared. It
+has no signing environment, secrets, write permission, route selection, tag,
+draft, appcast, or publication capability. Its bounded seven-day artifacts are
+source-specific readiness diagnostics, not signed release evidence. The guarded
+release engine invokes the same maintained preflight implementation again before
+the signing job can request `macos-signing` approval.
+
+Release operators receive two manual entry workflows:
 
 - **Stable**, which accepts only committed Stable metadata; and
 - **Prerelease**, which accepts committed Alpha, Beta, or RC metadata.

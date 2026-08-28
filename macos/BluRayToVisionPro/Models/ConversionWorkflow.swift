@@ -2,6 +2,7 @@ import Foundation
 
 enum BuiltInProfile: String, CaseIterable, Identifiable {
     case balanced = "builtin.balanced"
+    case smallerFile = "builtin.smaller-file"
     case originalResolution = "builtin.original-resolution"
     case fourKUpscale = "builtin.4k-upscale"
 
@@ -10,9 +11,11 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
     var name: String {
         switch self {
         case .balanced:
-            "Balanced"
+            "Recommended"
+        case .smallerFile:
+            "Smaller File"
         case .originalResolution:
-            "Original Resolution"
+            "Higher Quality"
         case .fourKUpscale:
             "4K Upscale"
         }
@@ -21,11 +24,13 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .balanced:
-            "HEVC 75, source resolution, automatic audio, English audio only, and subtitles."
+            "The best starting point for most movies, with source resolution and automatic audio and subtitles."
+        case .smallerFile:
+            "Uses less storage with a modest reduction in fine detail."
         case .originalResolution:
-            "Higher quality while preserving the source resolution."
+            "More detail at the source resolution, with a slower conversion and larger file."
         case .fourKUpscale:
-            "2× AI upscale with linked HEVC and upscale quality."
+            "Upscale the source to 4K for a slower conversion and larger file."
         }
     }
 
@@ -33,6 +38,8 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
         switch self {
         case .balanced:
             "slider.horizontal.3"
+        case .smallerFile:
+            "externaldrive.badge.minus"
         case .originalResolution:
             "rectangle.inset.filled"
         case .fourKUpscale:
@@ -60,7 +67,7 @@ struct EncodingProfile: Identifiable, Equatable {
     let id: String
     var name: String
     var options: EncodingOptions
-    var jobDefaults: ProfileJobDefaults? = nil
+    var pipelineDefaults: ProfilePipelineDefaults? = nil
     let kind: Kind
     let systemImage: String
 
@@ -68,14 +75,14 @@ struct EncodingProfile: Identifiable, Equatable {
         id: String,
         name: String,
         options: EncodingOptions,
-        jobDefaults: ProfileJobDefaults? = nil,
+        pipelineDefaults: ProfilePipelineDefaults? = nil,
         kind: Kind,
         systemImage: String
     ) {
         self.id = id
         self.name = name
         self.options = options
-        self.jobDefaults = jobDefaults
+        self.pipelineDefaults = pipelineDefaults
         self.kind = kind
         self.systemImage = systemImage
     }
@@ -83,6 +90,115 @@ struct EncodingProfile: Identifiable, Equatable {
     var isBuiltIn: Bool { kind == .builtIn }
     var isCustom: Bool { kind == .custom }
     var summary: String { options.compactSummary }
+}
+
+enum ProfilePersistenceCopy {
+    static let summary = "Profiles save video, audio, subtitle, reusable-file, and encoder settings. Restart, overwrite, delete-source, recovery, command-output, sound, and keep-awake choices are not saved."
+}
+
+enum ReusableFileOutcome: String, CaseIterable, Identifiable {
+    case finishedMovieOnly
+    case finishedMovieAndReusableFiles
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .finishedMovieOnly:
+            "Just the finished movie"
+        case .finishedMovieAndReusableFiles:
+            "The finished movie plus reusable files"
+        }
+    }
+
+    var policy: IntermediatePolicy {
+        switch self {
+        case .finishedMovieOnly:
+            .automatic
+        case .finishedMovieAndReusableFiles:
+            .reusable
+        }
+    }
+
+    init(policy: IntermediatePolicy) {
+        self = policy.createsReusableArtifacts
+            ? .finishedMovieAndReusableFiles
+            : .finishedMovieOnly
+    }
+
+    var detail: String {
+        switch self {
+        case .finishedMovieOnly:
+            "You get one finished movie. Temporary processing files are removed after a successful conversion."
+        case .finishedMovieAndReusableFiles:
+            "You get the finished movie plus reusable left- and right-eye movies that can be used later without rereading the disc. This needs more storage and time, and some quality choices may be unavailable."
+        }
+    }
+}
+
+struct SetupEditSession: Equatable {
+    private(set) var originalProfileID: String
+    private(set) var originalProfileName: String
+    private(set) var originalProfileKind: EncodingProfile.Kind
+    private(set) var originalOptions: ConversionOptions
+
+    private(set) var profileID: String
+    private(set) var profileName: String
+    private(set) var draftOptions: ConversionOptions
+
+    init(profile: EncodingProfile, options: ConversionOptions) {
+        originalProfileID = profile.id
+        originalProfileName = profile.name
+        originalProfileKind = profile.kind
+        originalOptions = options
+        profileID = profile.id
+        profileName = profile.name
+        draftOptions = options
+    }
+
+    var isDirty: Bool {
+        draftOptions != originalOptions || profileName != originalProfileName
+    }
+
+    var canUpdateProfile: Bool {
+        originalProfileKind == .custom && profileID == originalProfileID
+    }
+
+    var profilePipelineDefaults: ProfilePipelineDefaults {
+        draftOptions.job.profilePipelineDefaults
+    }
+
+    mutating func updateName(_ name: String) {
+        profileName = name
+    }
+
+    mutating func updateOptions(_ options: ConversionOptions) {
+        draftOptions = options
+    }
+
+    mutating func load(profile: EncodingProfile, options: ConversionOptions) {
+        originalProfileID = profile.id
+        originalProfileName = profile.name
+        originalProfileKind = profile.kind
+        originalOptions = options
+        profileID = profile.id
+        profileName = profile.name
+        draftOptions = options
+    }
+
+    mutating func discard() {
+        profileID = originalProfileID
+        profileName = originalProfileName
+        draftOptions = originalOptions
+    }
+
+    func profileWriteValues() -> (name: String, options: EncodingOptions, pipelineDefaults: ProfilePipelineDefaults) {
+        (profileName, draftOptions.encoding, profilePipelineDefaults)
+    }
+
+    func switching(to profile: EncodingProfile, options: ConversionOptions) -> SetupEditSession {
+        SetupEditSession(profile: profile, options: options)
+    }
 }
 
 enum OutputLength: String, CaseIterable, Identifiable {

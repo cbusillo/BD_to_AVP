@@ -4,14 +4,17 @@ import argparse
 import hashlib
 import json
 import shutil
-import uuid
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from scripts.artifact_identity import app_tree_sha256
+from scripts.installed_ui_qualification import (
+    InstalledUIQualificationConfig,
+    InstalledUIQualificationError,
+    run as run_installed_ui_qualification,
+)
 from scripts.signed_artifact_receipt import (
     PROFILE_CASE_ID,
     SignedArtifactReceiptError,
@@ -20,13 +23,7 @@ from scripts.signed_artifact_receipt import (
     validate_policy_case,
     write_receipt,
 )
-from scripts.tier3_clean_machine import (
-    APP_NAME,
-    RELEASES_URL,
-    CleanMachineError,
-    MacOSOperations,
-    normalize_installed_ui_candidate_evidence,
-)
+from scripts.tier3_clean_machine import RELEASES_URL, CleanMachineError, MacOSOperations
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -88,30 +85,8 @@ def _artifact(receipt: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
     return artifacts[0]
 
 
-def _preserve_failure_diagnostics(
-    config: SignedArtifactUIConfig,
-    raw_ui_directory: Path,
-    error: BaseException,
-) -> None:
-    destination = config.failure_diagnostics_directory
-    if destination is None:
-        return
-    destination.mkdir(parents=True)
-    (destination / "failure.txt").write_text(f"{type(error).__name__}: {error}\n", encoding="utf-8")
-    result_bundle = config.qualification_root / "InstalledUI-candidate.xcresult"
-    if result_bundle.is_dir():
-        shutil.copytree(result_bundle, destination / result_bundle.name)
-    if raw_ui_directory.is_dir():
-        shutil.copytree(raw_ui_directory, destination / raw_ui_directory.name)
-
-
 def _run(config: SignedArtifactUIConfig, operations: MacOSOperations) -> Mapping[str, Any]:
-    if (
-        config.output_receipt.exists()
-        or config.evidence_directory.exists()
-        or config.qualification_root.exists()
-        or (config.failure_diagnostics_directory is not None and config.failure_diagnostics_directory.exists())
-    ):
+    if config.output_receipt.exists() or config.evidence_directory.exists() or config.qualification_root.exists():
         raise SignedArtifactUIError("Signed artifact UI outputs and workspace must not already exist.")
     if operations.app_running():
         raise SignedArtifactUIError("The production app must not be running before signed artifact UI qualification.")
@@ -139,53 +114,22 @@ def _run(config: SignedArtifactUIConfig, operations: MacOSOperations) -> Mapping
     if dmg.get("asset_id") != expectation.dmg_asset_id:
         raise SignedArtifactUIError("Release receipt DMG asset ID changed before UI qualification.")
 
-    synthetic_home = config.qualification_root / "Home"
-    app_path = config.qualification_root / "Applications" / APP_NAME
-    raw_ui_directory = config.qualification_root / "InstalledUIEvidence"
-    marker_path = config.qualification_root / ".bd-to-avp-signed-artifact-ui.json"
-    marker = {"owner": "bd-to-avp-signed-artifact-ui", "run_id": str(uuid.uuid4())}
-    config.qualification_root.mkdir(parents=True)
-    marker_path.write_text(json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
-    try:
-        synthetic_home.mkdir(parents=True)
-        operations.install_app(config.dmg, app_path)
-        installed_app_tree_sha256 = app_tree_sha256(app_path)
-        if installed_app_tree_sha256 != expectation.signed_app_tree_sha256:
-            raise SignedArtifactUIError("Installed app tree digest does not match the signed package receipt.")
-        operations.collect_ui_evidence(
-            repo=config.repo.resolve(),
-            phase="candidate",
-            app_path=app_path,
-            synthetic_home=synthetic_home,
-            output_directory=raw_ui_directory,
+    evidence_digests = run_installed_ui_qualification(
+        InstalledUIQualificationConfig(
+            repo=config.repo,
+            dmg=config.dmg,
+            qualification_root=config.qualification_root,
+            evidence_directory=config.evidence_directory,
             release_notes_url=config.release_notes_url,
-        )
-        operations.quit_app()
-        if operations.app_running():
-            raise SignedArtifactUIError("Signed artifact UI test left the production app running.")
-        evidence_digests = normalize_installed_ui_candidate_evidence(
-            raw_ui_directory,
-            config.evidence_directory,
-            release_notes_url=config.release_notes_url,
-        )
-        receipt = build_receipt(expectation=expectation, evidence=evidence_digests)
-        write_receipt(receipt, config.output_receipt)
-        return receipt
-    except BaseException as error:
-        _preserve_failure_diagnostics(config, raw_ui_directory, error)
-        raise
-    finally:
-        try:
-            operations.quit_app()
-        finally:
-            if config.qualification_root.exists():
-                try:
-                    observed_marker = json.loads(marker_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError) as error:
-                    raise SignedArtifactUIError("Signed artifact UI cleanup marker is missing or invalid.") from error
-                if observed_marker != marker:
-                    raise SignedArtifactUIError("Signed artifact UI cleanup marker changed during the run.")
-                shutil.rmtree(config.qualification_root)
+            expected_app_tree_sha256=expectation.signed_app_tree_sha256,
+            owner="bd-to-avp-signed-artifact-ui",
+            failure_diagnostics_directory=config.failure_diagnostics_directory,
+        ),
+        operations,
+    )
+    receipt = build_receipt(expectation=expectation, evidence=evidence_digests)
+    write_receipt(receipt, config.output_receipt)
+    return receipt
 
 
 def run(config: SignedArtifactUIConfig, operations: MacOSOperations | None = None) -> Mapping[str, Any]:
@@ -239,7 +183,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         run(config)
-    except (CleanMachineError, SignedArtifactReceiptError, SignedArtifactUIError) as error:
+    except (
+        CleanMachineError,
+        InstalledUIQualificationError,
+        SignedArtifactReceiptError,
+        SignedArtifactUIError,
+    ) as error:
         build_parser().error(str(error))
     return 0
 

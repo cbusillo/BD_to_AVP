@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 from scripts.github_release_run import GhAPIClient
 from scripts.qualify_release_scope import QualificationScopeError
+from scripts.release_evidence_v2 import ReleaseEvidenceV2Error, validate_v2_bundle
 from scripts.release_milestone_context import ReleaseMilestoneContextError
 from scripts.release_qualification_artifact import (
     QualificationArtifactError,
@@ -40,7 +41,7 @@ from scripts.release_qualification_status import (
     build_status,
     resolve_evidence_binding,
 )
-from scripts.release_qualification_manifest import ReleaseQualificationManifestError
+from scripts.release_qualification_manifest import ReleaseQualificationManifestError, manifest_sha256
 
 
 REPOSITORY = "cbusillo/BD_to_AVP"
@@ -52,7 +53,7 @@ WORKFLOW_PATH = ".github/workflows/milestone-qualification.yml"
 WORKFLOW_JOB_NAME = "Collect exact post-publication qualification receipts"
 RESUME_TYPE = "bd_to_avp.release_qualification_resume"
 CHECKPOINT_TYPE = "bd_to_avp.release_qualification_resume_checkpoint"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EXIT_SUCCESS = 0
 EXIT_FAILED = 1
 EXIT_OPERATOR_REQUIRED = 20
@@ -109,7 +110,6 @@ class ResumeIdentity:
     evidence_ref: str
     evidence_sha: str
     evidence_base_sha: str
-    evidence_pr_number: int
     release_receipt_file_sha256: str
     signed_ui_artifact_id: int
     signed_ui_artifact_sha256: str
@@ -368,6 +368,127 @@ def _validate_checkpoint(checkpoint: Mapping[str, Any], identity: ResumeIdentity
     return dispatch
 
 
+def _identity_from_checkpoint(checkpoint: Mapping[str, Any]) -> ResumeIdentity:
+    recorded = _mapping(checkpoint.get("identity"), "checkpoint identity")
+    _exact_keys(recorded, set(ResumeIdentity.__dataclass_fields__), "checkpoint identity")
+    identity = ResumeIdentity(
+        release_tag=_string(recorded.get("release_tag"), "checkpoint release tag"),
+        candidate_sha=_sha(recorded.get("candidate_sha"), "checkpoint candidate SHA"),
+        release_id=_integer(recorded.get("release_id"), "checkpoint release ID"),
+        manifest_sha256=_sha256(recorded.get("manifest_sha256"), "checkpoint manifest digest"),
+        runner_sha=_sha(recorded.get("runner_sha"), "checkpoint runner SHA"),
+        main_sha=_sha(recorded.get("main_sha"), "checkpoint main SHA"),
+        evidence_ref=_string(recorded.get("evidence_ref"), "checkpoint evidence ref"),
+        evidence_sha=_sha(recorded.get("evidence_sha"), "checkpoint evidence SHA"),
+        evidence_base_sha=_sha(recorded.get("evidence_base_sha"), "checkpoint evidence base SHA"),
+        release_receipt_file_sha256=_sha256(
+            recorded.get("release_receipt_file_sha256"),
+            "checkpoint release receipt digest",
+        ),
+        signed_ui_artifact_id=_integer(
+            recorded.get("signed_ui_artifact_id"),
+            "checkpoint signed UI artifact ID",
+        ),
+        signed_ui_artifact_sha256=_sha256(
+            recorded.get("signed_ui_artifact_sha256"),
+            "checkpoint signed UI artifact digest",
+        ),
+        policy_sha256=_sha256(recorded.get("policy_sha256"), "checkpoint policy digest"),
+        policy_checkpoint_sha256=_sha256(
+            recorded.get("policy_checkpoint_sha256"),
+            "checkpoint policy checkpoint digest",
+        ),
+        route_table_sha256=_sha256(
+            recorded.get("route_table_sha256"),
+            "checkpoint route table digest",
+        ),
+        controller_runner_sha256=_sha256(
+            recorded.get("controller_runner_sha256"),
+            "checkpoint controller runner digest",
+        ),
+    )
+    if checkpoint.get("identity_sha256") != identity.digest:
+        raise QualificationResumeSafetyError("Qualification resume checkpoint identity digest is invalid.")
+    return identity
+
+
+def _validate_checkpoint_rebind(
+    repo_root: Path,
+    previous: ResumeIdentity,
+    current: ResumeIdentity,
+    current_manifest: Mapping[str, Any],
+) -> None:
+    immutable_fields = (
+        "release_tag",
+        "candidate_sha",
+        "release_id",
+        "evidence_ref",
+        "release_receipt_file_sha256",
+        "signed_ui_artifact_id",
+        "signed_ui_artifact_sha256",
+        "policy_sha256",
+        "policy_checkpoint_sha256",
+        "route_table_sha256",
+    )
+    changed = [field for field in immutable_fields if getattr(previous, field) != getattr(current, field)]
+    if changed:
+        raise QualificationResumeSafetyError(
+            f"Qualification checkpoint rebind changes immutable release fields: {changed!r}."
+        )
+    if previous.runner_sha != previous.main_sha or current.runner_sha != current.main_sha:
+        raise QualificationResumeSafetyError(
+            "Qualification checkpoint rebind requires protected-main runner identities."
+        )
+    ancestor = cast(
+        subprocess.CompletedProcess[str],
+        _git(repo_root, ["merge-base", "--is-ancestor", previous.main_sha, current.main_sha]),
+    )
+    if ancestor.returncode != 0:
+        raise QualificationResumeSafetyError(
+            "Qualification checkpoint rebind requires the refreshed protected main to descend from the prior runner."
+        )
+    previous_manifest = _manifest_at_revision(repo_root, previous)
+    if manifest_sha256(current_manifest) != current.manifest_sha256:
+        raise QualificationResumeSafetyError(
+            "Refreshed qualification manifest digest changed during checkpoint rebind."
+        )
+    if _checkpoint_rebind_manifest_projection(previous_manifest) != _checkpoint_rebind_manifest_projection(
+        current_manifest
+    ):
+        raise QualificationResumeSafetyError(
+            "Qualification checkpoint rebind changes decision-bearing manifest inputs."
+        )
+
+
+def _manifest_at_revision(repo_root: Path, identity: ResumeIdentity) -> Mapping[str, Any]:
+    manifest_path = f"docs/release-evidence/{identity.release_tag}/qualification-manifest.json"
+    result = cast(
+        subprocess.CompletedProcess[str],
+        _git(repo_root, ["show", f"{identity.evidence_sha}:{manifest_path}"]),
+    )
+    if result.returncode != 0:
+        raise QualificationResumeSafetyError("Unable to load the prior qualification manifest for checkpoint rebind.")
+    try:
+        manifest = _mapping(json.loads(result.stdout), "prior qualification manifest")
+    except json.JSONDecodeError as error:
+        raise QualificationResumeSafetyError("Prior qualification manifest is invalid JSON.") from error
+    recorded_digest = _sha256(manifest.get("manifest_sha256"), "prior qualification manifest digest")
+    if recorded_digest != identity.manifest_sha256 or manifest_sha256(manifest) != recorded_digest:
+        raise QualificationResumeSafetyError("Prior qualification manifest digest conflicts with the checkpoint.")
+    return manifest
+
+
+def _checkpoint_rebind_manifest_projection(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    projection = _mapping(json.loads(json.dumps(manifest)), "qualification manifest projection")
+    normalized = dict(projection)
+    normalized.pop("manifest_sha256", None)
+    normalized.pop("runner_sha", None)
+    canonical_evidence = dict(_mapping(normalized.get("canonical_evidence"), "manifest canonical evidence"))
+    canonical_evidence.pop("base_sha", None)
+    normalized["canonical_evidence"] = canonical_evidence
+    return normalized
+
+
 def _ref_endpoint(branch: str) -> str:
     return f"repos/{REPOSITORY}/git/ref/heads/{quote(branch, safe='')}"
 
@@ -405,34 +526,6 @@ def _validate_repository(client: GitHubAPI) -> None:
     _integer(repository.get("id"), "GitHub repository ID")
 
 
-def _open_evidence_pr(client: GitHubAPI, evidence_ref: str, evidence_sha: str) -> Mapping[str, Any]:
-    endpoint = (
-        f"repos/{REPOSITORY}/pulls?state=open&base={MAIN_BRANCH}"
-        f"&head={REPOSITORY_OWNER}%3A{quote(evidence_ref, safe='')}&per_page=100"
-    )
-    pulls = _sequence(client.get_json(endpoint, active_auth=True), "open evidence pull requests")
-    if len(pulls) != 1:
-        raise QualificationResumeSafetyError(
-            f"Expected exactly one open pull request for {evidence_ref}; found {len(pulls)}."
-        )
-    pull = _mapping(pulls[0], "evidence pull request")
-    head = _mapping(pull.get("head"), "evidence pull request head")
-    base = _mapping(pull.get("base"), "evidence pull request base")
-    if (
-        pull.get("state") != "open"
-        or head.get("ref") != evidence_ref
-        or head.get("sha") != evidence_sha
-        or _mapping(head.get("repo"), "evidence pull request head repository").get("full_name") != REPOSITORY
-        or base.get("ref") != MAIN_BRANCH
-        or _mapping(base.get("repo"), "evidence pull request base repository").get("full_name") != REPOSITORY
-    ):
-        raise QualificationResumeSafetyError(
-            "Evidence pull request identity conflicts with the checked evidence branch."
-        )
-    _integer(pull.get("number"), "evidence pull request number")
-    return pull
-
-
 def _require_local_evidence_checkout(repo_root: Path, identity: ResumeIdentity) -> None:
     local_head = _sha(_git_text(repo_root, ["rev-parse", "HEAD"], "local HEAD"), "local HEAD")
     local_branch = _git_text(repo_root, ["symbolic-ref", "--quiet", "--short", "HEAD"], "local branch")
@@ -458,12 +551,28 @@ def _require_local_evidence_checkout(repo_root: Path, identity: ResumeIdentity) 
         raise QualificationResumeSafetyError(f"Evidence branch contains non-documentation changes: {unexpected!r}.")
 
 
+def _require_durable_capture_checkpoint(repo_root: Path, identity: ResumeIdentity) -> None:
+    try:
+        result = validate_v2_bundle(
+            repo_root,
+            identity.release_tag,
+            verification_revision=identity.evidence_sha,
+        )
+    except ReleaseEvidenceV2Error as error:
+        raise QualificationResumeSafetyError(
+            "Evidence branch commit does not contain a valid durable v2 capture checkpoint."
+        ) from error
+    if result.get("class") not in {"v2-captured", "v2-qualified"}:
+        raise QualificationResumeSafetyError(
+            "Evidence branch commit does not contain an active CAPTURED qualification checkpoint."
+        )
+
+
 def _identity_from_binding(
     binding: EvidenceBinding,
     *,
     main_sha: str,
     evidence_sha: str,
-    evidence_pr_number: int,
 ) -> ResumeIdentity:
     manifest = binding.manifest
     if manifest is None:
@@ -484,7 +593,6 @@ def _identity_from_binding(
         evidence_ref=_string(canonical_evidence.get("ref"), "manifest evidence ref"),
         evidence_sha=_sha(evidence_sha, "evidence branch SHA"),
         evidence_base_sha=_sha(canonical_evidence.get("base_sha"), "manifest evidence base SHA"),
-        evidence_pr_number=_integer(evidence_pr_number, "evidence pull request number"),
         release_receipt_file_sha256=_sha256(
             release_receipt.get("file_sha256"),
             "manifest release receipt file digest",
@@ -533,8 +641,9 @@ def _workflow_runs(client: GitHubAPI, identity: ResumeIdentity) -> tuple[list[Ma
 def _run_matches(run: Mapping[str, Any], identity: ResumeIdentity) -> bool:
     actor = run.get("actor")
     triggering_actor = run.get("triggering_actor")
+    run_name = run.get("name")
     return (
-        run.get("name") == WORKFLOW_NAME
+        run_name in {WORKFLOW_NAME, identity.workflow_display_title}
         and run.get("path") == WORKFLOW_PATH
         and run.get("display_title") == identity.workflow_display_title
         and run.get("event") == "workflow_dispatch"
@@ -748,20 +857,6 @@ def _revalidate_remote_identity(
     )
     if _ref_sha(client, identity.evidence_ref) != evidence_sha:
         raise QualificationResumeSafetyError("Evidence branch moved after qualification resume preflight.")
-    pull_attempts = 5 if evidence_sha != identity.evidence_sha else 1
-    pull: Mapping[str, Any] | None = None
-    for attempt in range(pull_attempts):
-        try:
-            pull = _open_evidence_pr(client, identity.evidence_ref, evidence_sha)
-            break
-        except QualificationResumeSafetyError:
-            if attempt + 1 == pull_attempts:
-                raise
-            time.sleep(1.0)
-    if pull is None:
-        raise QualificationResumeSafetyError("Evidence pull request identity could not be revalidated.")
-    if pull.get("number") != identity.evidence_pr_number:
-        raise QualificationResumeSafetyError("Evidence pull request changed after qualification resume preflight.")
 
 
 def _require_no_active_exact_runs(client: GitHubAPI, identity: ResumeIdentity) -> None:
@@ -781,6 +876,8 @@ def _dispatch(
     high_water_run_id: int,
     retry_of_run_id: int | None,
     replace_prepared_checkpoint_sha256: str | None,
+    replace_observed_checkpoint_sha256: str | None,
+    replace_observed_run_conclusion: str | None,
     status_payload: Mapping[str, Any],
     poll_attempts: int,
     poll_seconds: float,
@@ -794,6 +891,8 @@ def _dispatch(
             high_water_run_id=high_water_run_id,
             retry_of_run_id=retry_of_run_id,
             replace_prepared_checkpoint_sha256=replace_prepared_checkpoint_sha256,
+            replace_observed_checkpoint_sha256=replace_observed_checkpoint_sha256,
+            replace_observed_run_conclusion=replace_observed_run_conclusion,
             status_payload=status_payload,
             poll_attempts=poll_attempts,
             poll_seconds=poll_seconds,
@@ -809,6 +908,8 @@ def _dispatch_locked(
     high_water_run_id: int,
     retry_of_run_id: int | None,
     replace_prepared_checkpoint_sha256: str | None,
+    replace_observed_checkpoint_sha256: str | None,
+    replace_observed_run_conclusion: str | None,
     status_payload: Mapping[str, Any],
     poll_attempts: int,
     poll_seconds: float,
@@ -816,16 +917,57 @@ def _dispatch_locked(
 ) -> ResumeResult:
     _require_dispatch_actor(client)
     _revalidate_remote_identity(client, identity)
+    if replace_prepared_checkpoint_sha256 is not None and replace_observed_checkpoint_sha256 is not None:
+        raise QualificationResumeSafetyError("Dispatch cannot replace prepared and observed checkpoints together.")
+    if (replace_observed_checkpoint_sha256 is None) != (replace_observed_run_conclusion is None):
+        raise QualificationResumeSafetyError(
+            "Observed checkpoint replacement requires its exact terminal run conclusion."
+        )
+    if replace_observed_run_conclusion not in {None, "failure", "success"}:
+        raise QualificationResumeSafetyError("Observed checkpoint replacement conclusion is unsupported.")
     existing_checkpoint = _load_checkpoint(checkpoint_path)
     if existing_checkpoint is not None:
-        existing_dispatch = _validate_checkpoint(existing_checkpoint, identity)
+        existing_identity = _identity_from_checkpoint(existing_checkpoint)
+        existing_dispatch = _validate_checkpoint(existing_checkpoint, existing_identity)
         existing_state = cast(str, existing_dispatch["state"])
         existing_run_id = cast(int | None, existing_dispatch.get("run_id"))
-        if replace_prepared_checkpoint_sha256 is not None:
-            recorded_digest = _sha256(
-                existing_checkpoint.get("checkpoint_sha256"),
-                "prepared checkpoint self digest",
+        existing_run_attempt = cast(int | None, existing_dispatch.get("run_attempt"))
+        recorded_digest = _sha256(
+            existing_checkpoint.get("checkpoint_sha256"),
+            "serialized checkpoint self digest",
+        )
+        if replace_observed_checkpoint_sha256 is not None:
+            if (
+                existing_state != "observed"
+                or existing_run_id != retry_of_run_id
+                or recorded_digest != replace_observed_checkpoint_sha256
+            ):
+                raise QualificationResumeSafetyError(
+                    "Observed checkpoint rebind does not match the serialized qualification checkpoint."
+                )
+            previous_run = _run_identity(
+                _workflow_run(client, cast(int, existing_run_id), existing_identity),
+                existing_identity,
             )
+            if (
+                previous_run["run_attempt"] != existing_run_attempt
+                or previous_run["status"] != TERMINAL_RUN_STATUS
+                or previous_run["conclusion"] != replace_observed_run_conclusion
+            ):
+                raise QualificationResumeSafetyError(
+                    "Observed checkpoint rebind run changed before the replacement dispatch."
+                )
+            refreshed_matches, refreshed_high_water = _workflow_runs(client, identity)
+            if refreshed_matches:
+                raise QualificationResumeSafetyError(
+                    "An exact refreshed qualification run appeared before checkpoint rebind dispatch."
+                )
+            high_water_run_id = max(high_water_run_id, refreshed_high_water)
+        elif existing_identity != identity:
+            raise QualificationResumeSafetyError(
+                "Qualification resume checkpoint conflicts with current release identity."
+            )
+        elif replace_prepared_checkpoint_sha256 is not None:
             if existing_state != "prepared" or recorded_digest != replace_prepared_checkpoint_sha256:
                 raise QualificationResumeSafetyError(
                     "Prepared checkpoint retry does not match the serialized qualification checkpoint."
@@ -972,12 +1114,10 @@ def resume_qualification(
     canonical_evidence = _mapping(binding.manifest.get("canonical_evidence"), "manifest canonical evidence")
     evidence_ref = _string(canonical_evidence.get("ref"), "manifest evidence ref")
     evidence_sha = _ref_sha(github, evidence_ref)
-    pull = _open_evidence_pr(github, evidence_ref, evidence_sha)
     identity = _identity_from_binding(
         binding,
         main_sha=main_sha,
         evidence_sha=evidence_sha,
-        evidence_pr_number=_integer(pull.get("number"), "evidence pull request number"),
     )
     if identity.runner_sha != identity.main_sha:
         return _result(
@@ -987,11 +1127,12 @@ def resume_qualification(
             identity=identity,
             next_action="Rerun Release Evidence to refresh the manifest against the current protected main SHA.",
         )
+    _require_durable_capture_checkpoint(repo_root, identity)
     if resolved_apply_checkpoint_path.exists():
         apply_summary = _apply_checkpoint_summary(resolved_apply_checkpoint_path)
         if apply_summary is None:
             raise QualificationResumeSafetyError("Qualification apply checkpoint disappeared during preflight.")
-        if apply_plan_sha256 is None and apply_summary.get("state") == "commented":
+        if apply_plan_sha256 is None and apply_summary.get("state") == "pushed":
             apply_plan_sha256 = _sha256(
                 apply_summary.get("plan_sha256"),
                 "completed reconciliation plan digest",
@@ -1012,7 +1153,6 @@ def resume_qualification(
                     repo_root=repo_root,
                     identity=identity,
                     expected_plan_sha256=apply_plan_sha256,
-                    client=github,
                     checkpoint_path=resolved_apply_checkpoint_path,
                     revalidate_remote=lambda evidence_sha: _revalidate_remote_identity(
                         github,
@@ -1037,14 +1177,10 @@ def resume_qualification(
             reconciliation_plan=outcome.plan,
             reconciliation_result={
                 "commit_sha": outcome.commit_sha,
-                "comment_id": outcome.comment_id,
             },
-            next_action=(
-                "Qualification evidence was committed, pushed, and recorded on the canonical evidence pull request."
-            ),
+            next_action="Qualification evidence was committed and pushed to the canonical evidence branch.",
         )
     _require_local_evidence_checkout(repo_root, identity)
-
     if resolved_checkpoint_path.exists():
         with _checkpoint_lock(resolved_checkpoint_path):
             checkpoint = _load_checkpoint(resolved_checkpoint_path)
@@ -1054,7 +1190,101 @@ def resume_qualification(
     active = [run for run in matches if run.get("status") in ACTIVE_RUN_STATUSES]
     if len(active) > 1:
         raise QualificationResumeSafetyError("Multiple active exact Milestone Qualification runs exist.")
+    selected_run: Mapping[str, Any] | None
     if checkpoint is not None:
+        checkpoint_identity = _identity_from_checkpoint(checkpoint)
+        if checkpoint_identity != identity:
+            _validate_checkpoint_rebind(repo_root, checkpoint_identity, identity, binding.manifest)
+            dispatch_checkpoint = _validate_checkpoint(checkpoint, checkpoint_identity)
+            checkpoint_state = cast(str, dispatch_checkpoint["state"])
+            checkpoint_digest = _sha256(
+                checkpoint.get("checkpoint_sha256"),
+                "checkpoint self digest",
+            )
+            observed_run_id = cast(int | None, dispatch_checkpoint.get("run_id"))
+            observed_run_attempt = cast(int | None, dispatch_checkpoint.get("run_attempt"))
+            if checkpoint_state != "observed" or observed_run_id is None or observed_run_attempt is None:
+                raise QualificationResumeSafetyError(
+                    "Qualification checkpoint rebind requires an observed terminal run."
+                )
+            previous_run = _run_identity(
+                _workflow_run(github, observed_run_id, checkpoint_identity),
+                checkpoint_identity,
+            )
+            if previous_run["run_attempt"] != observed_run_attempt:
+                raise QualificationResumeSafetyError(
+                    "Qualification checkpoint rebind run attempt differs from the observed terminal run."
+                )
+            previous_conclusion = previous_run["conclusion"]
+            if previous_run["status"] != TERMINAL_RUN_STATUS or previous_conclusion not in {"failure", "success"}:
+                raise QualificationResumeSafetyError(
+                    "Qualification checkpoint rebind requires an exact terminal failed or successful run."
+                )
+            refreshing_success = previous_conclusion == "success"
+            mutation = {
+                "operation": (
+                    "completed_checkpoint_refresh_dispatch" if refreshing_success else "checkpoint_rebind_dispatch"
+                ),
+                "endpoint": _workflow_dispatch_endpoint(),
+                "ref": MAIN_BRANCH,
+                "candidate_tag": identity.release_tag,
+                "manifest_sha256": identity.manifest_sha256,
+                "retry_of_run_id": observed_run_id,
+                "replaced_checkpoint_sha256": checkpoint_digest,
+            }
+            if retry_run_id is None or retry_checkpoint_sha256 is None:
+                return _result(
+                    "completed_checkpoint_refresh_required" if refreshing_success else "checkpoint_rebind_required",
+                    EXIT_OPERATOR_REQUIRED,
+                    status_payload,
+                    identity=identity,
+                    checkpoint_path=resolved_checkpoint_path,
+                    run=previous_run,
+                    mutation=mutation,
+                    next_action=(
+                        f"Rerun resume with --retry-run-id {observed_run_id}, "
+                        f"--retry-checkpoint-sha256 {checkpoint_digest}, and the exact expected "
+                        "main and manifest digests."
+                    ),
+                )
+            if retry_run_id != observed_run_id:
+                raise QualificationResumeSafetyError(
+                    "Checkpoint rebind retry run ID does not match the observed terminal run."
+                )
+            if retry_checkpoint_sha256 != checkpoint_digest:
+                raise QualificationResumeSafetyError(
+                    "Checkpoint rebind digest does not match the serialized qualification checkpoint."
+                )
+            if not _validate_expected_mutation(
+                identity,
+                expected_main_sha=expected_main_sha,
+                expected_manifest_sha256=expected_manifest_sha256,
+            ):
+                raise QualificationResumeSafetyError(
+                    "Checkpoint rebind requires exact expected main and manifest authorization."
+                )
+            if refreshing_success and matches:
+                raise QualificationResumeSafetyError(
+                    "An exact refreshed qualification run already exists during completed checkpoint refresh."
+                )
+            if active:
+                raise QualificationResumeSafetyError(
+                    "An exact refreshed qualification run is already active during checkpoint rebind."
+                )
+            return _dispatch(
+                github,
+                identity,
+                resolved_checkpoint_path,
+                high_water_run_id=high_water_run_id,
+                retry_of_run_id=observed_run_id,
+                replace_prepared_checkpoint_sha256=None,
+                replace_observed_checkpoint_sha256=checkpoint_digest,
+                replace_observed_run_conclusion=cast(str, previous_conclusion),
+                status_payload=status_payload,
+                poll_attempts=poll_attempts,
+                poll_seconds=poll_seconds,
+                sleep=sleep,
+            )
         dispatch_checkpoint = _validate_checkpoint(checkpoint, identity)
         checkpoint_state = cast(str, dispatch_checkpoint["state"])
         checkpoint_high_water = cast(int, dispatch_checkpoint["high_water_run_id"])
@@ -1107,6 +1337,8 @@ def resume_qualification(
                         high_water_run_id=high_water_run_id,
                         retry_of_run_id=None,
                         replace_prepared_checkpoint_sha256=checkpoint_digest,
+                        replace_observed_checkpoint_sha256=None,
+                        replace_observed_run_conclusion=None,
                         status_payload=status_payload,
                         poll_attempts=poll_attempts,
                         poll_seconds=poll_seconds,
@@ -1192,6 +1424,8 @@ def resume_qualification(
             high_water_run_id=high_water_run_id,
             retry_of_run_id=None,
             replace_prepared_checkpoint_sha256=None,
+            replace_observed_checkpoint_sha256=None,
+            replace_observed_run_conclusion=None,
             status_payload=status_payload,
             poll_attempts=poll_attempts,
             poll_seconds=poll_seconds,
@@ -1258,7 +1492,6 @@ def resume_qualification(
                         identity=identity,
                         bundle=bundle,
                         expected_plan_sha256=apply_plan_sha256,
-                        client=github,
                         checkpoint_path=resolved_apply_checkpoint_path,
                         revalidate_remote=lambda evidence_sha: _revalidate_remote_identity(
                             github,
@@ -1285,11 +1518,8 @@ def resume_qualification(
                 reconciliation_plan=outcome.plan,
                 reconciliation_result={
                     "commit_sha": outcome.commit_sha,
-                    "comment_id": outcome.comment_id,
                 },
-                next_action=(
-                    "Qualification evidence was committed, pushed, and recorded on the canonical evidence pull request."
-                ),
+                next_action="Qualification evidence was committed and pushed to the canonical evidence branch.",
             )
         return _result(
             "reconciliation_planned" if requires_changes else "reconciliation_current",
@@ -1336,6 +1566,8 @@ def resume_qualification(
         high_water_run_id=high_water_run_id,
         retry_of_run_id=run_id,
         replace_prepared_checkpoint_sha256=None,
+        replace_observed_checkpoint_sha256=None,
+        replace_observed_run_conclusion=None,
         status_payload=status_payload,
         poll_attempts=poll_attempts,
         poll_seconds=poll_seconds,

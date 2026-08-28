@@ -16,15 +16,12 @@ from typing import Any, Protocol, cast
 from scripts.release_qualification_artifact import ReconciliationBundle
 
 
-REPOSITORY = "cbusillo/BD_to_AVP"
 HTTPS_REPOSITORY_URL = "https://github.com/cbusillo/BD_to_AVP.git"
 APPLY_CHECKPOINT_TYPE = "bd_to_avp.release_qualification_apply_checkpoint"
-APPLY_SCHEMA_VERSION = 1
-COMMENT_PAGE_SIZE = 100
-MAX_COMMENT_PAGES = 20
+APPLY_SCHEMA_VERSION = 2
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-APPLY_STATES = {"prepared", "files_written", "committed", "pushed", "commented"}
+APPLY_STATES = {"prepared", "files_written", "committed", "pushed"}
 
 
 class QualificationApplyError(RuntimeError):
@@ -36,26 +33,19 @@ class QualificationApplySafetyError(QualificationApplyError):
 
 
 class QualificationIdentity(Protocol):
-    release_tag: str
-    evidence_ref: str
-    evidence_sha: str
-    evidence_pr_number: int
+    @property
+    def release_tag(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def evidence_ref(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def evidence_sha(self) -> str:
+        raise NotImplementedError
 
     def payload(self) -> dict[str, object]:
-        raise NotImplementedError
-
-
-class GitHubApplyAPI(Protocol):
-    def get_json(self, endpoint: str, *, active_auth: bool = False) -> object:
-        raise NotImplementedError
-
-    def post_json(
-        self,
-        endpoint: str,
-        payload: Mapping[str, object],
-        *,
-        active_auth: bool = False,
-    ) -> object:
         raise NotImplementedError
 
 
@@ -70,7 +60,6 @@ class ApplyOutcome:
     state: str
     plan: dict[str, object]
     commit_sha: str
-    comment_id: int
 
 
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
@@ -217,7 +206,6 @@ def _checkpoint_payload(
     *,
     state: str,
     commit_sha: str | None = None,
-    comment_id: int | None = None,
 ) -> dict[str, object]:
     if state not in APPLY_STATES:
         raise QualificationApplyError("Qualification apply checkpoint state is unsupported.")
@@ -241,7 +229,6 @@ def _checkpoint_payload(
         "progress": {
             "state": state,
             "commit_sha": commit_sha,
-            "comment_id": comment_id,
         },
     }
     payload["checkpoint_sha256"] = hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
@@ -254,13 +241,11 @@ def _replace_progress(
     *,
     state: str,
     commit_sha: str | None,
-    comment_id: int | None,
 ) -> dict[str, object]:
     payload = dict(checkpoint)
     payload["progress"] = {
         "state": state,
         "commit_sha": commit_sha,
-        "comment_id": comment_id,
     }
     payload.pop("checkpoint_sha256", None)
     payload["checkpoint_sha256"] = hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
@@ -313,20 +298,15 @@ def load_reconciliation_checkpoint(path: Path) -> Mapping[str, Any] | None:
         raise QualificationApplySafetyError("Qualification apply checkpoint plan self digest is invalid.")
     _validated_checkpoint_files(checkpoint)
     progress = _mapping(checkpoint.get("progress"), "qualification apply progress")
-    _exact_keys(progress, {"state", "commit_sha", "comment_id"}, "qualification apply progress")
+    _exact_keys(progress, {"state", "commit_sha"}, "qualification apply progress")
     state = _string(progress.get("state"), "qualification apply state")
     if state not in APPLY_STATES:
         raise QualificationApplySafetyError("Qualification apply checkpoint state is unsupported.")
     commit_sha = progress.get("commit_sha")
-    comment_id = progress.get("comment_id")
-    if state in {"committed", "pushed", "commented"}:
+    if state in {"committed", "pushed"}:
         _sha(commit_sha, "qualification apply commit SHA")
     elif commit_sha is not None:
         raise QualificationApplySafetyError("Qualification apply checkpoint records a premature commit SHA.")
-    if state == "commented":
-        _integer(comment_id, "qualification apply comment ID")
-    elif comment_id is not None:
-        raise QualificationApplySafetyError("Qualification apply checkpoint records a premature comment ID.")
     return checkpoint
 
 
@@ -641,128 +621,6 @@ def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
         raise QualificationApplyError("Unable to push the qualification reconciliation commit.")
 
 
-def _comment_marker(plan_sha256: str) -> str:
-    return f"<!-- bd-to-avp-qualification-reconciliation:{plan_sha256} -->"
-
-
-def _comment_body(plan: Mapping[str, Any], commit_sha: str) -> str:
-    artifact = _mapping(plan.get("artifact"), "reconciliation plan artifact")
-    plan_sha256 = _sha256(plan.get("plan_sha256"), "reconciliation plan digest")
-    return (
-        f"{_comment_marker(plan_sha256)}\n"
-        f"Qualification evidence for `{_string(plan.get('release_tag'), 'release tag')}` was reconciled from the exact "
-        "Milestone Qualification artifact.\n\n"
-        f"- Plan SHA-256: `{plan_sha256}`\n"
-        f"- Evidence commit: `{commit_sha}`\n"
-        f"- Milestone Qualification run: `{_integer(artifact.get('run_id'), 'qualification run ID')}` "
-        f"attempt `{_integer(artifact.get('run_attempt'), 'qualification run attempt')}`\n"
-    )
-
-
-def _matching_comment(
-    client: GitHubApplyAPI,
-    *,
-    pr_number: int,
-    plan: Mapping[str, Any],
-    commit_sha: str,
-    actor_login: str,
-    actor_id: int,
-) -> Mapping[str, Any] | None:
-    expected_body = _comment_body(plan, commit_sha)
-    marker = _comment_marker(_sha256(plan.get("plan_sha256"), "reconciliation plan digest"))
-    matches: list[Mapping[str, Any]] = []
-    for page in range(1, MAX_COMMENT_PAGES + 1):
-        payload = _sequence(
-            client.get_json(
-                f"repos/{REPOSITORY}/issues/{pr_number}/comments?per_page={COMMENT_PAGE_SIZE}&page={page}",
-                active_auth=True,
-            ),
-            "evidence pull request comments",
-        )
-        comments = [_mapping(item, "evidence pull request comment") for item in payload]
-        matches.extend(comment for comment in comments if marker in str(comment.get("body", "")))
-        if len(comments) < COMMENT_PAGE_SIZE:
-            break
-        if page == MAX_COMMENT_PAGES:
-            raise QualificationApplySafetyError("Evidence pull request comment history exceeds the adoption limit.")
-    if len(matches) > 1:
-        raise QualificationApplySafetyError("Multiple qualification reconciliation comments match one plan.")
-    if not matches:
-        return None
-    comment = matches[0]
-    _validate_comment(comment, expected_body=expected_body, actor_login=actor_login, actor_id=actor_id)
-    return comment
-
-
-def _validate_comment(
-    comment: Mapping[str, Any],
-    *,
-    expected_body: str,
-    actor_login: str,
-    actor_id: int,
-) -> int:
-    user = _mapping(comment.get("user"), "qualification reconciliation comment user")
-    if comment.get("body") != expected_body or user.get("login") != actor_login or user.get("id") != actor_id:
-        raise QualificationApplySafetyError("Qualification reconciliation comment conflicts with the plan.")
-    return _integer(comment.get("id"), "qualification reconciliation comment ID")
-
-
-def _post_or_adopt_comment(
-    client: GitHubApplyAPI,
-    *,
-    pr_number: int,
-    plan: Mapping[str, Any],
-    commit_sha: str,
-    actor_login: str,
-    actor_id: int,
-) -> int:
-    existing = _matching_comment(
-        client,
-        pr_number=pr_number,
-        plan=plan,
-        commit_sha=commit_sha,
-        actor_login=actor_login,
-        actor_id=actor_id,
-    )
-    if existing is not None:
-        return _integer(existing.get("id"), "qualification reconciliation comment ID")
-    body = _comment_body(plan, commit_sha)
-    comment = _mapping(
-        client.post_json(
-            f"repos/{REPOSITORY}/issues/{pr_number}/comments",
-            {"body": body},
-            active_auth=True,
-        ),
-        "qualification reconciliation comment",
-    )
-    return _validate_comment(comment, expected_body=body, actor_login=actor_login, actor_id=actor_id)
-
-
-def _comment_by_id(
-    client: GitHubApplyAPI,
-    *,
-    comment_id: int,
-    plan: Mapping[str, Any],
-    commit_sha: str,
-    actor_login: str,
-    actor_id: int,
-) -> Mapping[str, Any]:
-    comment = _mapping(
-        client.get_json(
-            f"repos/{REPOSITORY}/issues/comments/{comment_id}",
-            active_auth=True,
-        ),
-        "qualification reconciliation comment",
-    )
-    _validate_comment(
-        comment,
-        expected_body=_comment_body(plan, commit_sha),
-        actor_login=actor_login,
-        actor_id=actor_id,
-    )
-    return comment
-
-
 def reconciliation_checkpoint_summary(path: Path) -> dict[str, object] | None:
     checkpoint = load_reconciliation_checkpoint(path)
     if checkpoint is None:
@@ -773,7 +631,6 @@ def reconciliation_checkpoint_summary(path: Path) -> dict[str, object] | None:
         "plan_sha256": checkpoint.get("plan_sha256"),
         "state": progress.get("state"),
         "commit_sha": progress.get("commit_sha"),
-        "comment_id": progress.get("comment_id"),
     }
 
 
@@ -783,7 +640,6 @@ def start_reconciliation_apply(
     identity: QualificationIdentity,
     bundle: ReconciliationBundle,
     expected_plan_sha256: str,
-    client: GitHubApplyAPI,
     checkpoint_path: Path,
     revalidate_remote: RevalidateRemote,
     ensure_no_active_runs: EnsureNoActiveRuns,
@@ -808,7 +664,6 @@ def start_reconciliation_apply(
         repo_root=repo_root,
         identity=identity,
         expected_plan_sha256=expected_plan_sha256,
-        client=client,
         checkpoint_path=checkpoint_path,
         revalidate_remote=revalidate_remote,
         ensure_no_active_runs=ensure_no_active_runs,
@@ -822,7 +677,6 @@ def continue_reconciliation_apply(
     repo_root: Path,
     identity: QualificationIdentity,
     expected_plan_sha256: str,
-    client: GitHubApplyAPI,
     checkpoint_path: Path,
     revalidate_remote: RevalidateRemote,
     ensure_no_active_runs: EnsureNoActiveRuns,
@@ -849,7 +703,7 @@ def continue_reconciliation_apply(
     if state == "files_written" and checkpoint_commit_sha is None:
         allowed_heads.add(_sha(_git_text(repo_root, ["rev-parse", "HEAD"], "local HEAD"), "local HEAD"))
     _validate_local_branch(repo_root, identity, allowed_heads)
-    if state in {"committed", "pushed", "commented"} and _changed_paths(repo_root):
+    if state in {"committed", "pushed"} and _changed_paths(repo_root):
         raise QualificationApplySafetyError(
             "Qualification apply worktree changed after the reconciliation commit was created."
         )
@@ -863,7 +717,6 @@ def continue_reconciliation_apply(
             checkpoint,
             state="files_written",
             commit_sha=None,
-            comment_id=None,
         )
         state = "files_written"
 
@@ -890,7 +743,6 @@ def continue_reconciliation_apply(
             checkpoint,
             state="committed",
             commit_sha=commit_sha,
-            comment_id=None,
         )
         state = "committed"
     else:
@@ -937,52 +789,15 @@ def continue_reconciliation_apply(
             checkpoint,
             state="pushed",
             commit_sha=commit_sha,
-            comment_id=None,
         )
         state = "pushed"
 
-    if state == "pushed":
-        ensure_no_active_runs()
-        if _sha(remote_evidence_sha(), "remote evidence SHA") != commit_sha:
-            raise QualificationApplySafetyError("Evidence branch moved after the reconciliation commit was pushed.")
-        revalidate_remote(commit_sha)
-        comment_id = _post_or_adopt_comment(
-            client,
-            pr_number=identity.evidence_pr_number,
-            plan=plan,
-            commit_sha=commit_sha,
-            actor_login=actor_login,
-            actor_id=actor_id,
-        )
-        _replace_progress(
-            checkpoint_path,
-            checkpoint,
-            state="commented",
-            commit_sha=commit_sha,
-            comment_id=comment_id,
-        )
-        state = "commented"
-    else:
-        comment_id = _integer(
-            _mapping(checkpoint.get("progress"), "qualification apply progress").get("comment_id"),
-            "qualification apply comment ID",
-        )
-
-    if state != "commented":
+    if state != "pushed":
         raise QualificationApplySafetyError("Qualification apply stopped in an unsupported state.")
+    ensure_no_active_runs()
     if _sha(remote_evidence_sha(), "remote evidence SHA") != commit_sha:
         raise QualificationApplySafetyError("Evidence branch moved after qualification reconciliation completed.")
     revalidate_remote(commit_sha)
-    adopted = _comment_by_id(
-        client,
-        comment_id=comment_id,
-        plan=plan,
-        commit_sha=commit_sha,
-        actor_login=actor_login,
-        actor_id=actor_id,
-    )
-    if _integer(adopted.get("id"), "qualification reconciliation comment ID") != comment_id:
-        raise QualificationApplySafetyError("Qualification reconciliation comment is no longer durable.")
     try:
         checkpoint_path.unlink()
     except OSError as error:
@@ -991,7 +806,6 @@ def continue_reconciliation_apply(
         state="reconciliation_applied",
         plan=plan,
         commit_sha=commit_sha,
-        comment_id=comment_id,
     )
 
 
