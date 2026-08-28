@@ -21,8 +21,9 @@ version metadata. Corrective Beta `0.3.2b6` build `168` is a cancelled,
 unpublished signed attempt whose draft `374538590` was deleted through the
 authorized immutable-disposition path; its tag and build are permanently
 non-reusable. Beta `0.3.2b7` build `169` and RC `0.3.2rc1` build `170` are
-published, immutable, and fully qualified. Issue #614 owns prepared successor
-Stable `0.3.2` build `171`; dispatch, signing approval, and publication remain
+published, immutable, and fully qualified. Stable `0.3.2` build `171` is
+published and immutable. Issue #659 owns prepared successor Beta `0.3.3b1`
+build `172`; Prerelease dispatch, signing approval, and publication remain
 separately authorized. Run-bound signing approval remains a separate
 authorization boundary.
 
@@ -503,15 +504,14 @@ zero blocking cases and 15 completed cases. Its immutable publication and
 qualification contract is recorded in
 [the 0.3.2 RC 1 cut packet](0.3.2-rc.1-cut-packet.md).
 
-Stable 0.3.2 is prepared as internal and public version `0.3.2`, tag and title
-`v0.3.2`, and global build `171`. RC 1 is the immediate global predecessor and
-exact RC-route qualification base. Stable `v0.3.1` build `162` remains the
-previous Stable update and release-note base. The unchanneled Stable item is
-eligible on Stable, RC, Beta, and Alpha routes. Failed builds `165` and `166`
-and cancelled build `168` remain burned. No Stable dispatch, signing approval,
+Beta `0.3.3b1` is prepared as public tag and title `v0.3.3-beta.1` with global
+build `172`. Published Stable `0.3.2` build `171` is the immediate global
+predecessor and immutable Stable update and release-note base. The Beta item is
+eligible only on the Prerelease route. Failed builds `165` and `166` and
+cancelled build `168` remain burned. No Prerelease dispatch, signing approval,
 tag, release, draft, appcast, PyPI, or Homebrew mutation is authorized by this
 preparation. The preparation contract is recorded in
-[the 0.3.2 Stable cut packet](0.3.2-cut-packet.md).
+[the 0.3.3 Beta 1 cut packet](0.3.3-beta.1-cut-packet.md).
 
 ## Historical Boundaries
 
