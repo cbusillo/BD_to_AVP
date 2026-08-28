@@ -3298,6 +3298,40 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentQueueAttentionParksWithoutStrandingRunState() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let item = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        try await queueStore.replaceItems([item])
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onConversionJobReceived: { _ in conversionStarted.fulfill() },
+            recoveryDecision: WorkerDecision(
+                identifier: "subtitle_decision_required",
+                prompt: "Retry without subtitles?",
+                choices: [WorkerRecoveryChoice.retryWithoutSubtitles.rawValue],
+                details: nil
+            )
+        )
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        await fulfillment(of: [conversionStarted], timeout: 2)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.first?.state, .attention)
+        XCTAssertNil(viewModel.state.recoveryDecision)
+        XCTAssertEqual(viewModel.persistentQueueRunState, .idle)
+        let rejectedRestart = await viewModel.startPersistentQueue()
+        XCTAssertEqual(rejectedRestart, .rejected(.noEligibleItems))
+        XCTAssertEqual(viewModel.persistentQueueRunState, .idle)
+    }
+
+    @MainActor
     func testAdoptedMixedOriginsSerializeThroughGlobalPump() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -4037,6 +4071,7 @@ final class ConversionViewModelTests: XCTestCase {
 
         let startOutcome = await viewModel.startPersistentQueue()
         XCTAssertEqual(startOutcome, .rejected(.noEligibleItems))
+        XCTAssertEqual(viewModel.persistentQueueRunState, .idle)
         XCTAssertEqual(viewModel.pausePersistentQueueAfterCurrent(), .rejected(.queueIsNotRunning))
         XCTAssertEqual(viewModel.stopCurrentPersistentQueueItem(), .rejected(.queueIsNotRunning))
         XCTAssertEqual(viewModel.stopAllPersistentQueue(), .rejected(.noActiveItem))
@@ -4607,6 +4642,7 @@ final class ConversionViewModelTests: XCTestCase {
         if case .failed = viewModel.queueItems[1].status {} else {
             XCTFail("The remaining queue item should park when its shared source becomes unavailable.")
         }
+        XCTAssertTrue(viewModel.restoredDurableQueueItems[1].attempts.isEmpty)
     }
 
     @MainActor

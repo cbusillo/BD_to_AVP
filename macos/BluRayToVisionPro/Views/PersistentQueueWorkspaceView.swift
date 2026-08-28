@@ -194,20 +194,23 @@ struct PersistentQueueSidebarView: View {
                         .buttonStyle(.borderless)
                 }
             }
-            HStack(spacing: 8) {
+            VStack(alignment: .trailing, spacing: 8) {
                 Button(startButtonTitle, action: start)
                     .buttonStyle(.borderedProminent)
                     .disabled(!canStart)
+                    .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("persistent-queue-start")
                     .accessibilityLabel(startButtonTitle)
-                Button("Pause After Current", action: pauseAfterCurrent)
-                    .disabled(!canPauseAfterCurrent)
-                    .accessibilityIdentifier("persistent-queue-pause-after-current")
-                    .accessibilityLabel("Pause queue after the current video")
-                Button("Stop Current", role: .destructive, action: stopCurrent)
-                    .disabled(!canStopCurrent)
-                    .accessibilityIdentifier("persistent-queue-stop-current")
-                    .accessibilityLabel("Stop only the current video")
+                HStack(spacing: 8) {
+                    Button("Pause After Current", action: pauseAfterCurrent)
+                        .disabled(!canPauseAfterCurrent)
+                        .accessibilityIdentifier("persistent-queue-pause-after-current")
+                        .accessibilityLabel("Pause queue after the current video")
+                    Button("Stop Current", role: .destructive, action: stopCurrent)
+                        .disabled(!canStopCurrent)
+                        .accessibilityIdentifier("persistent-queue-stop-current")
+                        .accessibilityLabel("Stop only the current video")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }

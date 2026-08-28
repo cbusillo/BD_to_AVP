@@ -91,6 +91,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var sourceFolderQueueGroupID: UUID?
     private var sourceFolderStopRequested = false
     private var durableQueueStopRequested = false
+    private var persistentQueueControlsActive = false
     private var adoptedItemIDs: Set<UUID> = []
     private var sourceFolderQueueCompletionPending = false
     private var sourceFolderRecoveryChoices: [UUID: String] = [:]
@@ -332,7 +333,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard !candidates.isEmpty else {
             return .rejected(.noEligibleItems)
         }
+        let previousRunState = persistentQueueRunState
+        let previousControlsActive = persistentQueueControlsActive
         parkActiveDurableQueueItemForResume()
+        persistentQueueControlsActive = true
         persistentQueueRunState = .running
         durableQueueStopRequested = false
         var adoptedCount = 0
@@ -342,7 +346,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
         }
         guard adoptedCount > 0 else {
-            persistentQueueRunState = .paused
+            persistentQueueRunState = previousRunState
+            persistentQueueControlsActive = previousControlsActive
             return .rejected(.noEligibleItems)
         }
         return .accepted(.running)
@@ -465,6 +470,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 }
             }
             adoptedItemIDs.insert(itemID)
+            persistentQueueControlsActive = true
             persistentQueueRunState = .running
             if let recoveryChoiceValue {
                 sourceFolderRecoveryChoices[itemID] = recoveryChoiceValue
@@ -1022,6 +1028,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
         persistentQueueRunState = .idle
+        persistentQueueControlsActive = false
         if hasActiveWorker {
             state.requestStop()
             recordDiagnosticWorkflow(name: "cancel.requested", mode: activeRunMode, jobID: state.jobID)
@@ -1732,6 +1739,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             if persistentQueueRunState == .running {
                 persistentQueueRunState = .idle
             }
+            persistentQueueControlsActive = false
             finishSourceFolderQueueIfNeeded()
             return
         }
@@ -2169,7 +2177,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             publishTitleQueueProjection()
             if requiresDecision {
-                if hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
+                if persistentQueueControlsActive || hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
                     parkActiveDurableQueueItemForResume()
                     await pumpDurableQueue()
                 }
@@ -2219,10 +2227,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 items[index].result = result
                 items[index].decision = nil
                 items[index].failure = nil
-                } else if let decision = snapshot.decision {
-                    items[index].state = .attention
-                    items[index].failure = nil
-                    items[index].decision = DurableQueueDecision(decision: decision)
+            } else if let decision = snapshot.decision {
+                items[index].state = .attention
+                items[index].failure = nil
+                items[index].decision = DurableQueueDecision(decision: decision)
             } else {
                 items[index].state = .failed
                 items[index].failure = snapshot.failure
@@ -2494,6 +2502,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func failClosedSourceFolderQueuePersistence(_ error: Error) {
         durableQueueRuntimeDiagnostic = "Queue changes are unavailable: \(error.localizedDescription)"
+        persistentQueueRunState = .idle
+        persistentQueueControlsActive = false
         if let projected = batchQueue {
             if sourceFolderQueueGroupID == nil {
                 batchQueue = SourceFolderQueueState(
@@ -2640,7 +2650,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             publishTitleQueueProjection()
             if requiresDecision {
-                if hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
+                if persistentQueueControlsActive || hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
                     parkActiveDurableQueueItemForResume()
                     await pumpDurableQueue()
                 }
@@ -2740,7 +2750,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 }
             case .decisionRequired:
                 publishTitleQueueProjection()
-                if hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
+                if persistentQueueControlsActive || hasAdoptedWaitingDurableQueueItem(excluding: itemID) {
                     parkActiveDurableQueueItemForResume()
                     await pumpDurableQueue()
                 }
@@ -2767,7 +2777,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
         do {
-            var stoppedItemIDs: Set<UUID> = []
             try await durableQueueStore.mutateItems { items in
                 guard let index = items.firstIndex(where: { $0.id == itemID }) else {
                     throw ConversionQueueStoreError.invalidDocument
@@ -3142,26 +3151,41 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         do {
             var origin: DurableQueueItemOrigin?
             var groupID: UUID?
+            var parkedItemIDs: Set<UUID> = []
             try await durableQueueStore.mutateItems { items in
                 guard let index = items.firstIndex(where: { $0.id == itemID }) else {
                     throw ConversionQueueStoreError.invalidDocument
                 }
                 origin = items[index].origin
                 groupID = items[index].groupID
-                items[index].state = .failed
-                items[index].decision = nil
-                items[index].failure = DurableQueueFailure(
+                let unavailableSourcePath = items[index].intent.source.path
+                let failure = DurableQueueFailure(
                     code: "source_unavailable",
                     message: "The queued source is no longer available.",
-                    details: items[index].intent.source.path,
+                    details: unavailableSourcePath,
                     retryable: true
                 )
+                items[index].state = .failed
+                items[index].decision = nil
+                items[index].failure = failure
                 if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
                     items[index].attempts[attemptIndex].endedAt = diagnosticClock()
+                }
+                for peerIndex in items.indices where peerIndex != index
+                    && items[peerIndex].state == .waiting
+                    && items[peerIndex].intent.source.path == unavailableSourcePath
+                {
+                    items[peerIndex].state = .failed
+                    items[peerIndex].decision = nil
+                    items[peerIndex].failure = failure
+                    parkedItemIDs.insert(items[peerIndex].id)
                 }
             }
             activeQueueItemID = nil
             releaseAdoption(itemID)
+            for parkedItemID in parkedItemIDs {
+                releaseAdoption(parkedItemID)
+            }
             state.failTransport(message: "The queued source is no longer available.", retryable: true)
             switch origin {
             case .multiTitle:
@@ -3341,6 +3365,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func failClosedTitleQueuePersistence(_ error: Error) {
         durableQueueRuntimeDiagnostic = "Queue changes are unavailable: \(error.localizedDescription)"
+        persistentQueueRunState = .idle
+        persistentQueueControlsActive = false
         publishSetupQueueStartFailure()
         activeQueueItemID = nil
         titleQueueGroupID = nil
@@ -3361,6 +3387,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func resetQueue() {
         queueItems.removeAll()
+        persistentQueueRunState = .idle
+        persistentQueueControlsActive = false
         activeQueueItemID = nil
         titleQueueGroupID = nil
         titleQueueStopRequested = false
