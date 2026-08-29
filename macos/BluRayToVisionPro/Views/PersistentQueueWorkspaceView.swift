@@ -54,6 +54,7 @@ struct PersistentQueueSidebarView: View {
             header
             Divider()
             scheduleBanner
+            storageSummaryView
             if let banner {
                 Label(banner.title, systemImage: banner.systemImage)
                     .font(.caption.weight(.medium))
@@ -191,6 +192,58 @@ struct PersistentQueueSidebarView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var storageSummaryView: some View {
+        let summary = QueueStorageSummary(items: items)
+        if !summary.destinations.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Storage Forecast")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(summary.destinations) { destination in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(URL(fileURLWithPath: destination.destinationPath).lastPathComponent)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        HStack(spacing: 8) {
+                            storageMetric("Output", destination.outputDescription)
+                            storageMetric("Working", destination.temporaryWorkingDescription)
+                        }
+                        HStack(spacing: 8) {
+                            storageMetric("Margin", destination.safetyMarginDescription)
+                            storageMetric("Peak", destination.totalPeakDescription)
+                        }
+                        if destination.hasUnestimatedItems {
+                            Text("\(destination.unestimatedItemCount) item\(destination.unestimatedItemCount == 1 ? "" : "s") not estimated; totals are partial.")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("storage-summary-\(destination.id)")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.05))
+            .accessibilityIdentifier("persistent-queue-storage-summary")
+        }
+    }
+
+    private func storageMetric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption2.monospacedDigit())
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var queueList: some View {
@@ -764,6 +817,7 @@ struct PersistentQueueDetailView: View {
                                 apply: resolveRouteQuality
                             )
                         }
+                        storageSection(item)
                         Divider()
                         settings(item)
                     }
@@ -901,6 +955,44 @@ struct PersistentQueueDetailView: View {
             }
             .font(.callout)
         }
+    }
+
+    private func storageSection(_ item: PersistentQueueItem) -> some View {
+        let forecast = StorageForecastItem(draft: item.draft)
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Storage")
+                .font(.title3.weight(.semibold))
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+                GridRow {
+                    Text("Output").foregroundStyle(.secondary)
+                    Text(forecast.outputDescription)
+                }
+                GridRow {
+                    Text("Temporary / working").foregroundStyle(.secondary)
+                    Text(forecast.temporaryWorkingDescription)
+                }
+                GridRow {
+                    Text("Retained intermediates").foregroundStyle(.secondary)
+                    Text(forecast.retainedIntermediateDescription)
+                }
+                GridRow {
+                    Text("Safety margin").foregroundStyle(.secondary)
+                    Text(forecast.safetyMarginDescription)
+                }
+                GridRow {
+                    Text("Total peak").foregroundStyle(.secondary)
+                    Text(forecast.totalPeakDescription)
+                }
+            }
+            .font(.callout)
+            Text(forecast.assumptionDescription)
+                .font(.caption)
+                .foregroundStyle(forecast.isEstimated ? Color.secondary : Color.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityIdentifier("persistent-queue-storage-detail")
     }
 
     private func itemDetails(_ item: PersistentQueueItem) -> some View {

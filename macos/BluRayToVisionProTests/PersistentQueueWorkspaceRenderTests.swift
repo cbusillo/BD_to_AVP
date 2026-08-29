@@ -180,6 +180,20 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         )
     }
 
+    func testStorageForecastRendersHealthyPartialAndParkedStates() throws {
+        let items = try makeStorageRenderItems()
+
+        for item in items {
+            try render(
+                items: [item],
+                selectedItem: item,
+                compact: true,
+                colorScheme: .dark,
+                appearanceName: .darkAqua
+            )
+        }
+    }
+
     private func render(
         items: [PersistentQueueItem],
         selectedItem: PersistentQueueItem?,
@@ -310,6 +324,61 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 result: result
             ))
         }
+    }
+
+    private func makeStorageRenderItems() throws -> [PersistentQueueItem] {
+        var knownOptions = ConversionOptions()
+        knownOptions.encoding.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 40)
+        let knownDraft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Sources/known.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
+            options: knownOptions,
+            selectedTitle: SourceTitle(
+                id: "known",
+                name: "Known",
+                outputName: "Known",
+                durationSeconds: 3_600,
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                mainFeature: true
+            )
+        )
+        var unknownOptions = ConversionOptions()
+        unknownOptions.encoding.videoOutputMode = .av1Stereo
+        let unknownDraft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Sources/unknown.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
+            options: unknownOptions
+        )
+        let failure = DurableQueueFailure(
+            code: "destination_unavailable",
+            message: "Destination unavailable. Reconnect the destination and check that the folder is writable, then retry this item.",
+            details: nil,
+            retryable: true
+        )
+        return try [
+            PersistentQueueItem(item: DurableConversionQueueItem(
+                ordinal: 0,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: knownDraft)
+            )),
+            PersistentQueueItem(item: DurableConversionQueueItem(
+                ordinal: 1,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: unknownDraft)
+            )),
+            PersistentQueueItem(item: DurableConversionQueueItem(
+                ordinal: 2,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: knownDraft),
+                state: .failed,
+                failure: failure
+            )),
+        ]
     }
 
     private func makeIdentifiableItems() throws -> [PersistentQueueItem] {

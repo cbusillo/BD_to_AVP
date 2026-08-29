@@ -77,6 +77,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private let durableQueueStore: ConversionQueueStore
     private let offPeakScheduleStore: OffPeakScheduleStore
     private let sourceAvailabilityResolver: SourceAvailabilityResolver
+    private let queueStoragePreflight: (any QueueStoragePreflighting)?
     private let diagnosticRecorder = DiagnosticSessionRecorder()
     private var client: (any WorkerProcessRunning)?
     private var runTask: Task<Void, Never>?
@@ -113,7 +114,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared,
         durableQueueStore: ConversionQueueStore? = nil,
         offPeakScheduleStore: OffPeakScheduleStore? = nil,
-        sourceAvailabilityResolver: @escaping SourceAvailabilityResolver = ConversionViewModel.defaultSourceAvailability
+        sourceAvailabilityResolver: @escaping SourceAvailabilityResolver = ConversionViewModel.defaultSourceAvailability,
+        queueStoragePreflight: (any QueueStoragePreflighting)? = nil
     ) {
         self.clientFactory = clientFactory
         self.diagnosticClock = diagnosticClock
@@ -124,6 +126,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         self.durableQueueStore = durableQueueStore ?? ConversionQueueStore.inMemory()
         self.offPeakScheduleStore = offPeakScheduleStore ?? OffPeakScheduleStore.inMemory()
         self.sourceAvailabilityResolver = sourceAvailabilityResolver
+        self.queueStoragePreflight = queueStoragePreflight
         durableQueueSubscription = self.durableQueueStore.$document.sink { [weak self] document in
             self?.publishPersistentQueueProjection(items: document.items)
         }
@@ -637,7 +640,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableQueueStopRequested = false
         var adoptedCount = 0
         for item in candidates {
-            if await adoptPersistentQueueItem(item.id) {
+            if await adoptPersistentQueueItem(item.id, pump: false) {
                 adoptedCount += 1
             }
         }
@@ -647,6 +650,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             offPeakRunWindowEnd = previousWindowEnd
             return .rejected(.noEligibleItems)
         }
+        await pumpDurableQueue()
         return .accepted(.running)
     }
 
@@ -694,7 +698,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @discardableResult
     func adoptPersistentQueueItem(
         _ itemID: UUID,
-        recoveryChoice: WorkerRecoveryChoice? = nil
+        recoveryChoice: WorkerRecoveryChoice? = nil,
+        pump: Bool = true
     ) async -> Bool {
         if persistentQueueRunState == .pauseAfterCurrent, hasActiveWorker {
             return false
@@ -786,8 +791,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     publishSourceFolderQueueProjection()
                 }
             }
-            enqueueQueueTransition { [weak self] in
-                await self?.pumpDurableQueue()
+            if pump {
+                enqueueQueueTransition { [weak self] in
+                    await self?.pumpDurableQueue()
+                }
             }
             return true
         } catch {
@@ -2032,6 +2039,37 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
 
+        let destinationURL = URL(fileURLWithPath: item.intent.destinationPath)
+        let requiredBytes = (try? conversionDraft(for: item, preserveStoredSourceRemoval: true))
+            .flatMap { StorageForecastItem(draft: $0).totalPeakRequiredBytes }
+        if let queueStoragePreflight {
+            switch queueStoragePreflight.preflight(destinationURL: destinationURL, requiredBytes: requiredBytes) {
+            case .available, .unconfirmed:
+                break
+            case let .unavailable(reason):
+                await parkWaitingDurableQueueItemForStorage(
+                    item,
+                    code: "destination_unavailable",
+                    message: "Destination unavailable. Reconnect the destination and check that the folder is writable, then retry this item.",
+                    details: reason,
+                    pauseQueue: false
+                )
+                await pumpDurableQueue()
+                return
+            case let .insufficient(requiredBytes, availableBytes):
+                let requiredDescription = StorageForecastFormatting.coarse(requiredBytes)
+                let availableDescription = StorageForecastFormatting.coarse(availableBytes)
+                await parkWaitingDurableQueueItemForStorage(
+                    item,
+                    code: "destination_insufficient_capacity",
+                    message: "Not enough free space at \(destinationURL.path). Needs about \(requiredDescription), but only \(availableDescription) is available. Free space or choose another destination, then retry this item.",
+                    details: "Required: \(requiredDescription). Available: \(availableDescription).",
+                    pauseQueue: true
+                )
+                return
+            }
+        }
+
         switch item.origin {
         case .multiTitle:
             await startDurableTitleQueueItem(item)
@@ -2039,6 +2077,39 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             await startDurableSourceFolderQueueItem(item)
         case .singleSource:
             await startDurableSingleSourceItem(item)
+        }
+    }
+
+    private func parkWaitingDurableQueueItemForStorage(
+        _ item: DurableConversionQueueItem,
+        code: String,
+        message: String,
+        details: String,
+        pauseQueue: Bool
+    ) async {
+        do {
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == item.id }),
+                      items[index].state == .waiting
+                else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].state = .failed
+                items[index].decision = nil
+                items[index].failure = DurableQueueFailure(
+                    code: code,
+                    message: message,
+                    details: details,
+                    retryable: true
+                )
+            }
+            releaseAdoption(item.id)
+            if pauseQueue {
+                persistentQueueRunState = .pauseAfterCurrent
+                await pauseDurableQueueNow()
+            }
+        } catch {
+            failClosedTitleQueuePersistence(error)
         }
     }
 

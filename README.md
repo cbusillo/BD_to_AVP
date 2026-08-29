@@ -245,6 +245,23 @@ while **Stop Current** cancels only the active video and leaves pending work
 waiting for an explicit resume. Runtime failures and recovery decisions remain
 parked according to their existing queue policy.
 
+The queue also shows a coarse storage forecast grouped by destination. Each
+forecast separates estimated output, peak temporary/working space, retained
+intermediates, a visible safety margin, and total peak space. Forecasts use
+known source duration and route information when available; content-dependent
+or artifact-based routes remain explicitly unestimated rather than turning an
+assumption into a capacity block. The safety margin is 10% of peak working
+space, rounded up to whole GiB and clamped between 2 GiB and 20 GiB.
+
+Immediately before each queued item starts inspecting or converting, the app
+rechecks that its destination exists, is a writable directory, and has enough
+confirmed free space for the coarse total peak estimate. Unknown or conflicting
+capacity readings are advisory and do not block an item. A disconnected or
+read-only destination parks only that item with a retryable reconnect/check-
+writable message; known insufficient space parks the item with required and
+available coarse sizes and pauses the remaining queue. Fix the destination or
+free space, then retry the parked item through its existing retry action.
+
 Use **Start Later…** to arm one editable, cancellable off-peak window for the
 queue. The app must remain open: it does not schedule a system wake and does
 not keep the Mac awake merely because a window is armed. If the Mac wakes while
