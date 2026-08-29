@@ -2986,6 +2986,58 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testEditingWaitingItemWithConflictPausesRunningQueueAfterCurrent() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let active = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        let held = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        try await queueStore.replaceItems([active, held])
+        let firstStarted = expectation(description: "first queue item started")
+        let secondStarted = expectation(description: "second queue item started")
+        secondStarted.isInverted = true
+        let gate = QueueTestGate()
+        let worker = ReorderableQueueWorkerClient(
+            inspectionDone: {},
+            conversionStarted: { _, conversionNumber in
+                if conversionNumber == 1 {
+                    firstStarted.fulfill()
+                } else {
+                    secondStarted.fulfill()
+                }
+            },
+            conversionGate: gate
+        )
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: held.intent.options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            return XCTFail("Expected route-quality conflict")
+        }
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        await fulfillment(of: [firstStarted], timeout: 2)
+        try await viewModel.updatePersistentQueueItem(
+            held.id,
+            draft: try PersistentQueueItem(item: held).draft,
+            routeQualityConflict: conflict
+        )
+
+        XCTAssertEqual(viewModel.persistentQueueRunState, .pauseAfterCurrent)
+        XCTAssertEqual(queueStore.items[1].state, .needsChoice)
+        await gate.open()
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        await fulfillment(of: [secondStarted], timeout: 0.1)
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .needsChoice])
+        XCTAssertEqual(viewModel.persistentQueueRunState, .paused)
+    }
+
+    @MainActor
     func testAdoptionRevalidatesAvailabilityBeforeWorkerSpawn() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

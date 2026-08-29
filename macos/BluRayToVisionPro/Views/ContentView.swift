@@ -337,11 +337,15 @@ struct ContentView: View {
                 SourceConfigurationSheet(
                     source: configuredSource,
                     inspection: viewModel.state.result,
+                    inspectionFailureMessage: viewModel.state.failureMessage,
+                    inspectionWarningMessage: viewModel.state.warningMessage,
                     profile: selectedProfile,
                     destinationURL: destinationURL,
                     titleSelection: $titleSelection,
                     drafts: conversionDrafts,
                     previewViewModel: previewViewModel,
+                    queueAdmissionNoticeMessage: $queueAdmissionNoticeMessage,
+                    persistentQueueErrorMessage: $persistentQueueErrorMessage,
                     openSettings: { isShowingSourceConfigurationEditor = true },
                     addToQueue: addConfiguredDraftsToPersistentQueue,
                     startQueue: startConfiguredDrafts
@@ -723,29 +727,6 @@ struct ContentView: View {
 
     private var selectedVideoCount: Int {
         conversionDrafts.count
-    }
-
-    private var visibleQueueItems: [ConversionQueueItem] {
-        guard viewModel.queueItems.isEmpty, conversionDrafts.count > 1 else {
-            return viewModel.queueItems
-        }
-        return conversionDrafts.map {
-            ConversionQueueItem(id: ConversionQueueItem.stablePreviewID(for: $0), draft: $0)
-        }
-    }
-
-    private var titleSelectionSummary: String {
-        switch titleSelection {
-        case .main:
-            return "Main Movie"
-        case .all:
-            return "All \(selectedTitles.count) Videos"
-        case .custom:
-            if selectedTitles.count == 1 {
-                return selectedTitles[0].name
-            }
-            return "\(selectedTitles.count) Selected Videos"
-        }
     }
 
     private var statusText: String {
@@ -1443,11 +1424,15 @@ private struct SourceConfigurationSheet: View {
 
     let source: ConversionSource
     let inspection: SourceInspection?
+    let inspectionFailureMessage: String?
+    let inspectionWarningMessage: String?
     let profile: EncodingProfile
     let destinationURL: URL
     @Binding var titleSelection: DiscTitleSelection
     let drafts: [ConversionDraft]
     @ObservedObject var previewViewModel: PreviewViewModel
+    @Binding var queueAdmissionNoticeMessage: String?
+    @Binding var persistentQueueErrorMessage: String?
     let openSettings: () -> Void
     let addToQueue: ([ConversionDraft]) -> Void
     let startQueue: ([ConversionDraft]) -> Void
@@ -1462,8 +1447,20 @@ private struct SourceConfigurationSheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     header
                     if let inspection {
+                        if let inspectionWarningMessage {
+                            Label(inspectionWarningMessage, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         titleSelectionControls(inspection)
                         setupSummary
+                    } else if let inspectionFailureMessage {
+                        ContentUnavailableView(
+                            "Source Could Not Be Read",
+                            systemImage: "exclamationmark.triangle",
+                            description: Text(inspectionFailureMessage)
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 160)
                     } else {
                         ProgressView("Reading source details…")
                             .frame(maxWidth: .infinity, minHeight: 160)
@@ -1506,6 +1503,34 @@ private struct SourceConfigurationSheet: View {
             }
         }
         .accessibilityIdentifier("source-configuration-sheet")
+        .alert(feedbackTitle, isPresented: feedbackIsPresented) {
+            Button("OK") {
+                queueAdmissionNoticeMessage = nil
+                persistentQueueErrorMessage = nil
+            }
+        } message: {
+            Text(feedbackMessage)
+        }
+    }
+
+    private var feedbackIsPresented: Binding<Bool> {
+        Binding(
+            get: { queueAdmissionNoticeMessage != nil || persistentQueueErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    queueAdmissionNoticeMessage = nil
+                    persistentQueueErrorMessage = nil
+                }
+            }
+        )
+    }
+
+    private var feedbackTitle: String {
+        persistentQueueErrorMessage == nil ? "Already in Queue" : "Queue Action Failed"
+    }
+
+    private var feedbackMessage: String {
+        persistentQueueErrorMessage ?? queueAdmissionNoticeMessage ?? "The queue action could not be completed."
     }
 
     private var header: some View {
@@ -1605,45 +1630,6 @@ private struct SourceConfigurationSheet: View {
             .font(.callout)
             .padding(.top, 4)
         }
-    }
-}
-
-private struct SaveProfileSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var name: String
-    let save: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Save New Profile")
-                    .font(.title2.weight(.semibold))
-                Text(ProfilePersistenceCopy.summary)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            TextField("Profile name", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("save-profile-name-field")
-
-            HStack {
-                Spacer()
-                Button("Cancel") {
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-                .accessibilityIdentifier("save-profile-cancel")
-
-                Button("Save", action: save)
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("save-profile-confirm")
-            }
-        }
-        .padding(24)
-        .frame(width: 440)
     }
 }
 

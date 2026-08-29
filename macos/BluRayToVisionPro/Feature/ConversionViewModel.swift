@@ -253,6 +253,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             intent: DurableQueueItemIntent(draft: draft),
             routeQualityConflict: routeQualityConflict.map(DurableRouteQualityConflict.init)
         )
+        if routeQualityConflict != nil, persistentQueueRunState == .running {
+            _ = pausePersistentQueueAfterCurrent()
+        }
     }
 
     func clearCompletedPersistentQueueItems() async throws -> PersistentQueueRemovalToken {
@@ -2763,10 +2766,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             WorkerDecision(identifier: $0.identifier, prompt: $0.prompt, choices: $0.choices, details: $0.details)
         }
         projected.status = switch item.state {
-        case .waiting, .interrupted:
+        case .waiting, .interrupted, .needsChoice:
             .pending
-        case .needsChoice:
-            .failed
         case .inspecting:
             .inspecting
         case .processing:
