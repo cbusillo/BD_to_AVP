@@ -8,14 +8,32 @@ struct ConversionSourceSelectionAction {
     let perform: () -> Void
 }
 
+struct PersistentQueueCommandActions {
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let canConvertNext: Bool
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+    let convertNext: () -> Void
+}
+
 private struct ConversionSourceSelectionActionKey: FocusedValueKey {
     typealias Value = ConversionSourceSelectionAction
+}
+
+private struct PersistentQueueCommandActionsKey: FocusedValueKey {
+    typealias Value = PersistentQueueCommandActions
 }
 
 extension FocusedValues {
     var conversionSourceSelectionAction: ConversionSourceSelectionAction? {
         get { self[ConversionSourceSelectionActionKey.self] }
         set { self[ConversionSourceSelectionActionKey.self] = newValue }
+    }
+
+    var persistentQueueCommandActions: PersistentQueueCommandActions? {
+        get { self[PersistentQueueCommandActionsKey.self] }
+        set { self[PersistentQueueCommandActionsKey.self] = newValue }
     }
 }
 
@@ -106,6 +124,7 @@ struct BluRayToVisionProApp: App {
             SettingsWindowCommands()
             UpdateCommands(updater: updater)
             SourceCommands()
+            PersistentQueueCommands()
         }
 
         Window("Settings", id: AppWindowID.settings) {
@@ -119,6 +138,34 @@ struct BluRayToVisionProApp: App {
         .windowResizability(.contentMinSize)
     }
 
+}
+
+private struct PersistentQueueCommands: Commands {
+    @FocusedValue(\.persistentQueueCommandActions) private var actions
+
+    var body: some Commands {
+        CommandMenu("Queue") {
+            Button("Move Up") {
+                actions?.moveUp()
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            .disabled(actions?.canMoveUp != true)
+
+            Button("Move Down") {
+                actions?.moveDown()
+            }
+            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            .disabled(actions?.canMoveDown != true)
+
+            Divider()
+
+            Button("Convert Next") {
+                actions?.convertNext()
+            }
+            .keyboardShortcut(.return, modifiers: [.command, .option])
+            .disabled(actions?.canConvertNext != true)
+        }
+    }
 }
 
 private struct SourceCommands: Commands {

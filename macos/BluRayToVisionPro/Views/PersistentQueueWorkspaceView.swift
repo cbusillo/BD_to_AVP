@@ -1,7 +1,27 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
+
+enum PersistentQueueMovePlacement: Equatable, Sendable {
+    case before
+    case after
+}
+
+private struct PersistentQueueDropInsertion: Equatable {
+    let targetID: UUID
+    let placement: PersistentQueueMovePlacement
+}
+
+private extension UTType {
+    static let persistentQueueItem = UTType(
+        exportedAs: "com.shinycomputers.bd-to-avp.queue-item",
+        conformingTo: .data
+    )
+}
 
 struct PersistentQueueSidebarView: View {
+    @State private var dropInsertion: PersistentQueueDropInsertion?
+
     let items: [PersistentQueueItem]
     @Binding var selectedID: UUID?
     @Binding var compactRows: Bool
@@ -20,7 +40,9 @@ struct PersistentQueueSidebarView: View {
     let addSources: () -> Void
     let addSourceFolder: () -> Void
     let addDisc: (ConversionSource) -> Void
+    let addDroppedURLs: ([URL], CGPoint) -> Bool
     let move: (UUID, Int) -> Void
+    let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
     let moveNext: (UUID) -> Void
     let remove: (UUID) -> Void
     let clearCompleted: () -> Void
@@ -58,6 +80,9 @@ struct PersistentQueueSidebarView: View {
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityIdentifier("persistent-queue-sidebar")
+        .onChange(of: items.map(\.id)) { _, _ in
+            dropInsertion = nil
+        }
     }
 
     @ViewBuilder
@@ -206,7 +231,13 @@ struct PersistentQueueSidebarView: View {
                 total: items.count,
                 compact: compactRows,
                 progress: item.status.isActive ? activeProgress : nil,
+                canMoveUp: canMove(item, by: -1),
+                canMoveDown: canMove(item, by: 1),
+                canConvertNext: canMoveToNext(item),
+                dropInsertion: $dropInsertion,
+                addDroppedURLs: addDroppedURLs,
                 move: move,
+                moveRelative: moveRelative,
                 moveNext: moveNext,
                 remove: remove
             )
@@ -240,6 +271,29 @@ struct PersistentQueueSidebarView: View {
                 .buttonStyle(.borderless)
                 .disabled(selectedItem?.canRemove != true)
                 .accessibilityIdentifier("persistent-queue-remove")
+
+                Menu {
+                    if let selectedItem {
+                        if selectedItem.canMove {
+                            Button("Move Up") { move(selectedItem.id, -1) }
+                                .disabled(!canMove(selectedItem, by: -1))
+                            Button("Move Down") { move(selectedItem.id, 1) }
+                                .disabled(!canMove(selectedItem, by: 1))
+                            Divider()
+                            Button("Convert Next") { moveNext(selectedItem.id) }
+                                .disabled(!canMoveToNext(selectedItem))
+                        } else if let reason = selectedItem.queueManipulationLockReason {
+                            Text(reason)
+                        }
+                    } else {
+                        Text("Select a waiting item to arrange it.")
+                    }
+                } label: {
+                    Label("Arrange", systemImage: "arrow.up.arrow.down")
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityHint("Move the selected waiting item with Command-Option-Up Arrow or Command-Option-Down Arrow.")
+                .accessibilityIdentifier("persistent-queue-arrange")
 
                 Spacer()
                 if canUndo {
@@ -295,6 +349,21 @@ struct PersistentQueueSidebarView: View {
     private var completedItems: [PersistentQueueItem] { items.filter(\.status.isCompleted) }
     private var pendingItems: [PersistentQueueItem] {
         items.filter { !$0.status.isActive && !$0.status.isCompleted }
+    }
+
+    private var waitingItems: [PersistentQueueItem] {
+        items.filter(\.canMove)
+    }
+
+    private func canMove(_ item: PersistentQueueItem, by offset: Int) -> Bool {
+        guard let index = waitingItems.firstIndex(where: { $0.id == item.id }) else {
+            return false
+        }
+        return waitingItems.indices.contains(index + offset)
+    }
+
+    private func canMoveToNext(_ item: PersistentQueueItem) -> Bool {
+        waitingItems.first?.id != item.id
     }
     private var selectedItem: PersistentQueueItem? {
         selectedID.flatMap { id in items.first(where: { $0.id == id }) }
@@ -408,16 +477,80 @@ struct OffPeakScheduleSheet: View {
 }
 
 private struct PersistentQueueRow: View {
+    @State private var rowHeight: CGFloat = 0
+
     let item: PersistentQueueItem
     let position: Int
     let total: Int
     let compact: Bool
     let progress: WorkerProgress?
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let canConvertNext: Bool
+    @Binding var dropInsertion: PersistentQueueDropInsertion?
+    let addDroppedURLs: ([URL], CGPoint) -> Bool
     let move: (UUID, Int) -> Void
+    let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
     let moveNext: (UUID) -> Void
     let remove: (UUID) -> Void
 
     var body: some View {
+        interactiveRow
+    }
+
+    @ViewBuilder
+    private var interactiveRow: some View {
+        if item.canMove {
+            baseRow
+                .onDrag { queueItemProvider() }
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { rowHeight = proxy.size.height }
+                            .onChange(of: proxy.size) { _, size in
+                                rowHeight = size.height
+                            }
+                    }
+                }
+                .onDrop(
+                    of: [UTType.persistentQueueItem, UTType.fileURL],
+                    delegate: PersistentQueueRowDropDelegate(
+                        targetID: item.id,
+                        rowHeight: rowHeight,
+                        dropInsertion: $dropInsertion,
+                        addDroppedURLs: addDroppedURLs,
+                        moveRelative: moveRelative
+                    )
+                )
+                .accessibilityAction(named: "Convert Next") {
+                    if canConvertNext { moveNext(item.id) }
+                }
+                .accessibilityAction(named: "Move Up") {
+                    if canMoveUp { move(item.id, -1) }
+                }
+                .accessibilityAction(named: "Move Down") {
+                    if canMoveDown { move(item.id, 1) }
+                }
+        } else {
+            baseRow
+                .accessibilityHint(item.queueManipulationLockReason ?? "This item cannot move or be edited.")
+        }
+    }
+
+    private func queueItemProvider() -> NSItemProvider {
+        let provider = NSItemProvider()
+        let itemData = Data(item.id.uuidString.utf8)
+        provider.registerDataRepresentation(
+            forTypeIdentifier: UTType.persistentQueueItem.identifier,
+            visibility: .ownProcess
+        ) { completion in
+            completion(itemData, nil)
+            return nil
+        }
+        return provider
+    }
+
+    private var baseRow: some View {
         HStack(spacing: compact ? 7 : 9) {
             Image(systemName: item.status.systemImage)
                 .font(.system(size: compact ? 13 : 15, weight: .medium))
@@ -488,9 +621,16 @@ private struct PersistentQueueRow: View {
         .contentShape(Rectangle())
         .contextMenu {
             if item.canMove {
-                Button("Convert Next") { moveNext(item.id) }
                 Button("Move Up") { move(item.id, -1) }
+                    .disabled(!canMoveUp)
                 Button("Move Down") { move(item.id, 1) }
+                    .disabled(!canMoveDown)
+                Divider()
+                Button("Convert Next") { moveNext(item.id) }
+                    .disabled(!canConvertNext)
+                Divider()
+            } else if let reason = item.queueManipulationLockReason {
+                Text(reason)
                 Divider()
             }
             Button("Remove from Queue", role: .destructive) { remove(item.id) }
@@ -502,15 +642,112 @@ private struct PersistentQueueRow: View {
                 + "Source kind: \(item.sourceKindName). Profile: \(item.draft.profile.name). "
                 + "State: \(item.status.title). Queue item \(position) of \(total)."
         )
-        .accessibilityAction(named: "Move Up") {
-            if item.canMove { move(item.id, -1) }
-        }
-        .accessibilityAction(named: "Move Down") {
-            if item.canMove { move(item.id, 1) }
-        }
         .accessibilityAction(named: "Remove from Queue") {
             if item.canRemove { remove(item.id) }
         }
+        .overlay(alignment: insertionAlignment) {
+            if dropInsertion?.targetID == item.id {
+                Color.accentColor
+                    .frame(height: 2)
+                    .padding(.horizontal, 4)
+                    .accessibilityHidden(true)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: dropInsertion)
+    }
+
+    private var insertionAlignment: Alignment {
+        dropInsertion?.placement == .before ? .top : .bottom
+    }
+}
+
+private struct PersistentQueueRowDropDelegate: DropDelegate {
+    let targetID: UUID
+    let rowHeight: CGFloat
+    @Binding var dropInsertion: PersistentQueueDropInsertion?
+    let addDroppedURLs: ([URL], CGPoint) -> Bool
+    let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [UTType.persistentQueueItem, UTType.fileURL])
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard info.hasItemsConforming(to: [UTType.persistentQueueItem]) else {
+            return
+        }
+        updateInsertion(for: info)
+    }
+
+    func dropExited(info _: DropInfo) {
+        guard dropInsertion?.targetID == targetID else {
+            return
+        }
+        dropInsertion = nil
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        if info.hasItemsConforming(to: [UTType.persistentQueueItem]) {
+            updateInsertion(for: info)
+            return DropProposal(operation: .move)
+        }
+        dropInsertion = nil
+        return info.hasItemsConforming(to: [UTType.fileURL])
+            ? DropProposal(operation: .copy)
+            : DropProposal(operation: .forbidden)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer { dropInsertion = nil }
+        if let provider = info.itemProviders(for: [UTType.persistentQueueItem]).first {
+            return performQueueItemDrop(provider: provider, info: info)
+        }
+        return performFileURLDrop(info: info)
+    }
+
+    private func performQueueItemDrop(provider: NSItemProvider, info: DropInfo) -> Bool {
+        guard validateDrop(info: info) else {
+            return false
+        }
+        let targetID = targetID
+        let targetPlacement = placement(for: info)
+        let moveRelative = moveRelative
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.persistentQueueItem.identifier) { data, error in
+            guard error == nil,
+                  let data,
+                  let value = String(data: data, encoding: .utf8),
+                  let sourceID = UUID(uuidString: value),
+                  sourceID != targetID
+            else {
+                return
+            }
+            DispatchQueue.main.async {
+                moveRelative(sourceID, targetID, targetPlacement)
+            }
+        }
+        return true
+    }
+
+    private func performFileURLDrop(info: DropInfo) -> Bool {
+        guard info.hasItemsConforming(to: [UTType.fileURL]) else {
+            return false
+        }
+        let pasteboardURLs = NSPasteboard(name: .drag)
+            .readObjects(forClasses: [NSURL.self]) as? [NSURL] ?? []
+        let fileURLs = pasteboardURLs.compactMap { $0.filePathURL as URL? }
+        guard !fileURLs.isEmpty else {
+            return false
+        }
+        return addDroppedURLs(fileURLs, info.location)
+    }
+
+    private func updateInsertion(for info: DropInfo) {
+        dropInsertion = PersistentQueueDropInsertion(targetID: targetID, placement: placement(for: info))
+    }
+
+    private func placement(for info: DropInfo) -> PersistentQueueMovePlacement {
+        let measuredHeight = rowHeight > 0 ? rowHeight : 44
+        return info.location.y < measuredHeight / 2 ? .before : .after
     }
 }
 
@@ -636,13 +873,16 @@ struct PersistentQueueDetailView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Conversion Setup")
                         .font(.title3.weight(.semibold))
-                    Text(item.isEditable ? "Waiting items can be edited until they start." : "Settings are locked for this queue state.")
+                    Text(item.isEditable
+                        ? "Waiting items can be edited until they start."
+                        : (item.queueManipulationLockReason ?? "Settings are locked for this queue state."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Edit…") { edit(item) }
                     .disabled(!item.isEditable)
+                    .help(item.isEditable ? "Edit this waiting item." : (item.queueManipulationLockReason ?? "Settings are locked."))
             }
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
                 GridRow {
@@ -655,6 +895,7 @@ struct PersistentQueueDetailView: View {
                         detailValue(item.draft.destinationURL.path, label: "Destination")
                         Button("Change…") { changeDestination(item) }
                             .disabled(!item.isEditable)
+                            .help(item.isEditable ? "Change this waiting item's destination." : (item.queueManipulationLockReason ?? "Settings are locked."))
                     }
                 }
                 GridRow {

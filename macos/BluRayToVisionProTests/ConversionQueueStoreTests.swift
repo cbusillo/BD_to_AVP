@@ -477,6 +477,32 @@ final class ConversionQueueStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentQueueMovePersistsMixedRowOrderAcrossReload() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let active = makeItem(ordinal: 0, sourcePath: "/tmp/active.mkv", state: .processing)
+        let completed = makeItem(
+            ordinal: 1,
+            sourcePath: "/tmp/completed.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/completed.mov")
+        )
+        let first = makeItem(ordinal: 2, sourcePath: "/tmp/first.mkv")
+        let second = makeItem(ordinal: 3, sourcePath: "/tmp/second.mkv")
+        let third = makeItem(ordinal: 4, sourcePath: "/tmp/third.mkv")
+        let store = ConversionQueueStore(fileURL: fileURL)
+        try await store.replaceItems([active, completed, first, second, third])
+
+        try await store.moveWaitingItem(third.id, before: first.id)
+
+        let reloadedStore = ConversionQueueStore(fileURL: fileURL)
+        XCTAssertEqual(reloadedStore.items.map(\.id), [active.id, completed.id, third.id, first.id, second.id])
+        XCTAssertEqual(reloadedStore.items.map(\.ordinal), Array(reloadedStore.items.indices))
+        XCTAssertEqual(reloadedStore.items.map(\.state), [.interrupted, .completed, .waiting, .waiting, .waiting])
+    }
+
+    @MainActor
     func testPersistentQueueRemovalAllowsRecoverableTerminalRows() async throws {
         let store = ConversionQueueStore.inMemory()
         let failed = makeItem(

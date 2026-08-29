@@ -102,6 +102,10 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         let group = try XCTUnwrap(QueueResolutionGroup.group([
             QueueResolutionCandidate(id: item.id, draft: item.draft, conflict: conflict),
         ]).first)
+        XCTAssertEqual(
+            item.queueManipulationLockReason,
+            "Resolve this item's required choice before moving or editing it."
+        )
 
         try render(
             items: [item],
@@ -145,6 +149,37 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         )
     }
 
+    func testQueueWorkspaceRendersQueueManipulationAtMinimumSidebarWidth() throws {
+        let items = try makeItems()
+        XCTAssertEqual(
+            items[0].queueManipulationLockReason,
+            "This item is active and cannot move or be edited until it finishes."
+        )
+        XCTAssertEqual(
+            items[1].queueManipulationLockReason,
+            "Restart this interrupted item before changing its position or settings."
+        )
+        XCTAssertEqual(
+            items[2].queueManipulationLockReason,
+            "Retry this failed item before changing its position or settings."
+        )
+        XCTAssertEqual(
+            items[3].queueManipulationLockReason,
+            "This item is stopping and cannot move or be edited until it has stopped."
+        )
+        XCTAssertNil(items[4].queueManipulationLockReason)
+        XCTAssertEqual(items[10].queueManipulationLockReason, "Completed items cannot move or be edited.")
+
+        try render(
+            items: items,
+            selectedItem: items[4],
+            compact: true,
+            colorScheme: .dark,
+            appearanceName: .darkAqua,
+            sidebarWidth: 300
+        )
+    }
+
     private func render(
         items: [PersistentQueueItem],
         selectedItem: PersistentQueueItem?,
@@ -153,7 +188,8 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         appearanceName: NSAppearance.Name,
         offPeakSchedule: OffPeakQueueSchedule? = nil,
         offPeakScheduleOutcome: OffPeakScheduleOutcome? = nil,
-        resolutionGroup: QueueResolutionGroup? = nil
+        resolutionGroup: QueueResolutionGroup? = nil,
+        sidebarWidth: CGFloat = 330
     ) throws {
         let content = HSplitView {
             PersistentQueueSidebarView(
@@ -175,7 +211,9 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 addSources: {},
                 addSourceFolder: {},
                 addDisc: { _ in },
+                addDroppedURLs: { _, _ in true },
                 move: { _, _ in },
+                moveRelative: { _, _, _ in },
                 moveNext: { _ in },
                 remove: { _ in },
                 clearCompleted: {},
@@ -188,7 +226,7 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 pauseAfterCurrent: {},
                 stopCurrent: {}
             )
-            .frame(minWidth: 300, idealWidth: 330, maxWidth: 420)
+            .frame(width: sidebarWidth)
             PersistentQueueDetailView(
                 item: selectedItem,
                 resolutionGroup: resolutionGroup,
@@ -245,6 +283,10 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
             case 2:
                 state = .failed
                 failure = DurableQueueFailure(code: "temporary", message: "Source needs attention", details: nil, retryable: true)
+                result = nil
+            case 3:
+                state = .stopping
+                failure = nil
                 result = nil
             case 10, 11:
                 state = .completed

@@ -160,6 +160,31 @@ struct PersistentQueueItem: Identifiable, Equatable {
         status == .waiting
     }
 
+    var queueManipulationLockReason: String? {
+        switch status {
+        case .waiting:
+            nil
+        case .needsChoice:
+            "Resolve this item's required choice before moving or editing it."
+        case .inspecting, .processing:
+            "This item is active and cannot move or be edited until it finishes."
+        case .stopping:
+            "This item is stopping and cannot move or be edited until it has stopped."
+        case .interrupted:
+            "Restart this interrupted item before changing its position or settings."
+        case .attention:
+            "Resolve the required action before moving or editing this item."
+        case .failed:
+            "Retry this failed item before changing its position or settings."
+        case .completed:
+            "Completed items cannot move or be edited."
+        case .stopped:
+            "Restart this stopped item before changing its position or settings."
+        case .notStarted:
+            "This item is not ready to move or edit yet."
+        }
+    }
+
     var canRemove: Bool {
         switch status {
         case .waiting, .needsChoice, .interrupted, .attention, .failed, .stopped, .notStarted:

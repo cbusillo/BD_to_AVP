@@ -139,6 +139,7 @@ struct ContentView: View {
         mainContent
         .accessibilityIdentifier("main-window-content")
         .focusedSceneValue(\.conversionSourceSelectionAction, sourceSelectionAction)
+        .focusedSceneValue(\.persistentQueueCommandActions, persistentQueueCommandActions)
         .toolbar { toolbarContent }
         .animation(.easeInOut(duration: 0.18), value: isShowingActivity)
         .dropDestination(for: URL.self, action: acceptDrop) { targeted in
@@ -433,7 +434,9 @@ struct ContentView: View {
             addSources: addSourcesToPersistentQueue,
             addSourceFolder: addSourceFolderToPersistentQueue,
             addDisc: { appendSourcesToPersistentQueue([$0]) },
+            addDroppedURLs: acceptDrop,
             move: movePersistentQueueItem,
+            moveRelative: movePersistentQueueItem,
             moveNext: movePersistentQueueItemNext,
             remove: removePersistentQueueItem,
             clearCompleted: clearCompletedPersistentQueueItems,
@@ -455,6 +458,33 @@ struct ContentView: View {
         return viewModel.persistentQueueResolutionGroups.first { group in
             group.candidates.contains(where: { $0.id == selectedItemID })
         }
+    }
+
+    private var persistentQueueCommandActions: PersistentQueueCommandActions {
+        let waitingItems = viewModel.persistentQueueItems.filter(\.canMove)
+        let selectedID = viewModel.selectedPersistentQueueItemID
+        let selectedIndex = selectedID.flatMap { id in
+            waitingItems.firstIndex(where: { $0.id == id })
+        }
+
+        return PersistentQueueCommandActions(
+            canMoveUp: selectedIndex.map { $0 > waitingItems.startIndex } ?? false,
+            canMoveDown: selectedIndex.map { $0 < waitingItems.index(before: waitingItems.endIndex) } ?? false,
+            canConvertNext: selectedIndex.map { $0 > waitingItems.startIndex } ?? false,
+            moveUp: { moveSelectedPersistentQueueItem(by: -1) },
+            moveDown: { moveSelectedPersistentQueueItem(by: 1) },
+            convertNext: moveSelectedPersistentQueueItemNext
+        )
+    }
+
+    private func moveSelectedPersistentQueueItem(by offset: Int) {
+        guard let selectedID = viewModel.selectedPersistentQueueItemID else { return }
+        movePersistentQueueItem(selectedID, by: offset)
+    }
+
+    private func moveSelectedPersistentQueueItemNext() {
+        guard let selectedID = viewModel.selectedPersistentQueueItemID else { return }
+        movePersistentQueueItemNext(selectedID)
     }
 
     private func resolvePersistentQueueRouteQuality(
@@ -1179,6 +1209,25 @@ struct ContentView: View {
                 if offset < 0 {
                     try await viewModel.movePersistentQueueItem(itemID, before: targetID)
                 } else {
+                    try await viewModel.movePersistentQueueItem(itemID, after: targetID)
+                }
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func movePersistentQueueItem(
+        _ itemID: UUID,
+        relativeTo targetID: UUID,
+        placement: PersistentQueueMovePlacement
+    ) {
+        Task { @MainActor in
+            do {
+                switch placement {
+                case .before:
+                    try await viewModel.movePersistentQueueItem(itemID, before: targetID)
+                case .after:
                     try await viewModel.movePersistentQueueItem(itemID, after: targetID)
                 }
             } catch {

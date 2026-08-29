@@ -42,5 +42,18 @@
 	<string>nJv1BH0mc2KFORVIDLlSI2A9mvGpVWdLcxlmz++OODU=</string>
 	<key>SUVerifyUpdateBeforeExtraction</key>
 	<true/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Persistent Queue Item</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.shinycomputers.bd-to-avp.queue-item</string>
+		</dict>
+	</array>
 </dict>
 </plist>
