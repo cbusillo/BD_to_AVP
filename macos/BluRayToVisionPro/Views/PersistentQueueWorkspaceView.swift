@@ -208,14 +208,20 @@ struct PersistentQueueSidebarView: View {
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
                             .truncationMode(.middle)
+                        Text(destination.destinationPath)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                         HStack(spacing: 8) {
                             storageMetric("Output", destination.outputDescription)
                             storageMetric("Working", destination.temporaryWorkingDescription)
                         }
                         HStack(spacing: 8) {
+                            storageMetric("Retained", destination.retainedIntermediateDescription)
                             storageMetric("Margin", destination.safetyMarginDescription)
-                            storageMetric("Peak", destination.totalPeakDescription)
                         }
+                        storageMetric("Peak", destination.totalPeakDescription)
                         if destination.hasUnestimatedItems {
                             Text("\(destination.unestimatedItemCount) item\(destination.unestimatedItemCount == 1 ? "" : "s") not estimated; totals are partial.")
                                 .font(.caption2)
@@ -223,6 +229,7 @@ struct PersistentQueueSidebarView: View {
                         }
                     }
                     .accessibilityElement(children: .combine)
+                    .help(destination.destinationPath)
                     .accessibilityIdentifier("storage-summary-\(destination.id)")
                 }
             }

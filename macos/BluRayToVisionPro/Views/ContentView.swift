@@ -1437,19 +1437,11 @@ struct ContentView: View {
         guard let destination = DestinationPicker.chooseDestination(startingAt: item.draft.destinationURL) else {
             return
         }
-        let draft = ConversionDraft(
-            source: item.draft.source,
-            sourceDetails: item.draft.sourceDetails,
-            profile: item.draft.profile,
-            destinationURL: destination,
-            options: item.draft.options,
-            selectedTitle: item.draft.selectedTitle
-        )
         Task { @MainActor in
             do {
                 try await viewModel.updatePersistentQueueItemDestination(
                     item.id,
-                    destinationURL: draft.destinationURL
+                    destinationURL: destination
                 )
             } catch {
                 persistentQueueErrorMessage = error.localizedDescription

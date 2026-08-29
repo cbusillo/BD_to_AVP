@@ -20,6 +20,7 @@ final class StorageForecastTests: XCTestCase {
                 + (forecast.temporaryWorkingBytes ?? 0)
                 + (forecast.safetyMarginBytes ?? 0)
         )
+        XCTAssertTrue(forecast.totalPeakDescription.hasPrefix("Up to "))
     }
 
     func testUnknownForecastNeverProducesBlockingRequiredBytes() {
@@ -126,6 +127,31 @@ final class StorageForecastTests: XCTestCase {
         XCTAssertNotEqual(original.totalPeakRequiredBytes, reordered.totalPeakRequiredBytes)
         XCTAssertGreaterThan(edited.estimatedOutputBytes ?? 0, original.estimatedOutputBytes ?? 0)
         XCTAssertGreaterThan(edited.totalPeakRequiredBytes ?? 0, original.totalPeakRequiredBytes ?? 0)
+    }
+
+    func testHeldItemsRemainVisibleAsUnestimated() throws {
+        let item = try makeItem(
+            ordinal: 0,
+            destination: "/Volumes/A",
+            durationSeconds: 3_600
+        )
+        let held = PersistentQueueItem(
+            id: item.id,
+            ordinal: item.ordinal,
+            draft: item.draft,
+            status: .attention(DurableQueueDecision(
+                identifier: "subtitle_decision_required",
+                prompt: "Choose subtitle handling.",
+                choices: ["continue_without_subtitles"]
+            ))
+        )
+
+        let destination = try XCTUnwrap(QueueStorageSummary(items: [held]).destinations.first)
+
+        XCTAssertEqual(destination.estimatedItemCount, 0)
+        XCTAssertEqual(destination.unestimatedItemCount, 1)
+        XCTAssertTrue(destination.unestimatedReasons.first?.contains("recovery action") == true)
+        XCTAssertNil(destination.totalPeakRequiredBytes)
     }
 
     func testSystemPreflightDistinguishesAvailabilityAndCapacity() throws {

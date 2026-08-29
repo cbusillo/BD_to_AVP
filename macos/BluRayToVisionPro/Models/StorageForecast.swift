@@ -12,7 +12,7 @@ enum StorageForecastFormatting {
     }
 
     static func about(_ bytes: Int64?) -> String {
-        guard let bytes else {
+        guard let bytes, bytes >= 0 else {
             return "Unavailable"
         }
         return "About \(coarse(bytes))"
@@ -30,6 +30,7 @@ struct StorageForecastItem: Equatable, Sendable {
     let safetyMarginBytes: Int64?
     let totalPeakRequiredBytes: Int64?
     let unavailableReason: String?
+    let conservativeUpperBound: Bool
 
     init(draft: ConversionDraft) {
         let estimate = VideoStorageEstimate(drafts: [draft])
@@ -40,6 +41,7 @@ struct StorageForecastItem: Equatable, Sendable {
         )
         retainedIntermediateBytes = estimate.retainedIntermediateBytes
         unavailableReason = estimate.unavailableReason
+        conservativeUpperBound = estimate.conservativeFallbackReserve
 
         guard let peakWorkingBytes = estimate.peakWorkingBytes,
               let safetyMarginBytes = Self.safetyMargin(for: peakWorkingBytes),
@@ -58,11 +60,11 @@ struct StorageForecastItem: Equatable, Sendable {
     }
 
     var outputDescription: String {
-        Self.estimateDescription(estimatedOutputBytes)
+        estimateDescription(estimatedOutputBytes)
     }
 
     var temporaryWorkingDescription: String {
-        Self.estimateDescription(temporaryWorkingBytes)
+        estimateDescription(temporaryWorkingBytes)
     }
 
     var retainedIntermediateDescription: String {
@@ -71,7 +73,7 @@ struct StorageForecastItem: Equatable, Sendable {
         }
         return retainedIntermediateBytes == 0
             ? "None after success"
-            : Self.estimateDescription(retainedIntermediateBytes)
+            : estimateDescription(retainedIntermediateBytes)
     }
 
     var safetyMarginDescription: String {
@@ -85,7 +87,7 @@ struct StorageForecastItem: Equatable, Sendable {
         guard let totalPeakRequiredBytes else {
             return unavailableReason ?? "Unavailable"
         }
-        return Self.estimateDescription(totalPeakRequiredBytes)
+        return estimateDescription(totalPeakRequiredBytes)
     }
 
     var assumptionDescription: String {
@@ -131,11 +133,12 @@ struct StorageForecastItem: Equatable, Sendable {
         return first + second
     }
 
-    private static func estimateDescription(_ bytes: Int64?) -> String {
+    private func estimateDescription(_ bytes: Int64?) -> String {
         guard let bytes else {
             return "Unavailable"
         }
-        return "About \(StorageForecastFormatting.coarse(bytes))"
+        let qualifier = conservativeUpperBound ? "Up to" : "About"
+        return "\(qualifier) \(StorageForecastFormatting.coarse(bytes))"
     }
 }
 
@@ -149,6 +152,7 @@ struct StorageForecastDestinationSummary: Identifiable, Equatable, Sendable {
     let estimatedItemCount: Int
     let unestimatedItemCount: Int
     let unestimatedReasons: [String]
+    let conservativeUpperBound: Bool
 
     var id: String { destinationPath }
 
@@ -157,17 +161,17 @@ struct StorageForecastDestinationSummary: Identifiable, Equatable, Sendable {
     }
 
     var outputDescription: String {
-        StorageForecastFormatting.about(estimatedOutputBytes)
+        estimateDescription(estimatedOutputBytes)
     }
 
     var temporaryWorkingDescription: String {
-        StorageForecastFormatting.about(temporaryWorkingBytes)
+        estimateDescription(temporaryWorkingBytes)
     }
 
     var retainedIntermediateDescription: String {
         retainedIntermediateBytes == 0
             ? "None after success"
-            : StorageForecastFormatting.about(retainedIntermediateBytes)
+            : estimateDescription(retainedIntermediateBytes)
     }
 
     var safetyMarginDescription: String {
@@ -175,7 +179,15 @@ struct StorageForecastDestinationSummary: Identifiable, Equatable, Sendable {
     }
 
     var totalPeakDescription: String {
-        StorageForecastFormatting.about(totalPeakRequiredBytes)
+        estimateDescription(totalPeakRequiredBytes)
+    }
+
+    private func estimateDescription(_ bytes: Int64?) -> String {
+        guard let bytes, bytes >= 0 else {
+            return "Unavailable"
+        }
+        let qualifier = conservativeUpperBound ? "Up to" : "About"
+        return "\(qualifier) \(StorageForecastFormatting.coarse(bytes))"
     }
 }
 
@@ -194,9 +206,18 @@ struct QueueStorageSummary: Equatable, Sendable {
             var unestimatedReasons: [String] = []
             var committedBytes: Int64 = 0
             var hasOverflow = false
+            var conservativeUpperBound = false
 
             mutating func add(_ item: PersistentQueueItem) {
+                if let deferredReason = item.storageForecastDeferredReason {
+                    unestimatedItemCount += 1
+                    if !unestimatedReasons.contains(deferredReason) {
+                        unestimatedReasons.append(deferredReason)
+                    }
+                    return
+                }
                 let forecast = StorageForecastItem(draft: item.draft)
+                conservativeUpperBound = conservativeUpperBound || forecast.conservativeUpperBound
                 var itemOverflow = false
                 if let outputBytes = forecast.estimatedOutputBytes,
                    let temporaryBytes = forecast.temporaryWorkingBytes,
@@ -246,7 +267,8 @@ struct QueueStorageSummary: Equatable, Sendable {
                     totalPeakRequiredBytes: total,
                     estimatedItemCount: estimatedItemCount,
                     unestimatedItemCount: unestimatedItemCount,
-                    unestimatedReasons: unestimatedReasons
+                    unestimatedReasons: unestimatedReasons,
+                    conservativeUpperBound: conservativeUpperBound
                 )
             }
 
@@ -275,12 +297,23 @@ struct QueueStorageSummary: Equatable, Sendable {
 private extension PersistentQueueItem {
     var isEligibleForStorageForecast: Bool {
         switch status {
-        case .waiting, .interrupted, .stopped, .notStarted:
+        case .waiting, .needsChoice, .interrupted, .attention, .stopped, .notStarted:
             true
         case let .failed(failure):
             failure.retryable
-        case .needsChoice, .inspecting, .processing, .stopping, .attention, .completed:
+        case .inspecting, .processing, .stopping, .completed:
             false
+        }
+    }
+
+    var storageForecastDeferredReason: String? {
+        switch status {
+        case .needsChoice:
+            "Resolve the queued route-quality choice before its storage can be estimated."
+        case .attention:
+            "Choose the queued recovery action before its storage can be estimated."
+        default:
+            nil
         }
     }
 }
