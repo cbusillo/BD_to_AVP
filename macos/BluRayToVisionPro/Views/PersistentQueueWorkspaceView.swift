@@ -319,7 +319,7 @@ struct PersistentQueueSidebarView: View {
         }
         if items.contains(where: { item in
             switch item.status {
-            case .attention, .failed:
+            case .needsChoice, .attention, .failed:
                 true
             default:
                 false
@@ -482,11 +482,14 @@ private struct PersistentQueueRow: View {
 
 struct PersistentQueueDetailView: View {
     let item: PersistentQueueItem?
+    let resolutionGroup: QueueResolutionGroup?
+    @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
     let activeProgress: WorkerProgress?
     let activeElapsedText: String?
     let edit: (PersistentQueueItem) -> Void
     let changeDestination: (PersistentQueueItem) -> Void
     let retry: (PersistentQueueItem, WorkerRecoveryChoice?) -> Void
+    let resolveRouteQuality: (QueueResolutionGroup, QueueResolutionSelection) -> Void
 
     var body: some View {
         Group {
@@ -495,6 +498,13 @@ struct PersistentQueueDetailView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         header(item)
                         statusBanner(item)
+                        if let resolutionGroup {
+                            PersistentQueueRouteQualityResolutionView(
+                                group: resolutionGroup,
+                                memoryStore: resolutionMemoryStore,
+                                apply: resolveRouteQuality
+                            )
+                        }
                         Divider()
                         settings(item)
                     }
@@ -629,6 +639,108 @@ struct PersistentQueueDetailView: View {
     }
 }
 
+private struct PersistentQueueRouteQualityResolutionView: View {
+    let group: QueueResolutionGroup
+    @ObservedObject var memoryStore: ResolutionMemoryStore
+    let apply: (QueueResolutionGroup, QueueResolutionSelection) -> Void
+    @State private var selection = QueueResolutionSelection()
+    @State private var message: String?
+    @State private var loadedSuggestion = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("A choice is needed before this video can run")
+                .font(.headline)
+            Text(group.conflict.reason)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Picker("Resolution", selection: $selection.resolutionID) {
+                Text("Choose a resolution").tag(String?.none)
+                ForEach(group.conflict.resolutions.filter(\.isAvailable)) { option in
+                    Text(option.title).tag(Optional(option.id))
+                }
+            }
+            .pickerStyle(.radioGroup)
+            Picker("Apply to", selection: $selection.scope) {
+                Text("All \(group.candidates.count) matching items").tag(QueueResolutionScope.allMatching)
+                ForEach(group.candidates) { candidate in
+                    Text("\(candidate.title) only").tag(QueueResolutionScope.item(candidate.id))
+                }
+            }
+            .pickerStyle(.menu)
+            Toggle("Suggest this next time for \(group.profileName)", isOn: $selection.shouldSuggest)
+                .font(.caption)
+            if let suggestion {
+                Text(suggestion.staleExplanation ?? "Suggested for this Profile. You’ll still confirm it with Apply Choice.")
+                    .font(.caption)
+                    .foregroundStyle(suggestion.isStale ? .orange : .secondary)
+                Button("Forget suggestion") {
+                    do {
+                        try memoryStore.forget(conflictID: group.conflict.stableID, scope: suggestion.entry.scope)
+                        selection.resolutionID = nil
+                        message = nil
+                    } catch {
+                        message = error.localizedDescription
+                    }
+                }
+                .buttonStyle(.borderless)
+            }
+            HStack {
+                if let message {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Spacer()
+                Button("Apply Choice") {
+                    guard let resolutionID = selection.resolutionID else { return }
+                    if selection.shouldSuggest,
+                       let option = group.conflict.resolutions.first(where: { $0.id == resolutionID })
+                    {
+                        do {
+                            try memoryStore.store(
+                                resolutionID: option.id,
+                                for: group.conflict.stableID,
+                                scope: .profile(group.candidates[0].draft.profile.id),
+                                mappingVersion: group.conflict.mappingVersion
+                            )
+                        } catch {
+                            message = error.localizedDescription
+                            return
+                        }
+                    }
+                    apply(group, selection)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!selection.canApply)
+                .accessibilityIdentifier("persistent-queue-apply-choice")
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityIdentifier("persistent-queue-conflict-group")
+        .onAppear {
+            guard !loadedSuggestion else { return }
+            loadedSuggestion = true
+            if let suggestion, !suggestion.isStale {
+                selection.resolutionID = group.conflict.resolutions.contains(where: {
+                    $0.id == suggestion.entry.resolutionID && $0.isAvailable
+                }) ? suggestion.entry.resolutionID : nil
+            }
+        }
+    }
+
+    private var suggestion: ResolutionMemorySuggestion? {
+        let candidate = group.candidates[0]
+        return memoryStore.suggestion(
+            conflictID: group.conflict.stableID,
+            profileID: candidate.draft.profile.id,
+            sourceKind: candidate.draft.source.kind,
+            mappingVersion: group.conflict.mappingVersion
+        )
+    }
+}
+
 private extension PersistentQueueItemStatus {
     var isActive: Bool {
         switch self {
@@ -656,6 +768,7 @@ private extension PersistentQueueItemStatus {
     var title: String {
         switch self {
         case .waiting: "Waiting"
+        case .needsChoice: "Needs a Choice"
         case .inspecting: "Reading Source"
         case .processing: "Converting"
         case .stopping: "Stopping"
@@ -670,6 +783,7 @@ private extension PersistentQueueItemStatus {
 
     var detailTitle: String {
         switch self {
+        case let .needsChoice(conflict): conflict.reason
         case let .attention(decision): decision.prompt
         case let .failed(failure): failure.message
         case let .completed(result): URL(fileURLWithPath: result.outputPath).lastPathComponent
@@ -681,6 +795,7 @@ private extension PersistentQueueItemStatus {
     var systemImage: String {
         switch self {
         case .waiting: "clock"
+        case .needsChoice: "exclamationmark.circle.fill"
         case .inspecting: "doc.text.magnifyingglass"
         case .processing: "gearshape.2"
         case .stopping: "hourglass"
@@ -696,7 +811,7 @@ private extension PersistentQueueItemStatus {
         switch self {
         case .waiting, .stopped, .notStarted: .secondary
         case .inspecting, .processing, .stopping: .accentColor
-        case .interrupted, .attention: .orange
+        case .needsChoice, .interrupted, .attention: .orange
         case .failed: .red
         case .completed: .green
         }
@@ -704,6 +819,7 @@ private extension PersistentQueueItemStatus {
 
     func subtitle(for item: PersistentQueueItem) -> String {
         switch self {
+        case let .needsChoice(conflict): conflict.reason
         case let .attention(decision): decision.prompt
         case let .failed(failure): failure.message
         case let .completed(result): URL(fileURLWithPath: result.outputPath).lastPathComponent

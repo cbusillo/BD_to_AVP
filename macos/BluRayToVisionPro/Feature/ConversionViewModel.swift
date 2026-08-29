@@ -64,7 +64,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var selectedPersistentQueueItemID: UUID?
     @Published private(set) var completedBatchResults: [ConversionResult]?
     @Published private(set) var durableQueueRuntimeDiagnostic: String?
-    @Published private(set) var setupQueueStartFailureItemIDs: Set<UUID> = []
     @Published private(set) var persistentQueueRunState: PersistentQueueRunState = .idle
     @Published private(set) var offPeakSchedule: OffPeakQueueSchedule?
     @Published private(set) var offPeakScheduleOutcome: OffPeakScheduleOutcome?
@@ -87,7 +86,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var pendingBatchContinuation: Task<Void, Never>?
     private var actionsWaitingForIdle: [() -> Void] = []
     private var activeQueueItemID: UUID?
-    private var activeSetupQueueItemIDs: Set<UUID> = []
     private var titleQueueGroupID: UUID?
     private var titleQueueStopRequested = false
     private var pendingQueueTransition: Task<Void, Never>?
@@ -256,39 +254,47 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         try await durableQueueStore.clearCompletedItems()
     }
 
-    func appendPersistentQueueDrafts(_ drafts: [ConversionDraft]) async throws -> SetupQueueAddResult {
+    func appendPersistentQueueDrafts(
+        _ drafts: [ConversionDraft],
+        conflicts: [RouteQualityConflict?] = []
+    ) async throws -> PersistentQueueAppendResult {
         let existingIdentities = Set(persistentQueueItems.map {
             ConversionQueueItem.stablePreviewID(for: $0.draft)
         })
         var admittedIdentities = existingIdentities
-        var admittedDrafts: [ConversionDraft] = []
+        let suppliedConflicts = conflicts + Array(repeating: nil, count: max(0, drafts.count - conflicts.count))
+        var admittedEntries: [(draft: ConversionDraft, conflict: RouteQualityConflict?)] = []
         var duplicateDisplayNames: [String] = []
-        for draft in drafts {
+        for (index, draft) in drafts.enumerated() {
             let identity = ConversionQueueItem.stablePreviewID(for: draft)
             guard admittedIdentities.insert(identity).inserted else {
                 duplicateDisplayNames.append(draft.selectedTitle?.name ?? draft.source.displayName)
                 continue
             }
-            admittedDrafts.append(draft)
+            admittedEntries.append((draft, suppliedConflicts[index]))
         }
-        guard !admittedDrafts.isEmpty else {
-            return SetupQueueAddResult(addedCount: 0, duplicateDisplayNames: duplicateDisplayNames)
+        guard !admittedEntries.isEmpty else {
+            return PersistentQueueAppendResult(addedCount: 0, duplicateDisplayNames: duplicateDisplayNames)
         }
 
         var groupIDsBySource: [QueueSourceIdentity: UUID] = [:]
-        let sourcesRequestingRemoval = Set(admittedDrafts.compactMap { draft in
-            draft.options.job.removeOriginalAfterSuccess
-                ? QueueSourceIdentity(source: draft.source)
-                : nil
+        let sourcesRequestingRemoval: Set<QueueSourceIdentity> = Set(admittedEntries.compactMap { entry in
+            let draft = entry.draft
+            guard draft.options.job.removeOriginalAfterSuccess else {
+                return nil
+            }
+            return QueueSourceIdentity(source: draft.source)
         })
         var finalRemovalIndexBySource: [QueueSourceIdentity: Int] = [:]
-        for (offset, draft) in admittedDrafts.enumerated() {
+        for (offset, entry) in admittedEntries.enumerated() {
+            let draft = entry.draft
             let sourceIdentity = QueueSourceIdentity(source: draft.source)
             if sourcesRequestingRemoval.contains(sourceIdentity) {
                 finalRemovalIndexBySource[sourceIdentity] = offset
             }
         }
-        let newItems = admittedDrafts.enumerated().map { offset, originalDraft in
+        let newItems = admittedEntries.enumerated().map { offset, entry in
+            let originalDraft = entry.draft
             var options = originalDraft.options
             let sourceIdentity = QueueSourceIdentity(source: originalDraft.source)
             options.job.removeOriginalAfterSuccess = finalRemovalIndexBySource[sourceIdentity] == offset
@@ -318,14 +324,50 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 groupID: itemGroupID,
                 origin: origin,
                 intent: DurableQueueItemIntent(draft: draft),
-                inspection: draft.sourceDetails
+                inspection: draft.sourceDetails,
+                state: entry.conflict == nil ? .waiting : .needsChoice,
+                routeQualityConflict: entry.conflict.map(DurableRouteQualityConflict.init)
             )
         }
-        try await durableQueueStore.appendWaitingItems(newItems)
+        try await durableQueueStore.appendAdmittedItems(newItems)
         selectedPersistentQueueItemID = newItems.first?.id
-        return SetupQueueAddResult(
+        return PersistentQueueAppendResult(
             addedCount: newItems.count,
             duplicateDisplayNames: duplicateDisplayNames
+        )
+    }
+
+    var persistentQueueResolutionGroups: [QueueResolutionGroup] {
+        QueueResolutionGroup.group(
+            persistentQueueItems.compactMap { item in
+                guard case let .needsChoice(conflict) = item.status else {
+                    return nil
+                }
+                return QueueResolutionCandidate(id: item.id, draft: item.draft, conflict: conflict)
+            }
+        )
+    }
+
+    func resolvePersistentQueueItems(
+        group: QueueResolutionGroup,
+        selection: QueueResolutionSelection
+    ) async throws {
+        let application = try QueueResolutionApplication.apply(group: group, selection: selection).get()
+        let intents = application.resolvedDrafts.mapValues { draft in
+            DurableQueueItemIntent(draft: draft)
+        }
+        let trace = DurableQueueResolutionTrace(
+            conflictID: group.conflict.stableID,
+            resolutionID: application.resolution.id,
+            qualityOutcome: "\(application.resolvedDrafts.values.first?.options.videoRoutePlan.qualityTitle ?? "Selected") quality",
+            fileOutcome: application.resolvedDrafts.values.first?.options.job.intermediatePolicy.createsReusableArtifacts == true
+                ? "Reusable files kept"
+                : "Reusable files removed"
+        )
+        try await durableQueueStore.resolveHeldItems(
+            Set(application.resolvedDrafts.keys),
+            intents: intents,
+            trace: trace
         )
     }
 
@@ -420,7 +462,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         switch item.state {
         case .waiting, .interrupted, .stopped, .notStarted:
             true
-        case .inspecting, .processing, .stopping, .attention, .failed, .completed:
+        case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
             false
         }
     }
@@ -498,11 +540,19 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard !hasActiveWorker || activeDurableQueueItem != nil else {
             return .rejected(.otherWorkIsActive)
         }
+        guard !persistentQueueItems.contains(where: { item in
+            if case .needsChoice = item.status {
+                return true
+            }
+            return false
+        }) else {
+            return .rejected(.unresolvedChoices)
+        }
         let candidates = persistentQueueItems.filter { item in
             switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
                 true
-            case .inspecting, .processing, .stopping, .attention, .failed, .completed:
+            case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
                 false
             }
         }
@@ -873,20 +923,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         )
     }
 
-    @discardableResult
-    func startConversionQueue(admissionItems: [SetupQueueAdmissionItem]) -> Bool {
-        let entries = admissionItems.compactMap { item -> QueueStartEntry? in
-            guard item.state == .waiting, let draft = item.currentDraft else {
-                return nil
-            }
-            return QueueStartEntry(id: item.id, draft: draft, resolutionTrace: item.resolutionTrace)
-        }
-        guard entries.count == admissionItems.count else {
-            return false
-        }
-        return startConversionQueue(entries: entries, preserveSingleEntry: true)
-    }
-
     private struct QueueStartEntry {
         let id: UUID
         let draft: ConversionDraft
@@ -907,7 +943,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
     }
 
-    private func startConversionQueue(entries: [QueueStartEntry], preserveSingleEntry: Bool) -> Bool {
+    private func startConversionQueue(entries: [QueueStartEntry], preserveSingleEntry: Bool = false) -> Bool {
         guard !hasActiveWork,
               !durableQueueStore.writesBlocked,
               !entries.isEmpty,
@@ -922,10 +958,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         if entries.count == 1, !preserveSingleEntry {
             startConversion(draft: firstEntry.draft)
             return true
-        }
-        if preserveSingleEntry {
-            activeSetupQueueItemIDs = Set(entries.map(\.id))
-            setupQueueStartFailureItemIDs = []
         }
         let groupID = UUID()
         let sourcesRequestingRemoval = Set(entries.compactMap { entry in
@@ -2672,6 +2704,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         projected.status = switch item.state {
         case .waiting, .interrupted:
             .pending
+        case .needsChoice:
+            .failed
         case .inspecting:
             .inspecting
         case .processing:
@@ -3529,13 +3563,14 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return result
         }
         completedBatchResults = results.isEmpty ? nil : results
-        activeSetupQueueItemIDs = []
     }
 
     private func queueStatus(for item: DurableConversionQueueItem) -> ConversionQueueItemStatus {
         switch item.state {
         case .waiting, .interrupted:
             .waiting
+        case .needsChoice:
+            .attention("Needs a route-quality choice")
         case .inspecting, .processing, .stopping:
             .processing
         case .attention:
@@ -3559,7 +3594,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         persistentQueueRunState = .idle
         persistentQueueControlsActive = false
         offPeakRunWindowEnd = nil
-        publishSetupQueueStartFailure()
         activeQueueItemID = nil
         titleQueueGroupID = nil
         adoptedItemIDs.removeAll()
@@ -3568,13 +3602,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableQueueStopRequested = false
         state.failTransport(message: durableQueueRuntimeDiagnostic ?? "Queue changes are unavailable.", retryable: false)
         runDeferredActionsIfIdle()
-    }
-
-    private func publishSetupQueueStartFailure() {
-        if !activeSetupQueueItemIDs.isEmpty {
-            setupQueueStartFailureItemIDs = activeSetupQueueItemIDs
-            activeSetupQueueItemIDs = []
-        }
     }
 
     private func resetQueue() {
@@ -3593,8 +3620,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableSingleJobIDs.removeAll()
         durableQueueStopRequested = false
         durableQueueRuntimeDiagnostic = nil
-        activeSetupQueueItemIDs = []
-        setupQueueStartFailureItemIDs = []
         completedBatchResults = nil
     }
 
