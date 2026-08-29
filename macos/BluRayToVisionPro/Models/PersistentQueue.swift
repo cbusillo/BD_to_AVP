@@ -127,7 +127,10 @@ struct PersistentQueueItem: Identifiable, Equatable {
     }
 
     var selectedTitleIdentity: String {
-        draft.selectedTitle?.name ?? "No title selected"
+        if let selectedTitle = draft.selectedTitle {
+            return selectedTitle.name
+        }
+        return draft.source.kind.isDiscWorkflow ? "Main movie (automatic)" : "Entire source"
     }
 
     var sourceKindName: String {

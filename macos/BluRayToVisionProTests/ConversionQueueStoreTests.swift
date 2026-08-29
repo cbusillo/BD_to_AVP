@@ -1244,6 +1244,27 @@ final class ConversionQueueStoreTests: XCTestCase {
         XCTAssertEqual(projection.sourceLocation, "/Volumes/Avatar 3D")
     }
 
+    func testPersistentQueueProjectionDescribesAutomaticAndWholeSourceSelection() throws {
+        var discItem = makeItem(ordinal: 0, origin: .singleSource)
+        discItem.intent.source = DurableQueueSource(
+            kind: ConversionSourceKind.physicalDisc.rawValue,
+            path: "/Volumes/Feature 3D",
+            displayName: "Feature 3D",
+            workerSourcePath: "/Volumes/Feature 3D",
+            mediaIdentifier: "disk4s1"
+        )
+        var fileItem = makeItem(ordinal: 0, origin: .singleSource)
+        fileItem.intent.source = DurableQueueSource(
+            kind: ConversionSourceKind.matroska.rawValue,
+            path: "/Movies/Feature.mkv",
+            displayName: "Feature.mkv",
+            workerSourcePath: "/Movies/Feature.mkv"
+        )
+
+        XCTAssertEqual(try PersistentQueueItem(item: discItem).selectedTitleIdentity, "Main movie (automatic)")
+        XCTAssertEqual(try PersistentQueueItem(item: fileItem).selectedTitleIdentity, "Entire source")
+    }
+
     private func makeItem(
         id: UUID = UUID(),
         ordinal: Int,

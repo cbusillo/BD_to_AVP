@@ -430,12 +430,38 @@ private struct PersistentQueueRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .accessibilityLabel("Source: \(item.sourceIdentity)")
-                Text(rowMetadata)
+                if compact {
+                    Text("\(item.selectedTitleIdentity) · \(item.status.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityLabel(
+                            "Selected title: \(item.selectedTitleIdentity). State: \(item.status.title)"
+                        )
+                } else {
+                    Text(item.selectedTitleIdentity)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityLabel("Selected title: \(item.selectedTitleIdentity)")
+                    HStack(spacing: 4) {
+                        Text("\(item.sourceKindName) · \(item.draft.profile.name)")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text("· \(item.status.title)")
+                            .foregroundStyle(item.status.tint)
+                            .lineLimit(1)
+                    }
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityLabel(rowAccessibilityMetadata)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(
+                        "Source kind: \(item.sourceKindName). Profile: \(item.draft.profile.name). "
+                            + "State: \(item.status.title)"
+                    )
+                }
                 if item.status.isActive, let progress {
                     if let stageFraction = progress.stageFraction {
                         ProgressView(value: stageFraction)
@@ -450,13 +476,6 @@ private struct PersistentQueueRow: View {
                 }
             }
             Spacer(minLength: 4)
-            if !compact {
-                Text(item.status.title)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(item.status.tint)
-                    .lineLimit(1)
-                    .accessibilityHidden(true)
-            }
             if item.isRestored {
                 Image(systemName: "arrow.counterclockwise.circle.fill")
                     .foregroundStyle(.orange)
@@ -492,22 +511,6 @@ private struct PersistentQueueRow: View {
         }
     }
 
-    private var rowMetadata: String {
-        if compact {
-            "\(item.selectedTitleIdentity) · \(item.status.title)"
-        } else {
-            "\(item.selectedTitleIdentity) · \(item.sourceKindName) · \(item.draft.profile.name)"
-        }
-    }
-
-    private var rowAccessibilityMetadata: String {
-        if compact {
-            "Selected title: \(item.selectedTitleIdentity). State: \(item.status.title)"
-        } else {
-            "Selected title: \(item.selectedTitleIdentity). Source kind: \(item.sourceKindName). "
-                + "Profile: \(item.draft.profile.name)"
-        }
-    }
 }
 
 struct PersistentQueueDetailView: View {
