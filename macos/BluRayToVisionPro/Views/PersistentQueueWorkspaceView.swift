@@ -974,29 +974,13 @@ struct PersistentQueueDetailView: View {
         return VStack(alignment: .leading, spacing: 10) {
             Text("Storage")
                 .font(.title3.weight(.semibold))
-            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
-                GridRow {
-                    Text("Output").foregroundStyle(.secondary)
-                    Text(forecast.outputDescription)
-                }
-                GridRow {
-                    Text("Temporary / working").foregroundStyle(.secondary)
-                    Text(forecast.temporaryWorkingDescription)
-                }
-                GridRow {
-                    Text("Retained intermediates").foregroundStyle(.secondary)
-                    Text(forecast.retainedIntermediateDescription)
-                }
-                GridRow {
-                    Text("Safety margin").foregroundStyle(.secondary)
-                    Text(forecast.safetyMarginDescription)
-                }
-                GridRow {
-                    Text("Total peak").foregroundStyle(.secondary)
-                    Text(forecast.totalPeakDescription)
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                storageDetailRow("Output", value: forecast.outputDescription)
+                storageDetailRow("Temporary / working", value: forecast.temporaryWorkingDescription)
+                storageDetailRow("Retained intermediates", value: forecast.retainedIntermediateDescription)
+                storageDetailRow("Safety margin", value: forecast.safetyMarginDescription)
+                storageDetailRow("Total peak", value: forecast.totalPeakDescription)
             }
-            .font(.callout)
             Text(forecast.assumptionDescription)
                 .font(.caption)
                 .foregroundStyle(forecast.isEstimated ? Color.secondary : Color.orange)
@@ -1005,6 +989,18 @@ struct PersistentQueueDetailView: View {
         .padding(12)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityIdentifier("persistent-queue-storage-detail")
+    }
+
+    private func storageDetailRow(_ title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 24) {
+            Text(title)
+                .foregroundStyle(.secondary)
+                .frame(width: 150, alignment: .leading)
+            Text(value)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.callout)
     }
 
     private func itemDetails(_ item: PersistentQueueItem) -> some View {
