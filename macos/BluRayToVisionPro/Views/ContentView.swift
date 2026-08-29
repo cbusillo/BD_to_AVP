@@ -138,7 +138,6 @@ struct ContentView: View {
     private var baseContent: some View {
         mainContent
         .accessibilityIdentifier("main-window-content")
-        .focusedSceneValue(\.conversionSourceSelectionAction, sourceSelectionAction)
         .focusedSceneValue(\.persistentQueueCommandActions, persistentQueueCommandActions)
         .toolbar { toolbarContent }
         .animation(.easeInOut(duration: 0.18), value: isShowingActivity)
@@ -199,8 +198,10 @@ struct ContentView: View {
                 refreshDiscs()
             }
         }
-        .onChange(of: viewModel.persistentQueueItems) { previousItems, currentItems in
-            if persistentQueueRemovalToken != nil, currentItems.count >= previousItems.count {
+        .onChange(of: viewModel.persistentQueueItems) { _, _ in
+            if let token = persistentQueueRemovalToken,
+               !viewModel.isPersistentQueueRemovalTokenValid(token)
+            {
                 persistentQueueRemovalToken = nil
             }
         }
@@ -405,35 +406,23 @@ struct ContentView: View {
     }
 
     private var persistentQueueSidebar: some View {
-        PersistentQueueSidebarView(
+        let commandState = persistentQueueCommandState
+        return PersistentQueueSidebarView(
             items: viewModel.persistentQueueItems,
             selectedID: Binding(
                 get: { viewModel.selectedPersistentQueueItemID },
                 set: viewModel.selectPersistentQueueItem
             ),
             compactRows: $compactPersistentQueueRows,
-            insertedDiscs: insertedDiscs,
+            commandState: commandState,
             makeMKVAvailable: DiscSourceDetector.makeMKVAvailable,
             activeProgress: viewModel.state.progress,
             activeElapsedText: viewModel.state.elapsedText,
-            runState: viewModel.persistentQueueRunState,
-            canStart: persistentQueueCanStart
-                && viewModel.persistentQueueRunState != .running
-                && viewModel.persistentQueueRunState != .pauseAfterCurrent
-                && !viewModel.hasActiveWorker
-                && !previewViewModel.hasActiveWorker,
-            canPauseAfterCurrent: viewModel.persistentQueueRunState == .running
-                && viewModel.hasActiveWorker,
-            canStopCurrent: (viewModel.persistentQueueRunState == .running
-                || viewModel.persistentQueueRunState == .pauseAfterCurrent)
-                && viewModel.hasActiveWorker,
-            canUndo: persistentQueueRemovalToken != nil,
-            offPeakSchedule: viewModel.offPeakSchedule,
             offPeakScheduleOutcome: viewModel.offPeakScheduleOutcome,
             offPeakScheduleErrorMessage: viewModel.offPeakScheduleErrorMessage,
             addSources: addSourcesToPersistentQueue,
             addSourceFolder: addSourceFolderToPersistentQueue,
-            addDisc: { appendSourcesToPersistentQueue([$0]) },
+            addDisc: addDiscToPersistentQueue,
             addDroppedURLs: acceptDrop,
             move: movePersistentQueueItem,
             moveRelative: movePersistentQueueItem,
@@ -461,30 +450,55 @@ struct ContentView: View {
     }
 
     private var persistentQueueCommandActions: PersistentQueueCommandActions {
-        let waitingItems = viewModel.persistentQueueItems.filter(\.canMove)
-        let selectedID = viewModel.selectedPersistentQueueItemID
-        let selectedIndex = selectedID.flatMap { id in
-            waitingItems.firstIndex(where: { $0.id == id })
-        }
-
         return PersistentQueueCommandActions(
-            canMoveUp: selectedIndex.map { $0 > waitingItems.startIndex } ?? false,
-            canMoveDown: selectedIndex.map { $0 < waitingItems.index(before: waitingItems.endIndex) } ?? false,
-            canConvertNext: selectedIndex.map { $0 > waitingItems.startIndex } ?? false,
+            state: persistentQueueCommandState,
+            addSources: addSourcesToPersistentQueue,
+            addSourceFolder: addSourceFolderToPersistentQueue,
+            addDisc: addDiscToPersistentQueue,
+            start: startPersistentQueue,
+            pauseAfterCurrent: pausePersistentQueueAfterCurrent,
+            stopCurrent: stopCurrentPersistentQueueItem,
             moveUp: { moveSelectedPersistentQueueItem(by: -1) },
             moveDown: { moveSelectedPersistentQueueItem(by: 1) },
-            convertNext: moveSelectedPersistentQueueItemNext
+            convertNext: moveSelectedPersistentQueueItemNext,
+            removeSelectedItem: removeSelectedPersistentQueueItem,
+            undoRemove: undoPersistentQueueRemoval
+        )
+    }
+
+    private var persistentQueueCommandState: PersistentQueueCommandState {
+        PersistentQueueCommandState(
+            items: viewModel.persistentQueueItems,
+            selectedItemID: viewModel.selectedPersistentQueueItemID,
+            runState: viewModel.persistentQueueRunState,
+            hasActiveWorker: viewModel.hasActiveWorker,
+            hasPreviewWorker: previewViewModel.hasActiveWorker,
+            offPeakSchedule: viewModel.offPeakSchedule,
+            insertedDiscs: insertedDiscs,
+            removalTokenIsValid: viewModel.isPersistentQueueRemovalTokenValid(persistentQueueRemovalToken)
         )
     }
 
     private func moveSelectedPersistentQueueItem(by offset: Int) {
-        guard let selectedID = viewModel.selectedPersistentQueueItemID else { return }
+        let state = persistentQueueCommandState
+        guard let selectedID = state.selectedItemID,
+              (offset == -1 ? state.canMoveUp : offset == 1 ? state.canMoveDown : false)
+        else {
+            return
+        }
         movePersistentQueueItem(selectedID, by: offset)
     }
 
     private func moveSelectedPersistentQueueItemNext() {
-        guard let selectedID = viewModel.selectedPersistentQueueItemID else { return }
+        let state = persistentQueueCommandState
+        guard state.canConvertNext, let selectedID = state.selectedItemID else { return }
         movePersistentQueueItemNext(selectedID)
+    }
+
+    private func removeSelectedPersistentQueueItem() {
+        let state = persistentQueueCommandState
+        guard state.canRemoveSelectedItem, let selectedID = state.selectedItemID else { return }
+        removePersistentQueueItem(selectedID)
     }
 
     private func resolvePersistentQueueRouteQuality(
@@ -500,25 +514,6 @@ struct ContentView: View {
         }
     }
 
-    private var persistentQueueCanStart: Bool {
-        guard !viewModel.persistentQueueItems.contains(where: { item in
-            if case .needsChoice = item.status {
-                return true
-            }
-            return false
-        }) else {
-            return false
-        }
-        return viewModel.persistentQueueItems.contains { item in
-            switch item.status {
-            case .waiting, .interrupted, .stopped, .notStarted:
-                true
-            case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
-                false
-            }
-        }
-    }
-
     private var hasEligiblePhysicalDiscItems: Bool {
         viewModel.persistentQueueItems.contains { item in
             guard item.draft.source.kind == .physicalDisc else { return false }
@@ -529,13 +524,6 @@ struct ContentView: View {
                 false
             }
         }
-    }
-
-    private var sourceSelectionAction: ConversionSourceSelectionAction? {
-        guard canSelectSource else {
-            return nil
-        }
-        return ConversionSourceSelectionAction(perform: chooseExistingSource)
     }
 
     @ToolbarContentBuilder
@@ -1027,16 +1015,6 @@ struct ContentView: View {
         refreshDiscs()
     }
 
-    private func chooseExistingSource() {
-        guard canSelectSource,
-              let sourceURL = SourcePicker.chooseExistingSource(),
-              let source = ConversionSource.infer(from: sourceURL)
-        else {
-            return
-        }
-        appendSourcesToPersistentQueue([source])
-    }
-
     private func configureExistingSource() {
         guard canSelectSource,
               let sourceURL = SourcePicker.chooseExistingSource(),
@@ -1063,6 +1041,13 @@ struct ContentView: View {
             return
         }
         appendSourcesToPersistentQueue([source])
+    }
+
+    private func addDiscToPersistentQueue(_ disc: ConversionSource) {
+        guard insertedDiscs.contains(where: { $0.url == disc.url }) else {
+            return
+        }
+        appendSourcesToPersistentQueue([disc])
     }
 
     private func appendSourcesToPersistentQueue(_ sources: [ConversionSource]) {
@@ -1247,7 +1232,13 @@ struct ContentView: View {
     }
 
     private func removePersistentQueueItem(_ itemID: UUID) {
+        guard viewModel.persistentQueueItems.first(where: { $0.id == itemID })?.canRemove == true else {
+            return
+        }
         Task { @MainActor in
+            guard viewModel.persistentQueueItems.first(where: { $0.id == itemID })?.canRemove == true else {
+                return
+            }
             do {
                 persistentQueueRemovalToken = try await viewModel.removePersistentQueueItems([itemID])
             } catch {
@@ -1269,6 +1260,10 @@ struct ContentView: View {
     private func undoPersistentQueueRemoval() {
         guard let token = persistentQueueRemovalToken else { return }
         Task { @MainActor in
+            guard viewModel.isPersistentQueueRemovalTokenValid(token) else {
+                persistentQueueRemovalToken = nil
+                return
+            }
             do {
                 try await viewModel.restorePersistentQueueItems(token)
                 persistentQueueRemovalToken = nil
@@ -1281,6 +1276,9 @@ struct ContentView: View {
 
     private func startPersistentQueue() {
         Task { @MainActor in
+            guard persistentQueueCommandState.canStart else {
+                return
+            }
             guard !previewViewModel.hasActiveWorker else {
                 persistentQueueErrorMessage = "Wait for the preview to finish before starting the queue."
                 return
@@ -1360,12 +1358,18 @@ struct ContentView: View {
     }
 
     private func pausePersistentQueueAfterCurrent() {
+        guard persistentQueueCommandState.canPauseAfterCurrent else {
+            return
+        }
         if case let .rejected(rejection) = viewModel.pausePersistentQueueAfterCurrent() {
             persistentQueueErrorMessage = persistentQueueCommandMessage(for: rejection)
         }
     }
 
     private func stopCurrentPersistentQueueItem() {
+        guard persistentQueueCommandState.canStopCurrent else {
+            return
+        }
         if case let .rejected(rejection) = viewModel.stopCurrentPersistentQueueItem() {
             persistentQueueErrorMessage = persistentQueueCommandMessage(for: rejection)
         }

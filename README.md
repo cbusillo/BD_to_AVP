@@ -230,15 +230,20 @@ Choice** instead of losing the unresolved route-quality decision.
 
 Waiting videos can be selected, edited, dragged into a new order, or arranged
 from the menu bar's **Queue** menu and the sidebar's **Arrange** menu. The Queue
-commands include **Move Up** (`⌘⌥↑`), **Move Down** (`⌘⌥↓`), and **Convert
-Next** (`⌘⌥↩`). They can also be removed and restored with Undo. Locked rows
-explain why they cannot move or edit, while active and completed settings remain
-locked. Work restored after an app restart never starts automatically; interrupted or
-stopped videos require an explicit **Resume Queue**, **Restart Safely**, or
-recovery choice. **Pause After Current** lets the active video finish without
-starting another, while **Stop Current** cancels only the active video and
-leaves pending work waiting for an explicit resume. Runtime failures and
-recovery decisions remain parked according to their existing queue policy.
+menu also provides source and detected-disc admission, **Start Queue** or
+**Resume Queue**, **Pause After Current**, **Stop Current**, selected-item
+**Remove**, and **Undo Remove**. Arrangement commands include **Move Up**
+(`⌘⌥↑`), **Move Down** (`⌘⌥↓`), and **Convert Next** (`⌘⌥↩`); **Add Sources…**
+uses `⌘O`. Command titles and availability track the same durable queue state
+as the sidebar, and Queue actions disable when another app scene such as
+Settings is active. Locked rows explain why they cannot move, edit, or be
+removed, while active and completed settings remain locked. Work restored after
+an app restart never starts automatically; interrupted or stopped videos
+require an explicit **Resume Queue**, **Restart Safely**, or recovery choice.
+**Pause After Current** lets the active video finish without starting another,
+while **Stop Current** cancels only the active video and leaves pending work
+waiting for an explicit resume. Runtime failures and recovery decisions remain
+parked according to their existing queue policy.
 
 Use **Start Later…** to arm one editable, cancellable off-peak window for the
 queue. The app must remain open: it does not schedule a system wake and does

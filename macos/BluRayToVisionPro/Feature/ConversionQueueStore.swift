@@ -58,6 +58,13 @@ final class ConversionQueueStore: ObservableObject {
         document.items
     }
 
+    func isRemovalTokenValid(_ token: PersistentQueueRemovalToken?) -> Bool {
+        guard let token, !token.isEmpty else {
+            return false
+        }
+        return token.revision == documentRevision
+    }
+
     func appendAdmittedItems(_ newItems: [DurableConversionQueueItem]) async throws {
         guard !newItems.isEmpty else {
             return

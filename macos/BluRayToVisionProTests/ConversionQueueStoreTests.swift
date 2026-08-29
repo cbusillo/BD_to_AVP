@@ -544,7 +544,9 @@ final class ConversionQueueStoreTests: XCTestCase {
         try await store.replaceItems(items)
 
         let token = try await store.removeWaitingItems([items[1].id])
+        XCTAssertTrue(store.isRemovalTokenValid(token))
         try await store.moveWaitingItemNext(items[2].id)
+        XCTAssertFalse(store.isRemovalTokenValid(token))
 
         await XCTAssertThrowsErrorAsync(try await store.restoreRemovedItems(token)) { error in
             XCTAssertEqual(error as? ConversionQueueStoreError, .staleRemovalToken)

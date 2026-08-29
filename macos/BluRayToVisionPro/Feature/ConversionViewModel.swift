@@ -213,6 +213,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableQueueStore.writesBlocked
     }
 
+    func isPersistentQueueRemovalTokenValid(_ token: PersistentQueueRemovalToken?) -> Bool {
+        durableQueueStore.isRemovalTokenValid(token)
+    }
+
     func selectPersistentQueueItem(_ itemID: UUID?) {
         selectedPersistentQueueItemID = itemID.flatMap { selectedID in
             persistentQueueItems.contains(where: { $0.id == selectedID }) ? selectedID : nil
