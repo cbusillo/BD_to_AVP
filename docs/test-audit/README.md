@@ -17,12 +17,19 @@ refresh or check instead of receiving an implicit default.
   requirements are intentional costs, not removal signals.
 - **0 `replace`, `consolidate`, or `remove`:** no behavioral counterexample,
   mutation proof, or historical regression evidence supports a change.
-- **High-confidence implementation candidates:** none.
+- **1 resolved high-confidence candidate:** `tests/test_process_runner.py`
+  depended on an earlier module importing `unittest.mock`; the focused fix now
+  imports `mock` explicitly and preserves all 45 assertions.
+- **1 non-actionable observation:** one release-milestone test run reported a
+  temporary-directory `.git` cleanup race after its assertions completed. The
+  module passed immediately afterward, passed five consecutive focused reruns,
+  and passed the final complete isolation sweep, so no speculative fix was made.
 
-The current evidence supports closing milestone #10 as **no action after its
-required final review**, unless later review provides a concrete candidate with
-the required proof. Neither test age, static brittleness signals, nor zero
-direct string references independently justify a non-retention decision.
+The current evidence supports closing milestone #10 after the exact-head
+isolation sweep, broad gates, and required final reviews remain green. No
+evidence-backed replacement, consolidation, or removal candidate remains.
+Neither test age, static brittleness signals, nor zero direct string references
+independently justify a non-retention decision.
 
 ## Refresh And Check
 
@@ -50,9 +57,10 @@ hostname, username, private paths, credentials, or device IDs.
 `classifications-v1.json` keeps cohorts compact while listing every member path
 literally. Each cohort provides one allowed classification, a file-expanded
 rationale, and IDs from the evidence catalog. The generated JSON expands these
-into `classification`, `classification_rationale`, `classification_evidence`,
-and `classification_cohort` on every row; generated Markdown includes the same
-rationale and evidence IDs plus an evidence catalog table.
+into `classification`, `classification_rationale`,
+`classification_evidence_ids`, and `classification_cohort` on every row;
+generated Markdown includes the same rationale and evidence IDs plus one shared
+evidence catalog table.
 
 Allowed classifications:
 
@@ -77,6 +85,10 @@ The point-in-time capture is for exact start SHA
   wall time).
 - Support diagnostics passed 23 tests in 164ms test duration (2.19 seconds
   wall time).
+- A 106-module isolated Python sweep reproduced one import-order failure in
+  `tests/test_process_runner.py`; after the focused import fix, that module
+  passed all 45 tests independently. The final exact-head sweep passed all 106
+  modules, covering 1,971 tests with 3 skips in 163.20 seconds wall time.
 - Matching `main` CI run `33264262845` succeeded.
 
 Local and CI timings are not compared across runners. The generated inventory

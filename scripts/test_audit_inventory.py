@@ -158,7 +158,7 @@ def load_classifications(
             classifications[path] = {
                 "classification": classification,
                 "classification_rationale": rationale.format(path=path),
-                "classification_evidence": [normalized_evidence[evidence_id] for evidence_id in evidence_ids],
+                "classification_evidence_ids": list(evidence_ids),
                 "classification_cohort": cohort_id,
             }
     missing_paths = sorted(expected.difference(classifications))
@@ -346,14 +346,12 @@ def _count_cases(relative_path: str, text: str) -> int:
 
 def _signals(text: str) -> list[dict[str, Any]]:
     lines = text.splitlines()
-    return [
-        {
-            "signal": signal,
-            "line_numbers": [line_number for line_number, line in enumerate(lines, 1) if re.search(pattern, line)],
-        }
-        for signal, pattern in SIGNAL_PATTERNS
-        if any(re.search(pattern, line) for line in lines)
-    ]
+    signals = []
+    for signal, pattern in SIGNAL_PATTERNS:
+        occurrences = sum(bool(re.search(pattern, line)) for line in lines)
+        if occurrences:
+            signals.append({"signal": signal, "occurrences": occurrences})
+    return signals
 
 
 def _requirements(relative_path: str, text: str) -> list[str]:
@@ -585,6 +583,14 @@ def build_inventory(
                         "wall_duration_seconds": 2.19,
                     },
                 ],
+                "python_module_isolation": {
+                    "status": "passed",
+                    "module_count": 106,
+                    "test_count": 1971,
+                    "skipped_count": 3,
+                    "wall_duration_seconds": 163.20,
+                    "resolved_candidate": "process-runner-isolated-import",
+                },
                 "excluded_identity_fields": ["hostname", "username", "private paths", "credentials", "device IDs"],
             },
             "ci": {
@@ -613,7 +619,9 @@ def build_inventory(
         },
         "classification_summary": {
             "source": _relative_display_path(root, _root_path(root, classifications_path)),
+            "evidence_catalog": classification_source["evidence_catalog"],
             "high_confidence_candidates": classification_source["candidate_summary"]["high_confidence_candidates"],
+            "review_observations": classification_source["candidate_summary"].get("review_observations", []),
             "milestone_10_disposition": classification_source["candidate_summary"]["milestone_10_disposition"],
         },
         "findings": {
@@ -699,6 +707,7 @@ def render_markdown(document: dict[str, Any]) -> str:
                 if not classification_summary["high_confidence_candidates"]
                 else "- High-confidence implementation candidates are recorded in the JSON artifact."
             ),
+            f"- Non-actionable review observations: **{len(classification_summary['review_observations'])}**.",
             f"- Milestone #10 disposition: {classification_summary['milestone_10_disposition']['outcome']}.",
             "",
             "## Execution Evidence",
@@ -735,11 +744,7 @@ def render_markdown(document: dict[str, Any]) -> str:
             "| --- | --- | --- |",
         ]
     )
-    evidence: dict[str, dict[str, Any]] = {}
-    for row in [*document["test_files"], *document["support_fixtures"]]:
-        for item in row["classification_evidence"]:
-            evidence[item["id"]] = item
-    for evidence_id, item in sorted(evidence.items()):
+    for evidence_id, item in sorted(classification_summary["evidence_catalog"].items()):
         source_paths = ", ".join(f"`{path}`" for path in item["source_paths"])
         lines.append(f"| `{evidence_id}` | {item['description']} | {source_paths} |")
     lines.extend(
@@ -754,8 +759,11 @@ def render_markdown(document: dict[str, Any]) -> str:
     )
     for row in document["test_files"]:
         requirements = "; ".join(row["special_requirements"]) or "—"
-        signals = ", ".join(signal["signal"] for signal in row["static_brittleness_signals"]) or "—"
-        evidence_ids = ", ".join(f"`{item['id']}`" for item in row["classification_evidence"])
+        signals = (
+            ", ".join(f"{signal['signal']} ({signal['occurrences']})" for signal in row["static_brittleness_signals"])
+            or "—"
+        )
+        evidence_ids = ", ".join(f"`{evidence_id}`" for evidence_id in row["classification_evidence_ids"])
         lines.append(
             f"| `{row['path']}` | {row['language']} | `{row['bundle']}` | {row['test_case_count']} | "
             f"`{row['classification']}` | {row['classification_rationale']} | {evidence_ids} | "
@@ -771,7 +779,7 @@ def render_markdown(document: dict[str, Any]) -> str:
         ]
     )
     for row in document["support_fixtures"]:
-        evidence_ids = ", ".join(f"`{item['id']}`" for item in row["classification_evidence"])
+        evidence_ids = ", ".join(f"`{evidence_id}`" for evidence_id in row["classification_evidence_ids"])
         lines.append(
             f"| `{row['path']}` | {row['format']} | `{row['classification']}` | "
             f"{row['classification_rationale']} | {evidence_ids} |"

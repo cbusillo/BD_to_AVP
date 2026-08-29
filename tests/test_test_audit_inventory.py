@@ -131,7 +131,11 @@ class TestTestAuditInventory(unittest.TestCase):
             document = build_inventory(root, baseline_sha="baseline")
             self.assertEqual(document["summary"]["classification_counts"], {"valuable": 2})
             self.assertEqual(document["test_files"][0]["classification"], "valuable")
-            self.assertEqual(document["test_files"][0]["classification_evidence"][0]["id"], "ci")
+            self.assertEqual(document["test_files"][0]["classification_evidence_ids"], ["ci"])
+            self.assertEqual(
+                document["classification_summary"]["evidence_catalog"]["ci"]["description"],
+                "maintained lane",
+            )
             self.assertIn("Classification Evidence", render_markdown(document))
 
     def test_classifications_reject_missing_and_unknown_paths(self) -> None:

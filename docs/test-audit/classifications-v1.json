@@ -12,10 +12,11 @@
     },
     "ci-python-discovery": {
       "description": "The maintained CI Python discovery lane executes these repository tests.",
-      "source_paths": [
-        ".github/workflows/ci.yml",
-        "tests"
-      ]
+      "source_paths": [".github/workflows/ci.yml", "tests"]
+    },
+    "python-module-isolation-sweep": {
+      "description": "Every Python test module was executed independently; one hidden import-order dependency was reproduced and fixed without relaxing behavior.",
+      "source_paths": ["tests/test_process_runner.py"]
     },
     "ci-support-diagnostics": {
       "description": "The maintained CI support-diagnostics check executes this service contract suite.",
@@ -81,10 +82,29 @@
     }
   },
   "candidate_summary": {
-    "high_confidence_candidates": [],
+    "high_confidence_candidates": [
+      {
+        "id": "process-runner-isolated-import",
+        "path": "tests/test_process_runner.py",
+        "status": "resolved",
+        "finding": "The module passed in full discovery but failed when executed alone because unittest.mock was only available after another module imported the submodule.",
+        "resolution": "Import mock explicitly from unittest and use the explicit binding.",
+        "proof": "The 106-module isolation sweep found the single failure; `uv run python -m unittest tests.test_process_runner` then passed all 45 tests after the focused fix.",
+        "commit": "bc71c18"
+      }
+    ],
+    "review_observations": [
+      {
+        "id": "release-milestone-tempdir-cleanup-race",
+        "path": "tests/test_release_milestone_context.py",
+        "status": "not reproduced",
+        "finding": "One isolated sweep ended with TemporaryDirectory cleanup reporting a non-empty .git directory after all test assertions completed.",
+        "follow_up": "The module passed an immediate rerun, five consecutive focused reruns, and the final 106-module isolation sweep. No code change is justified without reproducible evidence."
+      }
+    ],
     "milestone_10_disposition": {
-      "outcome": "Close no-action after the required final review unless new counterexample, mutation proof, or historical regression evidence produces a candidate.",
-      "rationale": "This classification slice found no evidence-backed replace, consolidate, or remove candidate. Static signals, age, and direct-string-reference counts are not removal evidence."
+      "outcome": "Close after final review if the exact-head isolation sweep and broad gates remain green.",
+      "rationale": "The audit produced one independently revertible import-order fix. All remaining rows are retained as valuable or accepted maintenance cost; no evidence-backed replace, consolidate, or remove candidate remains."
     }
   },
   "cohorts": [
@@ -92,9 +112,7 @@
       "id": "swift-app-unit-direct-contracts",
       "classification": "valuable",
       "rationale": "{path} runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence.",
-      "evidence_ids": [
-        "ci-macos-app-unit"
-      ],
+      "evidence_ids": ["ci-macos-app-unit"],
       "paths": [
         "macos/BluRayToVisionProTests/ActivityDrawerRenderTests.swift",
         "macos/BluRayToVisionProTests/AppDelegateTests.swift",
@@ -128,10 +146,7 @@
       "id": "swift-app-unit-coordinated-boundaries",
       "classification": "accepted-cost",
       "rationale": "{path} covers a CI-executed conversion, diagnostics, preview, or worker boundary with fixtures, process coordination, or environment setup. That setup cost is accepted because no behavioral replacement or removal proof exists.",
-      "evidence_ids": [
-        "ci-macos-app-unit",
-        "media-hardware-contract"
-      ],
+      "evidence_ids": ["ci-macos-app-unit", "media-hardware-contract"],
       "paths": [
         "macos/BluRayToVisionProTests/ConversionQueueStoreTests.swift",
         "macos/BluRayToVisionProTests/ConversionViewModelTests.swift",
@@ -167,22 +182,14 @@
       "id": "support-diagnostics-service-contract",
       "classification": "valuable",
       "rationale": "{path} is the maintained support-diagnostics service contract suite executed by CI; its fixture and request coverage protects a separately deployed interface.",
-      "evidence_ids": [
-        "ci-support-diagnostics",
-        "structured-fixture-contract"
-      ],
-      "paths": [
-        "support-diagnostics/test/diagnostic-service.test.ts"
-      ]
+      "evidence_ids": ["ci-support-diagnostics", "structured-fixture-contract"],
+      "paths": ["support-diagnostics/test/diagnostic-service.test.ts"]
     },
     {
       "id": "python-release-security-workflow-contracts",
       "classification": "valuable",
       "rationale": "{path} protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change.",
-      "evidence_ids": [
-        "ci-python-discovery",
-        "release-security-contract"
-      ],
+      "evidence_ids": ["ci-python-discovery", "release-security-contract"],
       "paths": [
         "tests/test_beta3_recovery_evidence.py",
         "tests/test_cancelled_release_attempt.py",
@@ -219,10 +226,7 @@
       "id": "python-media-hardware-and-quality-qualification",
       "classification": "accepted-cost",
       "rationale": "{path} covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence.",
-      "evidence_ids": [
-        "ci-python-discovery",
-        "media-hardware-contract"
-      ],
+      "evidence_ids": ["ci-python-discovery", "media-hardware-contract"],
       "paths": [
         "tests/test_apple_vision_ocr.py",
         "tests/test_direct_mv_hevc_anchors.py",
@@ -265,12 +269,17 @@
       ]
     },
     {
+      "id": "python-process-runner-isolation-contract",
+      "classification": "valuable",
+      "rationale": "{path} protects process and pipeline behavior in the maintained Python lane. Independent module execution exposed and verified the removal of a hidden unittest.mock import-order dependency without weakening any assertion.",
+      "evidence_ids": ["ci-python-discovery", "python-module-isolation-sweep"],
+      "paths": ["tests/test_process_runner.py"]
+    },
+    {
       "id": "python-direct-product-contracts",
       "classification": "valuable",
       "rationale": "{path} exercises a maintained Python product, parser, configuration, GUI, process, or validation contract in the authoritative discovery lane. No age, static-signal, or direct-reference observation is treated as removal evidence.",
-      "evidence_ids": [
-        "ci-python-discovery"
-      ],
+      "evidence_ids": ["ci-python-discovery"],
       "paths": [
         "tests/test_audio.py",
         "tests/test_audio_selection.py",
@@ -297,7 +306,6 @@
         "tests/test_preview.py",
         "tests/test_process_audio.py",
         "tests/test_process_preflight.py",
-        "tests/test_process_runner.py",
         "tests/test_spatial_video_metadata.py",
         "tests/test_storage_capacity.py",
         "tests/test_subtitles.py",
@@ -316,21 +324,14 @@
       "id": "audit-generator-contract",
       "classification": "valuable",
       "rationale": "{path} verifies the bounded audit generator itself, including deterministic artifacts and exact classification coverage. It is an intentional operational control rather than a product behavior candidate.",
-      "evidence_ids": [
-        "ci-python-discovery",
-        "audit-generator-contract"
-      ],
-      "paths": [
-        "tests/test_test_audit_inventory.py"
-      ]
+      "evidence_ids": ["ci-python-discovery", "audit-generator-contract"],
+      "paths": ["tests/test_test_audit_inventory.py"]
     },
     {
       "id": "native-worker-versioned-fixtures",
       "classification": "valuable",
       "rationale": "{path} is a versioned native-worker protocol fixture. Retain it to preserve decoding compatibility for the named message shape; fixture age or low direct-reference counts are not removal evidence.",
-      "evidence_ids": [
-        "worker-protocol-fixture-contract"
-      ],
+      "evidence_ids": ["worker-protocol-fixture-contract"],
       "paths": [
         "tests/fixtures/native_worker_audio_fallback_warning_v10.json",
         "tests/fixtures/native_worker_audio_fallback_warning_v11.json",
@@ -399,9 +400,7 @@
       "id": "other-structured-fixtures",
       "classification": "valuable",
       "rationale": "{path} is a named structured fixture for a maintained audio, observability, profile, or support-diagnostics contract. No repository evidence supports replacing or removing it.",
-      "evidence_ids": [
-        "structured-fixture-contract"
-      ],
+      "evidence_ids": ["structured-fixture-contract"],
       "paths": [
         "tests/fixtures/multilingual_audio_selection_v1.json",
         "tests/fixtures/observability_event_v1.json",
