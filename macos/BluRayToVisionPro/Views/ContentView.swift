@@ -1232,14 +1232,11 @@ struct ContentView: View {
     }
 
     private func removePersistentQueueItem(_ itemID: UUID) {
-        let state = persistentQueueCommandState
-        guard state.selectedItemID == itemID, state.canRemoveSelectedItem else {
+        guard viewModel.persistentQueueItems.first(where: { $0.id == itemID })?.canRemove == true else {
             return
         }
         Task { @MainActor in
-            guard persistentQueueCommandState.selectedItemID == itemID,
-                  persistentQueueCommandState.canRemoveSelectedItem
-            else {
+            guard viewModel.persistentQueueItems.first(where: { $0.id == itemID })?.canRemove == true else {
                 return
             }
             do {

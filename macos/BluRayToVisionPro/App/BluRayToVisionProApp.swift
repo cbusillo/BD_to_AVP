@@ -195,20 +195,32 @@ private struct PersistentQueueCommands: Commands {
             .keyboardShortcut(.return, modifiers: [.command, .option])
             .disabled(actions?.state.canConvertNext != true)
 
-            if let reason = actions?.state.selectedItemLockReason {
-                Text("Arrangement unavailable: \(reason)")
-                    .foregroundStyle(.secondary)
-            } else if actions?.state.selectedItemID == nil {
-                Text("Select a waiting item to arrange it.")
-                    .foregroundStyle(.secondary)
+            if let actions {
+                if let reason = actions.state.selectedItemLockReason {
+                    Text("Arrangement unavailable: \(reason)")
+                        .foregroundStyle(.secondary)
+                } else if actions.state.selectedItemID == nil {
+                    Text("Select a waiting item to arrange it.")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Divider()
 
-            Button("Remove Selected Item", role: .destructive) {
+            Button("Remove", role: .destructive) {
                 actions?.removeSelectedItem()
             }
             .disabled(actions?.state.canRemoveSelectedItem != true)
+
+            if let actions {
+                if let reason = actions.state.selectedItemRemovalLockReason {
+                    Text("Removal unavailable: \(reason)")
+                        .foregroundStyle(.secondary)
+                } else if actions.state.selectedItemID == nil {
+                    Text("Select an item to remove it.")
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             Button("Undo Remove") {
                 actions?.undoRemove()

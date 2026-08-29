@@ -20,6 +20,13 @@ final class PersistentQueueCommandStateTests: XCTestCase {
         let first = makeItem(ordinal: 0, status: .waiting)
         let second = makeItem(ordinal: 1, status: .waiting)
 
+        let singleState = makeState(items: [first], selectedItemID: first.id)
+        XCTAssertTrue(singleState.canStart)
+        XCTAssertTrue(singleState.canRemoveSelectedItem)
+        XCTAssertFalse(singleState.canMoveUp)
+        XCTAssertFalse(singleState.canMoveDown)
+        XCTAssertFalse(singleState.canConvertNext)
+
         let firstState = makeState(items: [first, second], selectedItemID: first.id)
         XCTAssertTrue(firstState.canStart)
         XCTAssertFalse(firstState.canMoveUp)
@@ -74,6 +81,10 @@ final class PersistentQueueCommandStateTests: XCTestCase {
         XCTAssertFalse(completedState.canStart)
         XCTAssertFalse(completedState.canRemoveSelectedItem)
         XCTAssertNotNil(completedState.selectedItemLockReason)
+        XCTAssertEqual(
+            completedState.selectedItemRemovalLockReason,
+            "Completed items are removed with Clear Completed."
+        )
 
         let stoppedState = makeState(items: [stopped], selectedItemID: stopped.id)
         XCTAssertTrue(stoppedState.canStart)
@@ -83,6 +94,7 @@ final class PersistentQueueCommandStateTests: XCTestCase {
         XCTAssertFalse(unresolvedState.canStart)
         XCTAssertTrue(unresolvedState.canRemoveSelectedItem)
         XCTAssertNotNil(unresolvedState.selectedItemLockReason)
+        XCTAssertNil(unresolvedState.selectedItemRemovalLockReason)
     }
 
     func testOffPeakScheduleAndInsertedDiscAreReflectedInState() {

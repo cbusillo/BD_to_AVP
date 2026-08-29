@@ -213,6 +213,19 @@ struct PersistentQueueItem: Identifiable, Equatable {
         }
     }
 
+    var queueRemovalLockReason: String? {
+        switch status {
+        case .inspecting, .processing:
+            "The active item cannot be removed until it finishes or stops."
+        case .stopping:
+            "This item cannot be removed until it has stopped."
+        case .completed:
+            "Completed items are removed with Clear Completed."
+        case .waiting, .needsChoice, .interrupted, .attention, .failed, .stopped, .notStarted:
+            nil
+        }
+    }
+
     var canRetry: Bool {
         switch status {
         case .interrupted, .attention:
@@ -242,6 +255,7 @@ struct PersistentQueueCommandState: Equatable {
     let canRemoveSelectedItem: Bool
     let canUndo: Bool
     let selectedItemLockReason: String?
+    let selectedItemRemovalLockReason: String?
 
     init(
         items: [PersistentQueueItem],
@@ -312,6 +326,7 @@ struct PersistentQueueCommandState: Equatable {
         canRemoveSelectedItem = selectedItem?.canRemove == true
         canUndo = removalTokenIsValid
         selectedItemLockReason = selectedItem?.queueManipulationLockReason
+        selectedItemRemovalLockReason = selectedItem?.queueRemovalLockReason
     }
 }
 
