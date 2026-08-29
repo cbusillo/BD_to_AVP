@@ -62,6 +62,9 @@ final class StoragePreflightViewModelTests: XCTestCase {
         while queueStore.items.contains(where: { $0.state == .waiting || $0.state == .processing }) {
             await Task.yield()
         }
+        while viewModel.persistentQueueCompletionRevision == 0 {
+            await Task.yield()
+        }
 
         XCTAssertEqual(workerFactory.count, 1)
         XCTAssertEqual(queueStore.items[0].failure?.code, "destination_unavailable")
