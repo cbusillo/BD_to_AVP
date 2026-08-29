@@ -8,6 +8,7 @@ import time
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from unittest import mock
 
 from bd_to_avp.observability import (
     ObservabilityContext,
@@ -690,7 +691,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
         runner = ProcessPipelineRunner(exit_grace_seconds=0.1)
 
         with (
-            unittest.mock.patch.object(runner, "_join_upstream_stages", side_effect=cleanup_error),
+            mock.patch.object(runner, "_join_upstream_stages", side_effect=cleanup_error),
             self.assertRaises(ProcessPipelineError) as raised,
         ):
             runner.run(stages)
