@@ -54,7 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        await Self.notificationPresentationOptions(isActive: NSApp.isActive)
+        let isActive = await MainActor.run { NSApp.isActive }
+        return Self.notificationPresentationOptions(isActive: isActive)
     }
 
     nonisolated func userNotificationCenter(

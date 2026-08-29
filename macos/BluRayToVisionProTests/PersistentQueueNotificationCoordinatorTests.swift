@@ -79,22 +79,51 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(delivery.deliveredRequests.first?.body, "1 completed.")
     }
 
-    func testTerminalPausedSessionResetsBeforeNewRun() async throws {
+    func testTerminalPausedSessionResetsBeforeStoreFirstRetry() async throws {
         let delivery = CapturingQueueNotificationDelivery()
         let settings = makeSettings(finish: true, attention: true)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         let first = try makeItem(ordinal: 0, state: .waiting)
         let firstFailed = try first.replacingStatus(.failed)
-        let second = try makeItem(ordinal: 1, state: .waiting)
-        let secondFailed = try second.replacingStatus(.failed)
+        let retried = try firstFailed.replacingStatus(.waiting)
+        let completed = try retried.replacingStatus(.completed)
 
         coordinator.observe(items: [first], runState: .running)
         coordinator.observe(items: [firstFailed], runState: .pauseAfterCurrent)
         coordinator.observe(items: [firstFailed], runState: .paused)
-        coordinator.observe(items: [firstFailed, second], runState: .running)
-        coordinator.observe(items: [firstFailed, secondFailed], runState: .running)
+        coordinator.observe(items: [retried], runState: .paused)
+        coordinator.observe(items: [retried], runState: .running)
+        coordinator.observe(items: [completed], runState: .running)
         coordinator.observe(
-            items: [firstFailed, secondFailed],
+            items: [completed],
+            runState: .idle,
+            completionRevision: 1
+        )
+        await Task.yield()
+
+        XCTAssertEqual(
+            delivery.deliveredRequests.map(\.title),
+            ["Queue Needs Attention", "Queue Finished"]
+        )
+        XCTAssertEqual(delivery.deliveredRequests.last?.body, "1 completed.")
+    }
+
+    func testTerminalPauseAfterCurrentSessionResetsBeforeStoreFirstRetry() async throws {
+        let delivery = CapturingQueueNotificationDelivery()
+        let settings = makeSettings(finish: true, attention: true)
+        let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
+        let first = try makeItem(ordinal: 0, state: .waiting)
+        let firstFailed = try first.replacingStatus(.failed)
+        let retried = try firstFailed.replacingStatus(.waiting)
+        let failedAgain = try retried.replacingStatus(.failed)
+
+        coordinator.observe(items: [first], runState: .running)
+        coordinator.observe(items: [firstFailed], runState: .pauseAfterCurrent)
+        coordinator.observe(items: [retried], runState: .pauseAfterCurrent)
+        coordinator.observe(items: [retried], runState: .running)
+        coordinator.observe(items: [failedAgain], runState: .running)
+        coordinator.observe(
+            items: [failedAgain],
             runState: .idle,
             completionRevision: 1
         )

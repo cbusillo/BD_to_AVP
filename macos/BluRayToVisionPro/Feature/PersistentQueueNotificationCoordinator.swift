@@ -78,14 +78,6 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
         )
         defer { lastSnapshot = snapshot }
 
-        if let session,
-           lastSnapshot.runState == .paused,
-           runState == .running,
-           sessionHasNoPendingItems(session, in: snapshot.items)
-        {
-            self.session = nil
-        }
-
         if session == nil,
            lastSnapshot.runState != .running,
            runState == .running
@@ -108,6 +100,11 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
             session = nil
         } else if runState == .idle, lastSnapshot.runState != .idle {
             session = nil
+        } else if runState != .running,
+                  let session,
+                  sessionHasNoPendingItems(session, in: snapshot.items)
+        {
+            self.session = nil
         }
     }
 
