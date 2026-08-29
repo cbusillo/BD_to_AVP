@@ -245,6 +245,16 @@ while **Stop Current** cancels only the active video and leaves pending work
 waiting for an explicit resume. Runtime failures and recovery decisions remain
 parked according to their existing queue policy.
 
+The sidebar includes a compact **Results** strip once durable outcomes exist,
+with count buttons for completed, failed, and needs-action items. Needs action
+groups choices, interrupted work, and recovery decisions separately from failed
+items; selecting a count jumps to the first matching queued item.
+
+Queue notifications are optional and default off in Settings. The app can notify
+when a queue run finishes and/or when a queued item first needs attention during
+that run. macOS notification text is count-only: source names, file paths,
+destinations, technical details, and failure text stay inside the app.
+
 The queue also shows a coarse storage forecast grouped by destination. Each
 forecast separates estimated output, peak temporary/working space, retained
 intermediates, a visible safety margin, and total peak space. Forecasts use

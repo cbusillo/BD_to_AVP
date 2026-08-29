@@ -27,8 +27,8 @@ struct SettingsView: View {
             minWidth: 820,
             idealWidth: 900,
             maxWidth: .infinity,
-            minHeight: 560,
-            idealHeight: 680,
+            minHeight: 620,
+            idealHeight: 700,
             maxHeight: .infinity
         )
     }
@@ -74,6 +74,15 @@ private struct GeneralSettingsPane: View {
                 Toggle("Reveal the output in Finder", isOn: $settings.revealOutput)
                 Toggle("Play a sound", isOn: $settings.playSound)
                 Toggle("Keep the Mac awake while converting", isOn: $settings.keepAwake)
+            }
+
+            Section("Queue Notifications") {
+                Toggle("Notify when the queue finishes", isOn: $settings.notifyWhenQueueFinishes)
+                Toggle("Notify when a queued item needs attention", isOn: $settings.notifyWhenQueueNeedsAttention)
+                Text("Notifications include queue counts only. Source names, file paths, destinations, and error details stay in the app.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)

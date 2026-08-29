@@ -11,6 +11,8 @@ final class AppSettings: ObservableObject {
         static let showTechnicalDetails = "native.showTechnicalDetails"
         static let keepIntermediateFiles = "native.keepIntermediateFiles"
         static let useSoftwareEncoder = "native.useSoftwareEncoder"
+        static let notifyWhenQueueFinishes = "native.notifyWhenQueueFinishes"
+        static let notifyWhenQueueNeedsAttention = "native.notifyWhenQueueNeedsAttention"
     }
 
     private let defaults: UserDefaults
@@ -53,6 +55,18 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(useSoftwareEncoder, forKey: Key.useSoftwareEncoder) }
     }
 
+    @Published var notifyWhenQueueFinishes: Bool {
+        didSet { defaults.set(notifyWhenQueueFinishes, forKey: Key.notifyWhenQueueFinishes) }
+    }
+
+    @Published var notifyWhenQueueNeedsAttention: Bool {
+        didSet { defaults.set(notifyWhenQueueNeedsAttention, forKey: Key.notifyWhenQueueNeedsAttention) }
+    }
+
+    var queueNotificationsEnabled: Bool {
+        notifyWhenQueueFinishes || notifyWhenQueueNeedsAttention
+    }
+
     init(
         defaults: UserDefaults = .standard,
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -72,6 +86,8 @@ final class AppSettings: ObservableObject {
             legacyKeepStageFiles: defaults.object(forKey: Key.keepIntermediateFiles) as? Bool ?? false
         )
         useSoftwareEncoder = defaults.object(forKey: Key.useSoftwareEncoder) as? Bool ?? false
+        notifyWhenQueueFinishes = defaults.object(forKey: Key.notifyWhenQueueFinishes) as? Bool ?? false
+        notifyWhenQueueNeedsAttention = defaults.object(forKey: Key.notifyWhenQueueNeedsAttention) as? Bool ?? false
     }
 
     func resetAdvancedSettings() {

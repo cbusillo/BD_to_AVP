@@ -32,6 +32,7 @@ final class StoragePreflightViewModelTests: XCTestCase {
         XCTAssertEqual(workerFactory.count, 0)
         XCTAssertEqual(queueStore.items.first?.failure?.code, "destination_insufficient_capacity")
         XCTAssertEqual(viewModel.persistentQueueRunState, .paused)
+        XCTAssertEqual(viewModel.persistentQueueCompletionRevision, 0)
         XCTAssertTrue(queueStore.items.first?.attempts.isEmpty == true)
         XCTAssertEqual(itemID, queueStore.items.first?.id)
     }
@@ -61,11 +62,15 @@ final class StoragePreflightViewModelTests: XCTestCase {
         while queueStore.items.contains(where: { $0.state == .waiting || $0.state == .processing }) {
             await Task.yield()
         }
+        while viewModel.persistentQueueCompletionRevision == 0 {
+            await Task.yield()
+        }
 
         XCTAssertEqual(workerFactory.count, 1)
         XCTAssertEqual(queueStore.items[0].failure?.code, "destination_unavailable")
         XCTAssertNotEqual(queueStore.items[1].failure?.code, "destination_unavailable")
         XCTAssertTrue(preflight.paths.contains("/Volumes/Available"))
+        XCTAssertEqual(viewModel.persistentQueueCompletionRevision, 1)
     }
 
     func testRetryableStorageFailureCanBeReadoptedAfterDestinationRecovers() async throws {

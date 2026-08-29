@@ -62,6 +62,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var persistentQueueItems: [PersistentQueueItem] = []
     @Published private(set) var persistentQueueProjectionError: PersistentQueueProjectionError?
     @Published private(set) var selectedPersistentQueueItemID: UUID?
+    @Published private(set) var persistentQueueCompletionRevision: UInt = 0
     @Published private(set) var completedBatchResults: [ConversionResult]?
     @Published private(set) var durableQueueRuntimeDiagnostic: String?
     @Published private(set) var persistentQueueRunState: PersistentQueueRunState = .idle
@@ -2050,6 +2051,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             .min(by: { $0.ordinal < $1.ordinal })
         else {
             if persistentQueueRunState == .running {
+                persistentQueueCompletionRevision &+= 1
                 persistentQueueRunState = .idle
             }
             persistentQueueControlsActive = false

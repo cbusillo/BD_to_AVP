@@ -1,4 +1,5 @@
 import XCTest
+import UserNotifications
 @testable import BluRayToVisionPro
 
 final class AppDelegateTests: XCTestCase {
@@ -35,4 +36,10 @@ final class AppDelegateTests: XCTestCase {
         )
         XCTAssertFalse(AppDelegate.isAutomationSmoke(arguments: ["app"]))
     }
+
+    func testNotificationPresentationPolicyMatchesAppActivity() {
+        XCTAssertEqual(AppDelegate.notificationPresentationOptions(isActive: true), [.list])
+        XCTAssertEqual(AppDelegate.notificationPresentationOptions(isActive: false), [.banner, .list, .sound])
+    }
+
 }

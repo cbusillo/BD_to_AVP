@@ -151,6 +151,10 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
 
     func testQueueWorkspaceRendersQueueManipulationAtMinimumSidebarWidth() throws {
         let items = try makeItems()
+        let outcome = PersistentQueueOutcomeSummary(items: items)
+        XCTAssertEqual(outcome.completedCount, 2)
+        XCTAssertEqual(outcome.failedCount, 1)
+        XCTAssertEqual(outcome.needsActionCount, 1)
         XCTAssertEqual(
             items[0].queueManipulationLockReason,
             "This item is active and cannot move or be edited until it finishes."
