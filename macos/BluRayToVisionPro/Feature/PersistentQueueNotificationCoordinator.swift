@@ -47,7 +47,6 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
         )
         bind(viewModel: viewModel)
         bind(settings: settings)
-        requestAuthorizationIfNeeded()
     }
 
     init(
@@ -65,7 +64,6 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
             completionRevision: initialCompletionRevision
         )
         bind(settings: settings)
-        requestAuthorizationIfNeeded()
     }
 
     func observe(
@@ -79,6 +77,14 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
             completionRevision: completionRevision
         )
         defer { lastSnapshot = snapshot }
+
+        if let session,
+           lastSnapshot.runState == .paused,
+           runState == .running,
+           sessionHasNoPendingItems(session, in: snapshot.items)
+        {
+            self.session = nil
+        }
 
         if session == nil,
            lastSnapshot.runState != .running,
@@ -105,10 +111,6 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
         }
     }
 
-    func refreshAuthorizationPreference() {
-        requestAuthorizationIfNeeded()
-    }
-
     private func bind(viewModel: ConversionViewModel) {
         Publishers.CombineLatest3(
             viewModel.$persistentQueueItems,
@@ -127,19 +129,17 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
 
     private func bind(settings: AppSettings) {
         settings.$notifyWhenQueueFinishes
-            .sink { [weak self] _ in
-                self?.requestAuthorizationIfNeeded()
-            }
-            .store(in: &cancellables)
-        settings.$notifyWhenQueueNeedsAttention
-            .sink { [weak self] _ in
-                self?.requestAuthorizationIfNeeded()
+            .combineLatest(settings.$notifyWhenQueueNeedsAttention)
+            .map { $0 || $1 }
+            .removeDuplicates()
+            .sink { [weak self] enabled in
+                self?.requestAuthorizationIfNeeded(enabled: enabled)
             }
             .store(in: &cancellables)
     }
 
-    private func requestAuthorizationIfNeeded() {
-        guard settings.queueNotificationsEnabled, !requestedAuthorization else {
+    private func requestAuthorizationIfNeeded(enabled: Bool) {
+        guard enabled, !requestedAuthorization else {
             return
         }
         requestedAuthorization = true
@@ -218,6 +218,13 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
         items.filter { session.participatingItemIDs.contains($0.id) }
     }
 
+    private func sessionHasNoPendingItems(_ session: Session, in items: [PersistentQueueItem]) -> Bool {
+        let itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        return session.participatingItemIDs.allSatisfy { itemID in
+            itemsByID[itemID]?.isQueueNotificationTerminalForSession ?? true
+        }
+    }
+
     private func deliver(
         identifier: String,
         threadIdentifier: String,
@@ -257,9 +264,18 @@ private extension PersistentQueueItem {
 
     var isQueueNotificationAttentionTrigger: Bool {
         switch status {
-        case .attention, .failed:
+        case .needsChoice, .interrupted, .attention, .failed:
             true
-        case .waiting, .needsChoice, .inspecting, .processing, .stopping, .interrupted, .completed, .stopped, .notStarted:
+        case .waiting, .inspecting, .processing, .stopping, .completed, .stopped, .notStarted:
+            false
+        }
+    }
+
+    var isQueueNotificationTerminalForSession: Bool {
+        switch status {
+        case .needsChoice, .interrupted, .attention, .failed, .completed, .stopped, .notStarted:
+            true
+        case .waiting, .inspecting, .processing, .stopping:
             false
         }
     }

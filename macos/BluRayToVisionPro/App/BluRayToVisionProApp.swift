@@ -136,7 +136,7 @@ struct BluRayToVisionProApp: App {
             )
             .focusedSceneValue(\.persistentQueueCommandActions, nil)
         }
-        .defaultSize(width: 900, height: 680)
+        .defaultSize(width: 900, height: 700)
         .windowResizability(.contentMinSize)
     }
 

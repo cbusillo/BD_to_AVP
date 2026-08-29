@@ -79,6 +79,34 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(delivery.deliveredRequests.first?.body, "1 completed.")
     }
 
+    func testTerminalPausedSessionResetsBeforeNewRun() async throws {
+        let delivery = CapturingQueueNotificationDelivery()
+        let settings = makeSettings(finish: true, attention: true)
+        let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
+        let first = try makeItem(ordinal: 0, state: .waiting)
+        let firstFailed = try first.replacingStatus(.failed)
+        let second = try makeItem(ordinal: 1, state: .waiting)
+        let secondFailed = try second.replacingStatus(.failed)
+
+        coordinator.observe(items: [first], runState: .running)
+        coordinator.observe(items: [firstFailed], runState: .pauseAfterCurrent)
+        coordinator.observe(items: [firstFailed], runState: .paused)
+        coordinator.observe(items: [firstFailed, second], runState: .running)
+        coordinator.observe(items: [firstFailed, secondFailed], runState: .running)
+        coordinator.observe(
+            items: [firstFailed, secondFailed],
+            runState: .idle,
+            completionRevision: 1
+        )
+        await Task.yield()
+
+        XCTAssertEqual(
+            delivery.deliveredRequests.map(\.title),
+            ["Queue Needs Attention", "Queue Needs Attention", "Queue Finished"]
+        )
+        XCTAssertEqual(delivery.deliveredRequests.last?.body, "1 failed.")
+    }
+
     func testExplicitStopDoesNotSendCompletionNotification() async throws {
         let delivery = CapturingQueueNotificationDelivery()
         let settings = makeSettings(finish: true, attention: false)
@@ -107,15 +135,33 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
         let authorizationRequested = expectation(description: "authorization requested")
         delivery.authorizationRequested = authorizationRequested
         settings.notifyWhenQueueFinishes = true
-        coordinator.refreshAuthorizationPreference()
         await fulfillment(of: [authorizationRequested], timeout: 1)
         XCTAssertEqual(delivery.authorizationRequestCount, 1)
 
         settings.notifyWhenQueueNeedsAttention = true
-        coordinator.refreshAuthorizationPreference()
         await Task.yield()
         XCTAssertEqual(delivery.authorizationRequestCount, 1)
         _ = coordinator
+    }
+
+    func testRestoredFailedItemCanTriggerAttentionAfterRetry() async throws {
+        let delivery = CapturingQueueNotificationDelivery()
+        let settings = makeSettings(finish: false, attention: true)
+        let failed = try makeItem(ordinal: 0, state: .failed)
+        let waiting = try failed.replacingStatus(.waiting)
+        let coordinator = PersistentQueueNotificationCoordinator(
+            settings: settings,
+            delivery: delivery,
+            initialItems: [failed],
+            initialRunState: .idle
+        )
+
+        coordinator.observe(items: [failed], runState: .running)
+        coordinator.observe(items: [waiting], runState: .running)
+        coordinator.observe(items: [failed], runState: .running)
+        await Task.yield()
+
+        XCTAssertEqual(delivery.deliveredRequests.map(\.title), ["Queue Needs Attention"])
     }
 
     func testNotificationCopyIsPrivacySafe() async throws {
