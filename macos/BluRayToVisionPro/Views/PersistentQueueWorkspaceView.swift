@@ -897,6 +897,9 @@ struct PersistentQueueDetailView: View {
                     Button(item.isRestored ? "Restart Safely" : "Retry") { retry(item, nil) }
                 }
             }
+            if item.hasStorageDestinationFailure {
+                Button("Change Destination…") { changeDestination(item) }
+            }
             if case let .completed(result) = item.status {
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.outputPath)])
@@ -936,8 +939,10 @@ struct PersistentQueueDetailView: View {
                     HStack {
                         detailValue(item.draft.destinationURL.path, label: "Destination")
                         Button("Change…") { changeDestination(item) }
-                            .disabled(!item.isEditable)
-                            .help(item.isEditable ? "Change this waiting item's destination." : (item.queueManipulationLockReason ?? "Settings are locked."))
+                            .disabled(!item.canChangeDestination)
+                            .help(item.canChangeDestination
+                                ? "Change this item's destination."
+                                : (item.queueManipulationLockReason ?? "Settings are locked."))
                     }
                 }
                 GridRow {

@@ -1447,7 +1447,10 @@ struct ContentView: View {
         )
         Task { @MainActor in
             do {
-                try await viewModel.updatePersistentQueueItem(item.id, draft: draft)
+                try await viewModel.updatePersistentQueueItemDestination(
+                    item.id,
+                    destinationURL: draft.destinationURL
+                )
             } catch {
                 persistentQueueErrorMessage = error.localizedDescription
             }

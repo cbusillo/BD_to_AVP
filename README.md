@@ -259,8 +259,8 @@ confirmed free space for the coarse total peak estimate. Unknown or conflicting
 capacity readings are advisory and do not block an item. A disconnected or
 read-only destination parks only that item with a retryable reconnect/check-
 writable message; known insufficient space parks the item with required and
-available coarse sizes and pauses the remaining queue. Fix the destination or
-free space, then retry the parked item through its existing retry action.
+available coarse sizes and pauses the remaining queue. Reconnect the volume,
+free space, or change the parked item's destination, then resume the queue.
 
 Use **Start Later…** to arm one editable, cancellable off-peak window for the
 queue. The app must remain open: it does not schedule a system wake and does

@@ -273,6 +273,40 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
+    func updateRecoverableItemDestination(_ itemID: UUID, destinationPath: String) async throws {
+        try await mutateItems { items in
+            guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let canUpdate: Bool
+            switch items[index].state {
+            case .waiting:
+                canUpdate = true
+            case .failed:
+                canUpdate = items[index].failure?.code == "destination_unavailable"
+                    || items[index].failure?.code == "destination_insufficient_capacity"
+            case .needsChoice, .inspecting, .processing, .stopping, .interrupted, .attention,
+                 .completed, .stopped, .notStarted:
+                canUpdate = false
+            }
+            guard canUpdate else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            items[index].intent.destinationPath = destinationPath
+            if items[index].state == .failed {
+                items[index].state = .waiting
+                items[index].failure = nil
+                items[index].decision = nil
+                items[index].result = nil
+            }
+            let groupIDs = Set(items[index].groupID.map { [$0] } ?? [])
+            Self.normalizeMultiTitleSourceRemoval(
+                in: &items,
+                requests: Self.multiTitleSourceRemovalRequests(in: items, groupIDs: groupIDs)
+            )
+        }
+    }
+
     func resolveHeldItems(
         _ itemIDs: Set<UUID>,
         intents: [UUID: DurableQueueItemIntent],

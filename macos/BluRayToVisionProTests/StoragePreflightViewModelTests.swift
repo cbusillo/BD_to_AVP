@@ -95,6 +95,33 @@ final class StoragePreflightViewModelTests: XCTestCase {
         XCTAssertNotEqual(queueStore.items.first?.failure?.code, "destination_unavailable")
     }
 
+    func testStorageFailureDestinationChangeReturnsItemToWaiting() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let preflight = StubQueueStoragePreflight(verdict: .unavailable("Destination is disconnected."))
+        let viewModel = ConversionViewModel(
+            clientFactory: { throw StoragePreflightTestError.workerSpawned },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true },
+            queueStoragePreflight: preflight
+        )
+        _ = try await viewModel.appendPersistentQueueDrafts([makeDraft(destination: "/Volumes/Missing")])
+        let itemID = try XCTUnwrap(queueStore.items.first?.id)
+
+        _ = await viewModel.startPersistentQueue()
+        while queueStore.items.first?.state != .failed {
+            await Task.yield()
+        }
+
+        try await viewModel.updatePersistentQueueItemDestination(
+            itemID,
+            destinationURL: URL(fileURLWithPath: "/Volumes/Recovered", isDirectory: true)
+        )
+
+        XCTAssertEqual(queueStore.items.first?.state, .waiting)
+        XCTAssertNil(queueStore.items.first?.failure)
+        XCTAssertEqual(queueStore.items.first?.intent.destinationPath, "/Volumes/Recovered")
+    }
+
     private func makeDraft(destination: String, sourcePath: String = "/Sources/movie.mkv") -> ConversionDraft {
         var options = ConversionOptions()
         options.encoding.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 40)

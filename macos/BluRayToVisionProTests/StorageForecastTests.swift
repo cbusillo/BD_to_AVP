@@ -84,6 +84,50 @@ final class StorageForecastTests: XCTestCase {
         XCTAssertNotNil(summary.destinations[1].totalPeakRequiredBytes)
     }
 
+    func testQueueSummaryRecomputesWhenOrderOrSettingsChange() throws {
+        let lowBitrate = try makeItem(
+            ordinal: 0,
+            destination: "/Volumes/A",
+            durationSeconds: 3_600,
+            bitrateMbps: 40
+        )
+        let highBitrate = try makeItem(
+            ordinal: 1,
+            destination: "/Volumes/A",
+            durationSeconds: 3_600,
+            bitrateMbps: 200
+        )
+        let original = try XCTUnwrap(QueueStorageSummary(items: [lowBitrate, highBitrate]).destinations.first)
+
+        let reorderedLow = try makeItem(
+            ordinal: 1,
+            destination: "/Volumes/A",
+            durationSeconds: 3_600,
+            bitrateMbps: 40
+        )
+        let reorderedHigh = try makeItem(
+            ordinal: 0,
+            destination: "/Volumes/A",
+            durationSeconds: 3_600,
+            bitrateMbps: 200
+        )
+        let reordered = try XCTUnwrap(
+            QueueStorageSummary(items: [reorderedLow, reorderedHigh]).destinations.first
+        )
+
+        let editedHigh = try makeItem(
+            ordinal: 1,
+            destination: "/Volumes/A",
+            durationSeconds: 3_600,
+            bitrateMbps: 300
+        )
+        let edited = try XCTUnwrap(QueueStorageSummary(items: [lowBitrate, editedHigh]).destinations.first)
+
+        XCTAssertNotEqual(original.totalPeakRequiredBytes, reordered.totalPeakRequiredBytes)
+        XCTAssertGreaterThan(edited.estimatedOutputBytes ?? 0, original.estimatedOutputBytes ?? 0)
+        XCTAssertGreaterThan(edited.totalPeakRequiredBytes ?? 0, original.totalPeakRequiredBytes ?? 0)
+    }
+
     func testSystemPreflightDistinguishesAvailabilityAndCapacity() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("storage-preflight-\(UUID().uuidString)", isDirectory: true)
@@ -179,12 +223,16 @@ final class StorageForecastTests: XCTestCase {
         ordinal: Int,
         destination: String,
         durationSeconds: Double?,
-        av1: Bool = false
+        av1: Bool = false,
+        bitrateMbps: Int = 40
     ) throws -> PersistentQueueItem {
         var options = ConversionOptions()
         options.encoding.videoOutputMode = av1 ? .av1Stereo : .mvHEVC
         if !av1 {
-            options.encoding.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 40)
+            options.encoding.mvHEVC.directFinalBitrate = BitratePreference(
+                mode: .custom,
+                customMbps: bitrateMbps
+            )
         }
         let draft = ConversionDraft(
             source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Sources/movie-\(ordinal).mkv")),

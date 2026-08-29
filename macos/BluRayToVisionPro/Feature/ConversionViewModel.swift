@@ -265,6 +265,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
     }
 
+    func updatePersistentQueueItemDestination(_ itemID: UUID, destinationURL: URL) async throws {
+        try await durableQueueStore.updateRecoverableItemDestination(
+            itemID,
+            destinationPath: destinationURL.standardizedFileURL.path
+        )
+    }
+
     func clearCompletedPersistentQueueItems() async throws -> PersistentQueueRemovalToken {
         try await durableQueueStore.clearCompletedItems()
     }
@@ -640,7 +647,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableQueueStopRequested = false
         var adoptedCount = 0
         for item in candidates {
-            if await adoptPersistentQueueItem(item.id, pump: false) {
+            if await adoptPersistentQueueItem(item.id, recoveryChoice: nil, pump: false) {
                 adoptedCount += 1
             }
         }
@@ -698,8 +705,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @discardableResult
     func adoptPersistentQueueItem(
         _ itemID: UUID,
-        recoveryChoice: WorkerRecoveryChoice? = nil,
-        pump: Bool = true
+        recoveryChoice: WorkerRecoveryChoice? = nil
+    ) async -> Bool {
+        await adoptPersistentQueueItem(itemID, recoveryChoice: recoveryChoice, pump: true)
+    }
+
+    private func adoptPersistentQueueItem(
+        _ itemID: UUID,
+        recoveryChoice: WorkerRecoveryChoice?,
+        pump: Bool
     ) async -> Bool {
         if persistentQueueRunState == .pauseAfterCurrent, hasActiveWorker {
             return false
@@ -2050,7 +2064,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 await parkWaitingDurableQueueItemForStorage(
                     item,
                     code: "destination_unavailable",
-                    message: "Destination unavailable. Reconnect the destination and check that the folder is writable, then retry this item.",
+                    message: "Destination unavailable. Reconnect it or choose another writable destination, then resume the queue.",
                     details: reason,
                     pauseQueue: false
                 )
@@ -2062,7 +2076,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 await parkWaitingDurableQueueItemForStorage(
                     item,
                     code: "destination_insufficient_capacity",
-                    message: "Not enough free space at \(destinationURL.path). Needs about \(requiredDescription), but only \(availableDescription) is available. Free space or choose another destination, then retry this item.",
+                    message: "Not enough free space at \(destinationURL.path). Needs about \(requiredDescription), but only \(availableDescription) is available. Free space or choose another destination, then resume the queue.",
                     details: "Required: \(requiredDescription). Available: \(availableDescription).",
                     pauseQueue: true
                 )
