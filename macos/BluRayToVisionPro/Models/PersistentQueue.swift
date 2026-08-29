@@ -176,6 +176,18 @@ struct PersistentQueueItem: Identifiable, Equatable {
         status == .waiting
     }
 
+    var hasStorageDestinationFailure: Bool {
+        guard case let .failed(failure) = status else {
+            return false
+        }
+        return failure.code == DurableQueueFailureCode.destinationUnavailable
+            || failure.code == DurableQueueFailureCode.destinationInsufficientCapacity
+    }
+
+    var canChangeDestination: Bool {
+        isEditable || hasStorageDestinationFailure
+    }
+
     var canMove: Bool {
         status == .waiting
     }

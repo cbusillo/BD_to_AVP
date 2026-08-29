@@ -56,7 +56,8 @@ struct BluRayToVisionProApp: App {
         let viewModel = ConversionViewModel(
             observabilityEventStore: observabilityEventStore,
             durableQueueStore: durableQueueStore,
-            offPeakScheduleStore: offPeakScheduleStore
+            offPeakScheduleStore: offPeakScheduleStore,
+            queueStoragePreflight: SystemQueueStoragePreflight()
         )
         let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
