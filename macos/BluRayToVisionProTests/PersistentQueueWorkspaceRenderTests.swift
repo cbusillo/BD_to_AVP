@@ -113,6 +113,38 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         )
     }
 
+    func testQueueWorkspaceRendersIdentifiableRowsForDuplicateTitlesAndMediaSources() throws {
+        let items = try makeIdentifiableItems()
+
+        XCTAssertEqual(items.map(\.sourceIdentity), [
+            "A Very Long Archive Name That Keeps Its Source Identity.mkv",
+            "Avatar 3D",
+            "Blade Runner 2049.iso",
+            "Avatar 3D",
+        ])
+        XCTAssertEqual(items.map(\.selectedTitleIdentity), [
+            "Main Movie",
+            "Main Movie",
+            "Main Movie",
+            "Bonus Features",
+        ])
+
+        try render(
+            items: items,
+            selectedItem: items[1],
+            compact: false,
+            colorScheme: .light,
+            appearanceName: .aqua
+        )
+        try render(
+            items: items,
+            selectedItem: items[2],
+            compact: true,
+            colorScheme: .dark,
+            appearanceName: .darkAqua
+        )
+    }
+
     private func render(
         items: [PersistentQueueItem],
         selectedItem: PersistentQueueItem?,
@@ -231,6 +263,83 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 state: state,
                 failure: failure,
                 result: result
+            ))
+        }
+    }
+
+    private func makeIdentifiableItems() throws -> [PersistentQueueItem] {
+        let title = SourceTitle(
+            id: "main",
+            name: "Main Movie",
+            outputName: "Main Movie",
+            durationSeconds: 7_200,
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            mainFeature: true
+        )
+        let bonusTitle = SourceTitle(
+            id: "bonus",
+            name: "Bonus Features",
+            outputName: "Bonus Features",
+            durationSeconds: 1_800,
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            mainFeature: false
+        )
+        let fixtures: [(source: ConversionSource, title: SourceTitle, state: DurableQueueItemState)] = [
+            (
+                ConversionSource(
+                    kind: .matroska,
+                    url: URL(fileURLWithPath: "/Volumes/Archive/A Very Long Archive Name That Keeps Its Source Identity.mkv")
+                ),
+                title,
+                .waiting
+            ),
+            (
+                ConversionSource(
+                    kind: .physicalDisc,
+                    url: URL(fileURLWithPath: "/Volumes/Avatar 3D"),
+                    displayName: "Avatar 3D",
+                    mediaIdentifier: "disk4s1"
+                ),
+                title,
+                .processing
+            ),
+            (
+                ConversionSource(
+                    kind: .discImage,
+                    url: URL(fileURLWithPath: "/Volumes/Rips/Blade Runner 2049.iso")
+                ),
+                title,
+                .waiting
+            ),
+            (
+                ConversionSource(
+                    kind: .physicalDisc,
+                    url: URL(fileURLWithPath: "/Volumes/Avatar 3D"),
+                    displayName: "Avatar 3D",
+                    mediaIdentifier: "disk4s1"
+                ),
+                bonusTitle,
+                .completed
+            ),
+        ]
+
+        return try fixtures.enumerated().map { offset, fixture in
+            let draft = ConversionDraft(
+                source: fixture.source,
+                sourceDetails: nil,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Movies"),
+                options: ConversionOptions(),
+                selectedTitle: fixture.title
+            )
+            return try PersistentQueueItem(item: DurableConversionQueueItem(
+                ordinal: offset,
+                origin: .multiTitle,
+                intent: DurableQueueItemIntent(draft: draft),
+                state: fixture.state,
+                result: fixture.state == .completed ? DurableQueueResult(outputPath: "/Movies/Avatar Bonus Features.mov") : nil
             ))
         }
     }
