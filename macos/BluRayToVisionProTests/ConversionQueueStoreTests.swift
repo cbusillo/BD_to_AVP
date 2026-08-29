@@ -1203,6 +1203,47 @@ final class ConversionQueueStoreTests: XCTestCase {
         XCTAssertNotEqual(first, other)
     }
 
+    func testPersistentQueueProjectionProvidesSourceFirstIdentity() throws {
+        let selectedTitle = SourceTitle(
+            id: "title-1",
+            name: "Main Movie",
+            outputName: "Main Movie",
+            durationSeconds: 7_200,
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            mainFeature: true
+        )
+        let item = DurableConversionQueueItem(
+            ordinal: 0,
+            origin: .multiTitle,
+            intent: DurableQueueItemIntent(
+                source: DurableQueueSource(
+                    kind: ConversionSourceKind.physicalDisc.rawValue,
+                    path: "/Volumes/Avatar 3D",
+                    displayName: "Avatar 3D",
+                    workerSourcePath: "/Volumes/Avatar 3D",
+                    mediaIdentifier: "disk4s1"
+                ),
+                profile: DurableQueueProfile(
+                    id: BuiltInProfile.balanced.id,
+                    name: BuiltInProfile.balanced.name,
+                    kind: .builtIn
+                ),
+                destinationPath: "/Movies",
+                options: ConversionOptions(),
+                selectedTitle: selectedTitle
+            ),
+            state: .waiting
+        )
+
+        let projection = try PersistentQueueItem(item: item)
+
+        XCTAssertEqual(projection.sourceIdentity, "Avatar 3D")
+        XCTAssertEqual(projection.selectedTitleIdentity, "Main Movie")
+        XCTAssertEqual(projection.sourceKindName, "3D Blu-ray Disc")
+        XCTAssertEqual(projection.sourceLocation, "/Volumes/Avatar 3D")
+    }
+
     private func makeItem(
         id: UUID = UUID(),
         ordinal: Int,

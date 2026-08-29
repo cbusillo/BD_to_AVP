@@ -122,6 +122,22 @@ struct PersistentQueueItem: Identifiable, Equatable {
         draft.selectedTitle?.name ?? draft.source.displayName
     }
 
+    var sourceIdentity: String {
+        draft.source.displayName
+    }
+
+    var selectedTitleIdentity: String {
+        draft.selectedTitle?.name ?? "No title selected"
+    }
+
+    var sourceKindName: String {
+        draft.source.kind.title
+    }
+
+    var sourceLocation: String {
+        draft.source.locationDescription
+    }
+
     var isRestored: Bool {
         switch status {
         case .interrupted:
