@@ -14,6 +14,9 @@ from typing import Any
 SCHEMA_VERSION = 1
 DEFAULT_JSON = Path("docs/test-audit/inventory-v1.json")
 DEFAULT_MARKDOWN = Path("docs/test-audit/inventory-v1.md")
+DEFAULT_CLASSIFICATIONS = Path("docs/test-audit/classifications-v1.json")
+CLASSIFICATION_SOURCE_SCHEMA_VERSION = 1
+VALID_CLASSIFICATIONS = frozenset({"valuable", "accepted-cost", "replace", "consolidate", "remove"})
 TEST_GLOBS = (
     "tests/test_*.py",
     "macos/BluRayToVisionProTests/*.swift",
@@ -63,6 +66,105 @@ def _read_text(root: Path, relative_path: str) -> str:
         return (root / relative_path).read_text(encoding="utf-8")
     except OSError as error:
         raise InventoryError(f"Unable to read {relative_path}: {error}") from error
+
+
+def _root_path(root: Path, path: Path) -> Path:
+    return path if path.is_absolute() else root / path
+
+
+def _relative_display_path(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def load_classifications(
+    root: Path, classification_path: Path, expected_paths: Sequence[str]
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    source_path = _root_path(root, classification_path)
+    try:
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        display_path = _relative_display_path(root, source_path)
+        raise InventoryError(f"Unable to load classifications from {display_path}: {error}") from error
+    if not isinstance(source, dict):
+        raise InventoryError("Classification source must be a JSON object")
+    if source.get("schema_version") != CLASSIFICATION_SOURCE_SCHEMA_VERSION:
+        raise InventoryError(f"Classification source schema_version must be {CLASSIFICATION_SOURCE_SCHEMA_VERSION}")
+    if source.get("artifact") != "test-audit-classifications":
+        raise InventoryError("Classification source artifact must be test-audit-classifications")
+    evidence_catalog = source.get("evidence_catalog")
+    cohorts = source.get("cohorts")
+    candidates = source.get("candidate_summary")
+    if not isinstance(evidence_catalog, dict) or not isinstance(cohorts, list) or not isinstance(candidates, dict):
+        raise InventoryError("Classification source requires evidence_catalog, cohorts, and candidate_summary objects")
+    if not isinstance(candidates.get("high_confidence_candidates"), list) or not isinstance(
+        candidates.get("milestone_10_disposition"), dict
+    ):
+        raise InventoryError("Classification candidate_summary must declare candidates and milestone_10_disposition")
+
+    normalized_evidence: dict[str, dict[str, Any]] = {}
+    for evidence_id, evidence in evidence_catalog.items():
+        if not isinstance(evidence_id, str) or not isinstance(evidence, dict):
+            raise InventoryError("Classification evidence_catalog entries must be keyed objects")
+        description = evidence.get("description")
+        source_paths = evidence.get("source_paths")
+        if (
+            not isinstance(description, str)
+            or not description
+            or not isinstance(source_paths, list)
+            or not all(isinstance(source_path, str) and source_path for source_path in source_paths)
+        ):
+            raise InventoryError(f"Evidence {evidence_id!r} must have description and source_paths")
+        normalized_evidence[evidence_id] = {
+            "id": evidence_id,
+            "description": description,
+            "source_paths": source_paths,
+        }
+
+    expected = set(expected_paths)
+    classifications: dict[str, dict[str, Any]] = {}
+    for cohort in cohorts:
+        if not isinstance(cohort, dict):
+            raise InventoryError("Classification cohorts must be objects")
+        cohort_id = cohort.get("id")
+        classification = cohort.get("classification")
+        rationale = cohort.get("rationale")
+        evidence_ids = cohort.get("evidence_ids")
+        paths = cohort.get("paths")
+        if not isinstance(cohort_id, str) or not cohort_id:
+            raise InventoryError("Classification cohorts require a non-empty id")
+        if classification not in VALID_CLASSIFICATIONS:
+            raise InventoryError(f"Classification cohort {cohort_id!r} has invalid classification {classification!r}")
+        if not isinstance(rationale, str) or not rationale:
+            raise InventoryError(f"Classification cohort {cohort_id!r} requires a rationale")
+        if (
+            not isinstance(evidence_ids, list)
+            or not evidence_ids
+            or not all(isinstance(item, str) for item in evidence_ids)
+        ):
+            raise InventoryError(f"Classification cohort {cohort_id!r} requires non-empty evidence_ids")
+        unknown_evidence = sorted(set(evidence_ids).difference(normalized_evidence))
+        if unknown_evidence:
+            raise InventoryError(f"Classification cohort {cohort_id!r} references unknown evidence: {unknown_evidence}")
+        if not isinstance(paths, list) or not paths or not all(isinstance(path, str) and path for path in paths):
+            raise InventoryError(f"Classification cohort {cohort_id!r} requires non-empty literal paths")
+        for path in paths:
+            if path in classifications:
+                raise InventoryError(f"Classification path is assigned more than once: {path}")
+            if path not in expected:
+                raise InventoryError(f"Classification source contains unknown path: {path}")
+            classifications[path] = {
+                "classification": classification,
+                "classification_rationale": rationale.format(path=path),
+                "classification_evidence": [normalized_evidence[evidence_id] for evidence_id in evidence_ids],
+                "classification_cohort": cohort_id,
+            }
+    missing_paths = sorted(expected.difference(classifications))
+    if missing_paths:
+        raise InventoryError(f"Classification source is missing paths: {missing_paths}")
+    return classifications, source
 
 
 def _first_match(text: str, pattern: str) -> str | None:
@@ -297,7 +399,9 @@ def _lane_ids(relative_path: str, bundle: str) -> list[str]:
     return []
 
 
-def _test_rows(root: Path, paths: Iterable[str], project: dict[str, Any]) -> list[dict[str, Any]]:
+def _test_rows(
+    root: Path, paths: Iterable[str], project: dict[str, Any], classifications: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
     rows = []
     for relative_path in sorted(paths):
         text = _read_text(root, relative_path)
@@ -309,10 +413,7 @@ def _test_rows(root: Path, paths: Iterable[str], project: dict[str, Any]) -> lis
                 "bundle": bundle,
                 "lane_ids": _lane_ids(relative_path, bundle),
                 "test_case_count": _count_cases(relative_path, text),
-                "classification": "unclassified",
-                "classification_rationale": (
-                    "Slice 1 records inventory and evidence boundaries; no disposition is assigned."
-                ),
+                **classifications[relative_path],
                 "special_requirements": _requirements(relative_path, text),
                 "static_brittleness_signals": _signals(text),
             }
@@ -320,16 +421,13 @@ def _test_rows(root: Path, paths: Iterable[str], project: dict[str, Any]) -> lis
     return rows
 
 
-def _fixture_rows(paths: Iterable[str]) -> list[dict[str, Any]]:
+def _fixture_rows(paths: Iterable[str], classifications: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "path": relative_path,
             "kind": "support_fixture",
             "format": Path(relative_path).suffix.removeprefix(".") or "unknown",
-            "classification": "unclassified",
-            "classification_rationale": (
-                "Slice 1 records inventory and evidence boundaries; no disposition is assigned."
-            ),
+            **classifications[relative_path],
         }
         for relative_path in sorted(paths)
     ]
@@ -397,7 +495,13 @@ def _lane_definitions(
     return sorted(lanes, key=lambda lane: lane["id"])
 
 
-def build_inventory(root: Path, *, baseline_sha: str, paths: Sequence[str] | None = None) -> dict[str, Any]:
+def build_inventory(
+    root: Path,
+    *,
+    baseline_sha: str,
+    paths: Sequence[str] | None = None,
+    classifications_path: Path = DEFAULT_CLASSIFICATIONS,
+) -> dict[str, Any]:
     tracked = tuple(paths) if paths is not None else tracked_paths(root)
     test_paths = [path for path in tracked if _matches_any(path, TEST_GLOBS)]
     fixture_paths = [path for path in tracked if _matches_any(path, FIXTURE_GLOBS)]
@@ -406,8 +510,11 @@ def build_inventory(root: Path, *, baseline_sha: str, paths: Sequence[str] | Non
     documents = {path: _read_text(root, path) for path in LANE_SOURCE_PATHS if (root / path).exists()}
     documented = parse_documented_lanes(documents)
     lanes = _lane_definitions(ci, project, documented)
-    test_files = _test_rows(root, test_paths, project)
-    fixtures = _fixture_rows(fixture_paths)
+    classifications, classification_source = load_classifications(
+        root, classifications_path, [*test_paths, *fixture_paths]
+    )
+    test_files = _test_rows(root, test_paths, project, classifications)
+    fixtures = _fixture_rows(fixture_paths, classifications)
     orphan_lanes = [
         {
             "lane_id": lane["id"],
@@ -439,20 +546,54 @@ def build_inventory(root: Path, *, baseline_sha: str, paths: Sequence[str] | Non
             "lane_source_paths": list(LANE_SOURCE_PATHS),
             "test_globs": list(TEST_GLOBS),
             "fixture_globs": list(FIXTURE_GLOBS),
+            "classification_source": _relative_display_path(root, _root_path(root, classifications_path)),
         },
         "execution_evidence": {
             "deterministic": False,
-            "status": "inventory-only; no runtime durations or hostnames are asserted",
+            "status": "point-in-time execution evidence; excluded from deterministic inventory checks",
             "local": {
-                "runner_class": "local macOS arm64",
-                "identity": "not recorded",
-                "evidence": "generator invocation only",
+                "captured_from_sha": "b4f980642c6e36140f458af3f3eaffafc9ae14fa",
+                "platform": {"macos_version": "27.0", "build": "26A5421a", "architecture": "arm64"},
+                "toolchain": {
+                    "xcode": {"version": "27.0", "build": "27A5194q"},
+                    "python": "3.12.11",
+                    "uv": "0.12.3",
+                    "node": "26.7.0",
+                    "npm": "11.19.0",
+                },
+                "lanes": [
+                    {
+                        "id": "ci.python.unittest",
+                        "status": "passed",
+                        "test_count": 1966,
+                        "skipped_count": 3,
+                        "test_duration_seconds": 235.950,
+                        "wall_duration_seconds": 241.08,
+                    },
+                    {
+                        "id": "ci.macos.blu_ray_unit",
+                        "status": "passed",
+                        "test_count": 567,
+                        "test_duration_seconds": 25.010,
+                        "wall_duration_seconds": 52.17,
+                    },
+                    {
+                        "id": "ci.support_diagnostics.vitest",
+                        "status": "passed",
+                        "test_count": 23,
+                        "test_duration_milliseconds": 164,
+                        "wall_duration_seconds": 2.19,
+                    },
+                ],
+                "excluded_identity_fields": ["hostname", "username", "private paths", "credentials", "device IDs"],
             },
             "ci": {
                 "runner_label": ci["runner"],
-                "evidence": "baseline planning evidence from GitHub Actions run 33264262845",
+                "run_id": "33264262845",
+                "status": "success",
+                "evidence": "matching main CI run succeeded at the captured baseline",
             },
-            "timings": [],
+            "comparison_caveat": "Local timings are not compared with CI runner timings.",
         },
         "authoritative_commands": [
             "uv run python -m unittest discover -s tests -t .",
@@ -468,6 +609,12 @@ def build_inventory(root: Path, *, baseline_sha: str, paths: Sequence[str] | Non
             "language_file_counts": _counts(test_files, "language"),
             "bundle_file_counts": _counts(test_files, "bundle"),
             "unmapped_test_file_count": len(unmaintained),
+            "classification_counts": _counts([*test_files, *fixtures], "classification"),
+        },
+        "classification_summary": {
+            "source": _relative_display_path(root, _root_path(root, classifications_path)),
+            "high_confidence_candidates": classification_source["candidate_summary"]["high_confidence_candidates"],
+            "milestone_10_disposition": classification_source["candidate_summary"]["milestone_10_disposition"],
         },
         "findings": {
             "orphan_or_not_in_ci_lanes": orphan_lanes,
@@ -512,6 +659,7 @@ def _canonical_markdown(markdown: str) -> str:
 
 def render_markdown(document: dict[str, Any]) -> str:
     summary = document["summary"]
+    classification_summary = document["classification_summary"]
     lines = [
         "# Test Audit Inventory v1",
         "",
@@ -519,7 +667,7 @@ def render_markdown(document: dict[str, Any]) -> str:
         f"- Test files: **{summary['test_file_count']}**",
         f"- Support fixtures: **{summary['support_fixture_count']}**",
         f"- Test cases counted: **{summary['test_case_count']}**",
-        "- This generated view is inventory evidence, not a runtime result or duration report.",
+        f"- Classification source: `{classification_summary['source']}`",
         "",
         "## Lanes",
         "",
@@ -540,32 +688,94 @@ def render_markdown(document: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Disposition Summary",
+            "",
+            *[
+                f"- `{classification}`: **{count}** rows."
+                for classification, count in summary["classification_counts"].items()
+            ],
+            (
+                "- High-confidence implementation candidates: **none**."
+                if not classification_summary["high_confidence_candidates"]
+                else "- High-confidence implementation candidates are recorded in the JSON artifact."
+            ),
+            f"- Milestone #10 disposition: {classification_summary['milestone_10_disposition']['outcome']}.",
+            "",
+            "## Execution Evidence",
+            "",
+            "Point-in-time execution evidence is recorded for the baseline and intentionally excluded from",
+            "`--check` comparison.",
+            "",
+            "| Lane | Status | Tests | Skips | Test duration | Wall duration |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for lane in document["execution_evidence"]["local"]["lanes"]:
+        test_duration = (
+            f"{lane['test_duration_seconds']:.3f}s"
+            if "test_duration_seconds" in lane
+            else f"{lane['test_duration_milliseconds']}ms"
+        )
+        lines.append(
+            f"| `{lane['id']}` | {lane['status']} | {lane['test_count']} | {lane.get('skipped_count', 0)} | "
+            f"{test_duration} | {lane['wall_duration_seconds']:.2f}s |"
+        )
+    lines.extend(
+        [
+            "",
             "## Findings",
             "",
             f"- Orphan/not-in-CI lane findings: **{len(document['findings']['orphan_or_not_in_ci_lanes'])}**.",
             f"- Unmaintained test files: **{len(document['findings']['unmaintained_test_files'])}**.",
-            (
-                "- Classifications remain `unclassified`; this slice does not recommend deletion, "
-                "relaxation, or test-count targets."
-            ),
+            "- No row is classified as `replace`, `consolidate`, or `remove` without concrete repository evidence.",
+            "",
+            "## Classification Evidence",
+            "",
+            "| ID | Basis | Source paths |",
+            "| --- | --- | --- |",
+        ]
+    )
+    evidence: dict[str, dict[str, Any]] = {}
+    for row in [*document["test_files"], *document["support_fixtures"]]:
+        for item in row["classification_evidence"]:
+            evidence[item["id"]] = item
+    for evidence_id, item in sorted(evidence.items()):
+        source_paths = ", ".join(f"`{path}`" for path in item["source_paths"])
+        lines.append(f"| `{evidence_id}` | {item['description']} | {source_paths} |")
+    lines.extend(
+        [
+            "",
             "",
             "## Test Files",
             "",
-            "| Path | Language | Bundle | Cases | Lanes | Requirements | Signals |",
-            "| --- | --- | --- | ---: | --- | --- | --- |",
+            "| Path | Language | Bundle | Cases | Classification | Rationale | Evidence | Requirements | Signals |",
+            "| --- | --- | --- | ---: | --- | --- | --- | --- | --- |",
         ]
     )
     for row in document["test_files"]:
         requirements = "; ".join(row["special_requirements"]) or "—"
         signals = ", ".join(signal["signal"] for signal in row["static_brittleness_signals"]) or "—"
-        lane_ids = ", ".join(f"`{lane}`" for lane in row["lane_ids"]) or "—"
+        evidence_ids = ", ".join(f"`{item['id']}`" for item in row["classification_evidence"])
         lines.append(
             f"| `{row['path']}` | {row['language']} | `{row['bundle']}` | {row['test_case_count']} | "
-            f"{lane_ids} | {requirements} | {signals} |"
+            f"`{row['classification']}` | {row['classification_rationale']} | {evidence_ids} | "
+            f"{requirements} | {signals} |"
         )
-    lines.extend(["", "## Support Fixtures", "", "| Path | Format | Classification |", "| --- | --- | --- |"])
+    lines.extend(
+        [
+            "",
+            "## Support Fixtures",
+            "",
+            "| Path | Format | Classification | Rationale | Evidence |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
     for row in document["support_fixtures"]:
-        lines.append(f"| `{row['path']}` | {row['format']} | {row['classification']} |")
+        evidence_ids = ", ".join(f"`{item['id']}`" for item in row["classification_evidence"])
+        lines.append(
+            f"| `{row['path']}` | {row['format']} | `{row['classification']}` | "
+            f"{row['classification_rationale']} | {evidence_ids} |"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -576,10 +786,17 @@ def write_artifacts(document: dict[str, Any], json_path: Path, markdown_path: Pa
     markdown_path.write_text(render_markdown(document), encoding="utf-8")
 
 
-def check_artifacts(root: Path, json_path: Path, markdown_path: Path) -> tuple[bool, list[str]]:
+def check_artifacts(
+    root: Path,
+    json_path: Path,
+    markdown_path: Path,
+    classifications_path: Path = DEFAULT_CLASSIFICATIONS,
+) -> tuple[bool, list[str]]:
     try:
         stored = json.loads(json_path.read_text(encoding="utf-8"))
-        expected = build_inventory(root, baseline_sha=stored["baseline"]["sha"])
+        expected = build_inventory(
+            root, baseline_sha=stored["baseline"]["sha"], classifications_path=classifications_path
+        )
         actual_markdown = markdown_path.read_text(encoding="utf-8")
     except (OSError, KeyError, json.JSONDecodeError, TypeError) as error:
         return False, [f"unable to load generated artifacts: {error}"]
@@ -599,6 +816,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-json", type=Path, default=DEFAULT_JSON)
     parser.add_argument("--output-markdown", type=Path, default=DEFAULT_MARKDOWN)
+    parser.add_argument("--classifications", type=Path, default=DEFAULT_CLASSIFICATIONS)
     parser.add_argument(
         "--check", action="store_true", help="Fail when deterministic inventory or Markdown has drifted."
     )
@@ -610,16 +828,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = args.root.resolve()
     json_path = args.output_json if args.output_json.is_absolute() else root / args.output_json
     markdown_path = args.output_markdown if args.output_markdown.is_absolute() else root / args.output_markdown
+    classifications_path = args.classifications if args.classifications.is_absolute() else root / args.classifications
     baseline_sha = args.baseline_sha or _git_output(root, ["rev-parse", "HEAD"]).strip()
     if args.check:
-        matches, differences = check_artifacts(root, json_path, markdown_path)
+        matches, differences = check_artifacts(root, json_path, markdown_path, classifications_path)
         if not matches:
             for difference in differences:
                 print(f"drift: {difference}", file=sys.stderr)
             return 1
         print("test audit inventory is up to date")
         return 0
-    document = build_inventory(root, baseline_sha=baseline_sha)
+    document = build_inventory(root, baseline_sha=baseline_sha, classifications_path=classifications_path)
     write_artifacts(document, json_path, markdown_path)
     print(f"wrote {json_path}")
     print(f"wrote {markdown_path}")

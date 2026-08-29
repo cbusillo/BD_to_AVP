@@ -1,0 +1,418 @@
+{
+  "artifact": "test-audit-classifications",
+  "schema_version": 1,
+  "evidence_catalog": {
+    "ci-macos-app-unit": {
+      "description": "The maintained CI macOS scheme executes the application unit-test target.",
+      "source_paths": [
+        ".github/workflows/ci.yml",
+        "macos/project.yml",
+        "scripts/native_app.py"
+      ]
+    },
+    "ci-python-discovery": {
+      "description": "The maintained CI Python discovery lane executes these repository tests.",
+      "source_paths": [
+        ".github/workflows/ci.yml",
+        "tests"
+      ]
+    },
+    "ci-support-diagnostics": {
+      "description": "The maintained CI support-diagnostics check executes this service contract suite.",
+      "source_paths": [
+        ".github/workflows/ci.yml",
+        "support-diagnostics/package.json"
+      ]
+    },
+    "operator-tier3-contract": {
+      "description": "The installed-app UI target is an explicit clean-machine and Accessibility operator contract, not an unmaintained CI omission.",
+      "source_paths": [
+        "docs/tier3-clean-machine.md",
+        "docs/tier3-operator-hardware.md",
+        "macos/project.yml"
+      ]
+    },
+    "operator-visionos-contract": {
+      "description": "The spatial-playback targets are explicit simulator/device evidence lanes with a physical-Vision-Pro presentation boundary.",
+      "source_paths": [
+        "docs/visionos-playback-validator.md",
+        "macos/project.yml"
+      ]
+    },
+    "release-security-contract": {
+      "description": "Release, signing, recovery, policy, and workflow assertions protect intentional operational contracts that the audit must not weaken without proof.",
+      "source_paths": [
+        ".github/workflows",
+        "docs/release-qualification-policy.md",
+        "scripts"
+      ]
+    },
+    "media-hardware-contract": {
+      "description": "Media, device, codec, fixture, and Tier 3 qualification paths retain special setup cost because they cover hardware or protocol boundaries absent from ordinary unit tests.",
+      "source_paths": [
+        "docs/tier3-operator-hardware.md",
+        "docs/visionos-playback-validator.md",
+        "tests"
+      ]
+    },
+    "audit-generator-contract": {
+      "description": "The audit generator and its focused tests enforce deterministic inventory, classification coverage, and evidence boundaries for this bounded review.",
+      "source_paths": [
+        "scripts/test_audit_inventory.py",
+        "tests/test_test_audit_inventory.py"
+      ]
+    },
+    "worker-protocol-fixture-contract": {
+      "description": "Versioned native-worker payload fixtures preserve protocol compatibility and warning/progress/terminal-state decoding across supported versions.",
+      "source_paths": [
+        "bd_to_avp/worker/protocol.py",
+        "tests/test_native_worker.py",
+        "tests/fixtures"
+      ]
+    },
+    "structured-fixture-contract": {
+      "description": "Audio, observability, profile, and support-diagnostics fixtures provide named structured inputs for maintained parser and service contracts.",
+      "source_paths": [
+        "tests/test_audio_selection.py",
+        "tests/test_observability.py",
+        "tests/test_support_diagnostics.py",
+        "tests/fixtures"
+      ]
+    }
+  },
+  "candidate_summary": {
+    "high_confidence_candidates": [],
+    "milestone_10_disposition": {
+      "outcome": "Close no-action after the required final review unless new counterexample, mutation proof, or historical regression evidence produces a candidate.",
+      "rationale": "This classification slice found no evidence-backed replace, consolidate, or remove candidate. Static signals, age, and direct-string-reference counts are not removal evidence."
+    }
+  },
+  "cohorts": [
+    {
+      "id": "swift-app-unit-direct-contracts",
+      "classification": "valuable",
+      "rationale": "{path} runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence.",
+      "evidence_ids": [
+        "ci-macos-app-unit"
+      ],
+      "paths": [
+        "macos/BluRayToVisionProTests/ActivityDrawerRenderTests.swift",
+        "macos/BluRayToVisionProTests/AppDelegateTests.swift",
+        "macos/BluRayToVisionProTests/AppSettingsTests.swift",
+        "macos/BluRayToVisionProTests/DiagnosticReportViewModelTests.swift",
+        "macos/BluRayToVisionProTests/DiagnosticUserCommentTests.swift",
+        "macos/BluRayToVisionProTests/GitHubIssueDraftTests.swift",
+        "macos/BluRayToVisionProTests/JSONLFramerTests.swift",
+        "macos/BluRayToVisionProTests/LanguageCatalogTests.swift",
+        "macos/BluRayToVisionProTests/ObservabilityEventTests.swift",
+        "macos/BluRayToVisionProTests/OffPeakScheduleStoreTests.swift",
+        "macos/BluRayToVisionProTests/PersistentQueueCommandStateTests.swift",
+        "macos/BluRayToVisionProTests/PersistentQueueNotificationCoordinatorTests.swift",
+        "macos/BluRayToVisionProTests/PersistentQueueOutcomeSummaryTests.swift",
+        "macos/BluRayToVisionProTests/PersistentQueueWorkspaceRenderTests.swift",
+        "macos/BluRayToVisionProTests/ProfileStoreTests.swift",
+        "macos/BluRayToVisionProTests/QueueResolutionTests.swift",
+        "macos/BluRayToVisionProTests/ResolutionMemoryStoreTests.swift",
+        "macos/BluRayToVisionProTests/RouteResolutionTests.swift",
+        "macos/BluRayToVisionProTests/SetupEditSessionTests.swift",
+        "macos/BluRayToVisionProTests/SetupEditorRenderTests.swift",
+        "macos/BluRayToVisionProTests/StorageForecastTests.swift",
+        "macos/BluRayToVisionProTests/StoragePreflightViewModelTests.swift",
+        "macos/BluRayToVisionProTests/UpdateControllerTests.swift",
+        "macos/BluRayToVisionProTests/VideoQualityEditorRenderTests.swift",
+        "macos/BluRayToVisionProTests/VideoQualityTests.swift",
+        "macos/BluRayToVisionProTests/VideoRouteQualitySummaryTests.swift"
+      ]
+    },
+    {
+      "id": "swift-app-unit-coordinated-boundaries",
+      "classification": "accepted-cost",
+      "rationale": "{path} covers a CI-executed conversion, diagnostics, preview, or worker boundary with fixtures, process coordination, or environment setup. That setup cost is accepted because no behavioral replacement or removal proof exists.",
+      "evidence_ids": [
+        "ci-macos-app-unit",
+        "media-hardware-contract"
+      ],
+      "paths": [
+        "macos/BluRayToVisionProTests/ConversionQueueStoreTests.swift",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift",
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift",
+        "macos/BluRayToVisionProTests/DiagnosticBundleTests.swift",
+        "macos/BluRayToVisionProTests/DiagnosticReportClientTests.swift",
+        "macos/BluRayToVisionProTests/LiveObservabilityStatusTests.swift",
+        "macos/BluRayToVisionProTests/ObservabilityEventStoreTests.swift",
+        "macos/BluRayToVisionProTests/PreviewPresentationSmokeTests.swift",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift",
+        "macos/BluRayToVisionProTests/WorkerCancellationSmokeTests.swift",
+        "macos/BluRayToVisionProTests/WorkerLaunchConfigurationTests.swift",
+        "macos/BluRayToVisionProTests/WorkerLifecycleTests.swift",
+        "macos/BluRayToVisionProTests/WorkerProcessClientTests.swift"
+      ]
+    },
+    {
+      "id": "operator-and-device-evidence",
+      "classification": "accepted-cost",
+      "rationale": "{path} belongs to a documented operator/device lane. Its Accessibility, simulator, or physical-device requirement is an explicit evidence boundary and not evidence of dead coverage.",
+      "evidence_ids": [
+        "operator-tier3-contract",
+        "operator-visionos-contract",
+        "media-hardware-contract"
+      ],
+      "paths": [
+        "macos/BluRayToVisionProUITests/InstalledUIAcceptanceTests.swift",
+        "macos/SpatialPlaybackProbeTests/PlaybackValidationTests.swift",
+        "macos/SpatialPlaybackProbeUITests/SpatialPlaybackProbeUITests.swift"
+      ]
+    },
+    {
+      "id": "support-diagnostics-service-contract",
+      "classification": "valuable",
+      "rationale": "{path} is the maintained support-diagnostics service contract suite executed by CI; its fixture and request coverage protects a separately deployed interface.",
+      "evidence_ids": [
+        "ci-support-diagnostics",
+        "structured-fixture-contract"
+      ],
+      "paths": [
+        "support-diagnostics/test/diagnostic-service.test.ts"
+      ]
+    },
+    {
+      "id": "python-release-security-workflow-contracts",
+      "classification": "valuable",
+      "rationale": "{path} protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change.",
+      "evidence_ids": [
+        "ci-python-discovery",
+        "release-security-contract"
+      ],
+      "paths": [
+        "tests/test_beta3_recovery_evidence.py",
+        "tests/test_cancelled_release_attempt.py",
+        "tests/test_github_release_run.py",
+        "tests/test_macos_release.py",
+        "tests/test_pre_signing_ui.py",
+        "tests/test_production_preflight.py",
+        "tests/test_qualify_apple_aac_layouts.py",
+        "tests/test_qualify_release_notes_links.py",
+        "tests/test_qualify_release_scope.py",
+        "tests/test_release.py",
+        "tests/test_release_evidence_orphan_audit.py",
+        "tests/test_release_evidence_reconcile.py",
+        "tests/test_release_evidence_v2.py",
+        "tests/test_release_milestone_context.py",
+        "tests/test_release_qualification_apply.py",
+        "tests/test_release_qualification_artifact.py",
+        "tests/test_release_qualification_controller.py",
+        "tests/test_release_qualification_manifest.py",
+        "tests/test_release_qualification_resume.py",
+        "tests/test_release_receipt.py",
+        "tests/test_release_recovery_records.py",
+        "tests/test_release_smoke.py",
+        "tests/test_release_workflow_policy.py",
+        "tests/test_signed_artifact_receipt.py",
+        "tests/test_signed_artifact_ui.py",
+        "tests/test_sparkle_appcast.py",
+        "tests/test_sparkle_packaging.py",
+        "tests/test_sparkle_workflows.py",
+        "tests/test_stable_pypi_recovery.py"
+      ]
+    },
+    {
+      "id": "python-media-hardware-and-quality-qualification",
+      "classification": "accepted-cost",
+      "rationale": "{path} covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence.",
+      "evidence_ids": [
+        "ci-python-discovery",
+        "media-hardware-contract"
+      ],
+      "paths": [
+        "tests/test_apple_vision_ocr.py",
+        "tests/test_direct_mv_hevc_anchors.py",
+        "tests/test_direct_mv_hevc_mapping_confirmation.py",
+        "tests/test_direct_mv_hevc_metalfx_mapping_confirmation.py",
+        "tests/test_direct_mv_hevc_quality_sweep.py",
+        "tests/test_direct_mv_hevc_route_integration.py",
+        "tests/test_file_upscale_quality_mapping_selection.py",
+        "tests/test_file_upscale_quality_repeatability_calibration.py",
+        "tests/test_file_upscale_quality_sweep.py",
+        "tests/test_generated_mv_hevc_artifacts.py",
+        "tests/test_generated_mv_hevc_calibration.py",
+        "tests/test_generated_mv_hevc_collapse.py",
+        "tests/test_installed_ui_qualification.py",
+        "tests/test_mv_hevc_adaptive.py",
+        "tests/test_mv_hevc_corpus.py",
+        "tests/test_mv_hevc_encoder.py",
+        "tests/test_mv_hevc_gpu_profile.py",
+        "tests/test_mv_hevc_metalfx_benchmark.py",
+        "tests/test_mv_hevc_metalfx_quality.py",
+        "tests/test_mv_hevc_quality_match.py",
+        "tests/test_packaged_aac_layouts.py",
+        "tests/test_packaged_mv_hevc_routes.py",
+        "tests/test_packaged_video_quality_routes.py",
+        "tests/test_real_mvc_4k_quality.py",
+        "tests/test_real_mvc_feature_qualification.py",
+        "tests/test_real_mvc_public_evidence.py",
+        "tests/test_real_mvc_qualification_segment.py",
+        "tests/test_reassess_real_mvc_feature.py",
+        "tests/test_ssif_probe.py",
+        "tests/test_ssif_probe_builder.py",
+        "tests/test_ssif_probe_integration.py",
+        "tests/test_tier3_clean_machine.py",
+        "tests/test_tier3_operator_collect.py",
+        "tests/test_tier3_operator_receipt.py",
+        "tests/test_tier3_receipt.py",
+        "tests/test_vendor_pgsrip_cli.py",
+        "tests/test_vendor_pgsrip_edge_cases.py",
+        "tests/test_video_quality_ladder.py"
+      ]
+    },
+    {
+      "id": "python-direct-product-contracts",
+      "classification": "valuable",
+      "rationale": "{path} exercises a maintained Python product, parser, configuration, GUI, process, or validation contract in the authoritative discovery lane. No age, static-signal, or direct-reference observation is treated as removal evidence.",
+      "evidence_ids": [
+        "ci-python-discovery"
+      ],
+      "paths": [
+        "tests/test_audio.py",
+        "tests/test_audio_selection.py",
+        "tests/test_av1_stereo.py",
+        "tests/test_command.py",
+        "tests/test_config_version.py",
+        "tests/test_container.py",
+        "tests/test_create_packaged_aac_layout_fixtures.py",
+        "tests/test_disc.py",
+        "tests/test_edge264_builder.py",
+        "tests/test_embedded_python.py",
+        "tests/test_ffmpeg_manifest_update.py",
+        "tests/test_ffmpeg_vendor.py",
+        "tests/test_gui_processing.py",
+        "tests/test_languages.py",
+        "tests/test_main.py",
+        "tests/test_mp4box_builder.py",
+        "tests/test_native_app.py",
+        "tests/test_native_mvc_split.py",
+        "tests/test_native_worker.py",
+        "tests/test_observability.py",
+        "tests/test_observability_migration.py",
+        "tests/test_preflight.py",
+        "tests/test_preview.py",
+        "tests/test_process_audio.py",
+        "tests/test_process_preflight.py",
+        "tests/test_process_runner.py",
+        "tests/test_spatial_video_metadata.py",
+        "tests/test_storage_capacity.py",
+        "tests/test_subtitles.py",
+        "tests/test_support_diagnostics.py",
+        "tests/test_tool_resolution.py",
+        "tests/test_updater.py",
+        "tests/test_verify_app_tools.py",
+        "tests/test_verify_apple_media.py",
+        "tests/test_video_helpers.py",
+        "tests/test_video_quality_route_table.py",
+        "tests/test_video_route.py",
+        "tests/test_worker_diagnostics.py"
+      ]
+    },
+    {
+      "id": "audit-generator-contract",
+      "classification": "valuable",
+      "rationale": "{path} verifies the bounded audit generator itself, including deterministic artifacts and exact classification coverage. It is an intentional operational control rather than a product behavior candidate.",
+      "evidence_ids": [
+        "ci-python-discovery",
+        "audit-generator-contract"
+      ],
+      "paths": [
+        "tests/test_test_audit_inventory.py"
+      ]
+    },
+    {
+      "id": "native-worker-versioned-fixtures",
+      "classification": "valuable",
+      "rationale": "{path} is a versioned native-worker protocol fixture. Retain it to preserve decoding compatibility for the named message shape; fixture age or low direct-reference counts are not removal evidence.",
+      "evidence_ids": [
+        "worker-protocol-fixture-contract"
+      ],
+      "paths": [
+        "tests/fixtures/native_worker_audio_fallback_warning_v10.json",
+        "tests/fixtures/native_worker_audio_fallback_warning_v11.json",
+        "tests/fixtures/native_worker_audio_fallback_warning_v12.json",
+        "tests/fixtures/native_worker_audio_fallback_warning_v8.json",
+        "tests/fixtures/native_worker_audio_fallback_warning_v9.json",
+        "tests/fixtures/native_worker_audio_language_fallback_warning_v10.json",
+        "tests/fixtures/native_worker_audio_language_fallback_warning_v11.json",
+        "tests/fixtures/native_worker_audio_language_fallback_warning_v12.json",
+        "tests/fixtures/native_worker_audio_language_fallback_warning_v9.json",
+        "tests/fixtures/native_worker_conversion_completed_v1.json",
+        "tests/fixtures/native_worker_conversion_completed_v10.json",
+        "tests/fixtures/native_worker_conversion_completed_v11.json",
+        "tests/fixtures/native_worker_conversion_completed_v12.json",
+        "tests/fixtures/native_worker_conversion_completed_v2.json",
+        "tests/fixtures/native_worker_conversion_completed_v3.json",
+        "tests/fixtures/native_worker_conversion_completed_v4.json",
+        "tests/fixtures/native_worker_conversion_completed_v5.json",
+        "tests/fixtures/native_worker_conversion_completed_v8.json",
+        "tests/fixtures/native_worker_conversion_completed_v9.json",
+        "tests/fixtures/native_worker_convert_existing_artifact_upscale_v11.json",
+        "tests/fixtures/native_worker_convert_existing_artifact_upscale_v12.json",
+        "tests/fixtures/native_worker_convert_existing_artifact_v10.json",
+        "tests/fixtures/native_worker_convert_existing_artifact_v11.json",
+        "tests/fixtures/native_worker_convert_existing_artifact_v12.json",
+        "tests/fixtures/native_worker_convert_generated_v10.json",
+        "tests/fixtures/native_worker_convert_generated_v11.json",
+        "tests/fixtures/native_worker_convert_generated_v12.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v10.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v11.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v12.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v2.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v3.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v4.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v5.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v8.json",
+        "tests/fixtures/native_worker_convert_physical_disc_v9.json",
+        "tests/fixtures/native_worker_convert_v1.json",
+        "tests/fixtures/native_worker_convert_v10.json",
+        "tests/fixtures/native_worker_convert_v11.json",
+        "tests/fixtures/native_worker_convert_v12.json",
+        "tests/fixtures/native_worker_convert_v2.json",
+        "tests/fixtures/native_worker_convert_v3.json",
+        "tests/fixtures/native_worker_convert_v4.json",
+        "tests/fixtures/native_worker_convert_v5.json",
+        "tests/fixtures/native_worker_convert_v8.json",
+        "tests/fixtures/native_worker_convert_v9.json",
+        "tests/fixtures/native_worker_preview_v10.json",
+        "tests/fixtures/native_worker_preview_v11.json",
+        "tests/fixtures/native_worker_preview_v12.json",
+        "tests/fixtures/native_worker_preview_v3.json",
+        "tests/fixtures/native_worker_preview_v4.json",
+        "tests/fixtures/native_worker_preview_v5.json",
+        "tests/fixtures/native_worker_preview_v8.json",
+        "tests/fixtures/native_worker_preview_v9.json",
+        "tests/fixtures/native_worker_stage_started_progress_v10.json",
+        "tests/fixtures/native_worker_stage_started_progress_v11.json",
+        "tests/fixtures/native_worker_stage_started_progress_v12.json",
+        "tests/fixtures/native_worker_stage_started_progress_v4.json",
+        "tests/fixtures/native_worker_stage_started_progress_v5.json",
+        "tests/fixtures/native_worker_stage_started_progress_v8.json",
+        "tests/fixtures/native_worker_stage_started_progress_v9.json"
+      ]
+    },
+    {
+      "id": "other-structured-fixtures",
+      "classification": "valuable",
+      "rationale": "{path} is a named structured fixture for a maintained audio, observability, profile, or support-diagnostics contract. No repository evidence supports replacing or removing it.",
+      "evidence_ids": [
+        "structured-fixture-contract"
+      ],
+      "paths": [
+        "tests/fixtures/multilingual_audio_selection_v1.json",
+        "tests/fixtures/observability_event_v1.json",
+        "tests/fixtures/observability_left_eye_growing_v1.json",
+        "tests/fixtures/observability_long_running_tool_v1.json",
+        "tests/fixtures/observability_right_eye_growing_v1.json",
+        "tests/fixtures/observability_stalled_tool_v1.json",
+        "tests/fixtures/profile_library_v5.json",
+        "tests/fixtures/profile_library_v6.json",
+        "tests/fixtures/support_diagnostics_native_v1.b64"
+      ]
+    }
+  ]
+}

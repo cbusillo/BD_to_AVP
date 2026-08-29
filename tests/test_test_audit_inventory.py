@@ -8,6 +8,7 @@ from pathlib import Path
 
 from scripts.test_audit_inventory import (
     _canonical_json,
+    InventoryError,
     build_inventory,
     check_artifacts,
     parse_ci_workflow,
@@ -122,11 +123,40 @@ class TestTestAuditInventory(unittest.TestCase):
             self.assertFalse(matches)
             self.assertTrue(differences)
 
+    def test_classifications_are_emitted_for_every_row(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._init_repo(root)
+            self._populate_minimal_repo(root)
+            document = build_inventory(root, baseline_sha="baseline")
+            self.assertEqual(document["summary"]["classification_counts"], {"valuable": 2})
+            self.assertEqual(document["test_files"][0]["classification"], "valuable")
+            self.assertEqual(document["test_files"][0]["classification_evidence"][0]["id"], "ci")
+            self.assertIn("Classification Evidence", render_markdown(document))
+
+    def test_classifications_reject_missing_and_unknown_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._init_repo(root)
+            self._populate_minimal_repo(root)
+            classification_path = root / "docs/test-audit/classifications-v1.json"
+            source = json.loads(classification_path.read_text())
+            source["cohorts"][0]["paths"] = ["tests/test_missing.py"]
+            classification_path.write_text(json.dumps(source))
+            with self.assertRaisesRegex(InventoryError, "unknown path"):
+                build_inventory(root, baseline_sha="baseline")
+
+            source["cohorts"][0]["paths"] = ["tests/test_sample.py"]
+            classification_path.write_text(json.dumps(source))
+            with self.assertRaisesRegex(InventoryError, "missing paths"):
+                build_inventory(root, baseline_sha="baseline")
+
     @staticmethod
     def _init_repo(root: Path) -> None:
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
 
-    def _populate_minimal_repo(self, root: Path) -> None:
+    @staticmethod
+    def _populate_minimal_repo(root: Path) -> None:
         (root / ".github/workflows").mkdir(parents=True)
         (root / "macos").mkdir()
         (root / "tests").mkdir()
@@ -143,6 +173,31 @@ class TestTestAuditInventory(unittest.TestCase):
         (root / "docs/tier3-operator-hardware.md").write_text("# hardware")
         (root / "tests/test_sample.py").write_text("def test_sample():\n    pass\n")
         (root / "support-diagnostics/test/sample.test.ts").write_text("test('sample', () => {})\n")
+        (root / "docs/test-audit").mkdir()
+        (root / "docs/test-audit/classifications-v1.json").write_text(
+            json.dumps(
+                {
+                    "artifact": "test-audit-classifications",
+                    "schema_version": 1,
+                    "evidence_catalog": {
+                        "ci": {"description": "maintained lane", "source_paths": [".github/workflows/ci.yml"]}
+                    },
+                    "candidate_summary": {
+                        "high_confidence_candidates": [],
+                        "milestone_10_disposition": {"outcome": "no action", "rationale": "test fixture"},
+                    },
+                    "cohorts": [
+                        {
+                            "id": "all",
+                            "classification": "valuable",
+                            "rationale": "{path} has a maintained test contract.",
+                            "evidence_ids": ["ci"],
+                            "paths": ["support-diagnostics/test/sample.test.ts", "tests/test_sample.py"],
+                        }
+                    ],
+                }
+            )
+        )
         subprocess.run(["git", "add", "."], cwd=root, check=True)
 
     @staticmethod
