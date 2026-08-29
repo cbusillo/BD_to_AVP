@@ -8,7 +8,8 @@ import time
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-from unittest import mock
+
+mock = unittest.mock
 
 from bd_to_avp.observability import (
     ObservabilityContext,
