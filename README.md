@@ -207,26 +207,28 @@ but this feature does not establish the cause of the output-size report in
 issue #202 and does not claim to fix any separately reported media-specific
 stall. Those observations remain separate diagnostic work.
 
-The native app keeps conversion setup centered on the selected source,
-Profile, destination, and estimated result. Use **Edit…** for per-conversion
-changes, then either apply them to the current conversion, update a custom
-Profile, or save a new Profile. If a source and Profile require a choice before
-they can run together, resolve it inline or use **Add to Queue for Review**;
-the queue preserves those decisions for each source and will not start while
-any item still needs attention. Remembered choices are scoped to the matching
-source and Profile and can be forgotten from the resolution prompt.
+The native app uses one persistent queue workspace for composition, review,
+execution, and results. Use **Add Sources…**, the queue's **Add** menu, or drag
+and drop to append files, folders, disc images, Blu-ray folders, movie folders,
+and inserted discs without replacing work already in the queue. Select a
+waiting video and use **Edit…** to change its Profile and conversion settings,
+or **Change…** to choose its destination.
 
-The macOS app opens to a persistent queue workspace even before a source is
-selected. Files, folders, disc images, and inserted discs can be appended with
-the native picker or drag and drop. Waiting videos can be selected, edited,
-reordered, moved next, removed, and restored with Undo while active and
-completed settings remain locked. Work restored after an app restart never
-starts automatically; interrupted or stopped videos require an explicit
-**Resume Queue**, **Restart Safely**, or recovery choice. **Pause After Current**
-lets the active video finish without starting another, while **Stop Current**
-cancels only the active video and leaves pending work waiting for an explicit
-resume. Failed videos and items needing attention stay parked so unrelated
-eligible queue work can continue.
+If a source and Profile require a route-quality choice, the item is persisted
+immediately as **Needs a Choice** and the available resolution appears in its
+detail pane. The queue will not start while any item still needs that choice,
+so later videos cannot run ahead of unresolved work. Remembered choices remain
+scoped to the matching source and Profile and can be forgotten from the
+resolution prompt.
+
+Waiting videos can be selected, edited, reordered, moved next, removed, and
+restored with Undo while active and completed settings remain locked. Work
+restored after an app restart never starts automatically; interrupted or
+stopped videos require an explicit **Resume Queue**, **Restart Safely**, or
+recovery choice. **Pause After Current** lets the active video finish without
+starting another, while **Stop Current** cancels only the active video and
+leaves pending work waiting for an explicit resume. Runtime failures and
+recovery decisions remain parked according to their existing queue policy.
 
 Use **Start Later…** to arm one editable, cancellable off-peak window for the
 queue. The app must remain open: it does not schedule a system wake and does
