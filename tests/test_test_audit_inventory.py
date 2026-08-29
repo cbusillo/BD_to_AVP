@@ -60,6 +60,15 @@ schemes:
 
 
 class TestTestAuditInventory(unittest.TestCase):
+    def test_committed_inventory_artifacts_are_current(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        matches, differences = check_artifacts(
+            root,
+            root / "docs/test-audit/inventory-v1.json",
+            root / "docs/test-audit/inventory-v1.md",
+        )
+        self.assertTrue(matches, differences)
+
     def test_parses_authoritative_ci_commands(self) -> None:
         parsed = parse_ci_workflow(CI)
         self.assertEqual(parsed["runner"], "macos-26")
@@ -154,6 +163,26 @@ class TestTestAuditInventory(unittest.TestCase):
             classification_path.write_text(json.dumps(source))
             with self.assertRaisesRegex(InventoryError, "missing paths"):
                 build_inventory(root, baseline_sha="baseline")
+
+    def test_inventory_rejects_lane_references_missing_from_lane_definitions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._init_repo(root)
+            self._populate_minimal_repo(root)
+            (root / ".github/workflows/ci.yml").write_text("jobs:\n  validate:\n    runs-on: macos-26\n")
+            with self.assertRaisesRegex(InventoryError, "undefined lanes: ci.python.unittest"):
+                build_inventory(root, baseline_sha="baseline")
+
+    def test_support_fixture_markdown_has_matching_table_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._init_repo(root)
+            self._populate_minimal_repo(root)
+            markdown = render_markdown(build_inventory(root, baseline_sha="baseline"))
+            self.assertIn(
+                "| Path | Format | Classification | Rationale | Evidence |\n| --- | --- | --- | --- | --- |",
+                markdown,
+            )
 
     @staticmethod
     def _init_repo(root: Path) -> None:

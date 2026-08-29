@@ -85,15 +85,30 @@ The point-in-time capture is for exact start SHA
   wall time).
 - Support diagnostics passed 23 tests in 164ms test duration (2.19 seconds
   wall time).
+- Matching `main` CI run `33264262845` succeeded.
+
+## Exact-Head Execution Evidence
+
+The final local evidence was captured from exact audit implementation SHA
+`257fd21f38e49031b9fa96a733875702313ebd5c`:
+
+- Python discovery passed 1,973 tests with 3 skips in 154.497 test seconds
+  (156.10 seconds wall time) with the repository's vendored tools first in
+  `PATH`.
+- Native macOS tests passed 567 tests in 21.512 test seconds (46.10 seconds
+  wall time).
+- Support diagnostics passed 23 tests in 126ms test duration (1.20 seconds
+  wall time).
 - A 106-module isolated Python sweep reproduced one import-order failure in
   `tests/test_process_runner.py`; after the focused import fix, that module
   passed all 45 tests independently. The final exact-head sweep passed all 106
   modules, covering 1,971 tests with 3 skips in 163.20 seconds wall time.
-- Matching `main` CI run `33264262845` succeeded.
 
 Local and CI timings are not compared across runners. The generated inventory
-records this evidence as a fixed artifact; it is not a claim about a later
-local invocation.
+records baseline and exact-head evidence separately as fixed artifacts; neither
+is a claim about a later local invocation. The vendored-tool `PATH` avoids a
+local Homebrew `ffmpeg-full`/`libavfilter` linkage conflict and does not change
+the repository test command or product behavior.
 
 ## Lane Boundaries And Stop Rules
 

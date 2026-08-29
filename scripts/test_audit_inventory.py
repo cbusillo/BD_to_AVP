@@ -17,6 +17,7 @@ DEFAULT_MARKDOWN = Path("docs/test-audit/inventory-v1.md")
 DEFAULT_CLASSIFICATIONS = Path("docs/test-audit/classifications-v1.json")
 CLASSIFICATION_SOURCE_SCHEMA_VERSION = 1
 VALID_CLASSIFICATIONS = frozenset({"valuable", "accepted-cost", "replace", "consolidate", "remove"})
+EXACT_HEAD_EVIDENCE_SHA = "257fd21f38e49031b9fa96a733875702313ebd5c"
 TEST_GLOBS = (
     "tests/test_*.py",
     "macos/BluRayToVisionProTests/*.swift",
@@ -513,7 +514,12 @@ def build_inventory(
     )
     test_files = _test_rows(root, test_paths, project, classifications)
     fixtures = _fixture_rows(fixture_paths, classifications)
-    orphan_lanes = [
+    defined_lane_ids = {lane["id"] for lane in lanes}
+    referenced_lane_ids = {lane_id for row in test_files for lane_id in row["lane_ids"]}
+    undefined_lane_ids = sorted(referenced_lane_ids - defined_lane_ids)
+    if undefined_lane_ids:
+        raise InventoryError(f"test files reference undefined lanes: {', '.join(undefined_lane_ids)}")
+    not_in_ci_lanes = [
         {
             "lane_id": lane["id"],
             "reason": (
@@ -583,6 +589,34 @@ def build_inventory(
                         "wall_duration_seconds": 2.19,
                     },
                 ],
+                "excluded_identity_fields": ["hostname", "username", "private paths", "credentials", "device IDs"],
+            },
+            "exact_head": {
+                "captured_from_sha": EXACT_HEAD_EVIDENCE_SHA,
+                "lanes": [
+                    {
+                        "id": "ci.python.unittest",
+                        "status": "passed",
+                        "test_count": 1973,
+                        "skipped_count": 3,
+                        "test_duration_seconds": 154.497,
+                        "wall_duration_seconds": 156.10,
+                    },
+                    {
+                        "id": "ci.macos.blu_ray_unit",
+                        "status": "passed",
+                        "test_count": 567,
+                        "test_duration_seconds": 21.512,
+                        "wall_duration_seconds": 46.10,
+                    },
+                    {
+                        "id": "ci.support_diagnostics.vitest",
+                        "status": "passed",
+                        "test_count": 23,
+                        "test_duration_milliseconds": 126,
+                        "wall_duration_seconds": 1.20,
+                    },
+                ],
                 "python_module_isolation": {
                     "status": "passed",
                     "module_count": 106,
@@ -591,7 +625,6 @@ def build_inventory(
                     "wall_duration_seconds": 163.20,
                     "resolved_candidate": "process-runner-isolated-import",
                 },
-                "excluded_identity_fields": ["hostname", "username", "private paths", "credentials", "device IDs"],
             },
             "ci": {
                 "runner_label": ci["runner"],
@@ -625,7 +658,7 @@ def build_inventory(
             "milestone_10_disposition": classification_source["candidate_summary"]["milestone_10_disposition"],
         },
         "findings": {
-            "orphan_or_not_in_ci_lanes": orphan_lanes,
+            "not_in_ci_lanes": not_in_ci_lanes,
             "unmaintained_test_files": unmaintained,
             "excluded_from_inventory": [
                 "Untracked build/DerivedData checkouts and generated Xcode output.",
@@ -708,7 +741,10 @@ def render_markdown(document: dict[str, Any]) -> str:
                 else "- High-confidence implementation candidates are recorded in the JSON artifact."
             ),
             f"- Non-actionable review observations: **{len(classification_summary['review_observations'])}**.",
-            f"- Milestone #10 disposition: {classification_summary['milestone_10_disposition']['outcome']}.",
+            (
+                "- Milestone #10 disposition: "
+                f"{classification_summary['milestone_10_disposition']['outcome'].rstrip('.')}."
+            ),
             "",
             "## Execution Evidence",
             "",
@@ -729,12 +765,37 @@ def render_markdown(document: dict[str, Any]) -> str:
             f"| `{lane['id']}` | {lane['status']} | {lane['test_count']} | {lane.get('skipped_count', 0)} | "
             f"{test_duration} | {lane['wall_duration_seconds']:.2f}s |"
         )
+    exact_head = document["execution_evidence"]["exact_head"]
+    lines.extend(
+        [
+            "",
+            f"Exact-head evidence captured from `{exact_head['captured_from_sha']}`:",
+            "",
+            "| Lane | Status | Tests | Skips | Test duration | Wall duration |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for lane in exact_head["lanes"]:
+        test_duration = (
+            f"{lane['test_duration_seconds']:.3f}s"
+            if "test_duration_seconds" in lane
+            else f"{lane['test_duration_milliseconds']}ms"
+        )
+        lines.append(
+            f"| `{lane['id']}` | {lane['status']} | {lane['test_count']} | {lane.get('skipped_count', 0)} | "
+            f"{test_duration} | {lane['wall_duration_seconds']:.2f}s |"
+        )
+    isolation = exact_head["python_module_isolation"]
+    lines.append(
+        f"- Python module isolation: {isolation['module_count']} modules, {isolation['test_count']} tests, "
+        f"{isolation['skipped_count']} skips, {isolation['wall_duration_seconds']:.2f}s wall time."
+    )
     lines.extend(
         [
             "",
             "## Findings",
             "",
-            f"- Orphan/not-in-CI lane findings: **{len(document['findings']['orphan_or_not_in_ci_lanes'])}**.",
+            f"- Maintained lanes outside CI: **{len(document['findings']['not_in_ci_lanes'])}**.",
             f"- Unmaintained test files: **{len(document['findings']['unmaintained_test_files'])}**.",
             "- No row is classified as `replace`, `consolidate`, or `remove` without concrete repository evidence.",
             "",
@@ -775,7 +836,7 @@ def render_markdown(document: dict[str, Any]) -> str:
             "## Support Fixtures",
             "",
             "| Path | Format | Classification | Rationale | Evidence |",
-            "| --- | --- | --- | --- |",
+            "| --- | --- | --- | --- | --- |",
         ]
     )
     for row in document["support_fixtures"]:

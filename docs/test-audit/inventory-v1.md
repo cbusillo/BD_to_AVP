@@ -3,7 +3,7 @@
 - Baseline reference: `b4f980642c6e36140f458af3f3eaffafc9ae14fa`
 - Test files: **149**
 - Support fixtures: **70**
-- Test cases counted: **2586**
+- Test cases counted: **2589**
 - Classification source: `docs/test-audit/classifications-v1.json`
 
 ## Lanes
@@ -22,7 +22,7 @@
 - `valuable`: **165** rows.
 - High-confidence implementation candidates are recorded in the JSON artifact.
 - Non-actionable review observations: **1**.
-- Milestone #10 disposition: Close after final review if the exact-head isolation sweep and broad gates remain green..
+- Milestone #10 disposition: Close after final review if the exact-head isolation sweep and broad gates remain green.
 
 ## Execution Evidence
 
@@ -35,9 +35,18 @@ Point-in-time execution evidence is recorded for the baseline and intentionally 
 | `ci.macos.blu_ray_unit` | passed | 567 | 0 | 25.010s | 52.17s |
 | `ci.support_diagnostics.vitest` | passed | 23 | 0 | 164ms | 2.19s |
 
+Exact-head evidence captured from `257fd21f38e49031b9fa96a733875702313ebd5c`:
+
+| Lane | Status | Tests | Skips | Test duration | Wall duration |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `ci.python.unittest` | passed | 1973 | 3 | 154.497s | 156.10s |
+| `ci.macos.blu_ray_unit` | passed | 567 | 0 | 21.512s | 46.10s |
+| `ci.support_diagnostics.vitest` | passed | 23 | 0 | 126ms | 1.20s |
+- Python module isolation: 106 modules, 1971 tests, 3 skips, 163.20s wall time.
+
 ## Findings
 
-- Orphan/not-in-CI lane findings: **2**.
+- Maintained lanes outside CI: **2**.
 - Unmaintained test files: **0**.
 - No row is classified as `replace`, `consolidate`, or `remove` without concrete repository evidence.
 
@@ -195,7 +204,7 @@ Point-in-time execution evidence is recorded for the baseline and intentionally 
 | `tests/test_storage_capacity.py` | Python | `python-unittest-discovery` | 6 | `valuable` | tests/test_storage_capacity.py exercises a maintained Python product, parser, configuration, GUI, process, or validation contract in the authoritative discovery lane. No age, static-signal, or direct-reference observation is treated as removal evidence. | `ci-python-discovery` | — | filesystem_access (6), polling_or_waiting (2) |
 | `tests/test_subtitles.py` | Python | `python-unittest-discovery` | 46 | `valuable` | tests/test_subtitles.py exercises a maintained Python product, parser, configuration, GUI, process, or validation contract in the authoritative discovery lane. No age, static-signal, or direct-reference observation is treated as removal evidence. | `ci-python-discovery` | real-media or SSIF/ISO fixture may be required | filesystem_access (64) |
 | `tests/test_support_diagnostics.py` | Python | `python-unittest-discovery` | 21 | `valuable` | tests/test_support_diagnostics.py exercises a maintained Python product, parser, configuration, GUI, process, or validation contract in the authoritative discovery lane. No age, static-signal, or direct-reference observation is treated as removal evidence. | `ci-python-discovery` | network access | filesystem_access (14), polling_or_waiting (8), network_access (15) |
-| `tests/test_test_audit_inventory.py` | Python | `python-unittest-discovery` | 7 | `valuable` | tests/test_test_audit_inventory.py verifies the bounded audit generator itself, including deterministic artifacts and exact classification coverage. It is an intentional operational control rather than a product behavior candidate. | `ci-python-discovery`, `audit-generator-contract` | real-media or SSIF/ISO fixture may be required; visionOS simulator or physical Apple Vision Pro, depending on evidence | filesystem_access (7), external_process (7), polling_or_waiting (2) |
+| `tests/test_test_audit_inventory.py` | Python | `python-unittest-discovery` | 10 | `valuable` | tests/test_test_audit_inventory.py verifies the bounded audit generator itself, including deterministic artifacts and exact classification coverage. It is an intentional operational control rather than a product behavior candidate. | `ci-python-discovery`, `audit-generator-contract` | real-media or SSIF/ISO fixture may be required; visionOS simulator or physical Apple Vision Pro, depending on evidence | filesystem_access (11), external_process (7), polling_or_waiting (2) |
 | `tests/test_tier3_clean_machine.py` | Python | `python-unittest-discovery` | 43 | `accepted-cost` | tests/test_tier3_clean_machine.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | Tier 3 clean-machine and Accessibility environment; network access; real-media or SSIF/ISO fixture may be required | environment_dependent (3), filesystem_access (82), external_process (14), polling_or_waiting (4), network_access (7), ui_or_accessibility (14), hardware_or_media (3), skip_or_conditional (2) |
 | `tests/test_tier3_operator_collect.py` | Python | `python-unittest-discovery` | 26 | `accepted-cost` | tests/test_tier3_operator_collect.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | visionOS simulator or physical Apple Vision Pro, depending on evidence | filesystem_access (21), polling_or_waiting (3), hardware_or_media (10) |
 | `tests/test_tier3_operator_receipt.py` | Python | `python-unittest-discovery` | 5 | `accepted-cost` | tests/test_tier3_operator_receipt.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | visionOS simulator or physical Apple Vision Pro, depending on evidence | filesystem_access (7), hardware_or_media (4) |
@@ -215,7 +224,7 @@ Point-in-time execution evidence is recorded for the baseline and intentionally 
 ## Support Fixtures
 
 | Path | Format | Classification | Rationale | Evidence |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `tests/fixtures/multilingual_audio_selection_v1.json` | json | `valuable` | tests/fixtures/multilingual_audio_selection_v1.json is a named structured fixture for a maintained audio, observability, profile, or support-diagnostics contract. No repository evidence supports replacing or removing it. | `structured-fixture-contract` |
 | `tests/fixtures/native_worker_audio_fallback_warning_v10.json` | json | `valuable` | tests/fixtures/native_worker_audio_fallback_warning_v10.json is a versioned native-worker protocol fixture. Retain it to preserve decoding compatibility for the named message shape; fixture age or low direct-reference counts are not removal evidence. | `worker-protocol-fixture-contract` |
 | `tests/fixtures/native_worker_audio_fallback_warning_v11.json` | json | `valuable` | tests/fixtures/native_worker_audio_fallback_warning_v11.json is a versioned native-worker protocol fixture. Retain it to preserve decoding compatibility for the named message shape; fixture age or low direct-reference counts are not removal evidence. | `worker-protocol-fixture-contract` |

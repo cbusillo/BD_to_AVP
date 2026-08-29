@@ -131,6 +131,41 @@
     },
     "comparison_caveat": "Local timings are not compared with CI runner timings.",
     "deterministic": false,
+    "exact_head": {
+      "captured_from_sha": "257fd21f38e49031b9fa96a733875702313ebd5c",
+      "lanes": [
+        {
+          "id": "ci.python.unittest",
+          "skipped_count": 3,
+          "status": "passed",
+          "test_count": 1973,
+          "test_duration_seconds": 154.497,
+          "wall_duration_seconds": 156.1
+        },
+        {
+          "id": "ci.macos.blu_ray_unit",
+          "status": "passed",
+          "test_count": 567,
+          "test_duration_seconds": 21.512,
+          "wall_duration_seconds": 46.1
+        },
+        {
+          "id": "ci.support_diagnostics.vitest",
+          "status": "passed",
+          "test_count": 23,
+          "test_duration_milliseconds": 126,
+          "wall_duration_seconds": 1.2
+        }
+      ],
+      "python_module_isolation": {
+        "module_count": 106,
+        "resolved_candidate": "process-runner-isolated-import",
+        "skipped_count": 3,
+        "status": "passed",
+        "test_count": 1971,
+        "wall_duration_seconds": 163.2
+      }
+    },
     "local": {
       "captured_from_sha": "b4f980642c6e36140f458af3f3eaffafc9ae14fa",
       "excluded_identity_fields": [
@@ -169,14 +204,6 @@
         "build": "26A5421a",
         "macos_version": "27.0"
       },
-      "python_module_isolation": {
-        "module_count": 106,
-        "resolved_candidate": "process-runner-isolated-import",
-        "skipped_count": 3,
-        "status": "passed",
-        "test_count": 1971,
-        "wall_duration_seconds": 163.2
-      },
       "toolchain": {
         "node": "26.7.0",
         "npm": "11.19.0",
@@ -197,7 +224,7 @@
       "Release/signing workflows and packaging smoke commands that do not execute test cases.",
       "Non-test support modules outside tests/fixtures; none were found in this baseline."
     ],
-    "orphan_or_not_in_ci_lanes": [
+    "not_in_ci_lanes": [
       {
         "lane_id": "operator.tier3.installed_ui",
         "reason": "Configured test target is not part of the maintained CI validate job; coverage is documented as operator/device evidence.",
@@ -349,7 +376,7 @@
       "python-unittest-discovery": 106,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2564,
+    "ci_test_case_count": 2567,
     "classification_counts": {
       "accepted-cost": 54,
       "valuable": 165
@@ -360,7 +387,7 @@
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2586,
+    "test_case_count": 2589,
     "test_file_count": 149,
     "unmapped_test_file_count": 0
   },
@@ -4892,7 +4919,7 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 7,
+          "occurrences": 11,
           "signal": "filesystem_access"
         },
         {
@@ -4904,7 +4931,7 @@
           "signal": "polling_or_waiting"
         }
       ],
-      "test_case_count": 7
+      "test_case_count": 10
     },
     {
       "bundle": "python-unittest-discovery",
