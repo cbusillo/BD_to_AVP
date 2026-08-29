@@ -454,6 +454,8 @@ private struct PersistentQueueRow: View {
                         Text("· \(item.status.title)")
                             .foregroundStyle(item.status.tint)
                             .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(1)
                     }
                     .font(.caption)
                     .accessibilityElement(children: .combine)
@@ -510,7 +512,6 @@ private struct PersistentQueueRow: View {
             if item.canRemove { remove(item.id) }
         }
     }
-
 }
 
 struct PersistentQueueDetailView: View {
@@ -888,7 +889,6 @@ private extension PersistentQueueItemStatus {
         case .completed: .green
         }
     }
-
 }
 
 private extension ConversionSourceKind {
