@@ -211,6 +211,7 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 addSources: {},
                 addSourceFolder: {},
                 addDisc: { _ in },
+                addDroppedURLs: { _, _ in true },
                 move: { _, _ in },
                 moveRelative: { _, _, _ in },
                 moveNext: { _ in },

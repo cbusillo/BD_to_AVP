@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum PersistentQueueMovePlacement: Equatable {
+enum PersistentQueueMovePlacement: Equatable, Sendable {
     case before
     case after
 }
@@ -13,12 +13,14 @@ private struct PersistentQueueDropInsertion: Equatable {
 }
 
 private extension UTType {
-    static let persistentQueueItem = UTType(exportedAs: "com.shinycomputers.bd-to-avp.queue-item")
+    static let persistentQueueItem = UTType(
+        exportedAs: "com.shinycomputers.bd-to-avp.queue-item",
+        conformingTo: .data
+    )
 }
 
 struct PersistentQueueSidebarView: View {
     @State private var dropInsertion: PersistentQueueDropInsertion?
-    @State private var draggedItemID: UUID?
 
     let items: [PersistentQueueItem]
     @Binding var selectedID: UUID?
@@ -38,6 +40,7 @@ struct PersistentQueueSidebarView: View {
     let addSources: () -> Void
     let addSourceFolder: () -> Void
     let addDisc: (ConversionSource) -> Void
+    let addDroppedURLs: ([URL], CGPoint) -> Bool
     let move: (UUID, Int) -> Void
     let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
     let moveNext: (UUID) -> Void
@@ -77,6 +80,9 @@ struct PersistentQueueSidebarView: View {
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityIdentifier("persistent-queue-sidebar")
+        .onChange(of: items.map(\.id)) { _, _ in
+            dropInsertion = nil
+        }
     }
 
     @ViewBuilder
@@ -229,7 +235,7 @@ struct PersistentQueueSidebarView: View {
                 canMoveDown: canMove(item, by: 1),
                 canConvertNext: canMoveToNext(item),
                 dropInsertion: $dropInsertion,
-                draggedItemID: $draggedItemID,
+                addDroppedURLs: addDroppedURLs,
                 move: move,
                 moveRelative: moveRelative,
                 moveNext: moveNext,
@@ -269,12 +275,13 @@ struct PersistentQueueSidebarView: View {
                 Menu {
                     if let selectedItem {
                         if selectedItem.canMove {
-                            Button("Convert Next") { moveNext(selectedItem.id) }
-                                .disabled(!canMoveToNext(selectedItem))
                             Button("Move Up") { move(selectedItem.id, -1) }
                                 .disabled(!canMove(selectedItem, by: -1))
                             Button("Move Down") { move(selectedItem.id, 1) }
                                 .disabled(!canMove(selectedItem, by: 1))
+                            Divider()
+                            Button("Convert Next") { moveNext(selectedItem.id) }
+                                .disabled(!canMoveToNext(selectedItem))
                         } else if let reason = selectedItem.queueManipulationLockReason {
                             Text(reason)
                         }
@@ -481,7 +488,7 @@ private struct PersistentQueueRow: View {
     let canMoveDown: Bool
     let canConvertNext: Bool
     @Binding var dropInsertion: PersistentQueueDropInsertion?
-    @Binding var draggedItemID: UUID?
+    let addDroppedURLs: ([URL], CGPoint) -> Bool
     let move: (UUID, Int) -> Void
     let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
     let moveNext: (UUID) -> Void
@@ -495,13 +502,7 @@ private struct PersistentQueueRow: View {
     private var interactiveRow: some View {
         if item.canMove {
             baseRow
-                .onDrag {
-                    draggedItemID = item.id
-                    return NSItemProvider(
-                        item: item.id.uuidString as NSString,
-                        typeIdentifier: UTType.persistentQueueItem.identifier
-                    )
-                }
+                .onDrag { queueItemProvider() }
                 .background {
                     GeometryReader { proxy in
                         Color.clear
@@ -512,12 +513,12 @@ private struct PersistentQueueRow: View {
                     }
                 }
                 .onDrop(
-                    of: [UTType.persistentQueueItem],
+                    of: [UTType.persistentQueueItem, UTType.fileURL],
                     delegate: PersistentQueueRowDropDelegate(
                         targetID: item.id,
                         rowHeight: rowHeight,
                         dropInsertion: $dropInsertion,
-                        draggedItemID: $draggedItemID,
+                        addDroppedURLs: addDroppedURLs,
                         moveRelative: moveRelative
                     )
                 )
@@ -534,6 +535,19 @@ private struct PersistentQueueRow: View {
             baseRow
                 .accessibilityHint(item.queueManipulationLockReason ?? "This item cannot move or be edited.")
         }
+    }
+
+    private func queueItemProvider() -> NSItemProvider {
+        let provider = NSItemProvider()
+        let itemData = Data(item.id.uuidString.utf8)
+        provider.registerDataRepresentation(
+            forTypeIdentifier: UTType.persistentQueueItem.identifier,
+            visibility: .ownProcess
+        ) { completion in
+            completion(itemData, nil)
+            return nil
+        }
+        return provider
     }
 
     private var baseRow: some View {
@@ -607,12 +621,13 @@ private struct PersistentQueueRow: View {
         .contentShape(Rectangle())
         .contextMenu {
             if item.canMove {
-                Button("Convert Next") { moveNext(item.id) }
-                    .disabled(!canConvertNext)
                 Button("Move Up") { move(item.id, -1) }
                     .disabled(!canMoveUp)
                 Button("Move Down") { move(item.id, 1) }
                     .disabled(!canMoveDown)
+                Divider()
+                Button("Convert Next") { moveNext(item.id) }
+                    .disabled(!canConvertNext)
                 Divider()
             } else if let reason = item.queueManipulationLockReason {
                 Text(reason)
@@ -650,18 +665,15 @@ private struct PersistentQueueRowDropDelegate: DropDelegate {
     let targetID: UUID
     let rowHeight: CGFloat
     @Binding var dropInsertion: PersistentQueueDropInsertion?
-    @Binding var draggedItemID: UUID?
+    let addDroppedURLs: ([URL], CGPoint) -> Bool
     let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
 
     func validateDrop(info: DropInfo) -> Bool {
-        guard let draggedItemID, draggedItemID != targetID else {
-            return false
-        }
-        return info.hasItemsConforming(to: [UTType.persistentQueueItem])
+        info.hasItemsConforming(to: [UTType.persistentQueueItem, UTType.fileURL])
     }
 
     func dropEntered(info: DropInfo) {
-        guard validateDrop(info: info) else {
+        guard info.hasItemsConforming(to: [UTType.persistentQueueItem]) else {
             return
         }
         updateInsertion(for: info)
@@ -675,24 +687,58 @@ private struct PersistentQueueRowDropDelegate: DropDelegate {
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        guard validateDrop(info: info) else {
-            dropInsertion = nil
-            return DropProposal(operation: .forbidden)
+        if info.hasItemsConforming(to: [UTType.persistentQueueItem]) {
+            updateInsertion(for: info)
+            return DropProposal(operation: .move)
         }
-        updateInsertion(for: info)
-        return DropProposal(operation: .move)
+        dropInsertion = nil
+        return info.hasItemsConforming(to: [UTType.fileURL])
+            ? DropProposal(operation: .copy)
+            : DropProposal(operation: .forbidden)
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        defer {
-            dropInsertion = nil
-            draggedItemID = nil
+        defer { dropInsertion = nil }
+        if let provider = info.itemProviders(for: [UTType.persistentQueueItem]).first {
+            return performQueueItemDrop(provider: provider, info: info)
         }
-        guard validateDrop(info: info), let sourceID = draggedItemID else {
+        return performFileURLDrop(info: info)
+    }
+
+    private func performQueueItemDrop(provider: NSItemProvider, info: DropInfo) -> Bool {
+        guard validateDrop(info: info) else {
             return false
         }
-        moveRelative(sourceID, targetID, placement(for: info))
+        let targetID = targetID
+        let targetPlacement = placement(for: info)
+        let moveRelative = moveRelative
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.persistentQueueItem.identifier) { data, error in
+            guard error == nil,
+                  let data,
+                  let value = String(data: data, encoding: .utf8),
+                  let sourceID = UUID(uuidString: value),
+                  sourceID != targetID
+            else {
+                return
+            }
+            DispatchQueue.main.async {
+                moveRelative(sourceID, targetID, targetPlacement)
+            }
+        }
         return true
+    }
+
+    private func performFileURLDrop(info: DropInfo) -> Bool {
+        guard info.hasItemsConforming(to: [UTType.fileURL]) else {
+            return false
+        }
+        let pasteboardURLs = NSPasteboard(name: .drag)
+            .readObjects(forClasses: [NSURL.self]) as? [NSURL] ?? []
+        let fileURLs = pasteboardURLs.compactMap { $0.filePathURL as URL? }
+        guard !fileURLs.isEmpty else {
+            return false
+        }
+        return addDroppedURLs(fileURLs, info.location)
     }
 
     private func updateInsertion(for info: DropInfo) {

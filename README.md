@@ -231,9 +231,9 @@ Choice** instead of losing the unresolved route-quality decision.
 Waiting videos can be selected, edited, dragged into a new order, or arranged
 from the menu bar's **Queue** menu and the sidebar's **Arrange** menu. The Queue
 commands include **Move Up** (`⌘⌥↑`), **Move Down** (`⌘⌥↓`), and **Convert
-Next** (`⌘⌥↩`). They can also be removed and restored
-with Undo. Locked rows explain why they cannot move or edit while active and
-completed settings remain locked. Work restored after an app restart never starts automatically; interrupted or
+Next** (`⌘⌥↩`). They can also be removed and restored with Undo. Locked rows
+explain why they cannot move or edit, while active and completed settings remain
+locked. Work restored after an app restart never starts automatically; interrupted or
 stopped videos require an explicit **Resume Queue**, **Restart Safely**, or
 recovery choice. **Pause After Current** lets the active video finish without
 starting another, while **Stop Current** cancels only the active video and

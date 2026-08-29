@@ -434,6 +434,7 @@ struct ContentView: View {
             addSources: addSourcesToPersistentQueue,
             addSourceFolder: addSourceFolderToPersistentQueue,
             addDisc: { appendSourcesToPersistentQueue([$0]) },
+            addDroppedURLs: acceptDrop,
             move: movePersistentQueueItem,
             moveRelative: movePersistentQueueItem,
             moveNext: movePersistentQueueItemNext,
