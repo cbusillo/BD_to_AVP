@@ -76,6 +76,9 @@ struct PersistentQueueItem: Identifiable, Equatable {
         let resolvedStatus: PersistentQueueItemStatus
         switch item.state {
         case .waiting:
+            guard item.routeQualityConflict == nil else {
+                throw PersistentQueueProjectionError.unexpectedRouteQualityConflict(item.id)
+            }
             resolvedStatus = .waiting
         case .needsChoice:
             guard let conflict = item.routeQualityConflict?.conflict else {
@@ -179,6 +182,7 @@ enum PersistentQueueProjectionError: Error, Equatable {
     case invalidSourceKind(String)
     case missingDecision(UUID)
     case missingRouteQualityConflict(UUID)
+    case unexpectedRouteQualityConflict(UUID)
     case missingFailure(UUID)
     case missingResult(UUID)
     case unexpected

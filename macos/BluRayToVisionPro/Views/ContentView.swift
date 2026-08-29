@@ -20,6 +20,9 @@ struct ContentView: View {
     @State private var persistentQueueErrorMessage: String?
     @State private var persistentQueueRemovalToken: PersistentQueueRemovalToken?
     @State private var queueItemBeingEdited: PersistentQueueItem?
+    @State private var configuredSource: ConversionSource?
+    @State private var isShowingSourceConfiguration = false
+    @State private var isShowingSourceConfigurationEditor = false
     @State private var compactPersistentQueueRows = false
     @State private var preserveEncodingOnNextProfileChange = false
     @State private var titleSelection = DiscTitleSelection.main
@@ -318,8 +321,45 @@ struct ContentView: View {
                 resolutionMemoryStore: resolutionMemoryStore,
                 applyToConversion: { profileID, editedOptions in
                     updatePersistentQueueItem(item, profileID: profileID, options: editedOptions)
+                },
+                queueConflictForReview: { profileID, editedOptions, conflict in
+                    updatePersistentQueueItem(
+                        item,
+                        profileID: profileID,
+                        options: editedOptions,
+                        routeQualityConflict: conflict
+                    )
                 }
             )
+        }
+        .sheet(isPresented: $isShowingSourceConfiguration, onDismiss: finishSourceConfiguration) {
+            if let configuredSource {
+                SourceConfigurationSheet(
+                    source: configuredSource,
+                    inspection: viewModel.state.result,
+                    profile: selectedProfile,
+                    destinationURL: destinationURL,
+                    titleSelection: $titleSelection,
+                    drafts: conversionDrafts,
+                    previewViewModel: previewViewModel,
+                    openSettings: { isShowingSourceConfigurationEditor = true },
+                    addToQueue: addConfiguredDraftsToPersistentQueue,
+                    startQueue: startConfiguredDrafts
+                )
+                .sheet(isPresented: $isShowingSourceConfigurationEditor) {
+                    SetupEditSheet(
+                        initialProfile: selectedProfile,
+                        initialOptions: options,
+                        fallbackPipelineDefaults: defaultJobOptions.profilePipelineDefaults,
+                        sourceKind: configuredSource.kind,
+                        profiles: profileStore.profiles,
+                        profileStore: profileStore,
+                        resolutionMemoryStore: resolutionMemoryStore,
+                        applyToConversion: applyConfiguredOptions,
+                        queueConflictForReview: queueConfiguredConflictForReview
+                    )
+                }
+            }
         }
         .sheet(isPresented: $isShowingDiagnosticReport) {
             DiagnosticReportSheet(viewModel: diagnosticReportViewModel)
@@ -504,6 +544,9 @@ struct ContentView: View {
 
             Divider()
             Button("Add MTS or M2TS…") { chooseFile(.transportStream) }
+
+            Divider()
+            Button("Configure Source…", action: configureExistingSource)
         } label: {
             Label("Add Sources", systemImage: "plus")
         }
@@ -983,6 +1026,23 @@ struct ContentView: View {
         appendSourcesToPersistentQueue([source])
     }
 
+    private func configureExistingSource() {
+        guard canSelectSource,
+              let sourceURL = SourcePicker.chooseExistingSource(),
+              let source = ConversionSource.infer(from: sourceURL)
+        else {
+            return
+        }
+        guard source.kind != .sourceFolder else {
+            appendSourcesToPersistentQueue([source])
+            return
+        }
+        titleSelection = .main
+        configuredSource = source
+        viewModel.selectSource(source)
+        isShowingSourceConfiguration = true
+    }
+
     private func addSourcesToPersistentQueue() {
         appendSourcesToPersistentQueue(SourcePicker.chooseQueueSources())
     }
@@ -1066,6 +1126,64 @@ struct ContentView: View {
             } catch {
                 persistentQueueErrorMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func addConfiguredDraftsToPersistentQueue(_ drafts: [ConversionDraft]) {
+        appendDraftsToPersistentQueue(drafts, clearConfiguredSource: true)
+        isShowingSourceConfiguration = false
+    }
+
+    private func startConfiguredDrafts(_ drafts: [ConversionDraft]) {
+        Task { @MainActor in
+            do {
+                let result = try await viewModel.appendPersistentQueueDrafts(drafts)
+                queueAdmissionNoticeMessage = queueAdmissionMessage(for: result)
+                guard result.addedCount > 0 else {
+                    return
+                }
+                if viewModel.offPeakSchedule != nil {
+                    try await viewModel.cancelOffPeakSchedule()
+                }
+                isShowingSourceConfiguration = false
+                finishSourceConfiguration()
+                let outcome = await viewModel.startPersistentQueue()
+                if case let .rejected(rejection) = outcome {
+                    persistentQueueErrorMessage = persistentQueueCommandMessage(for: rejection)
+                }
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func queueConfiguredConflictForReview(
+        profileID: String,
+        options editedOptions: ConversionOptions,
+        conflict: RouteQualityConflict
+    ) {
+        let profile = profileStore.profile(withID: profileID)
+        let drafts = makeConversionDrafts(options: editedOptions, profile: profile)
+        appendDraftsToPersistentQueue(
+            drafts,
+            conflicts: Array(repeating: conflict, count: drafts.count),
+            clearConfiguredSource: true
+        )
+        isShowingSourceConfigurationEditor = false
+        isShowingSourceConfiguration = false
+    }
+
+    private func applyConfiguredOptions(profileID: String, options editedOptions: ConversionOptions) {
+        selectedProfileID = profileID
+        options = editedOptions
+    }
+
+    private func finishSourceConfiguration() {
+        isShowingSourceConfigurationEditor = false
+        guard configuredSource != nil else { return }
+        configuredSource = nil
+        if !viewModel.hasActiveWork {
+            viewModel.clearSource()
         }
     }
 
@@ -1256,7 +1374,8 @@ struct ContentView: View {
     private func updatePersistentQueueItem(
         _ item: PersistentQueueItem,
         profileID: String,
-        options editedOptions: ConversionOptions
+        options editedOptions: ConversionOptions,
+        routeQualityConflict: RouteQualityConflict? = nil
     ) {
         let profile = profileStore.profile(withID: profileID)
         let draft = ConversionDraft(
@@ -1269,7 +1388,11 @@ struct ContentView: View {
         )
         Task { @MainActor in
             do {
-                try await viewModel.updatePersistentQueueItem(item.id, draft: draft)
+                try await viewModel.updatePersistentQueueItem(
+                    item.id,
+                    draft: draft,
+                    routeQualityConflict: routeQualityConflict
+                )
             } catch {
                 persistentQueueErrorMessage = error.localizedDescription
             }
@@ -1313,6 +1436,176 @@ struct ContentView: View {
         return "\(skippedMessage) \(result.addedCount) other \(noun) added."
     }
 
+}
+
+private struct SourceConfigurationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let source: ConversionSource
+    let inspection: SourceInspection?
+    let profile: EncodingProfile
+    let destinationURL: URL
+    @Binding var titleSelection: DiscTitleSelection
+    let drafts: [ConversionDraft]
+    @ObservedObject var previewViewModel: PreviewViewModel
+    let openSettings: () -> Void
+    let addToQueue: ([ConversionDraft]) -> Void
+    let startQueue: ([ConversionDraft]) -> Void
+
+    @State private var isShowingPreview = false
+    @State private var outputLength = OutputLength.threeMinutes
+    @State private var samplePosition = SamplePosition.middle
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    if let inspection {
+                        titleSelectionControls(inspection)
+                        setupSummary
+                    } else {
+                        ProgressView("Reading source details…")
+                            .frame(maxWidth: .infinity, minHeight: 160)
+                    }
+                }
+                .padding(24)
+            }
+
+            Divider()
+            HStack(spacing: 10) {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Edit Settings…", action: openSettings)
+                    .disabled(inspection == nil)
+                Button("Preview…") { isShowingPreview = true }
+                    .disabled(drafts.count != 1)
+                Button("Add to Queue") { addToQueue(drafts) }
+                    .disabled(drafts.isEmpty)
+                Button("Start Queue") { startQueue(drafts) }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(drafts.isEmpty)
+            }
+            .padding(16)
+        }
+        .frame(minWidth: 680, idealWidth: 760, minHeight: 440, idealHeight: 560)
+        .sheet(isPresented: $isShowingPreview) {
+            if let draft = drafts.first {
+                PreviewSheet(
+                    viewModel: previewViewModel,
+                    conversionDraft: draft,
+                    outputLength: $outputLength,
+                    samplePosition: $samplePosition,
+                    startFullConversion: { preview in
+                        isShowingPreview = false
+                        startQueue([preview.conversion])
+                    }
+                )
+            }
+        }
+        .accessibilityIdentifier("source-configuration-sheet")
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Configure Source")
+                .font(.title2.weight(.semibold))
+            Text(source.displayName)
+                .font(.headline)
+            Text("Configure titles, settings, and previews here. Starting always saves the selected work to the persistent queue first.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func titleSelectionControls(_ inspection: SourceInspection) -> some View {
+        if source.kind.isDiscWorkflow, inspection.titles.count > 1 {
+            GroupBox("Titles") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker("Convert", selection: titleMode) {
+                        Text("Main Movie").tag("main")
+                        Text("All Videos").tag("all")
+                        Text("Custom Selection").tag("custom")
+                    }
+                    .pickerStyle(.segmented)
+                    if case let .custom(identifiers) = titleSelection {
+                        ForEach(inspection.titles) { title in
+                            Toggle(
+                                "\(title.name) · \(title.formattedDuration)",
+                                isOn: titleBinding(title.id, selectedIDs: identifiers)
+                            )
+                        }
+                    }
+                    Text("\(drafts.count) video\(drafts.count == 1 ? "" : "s") will be saved to the queue.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private var titleMode: Binding<String> {
+        Binding(
+            get: {
+                if titleSelection.isMain { return "main" }
+                if titleSelection.isAll { return "all" }
+                return "custom"
+            },
+            set: { mode in
+                switch mode {
+                case "main":
+                    titleSelection = .main
+                case "all":
+                    titleSelection = .all
+                default:
+                    titleSelection = .custom(Set(inspection?.titles.map(\.id) ?? []))
+                }
+            }
+        )
+    }
+
+    private func titleBinding(_ titleID: String, selectedIDs: Set<String>) -> Binding<Bool> {
+        Binding(
+            get: { selectedIDs.contains(titleID) },
+            set: { isSelected in
+                var updatedIDs = selectedIDs
+                if isSelected {
+                    updatedIDs.insert(titleID)
+                } else {
+                    updatedIDs.remove(titleID)
+                }
+                titleSelection = .custom(updatedIDs)
+            }
+        )
+    }
+
+    private var setupSummary: some View {
+        GroupBox("Conversion Setup") {
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
+                GridRow {
+                    Text("Profile").foregroundStyle(.secondary)
+                    Text(profile.name)
+                }
+                GridRow {
+                    Text("Destination").foregroundStyle(.secondary)
+                    Text(destinationURL.path)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                GridRow {
+                    Text("Output").foregroundStyle(.secondary)
+                    Text(drafts.first?.options.videoRoutePlan.qualityTitle ?? "Waiting for source details")
+                }
+            }
+            .font(.callout)
+            .padding(.top, 4)
+        }
+    }
 }
 
 private struct SaveProfileSheet: View {

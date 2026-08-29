@@ -214,12 +214,19 @@ and inserted discs without replacing work already in the queue. Select a
 waiting video and use **Edit…** to change its Profile and conversion settings,
 or **Change…** to choose its destination.
 
+Choose **Configure Source…** from the Add Sources menu when you want to inspect
+one source before admitting it. That secondary sheet restores Preview plus main,
+all-video, and custom title selection without replacing the main queue
+workspace. **Add to Queue**, **Start Queue**, and a reviewed Preview all save
+their selected drafts to the durable queue before queue execution begins.
+
 If a source and Profile require a route-quality choice, the item is persisted
 immediately as **Needs a Choice** and the available resolution appears in its
 detail pane. The queue will not start while any item still needs that choice,
 so later videos cannot run ahead of unresolved work. Remembered choices remain
 scoped to the matching source and Profile and can be forgotten from the
-resolution prompt.
+resolution prompt. Editing a waiting row can also park that row as **Needs a
+Choice** instead of losing the unresolved route-quality decision.
 
 Waiting videos can be selected, edited, reordered, moved next, removed, and
 restored with Undo while active and completed settings remain locked. Work

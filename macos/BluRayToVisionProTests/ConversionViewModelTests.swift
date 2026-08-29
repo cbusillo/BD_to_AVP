@@ -2962,6 +2962,30 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testEditingWaitingItemWithRouteQualityConflictParksItForResolution() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let item = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        try await queueStore.replaceItems([item])
+        let viewModel = ConversionViewModel(durableQueueStore: queueStore)
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: item.intent.options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            return XCTFail("Expected route-quality conflict")
+        }
+
+        try await viewModel.updatePersistentQueueItem(
+            item.id,
+            draft: try PersistentQueueItem(item: item).draft,
+            routeQualityConflict: conflict
+        )
+
+        XCTAssertEqual(queueStore.items.first?.state, .needsChoice)
+        XCTAssertEqual(viewModel.persistentQueueItems.first?.status, .needsChoice(conflict))
+        XCTAssertEqual(viewModel.persistentQueueResolutionGroups.first?.candidates.map(\.id), [item.id])
+    }
+
+    @MainActor
     func testAdoptionRevalidatesAvailabilityBeforeWorkerSpawn() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3054,7 +3078,8 @@ final class ConversionViewModelTests: XCTestCase {
         while viewModel.hasActiveWork { await Task.yield() }
 
         XCTAssertEqual(conversionPaths, [secondURL.path])
-        XCTAssertEqual(queueStore.items.map(\.state), [.waiting, .completed])
+        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .completed])
+        XCTAssertEqual(queueStore.items.first?.failure?.code, "source_unavailable")
     }
 
     @MainActor
@@ -4902,6 +4927,43 @@ final class ConversionViewModelTests: XCTestCase {
         XCTAssertEqual(convertedPaths, [localURL.path])
         XCTAssertEqual(queueStore.items.map(\.state), [.failed, .stopped, .completed])
         XCTAssertEqual(queueStore.items.first?.failure?.code, "scheduled_disc_unavailable")
+    }
+
+    @MainActor
+    func testOffPeakStartReportsUnresolvedChoiceInsteadOfQueueActivity() async throws {
+        let now = Date(timeIntervalSince1970: 150)
+        let scheduleStore = OffPeakScheduleStore.inMemory()
+        let schedule = OffPeakQueueSchedule(
+            startAt: Date(timeIntervalSince1970: 100),
+            endAt: Date(timeIntervalSince1970: 200),
+            createdAt: Date(timeIntervalSince1970: 50)
+        )
+        try await scheduleStore.save(schedule)
+        let queueStore = ConversionQueueStore.inMemory()
+        var options = ConversionOptions()
+        try options.encoding.selectQualityStep(.maximumDetail)
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            return XCTFail("Expected route-quality conflict")
+        }
+        var item = makePersistentQueueFixture(ordinal: 0, state: .needsChoice)
+        item.routeQualityConflict = DurableRouteQualityConflict(conflict: conflict)
+        try await queueStore.replaceItems([item])
+        let viewModel = ConversionViewModel(
+            diagnosticClock: { now },
+            durableQueueStore: queueStore,
+            offPeakScheduleStore: scheduleStore
+        )
+
+        let evaluation = await viewModel.evaluateOffPeakSchedule()
+        XCTAssertEqual(evaluation, .start(schedule))
+        XCTAssertEqual(scheduleStore.lastOutcome?.missReason, .unresolvedChoices)
+        XCTAssertEqual(
+            scheduleStore.lastOutcome?.message,
+            "The scheduled window opened, but a queued video still needs a choice before the queue can run."
+        )
     }
 
     @MainActor
