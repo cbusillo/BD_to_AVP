@@ -15,6 +15,7 @@ enum PersistentQueueCommandOutcome: Equatable {
 
 enum PersistentQueueCommandRejection: Equatable {
     case noEligibleItems
+    case unresolvedChoices
     case noActiveItem
     case queueIsNotRunning
     case otherWorkIsActive
@@ -22,6 +23,7 @@ enum PersistentQueueCommandRejection: Equatable {
 
 enum PersistentQueueItemStatus: Equatable {
     case waiting
+    case needsChoice(RouteQualityConflict)
     case inspecting
     case processing
     case stopping
@@ -75,6 +77,11 @@ struct PersistentQueueItem: Identifiable, Equatable {
         switch item.state {
         case .waiting:
             resolvedStatus = .waiting
+        case .needsChoice:
+            guard let conflict = item.routeQualityConflict?.conflict else {
+                throw PersistentQueueProjectionError.missingRouteQualityConflict(item.id)
+            }
+            resolvedStatus = .needsChoice(conflict)
         case .inspecting:
             resolvedStatus = .inspecting
         case .processing:
@@ -133,7 +140,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
 
     var canRemove: Bool {
         switch status {
-        case .waiting, .interrupted, .attention, .failed, .stopped, .notStarted:
+        case .waiting, .needsChoice, .interrupted, .attention, .failed, .stopped, .notStarted:
             true
         case .inspecting, .processing, .stopping, .completed:
             false
@@ -161,9 +168,17 @@ struct PersistentQueueRemovalToken: Equatable {
     }
 }
 
+struct PersistentQueueAppendResult: Equatable {
+    let addedCount: Int
+    let duplicateDisplayNames: [String]
+
+    var duplicateCount: Int { duplicateDisplayNames.count }
+}
+
 enum PersistentQueueProjectionError: Error, Equatable {
     case invalidSourceKind(String)
     case missingDecision(UUID)
+    case missingRouteQualityConflict(UUID)
     case missingFailure(UUID)
     case missingResult(UUID)
     case unexpected

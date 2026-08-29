@@ -83,6 +83,36 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         )
     }
 
+    func testHeldRouteQualityChoiceRendersInPersistentQueueDetail() throws {
+        let conflict = try makeRouteQualityConflict()
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Movies/Held Feature.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies"),
+            options: conflict.proposedOptions
+        )
+        let item = try PersistentQueueItem(item: DurableConversionQueueItem(
+            ordinal: 0,
+            origin: .singleSource,
+            intent: DurableQueueItemIntent(draft: draft),
+            state: .needsChoice,
+            routeQualityConflict: DurableRouteQualityConflict(conflict: conflict)
+        ))
+        let group = try XCTUnwrap(QueueResolutionGroup.group([
+            QueueResolutionCandidate(id: item.id, draft: item.draft, conflict: conflict),
+        ]).first)
+
+        try render(
+            items: [item],
+            selectedItem: item,
+            compact: false,
+            colorScheme: .dark,
+            appearanceName: .darkAqua,
+            resolutionGroup: group
+        )
+    }
+
     private func render(
         items: [PersistentQueueItem],
         selectedItem: PersistentQueueItem?,
@@ -90,7 +120,8 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         colorScheme: ColorScheme,
         appearanceName: NSAppearance.Name,
         offPeakSchedule: OffPeakQueueSchedule? = nil,
-        offPeakScheduleOutcome: OffPeakScheduleOutcome? = nil
+        offPeakScheduleOutcome: OffPeakScheduleOutcome? = nil,
+        resolutionGroup: QueueResolutionGroup? = nil
     ) throws {
         let content = HSplitView {
             PersistentQueueSidebarView(
@@ -128,11 +159,14 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
             .frame(minWidth: 300, idealWidth: 330, maxWidth: 420)
             PersistentQueueDetailView(
                 item: selectedItem,
+                resolutionGroup: resolutionGroup,
+                resolutionMemoryStore: ResolutionMemoryStore.inMemory(),
                 activeProgress: WorkerProgress(currentStage: 3, totalStages: 5, stageFraction: 0.61),
                 activeElapsedText: "1:12:31",
                 edit: { _ in },
                 changeDestination: { _ in },
-                retry: { _, _ in }
+                retry: { _, _ in },
+                resolveRouteQuality: { _, _ in }
             )
             .frame(minWidth: 600)
         }
@@ -199,5 +233,17 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 result: result
             ))
         }
+    }
+
+    private func makeRouteQualityConflict() throws -> RouteQualityConflict {
+        var options = ConversionOptions()
+        try options.encoding.selectQualityStep(.maximumDetail)
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            throw NSError(domain: "PersistentQueueWorkspaceRenderTests", code: 1)
+        }
+        return conflict
     }
 }

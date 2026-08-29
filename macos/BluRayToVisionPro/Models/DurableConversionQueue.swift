@@ -1,7 +1,7 @@
 import Foundation
 
 struct ConversionQueueDocument: Codable, Equatable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     let version: Int
     var items: [DurableConversionQueueItem]
@@ -17,7 +17,7 @@ struct ConversionQueueDocument: Codable, Equatable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let version = try values.decode(Int.self, forKey: .version)
         let items = try values.decode([DurableConversionQueueItem].self, forKey: .items)
-        guard version == 1 || version == Self.currentVersion else {
+        guard (1...Self.currentVersion).contains(version) else {
             throw ConversionQueueStoreError.unsupportedVersion(version)
         }
         self.init(version: Self.currentVersion, items: items)
@@ -44,6 +44,7 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
     var failure: DurableQueueFailure?
     var result: DurableQueueResult?
     var resolutionTrace: DurableQueueResolutionTrace?
+    var routeQualityConflict: DurableRouteQualityConflict?
 
     init(
         id: UUID = UUID(),
@@ -57,7 +58,8 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         decision: DurableQueueDecision? = nil,
         failure: DurableQueueFailure? = nil,
         result: DurableQueueResult? = nil,
-        resolutionTrace: DurableQueueResolutionTrace? = nil
+        resolutionTrace: DurableQueueResolutionTrace? = nil,
+        routeQualityConflict: DurableRouteQualityConflict? = nil
     ) {
         self.id = id
         self.ordinal = ordinal
@@ -71,6 +73,46 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         self.failure = failure
         self.result = result
         self.resolutionTrace = resolutionTrace
+        self.routeQualityConflict = routeQualityConflict
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, ordinal, groupID, origin, intent, inspection, state, attempts
+        case decision, failure, result, resolutionTrace, routeQualityConflict
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        ordinal = try values.decode(Int.self, forKey: .ordinal)
+        groupID = try values.decodeIfPresent(UUID.self, forKey: .groupID)
+        origin = try values.decode(DurableQueueItemOrigin.self, forKey: .origin)
+        intent = try values.decode(DurableQueueItemIntent.self, forKey: .intent)
+        inspection = try values.decodeIfPresent(SourceInspection.self, forKey: .inspection)
+        state = try values.decode(DurableQueueItemState.self, forKey: .state)
+        attempts = try values.decodeIfPresent([DurableQueueAttempt].self, forKey: .attempts) ?? []
+        decision = try values.decodeIfPresent(DurableQueueDecision.self, forKey: .decision)
+        failure = try values.decodeIfPresent(DurableQueueFailure.self, forKey: .failure)
+        result = try values.decodeIfPresent(DurableQueueResult.self, forKey: .result)
+        resolutionTrace = try values.decodeIfPresent(DurableQueueResolutionTrace.self, forKey: .resolutionTrace)
+        routeQualityConflict = try values.decodeIfPresent(DurableRouteQualityConflict.self, forKey: .routeQualityConflict)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(ordinal, forKey: .ordinal)
+        try values.encodeIfPresent(groupID, forKey: .groupID)
+        try values.encode(origin, forKey: .origin)
+        try values.encode(intent, forKey: .intent)
+        try values.encodeIfPresent(inspection, forKey: .inspection)
+        try values.encode(state, forKey: .state)
+        try values.encode(attempts, forKey: .attempts)
+        try values.encodeIfPresent(decision, forKey: .decision)
+        try values.encodeIfPresent(failure, forKey: .failure)
+        try values.encodeIfPresent(result, forKey: .result)
+        try values.encodeIfPresent(resolutionTrace, forKey: .resolutionTrace)
+        try values.encodeIfPresent(routeQualityConflict, forKey: .routeQualityConflict)
     }
 
     func restoredAfterLaunch(at restoredAt: Date = Date()) -> DurableConversionQueueItem {
@@ -89,7 +131,7 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
                 return restored
             }
             restored.decision = decision.markedStaleAfterRestore()
-        case .waiting, .interrupted, .failed, .completed, .stopped, .notStarted:
+        case .waiting, .needsChoice, .interrupted, .failed, .completed, .stopped, .notStarted:
             break
         }
         return restored
@@ -115,6 +157,38 @@ struct DurableQueueResolutionTrace: Codable, Equatable {
     }
 }
 
+struct DurableRouteQualityConflict: Codable, Equatable {
+    let trigger: RouteQualityTrigger
+    let reason: String
+    let priorOptions: ConversionOptions
+    let proposedOptions: ConversionOptions
+    let resolutions: [RouteQualityResolutionOption]
+    let mappingVersion: Int
+
+    init(conflict: RouteQualityConflict) {
+        trigger = conflict.trigger
+        reason = conflict.reason
+        priorOptions = conflict.priorOptions
+        proposedOptions = conflict.proposedOptions
+        resolutions = conflict.resolutions
+        mappingVersion = conflict.mappingVersion
+    }
+
+    var conflict: RouteQualityConflict {
+        RouteQualityConflict(
+            trigger: trigger,
+            reason: reason,
+            priorOptions: priorOptions,
+            proposedOptions: proposedOptions,
+            priorRoute: VideoRoutePlan(options: priorOptions),
+            proposedRoute: VideoRoutePlan(options: proposedOptions),
+            resolutions: resolutions,
+            mappingVersion: mappingVersion,
+            selectedResolutionID: nil
+        )
+    }
+}
+
 enum DurableQueueItemOrigin: String, Codable, Equatable {
     case singleSource
     case multiTitle
@@ -128,6 +202,7 @@ enum SourceFolderDiscTitleSelection: String, Codable, Equatable {
 
 enum DurableQueueItemState: String, Codable, Equatable, CaseIterable {
     case waiting
+    case needsChoice
     case inspecting
     case processing
     case stopping

@@ -58,13 +58,22 @@ final class ConversionQueueStore: ObservableObject {
         document.items
     }
 
-    func appendWaitingItems(_ newItems: [DurableConversionQueueItem]) async throws {
+    func appendAdmittedItems(_ newItems: [DurableConversionQueueItem]) async throws {
         guard !newItems.isEmpty else {
             return
         }
         try await mutateItems { items in
             let existingIDs = Set(items.map(\.id))
-            guard newItems.allSatisfy({ $0.state == .waiting }),
+            guard newItems.allSatisfy({ item in
+                switch item.state {
+                case .waiting:
+                    item.routeQualityConflict == nil
+                case .needsChoice:
+                    item.routeQualityConflict != nil
+                case .inspecting, .processing, .stopping, .interrupted, .attention, .failed, .completed, .stopped, .notStarted:
+                    false
+                }
+            }),
                   Set(newItems.map(\.id)).count == newItems.count,
                   newItems.allSatisfy({ !existingIDs.contains($0.id) })
             else {
@@ -187,7 +196,7 @@ final class ConversionQueueStore: ObservableObject {
             guard matchingItems.count == itemIDs.count,
                   matchingItems.allSatisfy({ item in
                       switch item.state {
-                      case .waiting, .interrupted, .attention, .failed, .stopped, .notStarted:
+                      case .waiting, .needsChoice, .interrupted, .attention, .failed, .stopped, .notStarted:
                           true
                       case .inspecting, .processing, .stopping, .completed:
                           false
@@ -251,7 +260,7 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
-    func resolveWaitingItems(
+    func resolveHeldItems(
         _ itemIDs: Set<UUID>,
         intents: [UUID: DurableQueueItemIntent],
         trace: DurableQueueResolutionTrace
@@ -261,11 +270,13 @@ final class ConversionQueueStore: ObservableObject {
         }
         try await mutateItems { items in
             for index in items.indices where itemIDs.contains(items[index].id) {
-                guard items[index].state == .waiting, let intent = intents[items[index].id] else {
+                guard items[index].state == .needsChoice, let intent = intents[items[index].id] else {
                     throw ConversionQueueStoreError.invalidDocument
                 }
                 items[index].intent = intent
                 items[index].resolutionTrace = trace
+                items[index].routeQualityConflict = nil
+                items[index].state = .waiting
             }
             guard Set(items.filter { itemIDs.contains($0.id) }.map(\.id)) == itemIDs else {
                 throw ConversionQueueStoreError.invalidDocument
@@ -425,6 +436,9 @@ final class ConversionQueueStore: ObservableObject {
                   !item.intent.profile.name.isEmpty,
                   !item.intent.destinationPath.isEmpty
             else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            if item.state == .needsChoice, item.routeQualityConflict == nil {
                 throw ConversionQueueStoreError.invalidDocument
             }
             if item.state == .attention, item.decision == nil {
