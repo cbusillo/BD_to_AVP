@@ -106,6 +106,7 @@ struct BluRayToVisionProApp: App {
                 resolutionMemoryStore: resolutionMemoryStore,
                 capabilities: capabilities
             )
+                .environmentObject(queueNotificationCoordinator)
                 .frame(minWidth: 920, minHeight: 680)
                 .background(
                     WindowAccessor { window in
