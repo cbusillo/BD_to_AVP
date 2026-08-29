@@ -25,16 +25,10 @@ struct PersistentQueueSidebarView: View {
     let items: [PersistentQueueItem]
     @Binding var selectedID: UUID?
     @Binding var compactRows: Bool
-    let insertedDiscs: [ConversionSource]
+    let commandState: PersistentQueueCommandState
     let makeMKVAvailable: Bool
     let activeProgress: WorkerProgress?
     let activeElapsedText: String?
-    let runState: PersistentQueueRunState
-    let canStart: Bool
-    let canPauseAfterCurrent: Bool
-    let canStopCurrent: Bool
-    let canUndo: Bool
-    let offPeakSchedule: OffPeakQueueSchedule?
     let offPeakScheduleOutcome: OffPeakScheduleOutcome?
     let offPeakScheduleErrorMessage: String?
     let addSources: () -> Void
@@ -96,7 +90,7 @@ struct PersistentQueueSidebarView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.red.opacity(0.08))
                 .accessibilityIdentifier("off-peak-schedule-error")
-        } else if let schedule = offPeakSchedule {
+        } else if let schedule = commandState.offPeakSchedule {
             VStack(alignment: .leading, spacing: 4) {
                 Label(
                     "Scheduled \(schedule.startAt.formatted(date: .abbreviated, time: .shortened))–\(schedule.endAt.formatted(date: .omitted, time: .shortened))",
@@ -152,7 +146,7 @@ struct PersistentQueueSidebarView: View {
                 Divider()
                 Button("Clear Completed", action: clearCompleted)
                     .disabled(completedItems.isEmpty)
-                if canUndo {
+                if commandState.canUndo {
                     Button("Undo Remove", action: undo)
                 }
             } label: {
@@ -251,9 +245,9 @@ struct PersistentQueueSidebarView: View {
                 Menu {
                     Button("Add Files or Folders…", action: addSources)
                     Button("Add Folder of Movies…", action: addSourceFolder)
-                    if !insertedDiscs.isEmpty {
+                    if !commandState.insertedDiscs.isEmpty {
                         Divider()
-                        ForEach(insertedDiscs, id: \.url) { disc in
+                        ForEach(commandState.insertedDiscs, id: \.url) { disc in
                             Button("Add \(disc.displayName)") { addDisc(disc) }
                         }
                     }
@@ -269,7 +263,7 @@ struct PersistentQueueSidebarView: View {
                     Label("Remove", systemImage: "minus")
                 }
                 .buttonStyle(.borderless)
-                .disabled(selectedItem?.canRemove != true)
+                .disabled(!commandState.canRemoveSelectedItem)
                 .accessibilityIdentifier("persistent-queue-remove")
 
                 Menu {
@@ -296,7 +290,7 @@ struct PersistentQueueSidebarView: View {
                 .accessibilityIdentifier("persistent-queue-arrange")
 
                 Spacer()
-                if canUndo {
+                if commandState.canUndo {
                     Button("Undo", action: undo)
                         .buttonStyle(.borderless)
                 }
@@ -307,19 +301,19 @@ struct PersistentQueueSidebarView: View {
             }
             VStack(alignment: .trailing, spacing: 8) {
                 HStack(spacing: 8) {
-                    Button(offPeakSchedule == nil ? startButtonTitle : "Start Now", action: start)
+                    Button(commandState.startTitle, action: start)
                         .buttonStyle(.borderedProminent)
-                        .disabled(!canStart)
+                        .disabled(!commandState.canStart)
                         .frame(maxWidth: .infinity)
                         .accessibilityIdentifier("persistent-queue-start")
-                        .accessibilityLabel(offPeakSchedule == nil ? startButtonTitle : "Start Now")
-                    if offPeakSchedule == nil {
+                        .accessibilityLabel(commandState.startTitle)
+                    if commandState.offPeakSchedule == nil {
                         Button("Start Later…", action: startLater)
-                            .disabled(!canStart)
+                            .disabled(!commandState.canStart)
                             .accessibilityIdentifier("off-peak-schedule-create")
                     }
                 }
-                if offPeakSchedule != nil {
+                if commandState.offPeakSchedule != nil {
                     HStack(spacing: 8) {
                         Button("Edit Schedule…", action: editSchedule)
                             .accessibilityIdentifier("off-peak-schedule-edit")
@@ -329,11 +323,11 @@ struct PersistentQueueSidebarView: View {
                 }
                 HStack(spacing: 8) {
                     Button("Pause After Current", action: pauseAfterCurrent)
-                        .disabled(!canPauseAfterCurrent)
+                        .disabled(!commandState.canPauseAfterCurrent)
                         .accessibilityIdentifier("persistent-queue-pause-after-current")
                         .accessibilityLabel("Pause queue after the current video")
                     Button("Stop Current", role: .destructive, action: stopCurrent)
-                        .disabled(!canStopCurrent)
+                        .disabled(!commandState.canStopCurrent)
                         .accessibilityIdentifier("persistent-queue-stop-current")
                         .accessibilityLabel("Stop only the current video")
                 }
@@ -368,14 +362,8 @@ struct PersistentQueueSidebarView: View {
     private var selectedItem: PersistentQueueItem? {
         selectedID.flatMap { id in items.first(where: { $0.id == id }) }
     }
-    private var startButtonTitle: String {
-        runState == .paused || items.contains(where: { $0.isRestored || $0.status.isStopped })
-            ? "Resume Queue"
-            : "Start Queue"
-    }
-
     private var banner: (title: String, systemImage: String, tint: Color)? {
-        switch runState {
+        switch commandState.runState {
         case .pauseAfterCurrent:
             return ("Pause requested — the current video will finish before the queue pauses.", "pause.circle.fill", .orange)
         case .paused:

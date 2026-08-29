@@ -45,6 +45,25 @@ struct PersistentQueueItem: Identifiable, Equatable {
     let attemptCount: Int
     let resolutionTrace: DurableQueueResolutionTrace?
 
+    init(
+        id: UUID = UUID(),
+        ordinal: Int,
+        origin: DurableQueueItemOrigin = .singleSource,
+        draft: ConversionDraft,
+        status: PersistentQueueItemStatus,
+        attemptCount: Int = 0,
+        resolutionTrace: DurableQueueResolutionTrace? = nil
+    ) {
+        self.id = id
+        self.ordinal = ordinal
+        self.groupID = nil
+        self.origin = origin
+        self.draft = draft
+        self.status = status
+        self.attemptCount = attemptCount
+        self.resolutionTrace = resolutionTrace
+    }
+
     init(item: DurableConversionQueueItem) throws {
         guard let sourceKind = ConversionSourceKind(rawValue: item.intent.source.kind) else {
             throw PersistentQueueProjectionError.invalidSourceKind(item.intent.source.kind)
@@ -203,6 +222,96 @@ struct PersistentQueueItem: Identifiable, Equatable {
         default:
             false
         }
+    }
+}
+
+struct PersistentQueueCommandState: Equatable {
+    let items: [PersistentQueueItem]
+    let selectedItemID: UUID?
+    let selectedItem: PersistentQueueItem?
+    let insertedDiscs: [ConversionSource]
+    let offPeakSchedule: OffPeakQueueSchedule?
+    let runState: PersistentQueueRunState
+    let startTitle: String
+    let canStart: Bool
+    let canPauseAfterCurrent: Bool
+    let canStopCurrent: Bool
+    let canMoveUp: Bool
+    let canMoveDown: Bool
+    let canConvertNext: Bool
+    let canRemoveSelectedItem: Bool
+    let canUndo: Bool
+    let selectedItemLockReason: String?
+
+    init(
+        items: [PersistentQueueItem],
+        selectedItemID: UUID?,
+        runState: PersistentQueueRunState,
+        hasActiveWorker: Bool,
+        hasPreviewWorker: Bool,
+        offPeakSchedule: OffPeakQueueSchedule?,
+        insertedDiscs: [ConversionSource],
+        removalTokenIsValid: Bool
+    ) {
+        self.items = items
+        self.selectedItemID = selectedItemID
+        self.selectedItem = selectedItemID.flatMap { selectedID in
+            items.first(where: { $0.id == selectedID })
+        }
+        self.insertedDiscs = insertedDiscs
+        self.offPeakSchedule = offPeakSchedule
+        self.runState = runState
+
+        let waitingItems = items.filter(\.canMove)
+        let selectedWaitingIndex = selectedItem.flatMap { item in
+            waitingItems.firstIndex(where: { $0.id == item.id })
+        }
+        let hasUnresolvedChoices = items.contains { item in
+            if case .needsChoice = item.status {
+                return true
+            }
+            return false
+        }
+        let hasEligibleItems = items.contains { item in
+            switch item.status {
+            case .waiting, .interrupted, .stopped, .notStarted:
+                true
+            case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
+                false
+            }
+        }
+        let hasResumableItems = runState == .paused || items.contains { item in
+            switch item.status {
+            case .interrupted, .stopped, .notStarted:
+                true
+            case let .attention(decision):
+                decision.staleAfterRestore
+            default:
+                false
+            }
+        }
+
+        startTitle = if offPeakSchedule != nil {
+            "Start Now"
+        } else if hasResumableItems {
+            "Resume Queue"
+        } else {
+            "Start Queue"
+        }
+        canStart = !hasUnresolvedChoices
+            && hasEligibleItems
+            && runState != .running
+            && runState != .pauseAfterCurrent
+            && !hasActiveWorker
+            && !hasPreviewWorker
+        canPauseAfterCurrent = runState == .running && hasActiveWorker
+        canStopCurrent = (runState == .running || runState == .pauseAfterCurrent) && hasActiveWorker
+        canMoveUp = selectedWaitingIndex.map { $0 > waitingItems.startIndex } ?? false
+        canMoveDown = selectedWaitingIndex.map { $0 < waitingItems.index(before: waitingItems.endIndex) } ?? false
+        canConvertNext = selectedWaitingIndex.map { $0 > waitingItems.startIndex } ?? false
+        canRemoveSelectedItem = selectedItem?.canRemove == true
+        canUndo = removalTokenIsValid
+        selectedItemLockReason = selectedItem?.queueManipulationLockReason
     }
 }
 

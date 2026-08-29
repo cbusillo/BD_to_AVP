@@ -4,21 +4,19 @@ enum AppWindowID {
     static let settings = "settings"
 }
 
-struct ConversionSourceSelectionAction {
-    let perform: () -> Void
-}
-
 struct PersistentQueueCommandActions {
-    let canMoveUp: Bool
-    let canMoveDown: Bool
-    let canConvertNext: Bool
+    let state: PersistentQueueCommandState
+    let addSources: () -> Void
+    let addSourceFolder: () -> Void
+    let addDisc: (ConversionSource) -> Void
+    let start: () -> Void
+    let pauseAfterCurrent: () -> Void
+    let stopCurrent: () -> Void
     let moveUp: () -> Void
     let moveDown: () -> Void
     let convertNext: () -> Void
-}
-
-private struct ConversionSourceSelectionActionKey: FocusedValueKey {
-    typealias Value = ConversionSourceSelectionAction
+    let removeSelectedItem: () -> Void
+    let undoRemove: () -> Void
 }
 
 private struct PersistentQueueCommandActionsKey: FocusedValueKey {
@@ -26,11 +24,6 @@ private struct PersistentQueueCommandActionsKey: FocusedValueKey {
 }
 
 extension FocusedValues {
-    var conversionSourceSelectionAction: ConversionSourceSelectionAction? {
-        get { self[ConversionSourceSelectionActionKey.self] }
-        set { self[ConversionSourceSelectionActionKey.self] = newValue }
-    }
-
     var persistentQueueCommandActions: PersistentQueueCommandActions? {
         get { self[PersistentQueueCommandActionsKey.self] }
         set { self[PersistentQueueCommandActionsKey.self] = newValue }
@@ -123,7 +116,6 @@ struct BluRayToVisionProApp: App {
         .commands {
             SettingsWindowCommands()
             UpdateCommands(updater: updater)
-            SourceCommands()
             PersistentQueueCommands()
         }
 
@@ -133,6 +125,7 @@ struct BluRayToVisionProApp: App {
                 profileStore: profileStore,
                 updater: updater
             )
+            .focusedSceneValue(\.persistentQueueCommandActions, nil)
         }
         .defaultSize(width: 900, height: 680)
         .windowResizability(.contentMinSize)
@@ -145,39 +138,82 @@ private struct PersistentQueueCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Queue") {
+            Button("Add Sources…") {
+                actions?.addSources()
+            }
+            .keyboardShortcut("o", modifiers: .command)
+            .disabled(actions == nil)
+
+            Button("Add Folder of Movies…") {
+                actions?.addSourceFolder()
+            }
+            .disabled(actions == nil)
+
+            if let actions, !actions.state.insertedDiscs.isEmpty {
+                Divider()
+                ForEach(actions.state.insertedDiscs, id: \.url) { disc in
+                    Button("Add \(disc.displayName)") {
+                        actions.addDisc(disc)
+                    }
+                }
+            }
+
+            Divider()
+
+            Button(actions?.state.startTitle ?? "Start Queue") {
+                actions?.start()
+            }
+            .disabled(actions?.state.canStart != true)
+
+            Button("Pause After Current") {
+                actions?.pauseAfterCurrent()
+            }
+            .disabled(actions?.state.canPauseAfterCurrent != true)
+
+            Button("Stop Current", role: .destructive) {
+                actions?.stopCurrent()
+            }
+            .disabled(actions?.state.canStopCurrent != true)
+
+            Divider()
+
             Button("Move Up") {
                 actions?.moveUp()
             }
             .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-            .disabled(actions?.canMoveUp != true)
+            .disabled(actions?.state.canMoveUp != true)
 
             Button("Move Down") {
                 actions?.moveDown()
             }
             .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-            .disabled(actions?.canMoveDown != true)
-
-            Divider()
+            .disabled(actions?.state.canMoveDown != true)
 
             Button("Convert Next") {
                 actions?.convertNext()
             }
             .keyboardShortcut(.return, modifiers: [.command, .option])
-            .disabled(actions?.canConvertNext != true)
-        }
-    }
-}
+            .disabled(actions?.state.canConvertNext != true)
 
-private struct SourceCommands: Commands {
-    @FocusedValue(\.conversionSourceSelectionAction) private var sourceSelectionAction
-
-    var body: some Commands {
-        CommandGroup(replacing: .newItem) {
-            Button("Add Source…") {
-                sourceSelectionAction?.perform()
+            if let reason = actions?.state.selectedItemLockReason {
+                Text("Arrangement unavailable: \(reason)")
+                    .foregroundStyle(.secondary)
+            } else if actions?.state.selectedItemID == nil {
+                Text("Select a waiting item to arrange it.")
+                    .foregroundStyle(.secondary)
             }
-            .keyboardShortcut("o")
-            .disabled(sourceSelectionAction == nil)
+
+            Divider()
+
+            Button("Remove Selected Item", role: .destructive) {
+                actions?.removeSelectedItem()
+            }
+            .disabled(actions?.state.canRemoveSelectedItem != true)
+
+            Button("Undo Remove") {
+                actions?.undoRemove()
+            }
+            .disabled(actions?.state.canUndo != true)
         }
     }
 }
