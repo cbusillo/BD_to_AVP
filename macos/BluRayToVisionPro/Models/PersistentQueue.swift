@@ -48,6 +48,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
     init(
         id: UUID = UUID(),
         ordinal: Int,
+        groupID: UUID? = nil,
         origin: DurableQueueItemOrigin = .singleSource,
         draft: ConversionDraft,
         status: PersistentQueueItemStatus,
@@ -56,7 +57,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
     ) {
         self.id = id
         self.ordinal = ordinal
-        self.groupID = nil
+        self.groupID = groupID
         self.origin = origin
         self.draft = draft
         self.status = status

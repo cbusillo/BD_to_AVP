@@ -1044,7 +1044,7 @@ struct ContentView: View {
     }
 
     private func addDiscToPersistentQueue(_ disc: ConversionSource) {
-        guard persistentQueueCommandState.insertedDiscs.contains(where: { $0.url == disc.url }) else {
+        guard insertedDiscs.contains(where: { $0.url == disc.url }) else {
             return
         }
         appendSourcesToPersistentQueue([disc])

@@ -137,6 +137,8 @@ private struct PersistentQueueCommands: Commands {
     @FocusedValue(\.persistentQueueCommandActions) private var actions
 
     var body: some Commands {
+        CommandGroup(replacing: .newItem) {}
+
         CommandMenu("Queue") {
             Button("Add Sources…") {
                 actions?.addSources()
@@ -200,7 +202,7 @@ private struct PersistentQueueCommands: Commands {
                     Text("Arrangement unavailable: \(reason)")
                         .foregroundStyle(.secondary)
                 } else if actions.state.selectedItemID == nil {
-                    Text("Select a waiting item to arrange it.")
+                    Text("Select a queue item to arrange or remove it.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -215,9 +217,6 @@ private struct PersistentQueueCommands: Commands {
             if let actions {
                 if let reason = actions.state.selectedItemRemovalLockReason {
                     Text("Removal unavailable: \(reason)")
-                        .foregroundStyle(.secondary)
-                } else if actions.state.selectedItemID == nil {
-                    Text("Select an item to remove it.")
                         .foregroundStyle(.secondary)
                 }
             }

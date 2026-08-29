@@ -47,6 +47,10 @@ final class PersistentQueueCommandStateTests: XCTestCase {
         XCTAssertTrue(paused.canStart)
         XCTAssertFalse(paused.canPauseAfterCurrent)
 
+        let interrupted = makeState(items: [makeItem(ordinal: 0, status: .interrupted)])
+        XCTAssertEqual(interrupted.startTitle, "Resume Queue")
+        XCTAssertTrue(interrupted.canStart)
+
         let running = makeState(items: [item], runState: .running, hasActiveWorker: true)
         XCTAssertFalse(running.canStart)
         XCTAssertTrue(running.canPauseAfterCurrent)
@@ -95,6 +99,24 @@ final class PersistentQueueCommandStateTests: XCTestCase {
         XCTAssertTrue(unresolvedState.canRemoveSelectedItem)
         XCTAssertNotNil(unresolvedState.selectedItemLockReason)
         XCTAssertNil(unresolvedState.selectedItemRemovalLockReason)
+    }
+
+    func testActiveAndStoppingItemsCannotBeRemoved() {
+        let processing = makeItem(ordinal: 0, status: .processing)
+        let processingState = makeState(items: [processing], selectedItemID: processing.id)
+        XCTAssertFalse(processingState.canRemoveSelectedItem)
+        XCTAssertEqual(
+            processingState.selectedItemRemovalLockReason,
+            "The active item cannot be removed until it finishes or stops."
+        )
+
+        let stopping = makeItem(ordinal: 0, status: .stopping)
+        let stoppingState = makeState(items: [stopping], selectedItemID: stopping.id)
+        XCTAssertFalse(stoppingState.canRemoveSelectedItem)
+        XCTAssertEqual(
+            stoppingState.selectedItemRemovalLockReason,
+            "This item cannot be removed until it has stopped."
+        )
     }
 
     func testOffPeakScheduleAndInsertedDiscAreReflectedInState() {
