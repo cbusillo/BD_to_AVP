@@ -27,8 +27,8 @@ struct SettingsView: View {
             minWidth: 820,
             idealWidth: 900,
             maxWidth: .infinity,
-            minHeight: 560,
-            idealHeight: 680,
+            minHeight: 620,
+            idealHeight: 700,
             maxHeight: .infinity
         )
     }
