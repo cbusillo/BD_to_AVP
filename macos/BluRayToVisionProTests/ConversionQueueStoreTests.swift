@@ -287,15 +287,26 @@ final class ConversionQueueStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testInvalidOrdinalOrderAndMissingFailureEvidenceAreRejected() async throws {
+    func testInvalidOrdinalAndRouteQualityStateCombinationsAreRejected() async throws {
         let store = ConversionQueueStore.inMemory()
         let misordered = makeItem(ordinal: 1)
         let failedWithoutEvidence = makeItem(ordinal: 0, state: .failed)
+        let waitingWithConflict = makeItem(
+            ordinal: 0,
+            routeQualityConflict: DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+        )
+        let needsChoiceWithoutConflict = makeItem(ordinal: 0, state: .needsChoice)
 
         await XCTAssertThrowsErrorAsync(try await store.replaceItems([misordered])) { error in
             XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
         }
         await XCTAssertThrowsErrorAsync(try await store.replaceItems([failedWithoutEvidence])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([waitingWithConflict])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([needsChoiceWithoutConflict])) { error in
             XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
         }
     }
@@ -835,12 +846,42 @@ final class ConversionQueueStoreTests: XCTestCase {
         try await store.resolveHeldItems(
             [item.id],
             intents: [item.id: item.intent],
-            trace: trace
+            traces: [item.id: trace]
         )
         let restored = ConversionQueueStore(fileURL: fileURL)
 
         XCTAssertEqual(restored.document.version, ConversionQueueDocument.currentVersion)
         XCTAssertEqual(restored.items.first?.resolutionTrace, trace)
+    }
+
+    @MainActor
+    func testResolvingHeldItemsPersistsEachItemTrace() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let conflict = DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+        let first = makeItem(ordinal: 0, state: .needsChoice, routeQualityConflict: conflict)
+        let second = makeItem(ordinal: 1, state: .needsChoice, routeQualityConflict: conflict)
+        let firstTrace = DurableQueueResolutionTrace(
+            conflictID: "first",
+            resolutionID: "first-resolution",
+            qualityOutcome: "Balanced quality",
+            fileOutcome: "Reusable files removed"
+        )
+        let secondTrace = DurableQueueResolutionTrace(
+            conflictID: "second",
+            resolutionID: "second-resolution",
+            qualityOutcome: "Maximum quality",
+            fileOutcome: "Reusable files kept"
+        )
+        try await store.replaceItems([first, second])
+
+        try await store.resolveHeldItems(
+            [first.id, second.id],
+            intents: [first.id: first.intent, second.id: second.intent],
+            traces: [first.id: firstTrace, second.id: secondTrace]
+        )
+
+        XCTAssertEqual(store.items.map(\.state), [.waiting, .waiting])
+        XCTAssertEqual(store.items.map(\.resolutionTrace), [firstTrace, secondTrace])
     }
 
     @MainActor

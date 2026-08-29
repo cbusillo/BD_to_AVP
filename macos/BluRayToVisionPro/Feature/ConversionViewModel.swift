@@ -243,10 +243,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         try await durableQueueStore.restoreRemovedItems(token)
     }
 
-    func updatePersistentQueueItem(_ itemID: UUID, draft: ConversionDraft) async throws {
+    func updatePersistentQueueItem(
+        _ itemID: UUID,
+        draft: ConversionDraft,
+        routeQualityConflict: RouteQualityConflict? = nil
+    ) async throws {
         try await durableQueueStore.updateWaitingItemIntent(
             itemID,
-            intent: DurableQueueItemIntent(draft: draft)
+            intent: DurableQueueItemIntent(draft: draft),
+            routeQualityConflict: routeQualityConflict.map(DurableRouteQualityConflict.init)
         )
     }
 
@@ -356,18 +361,20 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         let intents = application.resolvedDrafts.mapValues { draft in
             DurableQueueItemIntent(draft: draft)
         }
-        let trace = DurableQueueResolutionTrace(
-            conflictID: group.conflict.stableID,
-            resolutionID: application.resolution.id,
-            qualityOutcome: "\(application.resolvedDrafts.values.first?.options.videoRoutePlan.qualityTitle ?? "Selected") quality",
-            fileOutcome: application.resolvedDrafts.values.first?.options.job.intermediatePolicy.createsReusableArtifacts == true
-                ? "Reusable files kept"
-                : "Reusable files removed"
-        )
+        let traces = application.resolvedDrafts.mapValues { draft in
+            DurableQueueResolutionTrace(
+                conflictID: group.conflict.stableID,
+                resolutionID: application.resolution.id,
+                qualityOutcome: "\(draft.options.videoRoutePlan.qualityTitle) quality",
+                fileOutcome: draft.options.job.intermediatePolicy.createsReusableArtifacts
+                    ? "Reusable files kept"
+                    : "Reusable files removed"
+            )
+        }
         try await durableQueueStore.resolveHeldItems(
             Set(application.resolvedDrafts.keys),
             intents: intents,
-            trace: trace
+            traces: traces
         )
     }
 
@@ -434,9 +441,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             let outcome = await startPersistentQueue(windowEnd: startedSchedule.endAt)
             if case let .rejected(rejection) = outcome {
                 offPeakRunWindowEnd = nil
-                let reason: OffPeakScheduleMissReason = rejection == .noEligibleItems
-                    ? .noRunnableItems
-                    : .queueBecameActive
+                let reason: OffPeakScheduleMissReason
+                switch rejection {
+                case .noEligibleItems:
+                    reason = .noRunnableItems
+                case .unresolvedChoices:
+                    reason = .unresolvedChoices
+                case .noActiveItem, .queueIsNotRunning, .otherWorkIsActive:
+                    reason = .queueBecameActive
+                }
                 try await offPeakScheduleStore.markStartedScheduleMissed(
                     scheduleID: startedSchedule.id,
                     reason: reason,
@@ -468,6 +481,54 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func parkUnavailableScheduledQueueItems() async throws {
+        let eligibleItemIDs = Set(durableQueueStore.items
+            .filter(Self.isScheduleEligible)
+            .map(\.id))
+        try await parkUnavailableQueueItems(
+            eligibleItemIDs: eligibleItemIDs,
+            failure: { item in
+                let isPhysicalDisc = item.intent.source.kind == ConversionSourceKind.physicalDisc.rawValue
+                return DurableQueueFailure(
+                    code: isPhysicalDisc ? "scheduled_disc_unavailable" : "scheduled_source_unavailable",
+                    message: isPhysicalDisc
+                        ? "The required Blu-ray disc is not inserted."
+                        : "The scheduled source is no longer available.",
+                    details: item.intent.source.path,
+                    retryable: true
+                )
+            }
+        )
+    }
+
+    private func parkUnavailableManualQueueItems() async throws {
+        let eligibleItemIDs = Set(durableQueueStore.items.compactMap { item -> UUID? in
+            switch item.state {
+            case .waiting, .interrupted, .stopped, .notStarted:
+                item.id
+            case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
+                nil
+            }
+        })
+        try await parkUnavailableQueueItems(
+            eligibleItemIDs: eligibleItemIDs,
+            failure: { item in
+                let isPhysicalDisc = item.intent.source.kind == ConversionSourceKind.physicalDisc.rawValue
+                return DurableQueueFailure(
+                    code: "source_unavailable",
+                    message: isPhysicalDisc
+                        ? "The required Blu-ray disc is not inserted."
+                        : "The queued source is no longer available.",
+                    details: item.intent.source.path,
+                    retryable: true
+                )
+            }
+        )
+    }
+
+    private func parkUnavailableQueueItems(
+        eligibleItemIDs: Set<UUID>,
+        failure: (DurableConversionQueueItem) -> DurableQueueFailure
+    ) async throws {
         struct UnavailableSource: Hashable {
             let kind: String
             let path: String
@@ -476,24 +537,16 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
 
         var unavailableSources: [UnavailableSource: DurableQueueFailure] = [:]
-        for item in durableQueueStore.items where Self.isScheduleEligible(item) {
+        for item in durableQueueStore.items where eligibleItemIDs.contains(item.id) {
             let source = try? durableSource(for: item)
             guard let source, sourceAvailabilityResolver(source) else {
-                let isPhysicalDisc = item.intent.source.kind == ConversionSourceKind.physicalDisc.rawValue
                 let sourceIdentity = UnavailableSource(
                     kind: item.intent.source.kind,
                     path: item.intent.source.path,
                     workerSourcePath: item.intent.source.workerSourcePath,
                     mediaIdentifier: item.intent.source.mediaIdentifier
                 )
-                unavailableSources[sourceIdentity] = DurableQueueFailure(
-                    code: isPhysicalDisc ? "scheduled_disc_unavailable" : "scheduled_source_unavailable",
-                    message: isPhysicalDisc
-                        ? "The required Blu-ray disc is not inserted."
-                        : "The scheduled source is no longer available.",
-                    details: item.intent.source.path,
-                    retryable: true
-                )
+                unavailableSources[sourceIdentity] = failure(item)
                 continue
             }
         }
@@ -505,7 +558,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             for (sourceIdentity, failure) in unavailableSources {
                 let matchingIndices = items.indices.filter { index in
                     let source = items[index].intent.source
-                    return Self.isScheduleEligible(items[index])
+                    return eligibleItemIDs.contains(items[index].id)
                         && source.kind == sourceIdentity.kind
                         && source.path == sourceIdentity.path
                         && source.workerSourcePath == sourceIdentity.workerSourcePath
@@ -547,6 +600,14 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return false
         }) else {
             return .rejected(.unresolvedChoices)
+        }
+        if windowEnd == nil {
+            do {
+                try await parkUnavailableManualQueueItems()
+            } catch {
+                durableQueueRuntimeDiagnostic = "Queue could not park unavailable sources safely: \(error.localizedDescription)"
+                return .rejected(.noEligibleItems)
+            }
         }
         let candidates = persistentQueueItems.filter { item in
             switch item.status {

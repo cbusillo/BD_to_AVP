@@ -244,7 +244,11 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
-    func updateWaitingItemIntent(_ itemID: UUID, intent: DurableQueueItemIntent) async throws {
+    func updateWaitingItemIntent(
+        _ itemID: UUID,
+        intent: DurableQueueItemIntent,
+        routeQualityConflict: DurableRouteQualityConflict? = nil
+    ) async throws {
         try await mutateItems { items in
             guard let index = items.firstIndex(where: { $0.id == itemID }),
                   items[index].state == .waiting
@@ -252,6 +256,8 @@ final class ConversionQueueStore: ObservableObject {
                 throw ConversionQueueStoreError.invalidDocument
             }
             items[index].intent = intent
+            items[index].routeQualityConflict = routeQualityConflict
+            items[index].state = routeQualityConflict == nil ? .waiting : .needsChoice
             let groupIDs = Set(items[index].groupID.map { [$0] } ?? [])
             Self.normalizeMultiTitleSourceRemoval(
                 in: &items,
@@ -263,14 +269,17 @@ final class ConversionQueueStore: ObservableObject {
     func resolveHeldItems(
         _ itemIDs: Set<UUID>,
         intents: [UUID: DurableQueueItemIntent],
-        trace: DurableQueueResolutionTrace
+        traces: [UUID: DurableQueueResolutionTrace]
     ) async throws {
-        guard itemIDs == Set(intents.keys), !itemIDs.isEmpty else {
+        guard itemIDs == Set(intents.keys), itemIDs == Set(traces.keys), !itemIDs.isEmpty else {
             throw ConversionQueueStoreError.invalidDocument
         }
         try await mutateItems { items in
             for index in items.indices where itemIDs.contains(items[index].id) {
-                guard items[index].state == .needsChoice, let intent = intents[items[index].id] else {
+                guard items[index].state == .needsChoice,
+                      let intent = intents[items[index].id],
+                      let trace = traces[items[index].id]
+                else {
                     throw ConversionQueueStoreError.invalidDocument
                 }
                 items[index].intent = intent
@@ -439,6 +448,9 @@ final class ConversionQueueStore: ObservableObject {
                 throw ConversionQueueStoreError.invalidDocument
             }
             if item.state == .needsChoice, item.routeQualityConflict == nil {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            if item.state == .waiting, item.routeQualityConflict != nil {
                 throw ConversionQueueStoreError.invalidDocument
             }
             if item.state == .attention, item.decision == nil {

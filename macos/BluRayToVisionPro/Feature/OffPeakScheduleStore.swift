@@ -18,6 +18,7 @@ struct OffPeakQueueSchedule: Codable, Equatable, Identifiable {
 enum OffPeakScheduleMissReason: String, Codable, Equatable {
     case appRelaunchedAfterStart
     case noRunnableItems
+    case unresolvedChoices
     case queueBecameActive
     case queuePersistenceFailed
     case windowEndedBeforeEvaluation
@@ -28,6 +29,8 @@ enum OffPeakScheduleMissReason: String, Codable, Equatable {
             "The scheduled window was missed because the app was reopened after it started."
         case .noRunnableItems:
             "The scheduled window opened, but no queued videos were available to start."
+        case .unresolvedChoices:
+            "The scheduled window opened, but a queued video still needs a choice before the queue can run."
         case .queueBecameActive:
             "The scheduled window opened, but other work became active before the queue could start."
         case .queuePersistenceFailed:
