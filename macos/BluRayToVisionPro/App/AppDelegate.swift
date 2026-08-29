@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
     nonisolated static let startupSmokeArgument = "--startup-smoke"
     nonisolated static let previewPresentationSmokeArgument = "--preview-presentation-smoke"
     nonisolated static let workerCancellationSmokeArgument = "--worker-cancellation-smoke"
@@ -18,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var workerCancellationSmokeTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         let arguments = ProcessInfo.processInfo.arguments
         if let configuration = WorkerCancellationSmokeConfiguration.parse(arguments: arguments) {
             workerCancellationSmokeTask = Task {
@@ -46,6 +48,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.async {
             NSApp.terminate(nil)
         }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        await Self.notificationPresentationOptions(isActive: NSApp.isActive)
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        await MainActor.run {
+            raiseManagedWindow()
+        }
+    }
+
+    nonisolated static func notificationPresentationOptions(isActive: Bool) -> UNNotificationPresentationOptions {
+        if isActive {
+            return [.list]
+        }
+        return [.banner, .list, .sound]
     }
 
     nonisolated static func isStartupSmoke(arguments: [String]) -> Bool {
@@ -77,6 +102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         managedWindow = window
         originalWindowDelegate = window.delegate
         window.delegate = self
+    }
+
+    func raiseManagedWindow() {
+        NSApp.activate()
+        managedWindow?.makeKeyAndOrderFront(nil)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

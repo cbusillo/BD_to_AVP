@@ -55,6 +55,7 @@ struct PersistentQueueSidebarView: View {
             Divider()
             scheduleBanner
             storageSummaryView
+            outcomeSummaryView
             if let banner {
                 Label(banner.title, systemImage: banner.systemImage)
                     .font(.caption.weight(.medium))
@@ -251,6 +252,79 @@ struct PersistentQueueSidebarView: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var outcomeSummaryView: some View {
+        let summary = PersistentQueueOutcomeSummary(items: items)
+        if summary.hasAnyResults {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Results")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    outcomeButton(
+                        title: "Completed",
+                        count: summary.completedCount,
+                        itemIDs: summary.completedItemIDs,
+                        tint: .green,
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    outcomeButton(
+                        title: "Failed",
+                        count: summary.failedCount,
+                        itemIDs: summary.failedItemIDs,
+                        tint: .red,
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    outcomeButton(
+                        title: "Needs Action",
+                        count: summary.needsActionCount,
+                        itemIDs: summary.needsActionItemIDs,
+                        tint: .orange,
+                        systemImage: "exclamationmark.circle.fill"
+                    )
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.06))
+            .accessibilityIdentifier("persistent-queue-results-summary")
+        }
+    }
+
+    @ViewBuilder
+    private func outcomeButton(
+        title: String,
+        count: Int,
+        itemIDs: [UUID],
+        tint: Color,
+        systemImage: String
+    ) -> some View {
+        if count > 0, let firstID = itemIDs.first {
+            Button {
+                selectedID = firstID
+            } label: {
+                VStack(spacing: 2) {
+                    Label(title, systemImage: systemImage)
+                        .labelStyle(.iconOnly)
+                        .font(.caption.weight(.semibold))
+                    Text("\(count)")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                    Text(title)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .foregroundStyle(tint)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title): \(count)")
+            .accessibilityIdentifier("persistent-queue-results-\(title.lowercased().replacingOccurrences(of: " ", with: "-"))")
+        }
     }
 
     private var queueList: some View {

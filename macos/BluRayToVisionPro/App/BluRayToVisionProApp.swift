@@ -37,10 +37,11 @@ struct BluRayToVisionProApp: App {
     @StateObject private var previewViewModel: PreviewViewModel
     @StateObject private var diagnosticReportViewModel: DiagnosticReportViewModel
     @StateObject private var updater: UpdateController
-    @StateObject private var settings = AppSettings()
+    @StateObject private var settings: AppSettings
     @StateObject private var profileStore: ProfileStore
     @StateObject private var resolutionMemoryStore: ResolutionMemoryStore
     @StateObject private var durableQueueStore: ConversionQueueStore
+    @StateObject private var queueNotificationCoordinator: PersistentQueueNotificationCoordinator
 
     private let capabilities = AppCapabilities.current
     private let workCoordinator: AppWorkCoordinator
@@ -60,6 +61,7 @@ struct BluRayToVisionProApp: App {
             queueStoragePreflight: SystemQueueStoragePreflight()
         )
         let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
+        let settings = AppSettings()
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         let diagnosticConfiguration = DiagnosticServiceConfiguration.configured()
         let diagnosticUploader = diagnosticConfiguration.map {
@@ -78,9 +80,15 @@ struct BluRayToVisionProApp: App {
         _previewViewModel = StateObject(wrappedValue: previewViewModel)
         _diagnosticReportViewModel = StateObject(wrappedValue: diagnosticReportViewModel)
         _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
+        _settings = StateObject(wrappedValue: settings)
         _durableQueueStore = StateObject(wrappedValue: durableQueueStore)
         _profileStore = StateObject(wrappedValue: profileStore)
         _resolutionMemoryStore = StateObject(wrappedValue: resolutionMemoryStore)
+        _queueNotificationCoordinator = StateObject(wrappedValue: PersistentQueueNotificationCoordinator(
+            viewModel: viewModel,
+            settings: settings,
+            delivery: UserNotificationsQueueNotificationDelivery()
+        ))
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
         suppressDefaultLaunch = AppDelegate.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments)

@@ -1,4 +1,5 @@
 import XCTest
+import UserNotifications
 @testable import BluRayToVisionPro
 
 final class AppDelegateTests: XCTestCase {
@@ -34,5 +35,24 @@ final class AppDelegateTests: XCTestCase {
             AppDelegate.isAutomationSmoke(arguments: ["app", AppDelegate.workerCancellationSmokeArgument])
         )
         XCTAssertFalse(AppDelegate.isAutomationSmoke(arguments: ["app"]))
+    }
+
+    func testNotificationPresentationPolicyMatchesAppActivity() {
+        XCTAssertEqual(AppDelegate.notificationPresentationOptions(isActive: true), [.list])
+        XCTAssertEqual(AppDelegate.notificationPresentationOptions(isActive: false), [.banner, .list, .sound])
+    }
+
+    func testQueueNotificationRequestContainsOnlySafeDisplayFields() {
+        let request = QueueNotificationRequest(
+            identifier: "queue-completion-id",
+            threadIdentifier: "queue.completion",
+            title: "Queue Finished",
+            body: "Completed: 2. Failed: 0. Needs action: 0."
+        )
+
+        XCTAssertEqual(request.identifier, "queue-completion-id")
+        XCTAssertEqual(request.threadIdentifier, "queue.completion")
+        XCTAssertEqual(request.title, "Queue Finished")
+        XCTAssertEqual(request.body, "Completed: 2. Failed: 0. Needs action: 0.")
     }
 }

@@ -16,6 +16,8 @@ final class AppSettingsTests: XCTestCase {
         settings.showTechnicalDetails = true
         settings.intermediatePolicy = .reusable
         settings.useSoftwareEncoder = true
+        settings.notifyWhenQueueFinishes = true
+        settings.notifyWhenQueueNeedsAttention = true
 
         let restored = AppSettings(defaults: defaults, homeDirectoryURL: homeURL)
 
@@ -24,7 +26,25 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(restored.showTechnicalDetails)
         XCTAssertEqual(restored.intermediatePolicy, .reusable)
         XCTAssertTrue(restored.useSoftwareEncoder)
+        XCTAssertTrue(restored.notifyWhenQueueFinishes)
+        XCTAssertTrue(restored.notifyWhenQueueNeedsAttention)
+        XCTAssertTrue(restored.queueNotificationsEnabled)
         XCTAssertEqual(defaults.object(forKey: "native.keepIntermediateFiles") as? Bool, true)
+        XCTAssertEqual(defaults.object(forKey: "native.notifyWhenQueueFinishes") as? Bool, true)
+        XCTAssertEqual(defaults.object(forKey: "native.notifyWhenQueueNeedsAttention") as? Bool, true)
+    }
+
+    @MainActor
+    func testQueueNotificationsDefaultOff() {
+        let suiteName = "AppSettingsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = AppSettings(defaults: defaults)
+
+        XCTAssertFalse(settings.notifyWhenQueueFinishes)
+        XCTAssertFalse(settings.notifyWhenQueueNeedsAttention)
+        XCTAssertFalse(settings.queueNotificationsEnabled)
     }
 
     @MainActor
