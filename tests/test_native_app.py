@@ -274,8 +274,9 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(release_settings["INFOPLIST_FILE"], "BluRayToVisionPro/Info-Release.plist")
         self.assertNotIn("SUEnableAutomaticChecks", release_info)
 
-    def test_native_ui_keeps_discs_primary_and_original_job_controls_visible(self) -> None:
-        source_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "SourceWorkspaceView.swift").read_text(
+    def test_native_ui_keeps_queue_sources_and_original_job_controls_visible(self) -> None:
+        content_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ContentView.swift").read_text(encoding="utf-8")
+        queue_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "PersistentQueueWorkspaceView.swift").read_text(
             encoding="utf-8"
         )
         setup_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ConversionSetupView.swift").read_text(
@@ -303,18 +304,21 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn('.accessibilityLabel("\\(purpose.label): \\(selection.displayName)")', language_picker)
         self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
 
-        self.assertIn("Convert a 3D Blu-ray Disc", source_view)
-        self.assertIn("MTS or M2TS…", source_view)
-        self.assertIn("Add Folder of Movies…", source_view)
-        self.assertIn("Adds every supported ISO, MKV, MTS, and M2TS movie", source_view)
+        self.assertIn('Button("No Inserted Disc Detected")', content_view)
+        self.assertIn('Button("Add \\(disc.displayName) to Queue")', content_view)
+        self.assertIn('Button("Add Disc Image…")', content_view)
+        self.assertIn('Button("Add Blu-ray Folder…")', content_view)
+        self.assertIn('Button("Add Folder of Movies…")', content_view)
+        self.assertIn('Button("Add 3D MKV…")', content_view)
+        self.assertIn('Button("Add MTS or M2TS…")', content_view)
+        self.assertIn('Button("Configure Source…", action: configureExistingSource)', content_view)
+        self.assertIn('Button("Add Folder of Movies…", action: addSourceFolder)', queue_view)
         self.assertIn('Label("Save current settings as new profile", systemImage: "plus.square.on.square")', setup_view)
         self.assertIn('.accessibilityLabel("Save current settings as new profile")', setup_view)
         self.assertNotIn('Button("Save Current Settings as New Profile…", action: saveAsNewProfile)', setup_view)
-        self.assertIn(".disabled(outputControlsLocked)", source_view)
-        self.assertIn("state.phase.isRunning || state.phase == .decisionRequired", source_view)
         self.assertLess(
-            source_view.index("Convert a 3D Blu-ray Disc"),
-            source_view.index("MTS or M2TS…"),
+            content_view.index("No Inserted Disc Detected"),
+            content_view.index("Add MTS or M2TS…"),
         )
         for label in (
             "Video quality",
@@ -348,11 +352,10 @@ class NativeAppPackagingTests(unittest.TestCase):
 
         self.assertIn('Section("Subtitles")', encoding_editor)
         self.assertNotIn("Subtitles and Languages", encoding_editor)
-        self.assertIn('LabeledContent("Video")', source_view)
-        self.assertIn('LabeledContent("Audio")', source_view)
-        self.assertIn('LabeledContent("Subtitles")', source_view)
-        self.assertIn("Text(options.videoSummary)", source_view)
-        self.assertIn("Text(options.encoding.audioSummary)", source_view)
+        self.assertIn('GroupBox("Conversion Setup")', content_view)
+        self.assertIn('Text("Profile").foregroundStyle(.secondary)', content_view)
+        self.assertIn('Text("Destination").foregroundStyle(.secondary)', content_view)
+        self.assertIn('Text("Output").foregroundStyle(.secondary)', content_view)
         self.assertIn("Opens a searchable list of audio languages", language_picker)
         self.assertIn("Opens a searchable list of subtitle languages", language_picker)
         self.assertIn("Search audio languages", language_picker)

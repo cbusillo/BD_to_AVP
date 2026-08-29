@@ -928,7 +928,7 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAdmissionQueueRunsMultipleSingleSourceDrafts() async throws {
+    func testPersistentQueueRunsMultipleSingleSourceDraftsSequentially() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -943,8 +943,7 @@ final class ConversionViewModelTests: XCTestCase {
             clientFactory: { scenario.makeClient() },
             durableQueueStore: queueStore
         )
-        let admission = SetupQueueAdmission()
-        admission.add(drafts: sourceURLs.map { sourceURL in
+        let drafts = sourceURLs.map { sourceURL in
             let inspection = SourceInspection(
                 name: sourceURL.deletingPathExtension().lastPathComponent,
                 resolution: "1920x1080",
@@ -959,9 +958,11 @@ final class ConversionViewModelTests: XCTestCase {
                 destinationURL: directoryURL,
                 options: ConversionOptions()
             )
-        })
+        }
 
-        viewModel.startConversionQueue(admissionItems: admission.items)
+        _ = try await viewModel.appendPersistentQueueDrafts(drafts)
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
 
         while queueStore.items.count < sourceURLs.count { await Task.yield() }
         while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
@@ -971,11 +972,10 @@ final class ConversionViewModelTests: XCTestCase {
         )
         XCTAssertEqual(queueStore.items.map(\.origin), [.singleSource, .singleSource])
         XCTAssertEqual(queueStore.items.map(\.state), [.completed, .completed])
-        XCTAssertEqual(viewModel.completedBatchResults?.count, 2)
     }
 
     @MainActor
-    func testSingleAdmissionQueuePreservesIdentityAndResolutionTrace() async throws {
+    func testHeldPersistentQueueItemPreservesIdentityAndResolutionTrace() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -1009,32 +1009,32 @@ final class ConversionViewModelTests: XCTestCase {
         ) else {
             return XCTFail("Expected reusable-file conflict")
         }
-        let admission = SetupQueueAdmission()
-        admission.add(drafts: [draft], conflicts: [conflict])
-        let group = try XCTUnwrap(admission.groups.first)
+        _ = try await viewModel.appendPersistentQueueDrafts([draft], conflicts: [conflict])
+        let admittedID = try XCTUnwrap(queueStore.items.first?.id)
+        let group = try XCTUnwrap(viewModel.persistentQueueResolutionGroups.first)
         var selection = QueueResolutionSelection()
         selection.resolutionID = try XCTUnwrap(
             group.conflict.resolutions.first(where: {
                 $0.choice == .keepRequestedWorkflow && $0.isAvailable
             })?.id
         )
-        try admission.apply(group: group, selection: selection).get()
-        let admittedItem = try XCTUnwrap(admission.items.first)
-        let trace = try XCTUnwrap(admittedItem.resolutionTrace)
+        try await viewModel.resolvePersistentQueueItems(group: group, selection: selection)
+        let trace = try XCTUnwrap(queueStore.items.first?.resolutionTrace)
 
-        viewModel.startConversionQueue(admissionItems: admission.items)
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
 
         while queueStore.items.isEmpty { await Task.yield() }
         while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
         let storedItem = try XCTUnwrap(queueStore.items.first)
-        XCTAssertEqual(storedItem.id, admittedItem.id)
+        XCTAssertEqual(storedItem.id, admittedID)
         XCTAssertEqual(storedItem.resolutionTrace, trace)
         XCTAssertEqual(storedItem.origin, .singleSource)
         XCTAssertEqual(storedItem.state, .completed)
     }
 
     @MainActor
-    func testAdmissionQueueWriteFailureReturnsRowsToClearableAttention() async throws {
+    func testPersistentQueueAppendWriteFailureFailsClosed() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -1046,8 +1046,7 @@ final class ConversionViewModelTests: XCTestCase {
             dataWriter: { _, _ in throw RuntimePersistenceTestError.writeFailed }
         )
         let viewModel = ConversionViewModel(durableQueueStore: queueStore)
-        let admission = SetupQueueAdmission()
-        admission.add(drafts: [
+        let draft =
             ConversionDraft(
                 source: ConversionSource(kind: .matroska, url: sourceURL),
                 sourceDetails: SourceInspection(
@@ -1060,21 +1059,18 @@ final class ConversionViewModelTests: XCTestCase {
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: directoryURL,
                 options: ConversionOptions()
-            ),
-        ])
+            )
 
-        XCTAssertTrue(viewModel.startConversionQueue(admissionItems: admission.items))
-        admission.markAllRunning()
-        while viewModel.setupQueueStartFailureItemIDs.isEmpty { await Task.yield() }
-        admission.markStartFailed(viewModel.setupQueueStartFailureItemIDs)
-
-        XCTAssertEqual(admission.items.map(\.state), [.attention])
-        XCTAssertTrue(admission.canClear)
-        XCTAssertNotNil(viewModel.durableQueueRuntimeDiagnostic)
+        do {
+            _ = try await viewModel.appendPersistentQueueDrafts([draft])
+            XCTFail("Expected persistent queue append to fail")
+        } catch {
+        }
+        XCTAssertTrue(queueStore.items.isEmpty)
     }
 
     @MainActor
-    func testAdmissionQueueTerminalWriteFailureReturnsRowsToClearableAttention() async throws {
+    func testPersistentQueueTerminalWriteFailureStopsActiveWork() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -1096,8 +1092,7 @@ final class ConversionViewModelTests: XCTestCase {
             clientFactory: { scenario.makeClient() },
             durableQueueStore: queueStore
         )
-        let admission = SetupQueueAdmission()
-        admission.add(drafts: [
+        let draft =
             ConversionDraft(
                 source: ConversionSource(kind: .matroska, url: sourceURL),
                 sourceDetails: SourceInspection(
@@ -1110,17 +1105,13 @@ final class ConversionViewModelTests: XCTestCase {
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: directoryURL,
                 options: ConversionOptions()
-            ),
-        ])
+            )
 
-        XCTAssertTrue(viewModel.startConversionQueue(admissionItems: admission.items))
-        admission.markAllRunning()
-        while viewModel.setupQueueStartFailureItemIDs.isEmpty { await Task.yield() }
-        admission.markStartFailed(viewModel.setupQueueStartFailureItemIDs)
+        _ = try await viewModel.appendPersistentQueueDrafts([draft])
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        while viewModel.hasActiveWork { await Task.yield() }
 
-        XCTAssertEqual(admission.items.map(\.state), [.attention])
-        XCTAssertTrue(admission.canClear)
-        XCTAssertEqual(queueStore.items.map(\.state), [.processing])
         XCTAssertNotNil(viewModel.durableQueueRuntimeDiagnostic)
         XCTAssertFalse(viewModel.hasActiveWork)
     }
@@ -1151,11 +1142,8 @@ final class ConversionViewModelTests: XCTestCase {
             viewModel.startConversion(draft: draft)
             await fulfillment(of: [conversionStarted], timeout: 2)
 
-            let admission = SetupQueueAdmission()
-            admission.add(drafts: [draft])
-            XCTAssertFalse(viewModel.startConversionQueue(admissionItems: admission.items))
-            XCTAssertEqual(admission.items.map(\.state), [.waiting])
-            XCTAssertTrue(admission.canClear)
+            let startOutcome = await viewModel.startPersistentQueue()
+            XCTAssertEqual(startOutcome, .rejected(.noEligibleItems))
 
             viewModel.stopActiveWorker()
 
@@ -2974,6 +2962,82 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testEditingWaitingItemWithRouteQualityConflictParksItForResolution() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let item = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        try await queueStore.replaceItems([item])
+        let viewModel = ConversionViewModel(durableQueueStore: queueStore)
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: item.intent.options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            return XCTFail("Expected route-quality conflict")
+        }
+
+        try await viewModel.updatePersistentQueueItem(
+            item.id,
+            draft: try PersistentQueueItem(item: item).draft,
+            routeQualityConflict: conflict
+        )
+
+        XCTAssertEqual(queueStore.items.first?.state, .needsChoice)
+        XCTAssertEqual(viewModel.persistentQueueItems.first?.status, .needsChoice(conflict))
+        XCTAssertEqual(viewModel.persistentQueueResolutionGroups.first?.candidates.map(\.id), [item.id])
+    }
+
+    @MainActor
+    func testEditingWaitingItemWithConflictPausesRunningQueueAfterCurrent() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let active = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        let held = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        try await queueStore.replaceItems([active, held])
+        let firstStarted = expectation(description: "first queue item started")
+        let secondStarted = expectation(description: "second queue item started")
+        secondStarted.isInverted = true
+        let gate = QueueTestGate()
+        let worker = ReorderableQueueWorkerClient(
+            inspectionDone: {},
+            conversionStarted: { _, conversionNumber in
+                if conversionNumber == 1 {
+                    firstStarted.fulfill()
+                } else {
+                    secondStarted.fulfill()
+                }
+            },
+            conversionGate: gate
+        )
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore,
+            sourceAvailabilityResolver: { _ in true }
+        )
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: held.intent.options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            return XCTFail("Expected route-quality conflict")
+        }
+
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
+        await fulfillment(of: [firstStarted], timeout: 2)
+        try await viewModel.updatePersistentQueueItem(
+            held.id,
+            draft: try PersistentQueueItem(item: held).draft,
+            routeQualityConflict: conflict
+        )
+
+        XCTAssertEqual(viewModel.persistentQueueRunState, .pauseAfterCurrent)
+        XCTAssertEqual(queueStore.items[1].state, .needsChoice)
+        await gate.open()
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        await fulfillment(of: [secondStarted], timeout: 0.1)
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .needsChoice])
+        XCTAssertEqual(viewModel.persistentQueueRunState, .paused)
+    }
+
+    @MainActor
     func testAdoptionRevalidatesAvailabilityBeforeWorkerSpawn() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3021,7 +3085,7 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUnavailableAdmittedItemAdvancesToNextAvailableSource() async throws {
+    func testUnavailablePersistentQueueItemAdvancesToNextAvailableSource() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -3037,8 +3101,7 @@ final class ConversionViewModelTests: XCTestCase {
             interlaced: false,
             sizeBytes: 10
         )
-        let admission = SetupQueueAdmission()
-        admission.add(drafts: [firstURL, secondURL].map { sourceURL in
+        let drafts = [firstURL, secondURL].map { sourceURL in
             ConversionDraft(
                 source: ConversionSource(kind: .matroska, url: sourceURL),
                 sourceDetails: inspection,
@@ -3046,7 +3109,7 @@ final class ConversionViewModelTests: XCTestCase {
                 destinationURL: directoryURL,
                 options: ConversionOptions()
             )
-        })
+        }
         let queueStore = ConversionQueueStore.inMemory()
         let converted = expectation(description: "available source converted")
         var conversionPaths: [String] = []
@@ -3060,7 +3123,9 @@ final class ConversionViewModelTests: XCTestCase {
             sourceAvailabilityResolver: { $0.url != firstURL }
         )
 
-        XCTAssertTrue(viewModel.startConversionQueue(admissionItems: admission.items))
+        _ = try await viewModel.appendPersistentQueueDrafts(drafts)
+        let startOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(startOutcome, .accepted(.running))
         await fulfillment(of: [converted], timeout: 2)
         while viewModel.hasActiveWork { await Task.yield() }
 
@@ -4066,6 +4131,29 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentQueueDoesNotSkipUnresolvedChoiceToRunLaterItem() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let held = makePersistentQueueFixture(ordinal: 0, state: .needsChoice)
+        let waiting = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        try await queueStore.replaceItems([held, waiting])
+        var factoryCalls = 0
+        let viewModel = ConversionViewModel(
+            clientFactory: {
+                factoryCalls += 1
+                return TwoPhaseWorkerClient()
+            },
+            durableQueueStore: queueStore
+        )
+
+        let startOutcome = await viewModel.startPersistentQueue()
+
+        XCTAssertEqual(startOutcome, .rejected(.unresolvedChoices))
+        XCTAssertEqual(viewModel.persistentQueueRunState, .idle)
+        XCTAssertEqual(queueStore.items.map(\.state), [.needsChoice, .waiting])
+        XCTAssertEqual(factoryCalls, 0)
+    }
+
+    @MainActor
     func testPersistentQueueCommandsRejectInvalidTransitions() async throws {
         let viewModel = ConversionViewModel(durableQueueStore: .inMemory())
 
@@ -4291,6 +4379,9 @@ final class ConversionViewModelTests: XCTestCase {
                     staleAfterRestore: true
                 )
             }
+            if state == .needsChoice {
+                item.routeQualityConflict = DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+            }
             if state == .failed {
                 item.failure = DurableQueueFailure(
                     code: "fixture_failure",
@@ -4311,6 +4402,7 @@ final class ConversionViewModelTests: XCTestCase {
         for (projected, state) in zip(viewModel.persistentQueueItems, states) {
             switch (projected.status, state) {
             case (.waiting, .waiting),
+                 (.needsChoice, .needsChoice),
                  (.inspecting, .inspecting),
                  (.processing, .processing),
                  (.stopping, .stopping),
@@ -4890,6 +4982,43 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testOffPeakStartReportsUnresolvedChoiceInsteadOfQueueActivity() async throws {
+        let now = Date(timeIntervalSince1970: 150)
+        let scheduleStore = OffPeakScheduleStore.inMemory()
+        let schedule = OffPeakQueueSchedule(
+            startAt: Date(timeIntervalSince1970: 100),
+            endAt: Date(timeIntervalSince1970: 200),
+            createdAt: Date(timeIntervalSince1970: 50)
+        )
+        try await scheduleStore.save(schedule)
+        let queueStore = ConversionQueueStore.inMemory()
+        var options = ConversionOptions()
+        try options.encoding.selectQualityStep(.maximumDetail)
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            return XCTFail("Expected route-quality conflict")
+        }
+        var item = makePersistentQueueFixture(ordinal: 0, state: .needsChoice)
+        item.routeQualityConflict = DurableRouteQualityConflict(conflict: conflict)
+        try await queueStore.replaceItems([item])
+        let viewModel = ConversionViewModel(
+            diagnosticClock: { now },
+            durableQueueStore: queueStore,
+            offPeakScheduleStore: scheduleStore
+        )
+
+        let evaluation = await viewModel.evaluateOffPeakSchedule()
+        XCTAssertEqual(evaluation, .start(schedule))
+        XCTAssertEqual(scheduleStore.lastOutcome?.missReason, .unresolvedChoices)
+        XCTAssertEqual(
+            scheduleStore.lastOutcome?.message,
+            "The scheduled window opened, but a queued video still needs a choice before the queue can run."
+        )
+    }
+
+    @MainActor
     func testOffPeakWindowPausesBeforeStartingNextItem() async throws {
         let clock = LockedTestDate(Date(timeIntervalSince1970: 150))
         let scheduleStore = OffPeakScheduleStore.inMemory()
@@ -4978,8 +5107,23 @@ final class ConversionViewModelTests: XCTestCase {
             groupID: groupID,
             origin: origin,
             intent: DurableQueueItemIntent(draft: draft),
-            state: state
+            state: state,
+            routeQualityConflict: state == .needsChoice
+                ? DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+                : nil
         )
+    }
+
+    private func makeRouteQualityConflict() -> RouteQualityConflict {
+        var options = ConversionOptions()
+        try? options.encoding.selectQualityStep(.maximumDetail)
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            fatalError("Expected reusable-file conflict")
+        }
+        return conflict
     }
 
     private func withTemporarySource(_ operation: @MainActor (URL) async throws -> Void) async throws {

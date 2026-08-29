@@ -120,7 +120,10 @@ final class ConversionQueueStoreTests: XCTestCase {
                         retryable: true
                     )
                     : nil,
-                result: state == .completed ? DurableQueueResult(outputPath: "/tmp/output.mov") : nil
+                result: state == .completed ? DurableQueueResult(outputPath: "/tmp/output.mov") : nil,
+                routeQualityConflict: state == .needsChoice
+                    ? DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+                    : nil
             )
         }
         for index in items.indices where [.inspecting, .processing, .stopping].contains(items[index].state) {
@@ -284,15 +287,26 @@ final class ConversionQueueStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testInvalidOrdinalOrderAndMissingFailureEvidenceAreRejected() async throws {
+    func testInvalidOrdinalAndRouteQualityStateCombinationsAreRejected() async throws {
         let store = ConversionQueueStore.inMemory()
         let misordered = makeItem(ordinal: 1)
         let failedWithoutEvidence = makeItem(ordinal: 0, state: .failed)
+        let waitingWithConflict = makeItem(
+            ordinal: 0,
+            routeQualityConflict: DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+        )
+        let needsChoiceWithoutConflict = makeItem(ordinal: 0, state: .needsChoice)
 
         await XCTAssertThrowsErrorAsync(try await store.replaceItems([misordered])) { error in
             XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
         }
         await XCTAssertThrowsErrorAsync(try await store.replaceItems([failedWithoutEvidence])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([waitingWithConflict])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([needsChoiceWithoutConflict])) { error in
             XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
         }
     }
@@ -453,7 +467,7 @@ final class ConversionQueueStoreTests: XCTestCase {
         let second = makeItem(ordinal: 1, sourcePath: "/tmp/second.mkv")
         try await store.replaceItems([completed])
 
-        try await store.appendWaitingItems([first, second])
+        try await store.appendAdmittedItems([first, second])
         XCTAssertEqual(store.items.map(\.id), [completed.id, first.id, second.id])
         XCTAssertEqual(store.items.map(\.ordinal), [0, 1, 2])
 
@@ -819,21 +833,55 @@ final class ConversionQueueStoreTests: XCTestCase {
             qualityOutcome: "Balanced quality",
             fileOutcome: "Reusable files retained"
         )
-        let item = makeItem(ordinal: 0, state: .waiting)
+        let item = makeItem(
+            ordinal: 0,
+            state: .needsChoice,
+            routeQualityConflict: DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+        )
         let v1Data = try JSONEncoder().encode(ConversionQueueDocument(version: 1, items: [item]))
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         try v1Data.write(to: fileURL)
 
         let store = ConversionQueueStore(fileURL: fileURL)
-        try await store.resolveWaitingItems(
+        try await store.resolveHeldItems(
             [item.id],
             intents: [item.id: item.intent],
-            trace: trace
+            traces: [item.id: trace]
         )
         let restored = ConversionQueueStore(fileURL: fileURL)
 
         XCTAssertEqual(restored.document.version, ConversionQueueDocument.currentVersion)
         XCTAssertEqual(restored.items.first?.resolutionTrace, trace)
+    }
+
+    @MainActor
+    func testResolvingHeldItemsPersistsEachItemTrace() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let conflict = DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+        let first = makeItem(ordinal: 0, state: .needsChoice, routeQualityConflict: conflict)
+        let second = makeItem(ordinal: 1, state: .needsChoice, routeQualityConflict: conflict)
+        let firstTrace = DurableQueueResolutionTrace(
+            conflictID: "first",
+            resolutionID: "first-resolution",
+            qualityOutcome: "Balanced quality",
+            fileOutcome: "Reusable files removed"
+        )
+        let secondTrace = DurableQueueResolutionTrace(
+            conflictID: "second",
+            resolutionID: "second-resolution",
+            qualityOutcome: "Maximum quality",
+            fileOutcome: "Reusable files kept"
+        )
+        try await store.replaceItems([first, second])
+
+        try await store.resolveHeldItems(
+            [first.id, second.id],
+            intents: [first.id: first.intent, second.id: second.intent],
+            traces: [first.id: firstTrace, second.id: secondTrace]
+        )
+
+        XCTAssertEqual(store.items.map(\.state), [.waiting, .waiting])
+        XCTAssertEqual(store.items.map(\.resolutionTrace), [firstTrace, secondTrace])
     }
 
     @MainActor
@@ -1165,7 +1213,8 @@ final class ConversionQueueStoreTests: XCTestCase {
         state: DurableQueueItemState = .waiting,
         decision: DurableQueueDecision? = nil,
         failure: DurableQueueFailure? = nil,
-        result: DurableQueueResult? = nil
+        result: DurableQueueResult? = nil,
+        routeQualityConflict: DurableRouteQualityConflict? = nil
     ) -> DurableConversionQueueItem {
         DurableConversionQueueItem(
             id: id,
@@ -1190,8 +1239,21 @@ final class ConversionQueueStoreTests: XCTestCase {
             state: state,
             decision: decision,
             failure: failure,
-            result: result
+            result: result,
+            routeQualityConflict: routeQualityConflict
         )
+    }
+
+    private func makeRouteQualityConflict() -> RouteQualityConflict {
+        var options = ConversionOptions()
+        try? options.encoding.selectQualityStep(.maximumDetail)
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            fatalError("Expected reusable-file conflict")
+        }
+        return conflict
     }
 
     private func makeDraft(sourcePath: String, titleID: String) -> ConversionDraft {

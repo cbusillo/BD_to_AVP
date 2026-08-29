@@ -11,7 +11,7 @@ struct SetupEditSheet: View {
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
     let applyToConversion: (String, ConversionOptions) -> Void
-    let queueConflictForReview: ((String, RouteQualityConflict) -> Void)?
+    let queueConflictForReview: ((String, ConversionOptions, RouteQualityConflict) -> Void)?
 
     @State private var session: SetupEditSession
     @State private var selectedTab = ConversionSetupTab.video
@@ -31,7 +31,7 @@ struct SetupEditSheet: View {
         profileStore: ProfileStore,
         resolutionMemoryStore: ResolutionMemoryStore,
         applyToConversion: @escaping (String, ConversionOptions) -> Void,
-        queueConflictForReview: ((String, RouteQualityConflict) -> Void)? = nil
+        queueConflictForReview: ((String, ConversionOptions, RouteQualityConflict) -> Void)? = nil
     ) {
         self.initialProfile = initialProfile
         self.initialOptions = initialOptions
@@ -209,7 +209,7 @@ struct SetupEditSheet: View {
 
     private func enqueueHeldConflict(_ conflict: RouteQualityConflict) {
         guard let queueConflictForReview else { return }
-        queueConflictForReview(session.profileID, conflict)
+        queueConflictForReview(session.profileID, session.draftOptions, conflict)
         dismiss()
     }
 
