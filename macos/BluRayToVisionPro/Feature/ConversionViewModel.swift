@@ -2068,8 +2068,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             case let .unavailable(reason):
                 await parkWaitingDurableQueueItemForStorage(
                     item,
-                    code: "destination_unavailable",
-                    message: "Destination unavailable. Reconnect it and retry this item, or choose another writable destination and resume the queue.",
+                    code: DurableQueueFailureCode.destinationUnavailable,
+                    message: "Destination unavailable. Reconnect it and retry this item, or choose another writable destination. It will rejoin a running queue automatically; otherwise start the queue when ready.",
                     details: reason,
                     pauseQueue: false
                 )
@@ -2080,7 +2080,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 let availableDescription = StorageForecastFormatting.coarse(availableBytes)
                 await parkWaitingDurableQueueItemForStorage(
                     item,
-                    code: "destination_insufficient_capacity",
+                    code: DurableQueueFailureCode.destinationInsufficientCapacity,
                     message: "Not enough free space at \(destinationURL.path). Needs about \(requiredDescription), but only \(availableDescription) is available. Free space and retry this item, or choose another destination and resume the queue.",
                     details: "Required: \(requiredDescription). Available: \(availableDescription).",
                     pauseQueue: true

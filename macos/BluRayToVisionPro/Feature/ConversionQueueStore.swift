@@ -283,8 +283,8 @@ final class ConversionQueueStore: ObservableObject {
             case .waiting:
                 canUpdate = true
             case .failed:
-                canUpdate = items[index].failure?.code == "destination_unavailable"
-                    || items[index].failure?.code == "destination_insufficient_capacity"
+                canUpdate = items[index].failure?.code == DurableQueueFailureCode.destinationUnavailable
+                    || items[index].failure?.code == DurableQueueFailureCode.destinationInsufficientCapacity
             case .needsChoice, .inspecting, .processing, .stopping, .interrupted, .attention,
                  .completed, .stopped, .notStarted:
                 canUpdate = false

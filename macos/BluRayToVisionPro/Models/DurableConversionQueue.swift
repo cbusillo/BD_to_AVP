@@ -382,6 +382,11 @@ struct DurableQueueFailure: Codable, Equatable {
     let retryable: Bool
 }
 
+enum DurableQueueFailureCode {
+    static let destinationUnavailable = "destination_unavailable"
+    static let destinationInsufficientCapacity = "destination_insufficient_capacity"
+}
+
 struct DurableQueueResult: Codable, Equatable {
     let outputPath: String
     let durationSeconds: Double?

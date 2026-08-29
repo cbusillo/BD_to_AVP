@@ -180,8 +180,8 @@ struct PersistentQueueItem: Identifiable, Equatable {
         guard case let .failed(failure) = status else {
             return false
         }
-        return failure.code == "destination_unavailable"
-            || failure.code == "destination_insufficient_capacity"
+        return failure.code == DurableQueueFailureCode.destinationUnavailable
+            || failure.code == DurableQueueFailureCode.destinationInsufficientCapacity
     }
 
     var canChangeDestination: Bool {
