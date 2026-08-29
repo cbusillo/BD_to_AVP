@@ -12,8 +12,13 @@ private struct PersistentQueueDropInsertion: Equatable {
     let placement: PersistentQueueMovePlacement
 }
 
+private extension UTType {
+    static let persistentQueueItem = UTType(exportedAs: "com.shinycomputers.bd-to-avp.queue-item")
+}
+
 struct PersistentQueueSidebarView: View {
     @State private var dropInsertion: PersistentQueueDropInsertion?
+    @State private var draggedItemID: UUID?
 
     let items: [PersistentQueueItem]
     @Binding var selectedID: UUID?
@@ -224,6 +229,7 @@ struct PersistentQueueSidebarView: View {
                 canMoveDown: canMove(item, by: 1),
                 canConvertNext: canMoveToNext(item),
                 dropInsertion: $dropInsertion,
+                draggedItemID: $draggedItemID,
                 move: move,
                 moveRelative: moveRelative,
                 moveNext: moveNext,
@@ -265,13 +271,10 @@ struct PersistentQueueSidebarView: View {
                         if selectedItem.canMove {
                             Button("Convert Next") { moveNext(selectedItem.id) }
                                 .disabled(!canMoveToNext(selectedItem))
-                                .keyboardShortcut(.return, modifiers: [.command, .option])
                             Button("Move Up") { move(selectedItem.id, -1) }
                                 .disabled(!canMove(selectedItem, by: -1))
-                                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
                             Button("Move Down") { move(selectedItem.id, 1) }
                                 .disabled(!canMove(selectedItem, by: 1))
-                                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
                         } else if let reason = selectedItem.queueManipulationLockReason {
                             Text(reason)
                         }
@@ -478,6 +481,7 @@ private struct PersistentQueueRow: View {
     let canMoveDown: Bool
     let canConvertNext: Bool
     @Binding var dropInsertion: PersistentQueueDropInsertion?
+    @Binding var draggedItemID: UUID?
     let move: (UUID, Int) -> Void
     let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
     let moveNext: (UUID) -> Void
@@ -492,7 +496,11 @@ private struct PersistentQueueRow: View {
         if item.canMove {
             baseRow
                 .onDrag {
-                    NSItemProvider(object: item.id.uuidString as NSString)
+                    draggedItemID = item.id
+                    return NSItemProvider(
+                        item: item.id.uuidString as NSString,
+                        typeIdentifier: UTType.persistentQueueItem.identifier
+                    )
                 }
                 .background {
                     GeometryReader { proxy in
@@ -504,11 +512,12 @@ private struct PersistentQueueRow: View {
                     }
                 }
                 .onDrop(
-                    of: [UTType.plainText],
+                    of: [UTType.persistentQueueItem],
                     delegate: PersistentQueueRowDropDelegate(
                         targetID: item.id,
                         rowHeight: rowHeight,
                         dropInsertion: $dropInsertion,
+                        draggedItemID: $draggedItemID,
                         moveRelative: moveRelative
                     )
                 )
@@ -641,13 +650,20 @@ private struct PersistentQueueRowDropDelegate: DropDelegate {
     let targetID: UUID
     let rowHeight: CGFloat
     @Binding var dropInsertion: PersistentQueueDropInsertion?
+    @Binding var draggedItemID: UUID?
     let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
 
     func validateDrop(info: DropInfo) -> Bool {
-        info.hasItemsConforming(to: [UTType.plainText])
+        guard let draggedItemID, draggedItemID != targetID else {
+            return false
+        }
+        return info.hasItemsConforming(to: [UTType.persistentQueueItem])
     }
 
     func dropEntered(info: DropInfo) {
+        guard validateDrop(info: info) else {
+            return
+        }
         updateInsertion(for: info)
     }
 
@@ -659,27 +675,23 @@ private struct PersistentQueueRowDropDelegate: DropDelegate {
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard validateDrop(info: info) else {
+            dropInsertion = nil
+            return DropProposal(operation: .forbidden)
+        }
         updateInsertion(for: info)
         return DropProposal(operation: .move)
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        defer { dropInsertion = nil }
-        guard let provider = info.itemProviders(for: [UTType.plainText]).first else {
+        defer {
+            dropInsertion = nil
+            draggedItemID = nil
+        }
+        guard validateDrop(info: info), let sourceID = draggedItemID else {
             return false
         }
-        let targetPlacement = placement(for: info)
-        provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, error in
-            guard error == nil,
-                  let sourceID = persistentQueueItemID(from: item),
-                  sourceID != targetID
-            else {
-                return
-            }
-            DispatchQueue.main.async {
-                moveRelative(sourceID, targetID, targetPlacement)
-            }
-        }
+        moveRelative(sourceID, targetID, placement(for: info))
         return true
     }
 
@@ -688,22 +700,8 @@ private struct PersistentQueueRowDropDelegate: DropDelegate {
     }
 
     private func placement(for info: DropInfo) -> PersistentQueueMovePlacement {
-        info.location.y < rowHeight / 2 ? .before : .after
-    }
-
-    private func persistentQueueItemID(from item: NSSecureCoding?) -> UUID? {
-        let value: String?
-        switch item {
-        case let string as String:
-            value = string
-        case let string as NSString:
-            value = string as String
-        case let data as Data:
-            value = String(data: data, encoding: .utf8)
-        default:
-            value = nil
-        }
-        return value.flatMap(UUID.init(uuidString:))
+        let measuredHeight = rowHeight > 0 ? rowHeight : 44
+        return info.location.y < measuredHeight / 2 ? .before : .after
     }
 }
 

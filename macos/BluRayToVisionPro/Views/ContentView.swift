@@ -139,6 +139,7 @@ struct ContentView: View {
         mainContent
         .accessibilityIdentifier("main-window-content")
         .focusedSceneValue(\.conversionSourceSelectionAction, sourceSelectionAction)
+        .focusedSceneValue(\.persistentQueueCommandActions, persistentQueueCommandActions)
         .toolbar { toolbarContent }
         .animation(.easeInOut(duration: 0.18), value: isShowingActivity)
         .dropDestination(for: URL.self, action: acceptDrop) { targeted in
@@ -456,6 +457,33 @@ struct ContentView: View {
         return viewModel.persistentQueueResolutionGroups.first { group in
             group.candidates.contains(where: { $0.id == selectedItemID })
         }
+    }
+
+    private var persistentQueueCommandActions: PersistentQueueCommandActions {
+        let waitingItems = viewModel.persistentQueueItems.filter(\.canMove)
+        let selectedID = viewModel.selectedPersistentQueueItemID
+        let selectedIndex = selectedID.flatMap { id in
+            waitingItems.firstIndex(where: { $0.id == id })
+        }
+
+        return PersistentQueueCommandActions(
+            canMoveUp: selectedIndex.map { $0 > waitingItems.startIndex } ?? false,
+            canMoveDown: selectedIndex.map { $0 < waitingItems.index(before: waitingItems.endIndex) } ?? false,
+            canConvertNext: selectedIndex.map { $0 > waitingItems.startIndex } ?? false,
+            moveUp: { moveSelectedPersistentQueueItem(by: -1) },
+            moveDown: { moveSelectedPersistentQueueItem(by: 1) },
+            convertNext: moveSelectedPersistentQueueItemNext
+        )
+    }
+
+    private func moveSelectedPersistentQueueItem(by offset: Int) {
+        guard let selectedID = viewModel.selectedPersistentQueueItemID else { return }
+        movePersistentQueueItem(selectedID, by: offset)
+    }
+
+    private func moveSelectedPersistentQueueItemNext() {
+        guard let selectedID = viewModel.selectedPersistentQueueItemID else { return }
+        movePersistentQueueItemNext(selectedID)
     }
 
     private func resolvePersistentQueueRouteQuality(
