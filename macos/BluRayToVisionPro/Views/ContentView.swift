@@ -434,6 +434,7 @@ struct ContentView: View {
             addSourceFolder: addSourceFolderToPersistentQueue,
             addDisc: { appendSourcesToPersistentQueue([$0]) },
             move: movePersistentQueueItem,
+            moveRelative: movePersistentQueueItem,
             moveNext: movePersistentQueueItemNext,
             remove: removePersistentQueueItem,
             clearCompleted: clearCompletedPersistentQueueItems,
@@ -1179,6 +1180,25 @@ struct ContentView: View {
                 if offset < 0 {
                     try await viewModel.movePersistentQueueItem(itemID, before: targetID)
                 } else {
+                    try await viewModel.movePersistentQueueItem(itemID, after: targetID)
+                }
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func movePersistentQueueItem(
+        _ itemID: UUID,
+        relativeTo targetID: UUID,
+        placement: PersistentQueueMovePlacement
+    ) {
+        Task { @MainActor in
+            do {
+                switch placement {
+                case .before:
+                    try await viewModel.movePersistentQueueItem(itemID, before: targetID)
+                case .after:
                     try await viewModel.movePersistentQueueItem(itemID, after: targetID)
                 }
             } catch {
