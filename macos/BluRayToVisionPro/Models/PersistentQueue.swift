@@ -122,6 +122,25 @@ struct PersistentQueueItem: Identifiable, Equatable {
         draft.selectedTitle?.name ?? draft.source.displayName
     }
 
+    var sourceIdentity: String {
+        draft.source.displayName
+    }
+
+    var selectedTitleIdentity: String {
+        if let selectedTitle = draft.selectedTitle {
+            return selectedTitle.name
+        }
+        return draft.source.kind.isDiscWorkflow ? "Main movie (automatic)" : "Entire source"
+    }
+
+    var sourceKindName: String {
+        draft.source.kind.title
+    }
+
+    var sourceLocation: String {
+        draft.source.locationDescription
+    }
+
     var isRestored: Bool {
         switch status {
         case .interrupted:

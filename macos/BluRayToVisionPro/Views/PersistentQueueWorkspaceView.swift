@@ -425,15 +425,45 @@ private struct PersistentQueueRow: View {
                 .frame(width: compact ? 15 : 18)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: compact ? 1 : 3) {
-                Text(item.displayName)
+                Text(item.sourceIdentity)
                     .font(compact ? .callout : .callout.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(item.status.subtitle(for: item))
+                    .accessibilityLabel("Source: \(item.sourceIdentity)")
+                if compact {
+                    Text("\(item.selectedTitleIdentity) · \(item.status.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityLabel(
+                            "Selected title: \(item.selectedTitleIdentity). State: \(item.status.title)"
+                        )
+                } else {
+                    Text(item.selectedTitleIdentity)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityLabel("Selected title: \(item.selectedTitleIdentity)")
+                    HStack(spacing: 4) {
+                        Text("\(item.sourceKindName) · \(item.draft.profile.name)")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text("· \(item.status.title)")
+                            .foregroundStyle(item.status.tint)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(1)
+                    }
                     .font(.caption)
-                    .foregroundStyle(item.status.tint)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(
+                        "Source kind: \(item.sourceKindName). Profile: \(item.draft.profile.name). "
+                            + "State: \(item.status.title)"
+                    )
+                }
                 if item.status.isActive, let progress {
                     if let stageFraction = progress.stageFraction {
                         ProgressView(value: stageFraction)
@@ -467,7 +497,11 @@ private struct PersistentQueueRow: View {
                 .disabled(!item.canRemove)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.displayName), \(item.status.title), \(position) of \(total)")
+        .accessibilityLabel(
+            "Source: \(item.sourceIdentity). Selected title: \(item.selectedTitleIdentity). "
+                + "Source kind: \(item.sourceKindName). Profile: \(item.draft.profile.name). "
+                + "State: \(item.status.title). Queue item \(position) of \(total)."
+        )
         .accessibilityAction(named: "Move Up") {
             if item.canMove { move(item.id, -1) }
         }
@@ -536,16 +570,18 @@ struct PersistentQueueDetailView: View {
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 36)
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.displayName)
+                Text(item.sourceIdentity)
                     .font(.title2.weight(.semibold))
-                Text(item.draft.source.url.deletingLastPathComponent().path)
+                    .accessibilityLabel("Source: \(item.sourceIdentity)")
+                Text(item.sourceLocation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .accessibilityLabel("Source location: \(item.sourceLocation)")
             }
             Spacer()
-            Text(item.draft.source.kind.title)
+            Text(item.sourceKindName)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
@@ -594,6 +630,8 @@ struct PersistentQueueDetailView: View {
 
     private func settings(_ item: PersistentQueueItem) -> some View {
         VStack(alignment: .leading, spacing: 16) {
+            itemDetails(item)
+            Divider()
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Conversion Setup")
@@ -609,21 +647,19 @@ struct PersistentQueueDetailView: View {
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
                 GridRow {
                     Text("Profile").foregroundStyle(.secondary)
-                    Text(item.draft.profile.name)
+                    detailValue(item.draft.profile.name, label: "Profile")
                 }
                 GridRow {
                     Text("Destination").foregroundStyle(.secondary)
                     HStack {
-                        Text(item.draft.destinationURL.path)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        detailValue(item.draft.destinationURL.path, label: "Destination")
                         Button("Change…") { changeDestination(item) }
                             .disabled(!item.isEditable)
                     }
                 }
                 GridRow {
                     Text("Planned file").foregroundStyle(.secondary)
-                    Text(item.draft.proposedOutputURL.lastPathComponent)
+                    detailValue(item.draft.proposedOutputURL.lastPathComponent, label: "Planned file")
                 }
                 GridRow {
                     Text("Output").foregroundStyle(.secondary)
@@ -636,6 +672,43 @@ struct PersistentQueueDetailView: View {
             }
             .font(.callout)
         }
+    }
+
+    private func itemDetails(_ item: PersistentQueueItem) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Queue Item")
+                .font(.title3.weight(.semibold))
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
+                GridRow {
+                    Text("Source").foregroundStyle(.secondary)
+                    detailValue(item.sourceIdentity, label: "Source")
+                }
+                GridRow {
+                    Text("Source location").foregroundStyle(.secondary)
+                    detailValue(item.sourceLocation, label: "Source location")
+                }
+                GridRow {
+                    Text("Selected title").foregroundStyle(.secondary)
+                    detailValue(item.selectedTitleIdentity, label: "Selected title")
+                }
+                GridRow {
+                    Text("Source kind").foregroundStyle(.secondary)
+                    detailValue(item.sourceKindName, label: "Source kind")
+                }
+                GridRow {
+                    Text("State").foregroundStyle(.secondary)
+                    detailValue(item.status.title, label: "State")
+                }
+            }
+            .font(.callout)
+        }
+    }
+
+    private func detailValue(_ value: String, label: String) -> some View {
+        Text(value)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .accessibilityLabel("\(label): \(value)")
     }
 }
 
@@ -814,18 +887,6 @@ private extension PersistentQueueItemStatus {
         case .needsChoice, .interrupted, .attention: .orange
         case .failed: .red
         case .completed: .green
-        }
-    }
-
-    func subtitle(for item: PersistentQueueItem) -> String {
-        switch self {
-        case let .needsChoice(conflict): conflict.reason
-        case let .attention(decision): decision.prompt
-        case let .failed(failure): failure.message
-        case let .completed(result): URL(fileURLWithPath: result.outputPath).lastPathComponent
-        case .interrupted: "Will restart from the last safe stage"
-        case .processing: "\(item.draft.profile.name) · \(item.draft.proposedOutputURL.lastPathComponent)"
-        default: "\(item.draft.profile.name) · \(item.draft.proposedOutputURL.lastPathComponent)"
         }
     }
 }
