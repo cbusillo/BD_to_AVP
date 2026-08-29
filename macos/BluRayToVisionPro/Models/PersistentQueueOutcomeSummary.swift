@@ -35,4 +35,18 @@ struct PersistentQueueOutcomeSummary: Equatable {
     var hasAnyResults: Bool {
         completedCount > 0 || failedCount > 0 || needsActionCount > 0
     }
+
+    var notificationDescription: String {
+        var parts: [String] = []
+        if completedCount > 0 {
+            parts.append("\(completedCount) completed.")
+        }
+        if failedCount > 0 {
+            parts.append("\(failedCount) failed.")
+        }
+        if needsActionCount > 0 {
+            parts.append("\(needsActionCount) needs action.")
+        }
+        return parts.joined(separator: " ")
+    }
 }

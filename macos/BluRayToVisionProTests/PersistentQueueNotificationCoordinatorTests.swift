@@ -49,12 +49,16 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
         let failed = try second.replacingStatus(.failed)
 
         coordinator.observe(items: [first, second, stopped], runState: .running)
-        coordinator.observe(items: [completed, failed, stopped], runState: .idle)
+        coordinator.observe(
+            items: [completed, failed, stopped],
+            runState: .idle,
+            completionRevision: 1
+        )
         await Task.yield()
 
         XCTAssertEqual(delivery.deliveredRequests.map(\.title), ["Queue Finished"])
         XCTAssertEqual(delivery.deliveredRequests.first?.threadIdentifier, "queue.completion")
-        XCTAssertEqual(delivery.deliveredRequests.first?.body, "Completed: 1. Failed: 1. Needs action: 0.")
+        XCTAssertEqual(delivery.deliveredRequests.first?.body, "1 completed. 1 failed.")
     }
 
     func testPauseStatesPreserveSingleNotificationSession() async throws {
@@ -68,11 +72,29 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
         coordinator.observe(items: [item], runState: .pauseAfterCurrent)
         coordinator.observe(items: [item], runState: .paused)
         coordinator.observe(items: [item], runState: .running)
-        coordinator.observe(items: [completed], runState: .idle)
+        coordinator.observe(items: [completed], runState: .idle, completionRevision: 1)
         await Task.yield()
 
         XCTAssertEqual(delivery.deliveredRequests.map(\.title), ["Queue Finished"])
-        XCTAssertEqual(delivery.deliveredRequests.first?.body, "Completed: 1. Failed: 0. Needs action: 0.")
+        XCTAssertEqual(delivery.deliveredRequests.first?.body, "1 completed.")
+    }
+
+    func testExplicitStopDoesNotSendCompletionNotification() async throws {
+        let delivery = CapturingQueueNotificationDelivery()
+        let settings = makeSettings(finish: true, attention: false)
+        let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
+        let first = try makeItem(ordinal: 0, state: .waiting)
+        let second = try makeItem(ordinal: 1, state: .waiting)
+        let completed = try first.replacingStatus(.completed)
+        let processing = try second.replacingStatus(.processing)
+        let stopped = try second.replacingStatus(.stopped)
+
+        coordinator.observe(items: [first, second], runState: .running)
+        coordinator.observe(items: [completed, processing], runState: .running)
+        coordinator.observe(items: [completed, stopped], runState: .idle)
+        await Task.yield()
+
+        XCTAssertTrue(delivery.deliveredRequests.isEmpty)
     }
 
     func testDisabledPreferencesRequestAuthorizationOnlyWhenEnabled() async throws {
@@ -104,7 +126,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
         let failed = try waiting.replacingStatus(.failed, message: "ffmpeg failed at /tmp/private-output.mov")
 
         coordinator.observe(items: [waiting], runState: .running)
-        coordinator.observe(items: [failed], runState: .idle)
+        coordinator.observe(items: [failed], runState: .idle, completionRevision: 1)
         await Task.yield()
 
         let copy = delivery.deliveredRequests.flatMap { [$0.title, $0.body, $0.threadIdentifier, $0.identifier] }.joined(separator: " ")

@@ -11,6 +11,7 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
     private struct Snapshot: Equatable {
         let items: [PersistentQueueItem]
         let runState: PersistentQueueRunState
+        let completionRevision: UInt
 
         var itemsByID: [UUID: PersistentQueueItem] {
             Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
@@ -41,7 +42,8 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
         self.delivery = delivery
         lastSnapshot = Snapshot(
             items: viewModel.persistentQueueItems,
-            runState: viewModel.persistentQueueRunState
+            runState: viewModel.persistentQueueRunState,
+            completionRevision: viewModel.persistentQueueCompletionRevision
         )
         bind(viewModel: viewModel)
         bind(settings: settings)
@@ -52,17 +54,30 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
         settings: AppSettings,
         delivery: QueueNotificationDelivering,
         initialItems: [PersistentQueueItem] = [],
-        initialRunState: PersistentQueueRunState = .idle
+        initialRunState: PersistentQueueRunState = .idle,
+        initialCompletionRevision: UInt = 0
     ) {
         self.settings = settings
         self.delivery = delivery
-        lastSnapshot = Snapshot(items: initialItems, runState: initialRunState)
+        lastSnapshot = Snapshot(
+            items: initialItems,
+            runState: initialRunState,
+            completionRevision: initialCompletionRevision
+        )
         bind(settings: settings)
         requestAuthorizationIfNeeded()
     }
 
-    func observe(items: [PersistentQueueItem], runState: PersistentQueueRunState) {
-        let snapshot = Snapshot(items: items, runState: runState)
+    func observe(
+        items: [PersistentQueueItem],
+        runState: PersistentQueueRunState,
+        completionRevision: UInt = 0
+    ) {
+        let snapshot = Snapshot(
+            items: items,
+            runState: runState,
+            completionRevision: completionRevision
+        )
         defer { lastSnapshot = snapshot }
 
         if session == nil,
@@ -82,8 +97,10 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
         refreshParticipation(with: snapshot, previous: lastSnapshot)
         deliverAttentionIfNeeded(items: snapshot.items)
 
-        if runState == .idle {
+        if completionRevision != lastSnapshot.completionRevision {
             deliverCompletionIfNeeded(items: snapshot.items)
+            session = nil
+        } else if runState == .idle, lastSnapshot.runState != .idle {
             session = nil
         }
     }
@@ -93,10 +110,17 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
     }
 
     private func bind(viewModel: ConversionViewModel) {
-        viewModel.$persistentQueueItems
-            .combineLatest(viewModel.$persistentQueueRunState)
-            .sink { [weak self] items, runState in
-                self?.observe(items: items, runState: runState)
+        Publishers.CombineLatest3(
+            viewModel.$persistentQueueItems,
+            viewModel.$persistentQueueRunState,
+            viewModel.$persistentQueueCompletionRevision
+        )
+            .sink { [weak self] items, runState, completionRevision in
+                self?.observe(
+                    items: items,
+                    runState: runState,
+                    completionRevision: completionRevision
+                )
             }
             .store(in: &cancellables)
     }
@@ -186,7 +210,7 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
             identifier: "queue-completion-\(session.id.uuidString)",
             threadIdentifier: ThreadIdentifier.completion,
             title: "Queue Finished",
-            body: "Completed: \(summary.completedCount). Failed: \(summary.failedCount). Needs action: \(summary.needsActionCount)."
+            body: summary.notificationDescription
         )
     }
 

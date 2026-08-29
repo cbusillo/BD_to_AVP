@@ -20,6 +20,16 @@ final class PersistentQueueOutcomeSummaryTests: XCTestCase {
         XCTAssertTrue(summary.hasAnyResults)
     }
 
+    func testNotificationDescriptionOmitsZeroCategories() throws {
+        let completed = try makeItem(ordinal: 0, state: .completed)
+        let failed = try makeItem(ordinal: 1, state: .failed)
+
+        XCTAssertEqual(
+            PersistentQueueOutcomeSummary(items: [completed, failed]).notificationDescription,
+            "1 completed. 1 failed."
+        )
+    }
+
     private func makeItem(ordinal: Int, state: DurableQueueItemState) throws -> PersistentQueueItem {
         let draft = ConversionDraft(
             source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Sources/Feature-\(ordinal).mkv")),
