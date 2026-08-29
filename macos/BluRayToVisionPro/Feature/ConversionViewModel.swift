@@ -266,10 +266,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     func updatePersistentQueueItemDestination(_ itemID: UUID, destinationURL: URL) async throws {
+        let shouldRejoinRunningQueue = persistentQueueRunState == .running
+            && persistentQueueItems.first(where: { $0.id == itemID })?.hasStorageDestinationFailure == true
         try await durableQueueStore.updateRecoverableItemDestination(
             itemID,
             destinationPath: destinationURL.standardizedFileURL.path
         )
+        if shouldRejoinRunningQueue {
+            _ = await adoptPersistentQueueItem(itemID)
+        }
     }
 
     func clearCompletedPersistentQueueItems() async throws -> PersistentQueueRemovalToken {
