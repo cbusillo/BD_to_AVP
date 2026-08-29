@@ -275,12 +275,10 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertNotIn("SUEnableAutomaticChecks", release_info)
 
     def test_native_ui_keeps_queue_sources_and_original_job_controls_visible(self) -> None:
-        content_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ContentView.swift").read_text(
+        content_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ContentView.swift").read_text(encoding="utf-8")
+        queue_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "PersistentQueueWorkspaceView.swift").read_text(
             encoding="utf-8"
         )
-        queue_view = (
-            MACOS_ROOT / "BluRayToVisionPro" / "Views" / "PersistentQueueWorkspaceView.swift"
-        ).read_text(encoding="utf-8")
         setup_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ConversionSetupView.swift").read_text(
             encoding="utf-8"
         )
