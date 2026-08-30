@@ -166,7 +166,7 @@ jobs:
             -project BluRayToVisionPro.xcodeproj \
             -scheme BDToAVPPlayer \
             -configuration Debug \
-            -destination "id=$simulator_udid" \
+            -destination "platform=visionOS Simulator,id=$simulator_udid" \
             -derivedDataPath build/BDToAVPPlayerDerivedData \
             CODE_SIGNING_ALLOWED=NO
 

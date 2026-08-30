@@ -194,6 +194,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func seek(to requestedTime: TimeInterval) {
+        seek(to: requestedTime, completion: nil)
+    }
+
+    private func seek(to requestedTime: TimeInterval, completion: (() -> Void)?) {
         guard let playerItem else {
             return
         }
@@ -207,13 +211,15 @@ final class MVHEVCPlayerSession: ObservableObject {
         ) { [weak self, weak playerItem] completed in
             Task { @MainActor in
                 guard let self,
-                      completed,
                       generation == self.preparationGeneration,
                       playerItem === self.playerItem
                 else {
                     return
                 }
-                self.currentTime = targetTime
+                if completed {
+                    self.currentTime = targetTime
+                }
+                completion?()
             }
         }
     }
@@ -325,9 +331,12 @@ final class MVHEVCPlayerSession: ObservableObject {
         case .readyToPlay:
             state = .ready
             if let resumeTime = pendingResume.consume() {
-                seek(to: resumeTime)
+                seek(to: resumeTime) { [weak self] in
+                    self?.player.play()
+                }
+            } else {
+                player.play()
             }
-            player.play()
         case .failed:
             presentFailure(item.error?.localizedDescription ?? "The player failed without an error description.")
         @unknown default:

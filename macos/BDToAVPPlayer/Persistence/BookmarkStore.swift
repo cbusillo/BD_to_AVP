@@ -118,25 +118,6 @@ final class BookmarkStore {
             throw BookmarkStoreError.missingBookmark(id)
         }
 
-        do {
-            let (resolvedURL, isStale) = try resolveBookmark(bookmarkData)
-            if isStale {
-                throw BookmarkStoreError.staleBookmark(id)
-            }
-            return resolvedURL
-        } catch {
-            if error is BookmarkStoreError {
-                throw error
-            }
-            throw BookmarkStoreError.invalidBookmark(id)
-        }
-    }
-
-    func open(id: String) throws -> SecurityScopedResourceLease {
-        guard let bookmarkData = bookmarks[id] else {
-            throw BookmarkStoreError.missingBookmark(id)
-        }
-
         let resolvedURL: URL
         let isStale: Bool
         do {
@@ -145,22 +126,33 @@ final class BookmarkStore {
             throw BookmarkStoreError.invalidBookmark(id)
         }
 
+        guard isStale else {
+            return resolvedURL
+        }
+
         let lease = makeLease(resolvedURL)
+        defer { lease.close() }
         do {
             guard fileManager.fileExists(atPath: resolvedURL.path) else {
                 throw BookmarkStoreError.missingResource(resolvedURL)
             }
-            if isStale {
-                try save(bookmarkData: bookmarkDataForURL(resolvedURL), for: id)
-            }
-            return lease
-        } catch {
-            lease.close()
-            if isStale {
-                throw BookmarkStoreError.staleBookmark(id)
-            }
+            try save(bookmarkData: bookmarkDataForURL(resolvedURL), for: id)
+            return resolvedURL
+        } catch let error as BookmarkStoreError {
             throw error
+        } catch {
+            throw BookmarkStoreError.staleBookmark(id)
         }
+    }
+
+    func open(id: String) throws -> SecurityScopedResourceLease {
+        let resolvedURL = try resolve(id: id)
+        let lease = makeLease(resolvedURL)
+        guard fileManager.fileExists(atPath: resolvedURL.path) else {
+            lease.close()
+            throw BookmarkStoreError.missingResource(resolvedURL)
+        }
+        return lease
     }
 
     func withResolvedURL<T>(for id: String, _ body: (URL) throws -> T) throws -> T {

@@ -72,7 +72,7 @@ jobs:
           xcrun simctl bootstatus "$simulator_udid" -b
           xcodebuild test-without-building \
             -scheme BDToAVPPlayer \
-            -destination "id=$simulator_udid" \
+            -destination "platform=visionOS Simulator,id=$simulator_udid" \
             CODE_SIGNING_ALLOWED=NO
 """
 

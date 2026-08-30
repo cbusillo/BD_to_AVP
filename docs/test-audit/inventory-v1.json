@@ -4,11 +4,11 @@
     "uv run python -m unittest discover -s tests -t .",
     "uv run python scripts/native_app.py test",
     "(cd support-diagnostics && npm run check)",
-    "set -euo pipefail\ncd macos\nexport DEVELOPER_DIR=\"/Applications/Xcode_26.5.app/Contents/Developer\"\ntest -x \"$DEVELOPER_DIR/usr/bin/xcodebuild\"\ntest \"$(xcodebuild -version | sed -n '1p')\" = \"Xcode 26.5\"\nxcodegen generate --spec project.yml\nxcodebuild build-for-testing \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"generic/platform=visionOS Simulator\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO\nruntime_id=\"$(xcrun simctl list runtimes -j | jq -r '\n[.runtimes[]\n| select(.isAvailable == true)\n| select(.platform == \"visionOS\" or (.name | startswith(\"visionOS\")))\n| .identifier]\n| first // empty\n')\"\ndevice_type_id=\"$(xcrun simctl list devicetypes -j | jq -r '\n[.devicetypes[] | select(.name == \"Apple Vision Pro\") | .identifier]\n| first // empty\n')\"\nif [[ -z \"$runtime_id\" || -z \"$device_type_id\" ]]; then\necho \"::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none}).\"\nexit 0\nfi\nsimulator_name=\"BDToAVPPlayer CI ${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}\"\nsimulator_udid=\"$(xcrun simctl create \"$simulator_name\" \"$device_type_id\" \"$runtime_id\")\"\ncleanup_simulator() {\nxcrun simctl shutdown \"$simulator_udid\" >/dev/null 2>&1 || true\nxcrun simctl delete \"$simulator_udid\" >/dev/null 2>&1 || true\n}\ntrap cleanup_simulator EXIT\nxcrun simctl boot \"$simulator_udid\"\nxcrun simctl bootstatus \"$simulator_udid\" -b\nxcodebuild test-without-building \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"id=$simulator_udid\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO"
+    "set -euo pipefail\ncd macos\nexport DEVELOPER_DIR=\"/Applications/Xcode_26.5.app/Contents/Developer\"\ntest -x \"$DEVELOPER_DIR/usr/bin/xcodebuild\"\ntest \"$(xcodebuild -version | sed -n '1p')\" = \"Xcode 26.5\"\nxcodegen generate --spec project.yml\nxcodebuild build-for-testing \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"generic/platform=visionOS Simulator\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO\nruntime_id=\"$(xcrun simctl list runtimes -j | jq -r '\n[.runtimes[]\n| select(.isAvailable == true)\n| select(.platform == \"visionOS\" or (.name | startswith(\"visionOS\")))\n| .identifier]\n| first // empty\n')\"\ndevice_type_id=\"$(xcrun simctl list devicetypes -j | jq -r '\n[.devicetypes[] | select(.name == \"Apple Vision Pro\") | .identifier]\n| first // empty\n')\"\nif [[ -z \"$runtime_id\" || -z \"$device_type_id\" ]]; then\necho \"::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none}).\"\nexit 0\nfi\nsimulator_name=\"BDToAVPPlayer CI ${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}\"\nsimulator_udid=\"$(xcrun simctl create \"$simulator_name\" \"$device_type_id\" \"$runtime_id\")\"\ncleanup_simulator() {\nxcrun simctl shutdown \"$simulator_udid\" >/dev/null 2>&1 || true\nxcrun simctl delete \"$simulator_udid\" >/dev/null 2>&1 || true\n}\ntrap cleanup_simulator EXIT\nxcrun simctl boot \"$simulator_udid\"\nxcrun simctl bootstatus \"$simulator_udid\" -b\nxcodebuild test-without-building \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"platform=visionOS Simulator,id=$simulator_udid\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO"
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "8d36a4f746b5d379caf6bf4354bbd31064608f27",
+    "sha": "c12126871c60d08fe1a2c683e206eaeadb3f499f",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -310,7 +310,7 @@
       "working_directory": "support-diagnostics"
     },
     {
-      "authoritative_command": "set -euo pipefail\ncd macos\nexport DEVELOPER_DIR=\"/Applications/Xcode_26.5.app/Contents/Developer\"\ntest -x \"$DEVELOPER_DIR/usr/bin/xcodebuild\"\ntest \"$(xcodebuild -version | sed -n '1p')\" = \"Xcode 26.5\"\nxcodegen generate --spec project.yml\nxcodebuild build-for-testing \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"generic/platform=visionOS Simulator\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO\nruntime_id=\"$(xcrun simctl list runtimes -j | jq -r '\n[.runtimes[]\n| select(.isAvailable == true)\n| select(.platform == \"visionOS\" or (.name | startswith(\"visionOS\")))\n| .identifier]\n| first // empty\n')\"\ndevice_type_id=\"$(xcrun simctl list devicetypes -j | jq -r '\n[.devicetypes[] | select(.name == \"Apple Vision Pro\") | .identifier]\n| first // empty\n')\"\nif [[ -z \"$runtime_id\" || -z \"$device_type_id\" ]]; then\necho \"::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none}).\"\nexit 0\nfi\nsimulator_name=\"BDToAVPPlayer CI ${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}\"\nsimulator_udid=\"$(xcrun simctl create \"$simulator_name\" \"$device_type_id\" \"$runtime_id\")\"\ncleanup_simulator() {\nxcrun simctl shutdown \"$simulator_udid\" >/dev/null 2>&1 || true\nxcrun simctl delete \"$simulator_udid\" >/dev/null 2>&1 || true\n}\ntrap cleanup_simulator EXIT\nxcrun simctl boot \"$simulator_udid\"\nxcrun simctl bootstatus \"$simulator_udid\" -b\nxcodebuild test-without-building \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"id=$simulator_udid\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO",
+      "authoritative_command": "set -euo pipefail\ncd macos\nexport DEVELOPER_DIR=\"/Applications/Xcode_26.5.app/Contents/Developer\"\ntest -x \"$DEVELOPER_DIR/usr/bin/xcodebuild\"\ntest \"$(xcodebuild -version | sed -n '1p')\" = \"Xcode 26.5\"\nxcodegen generate --spec project.yml\nxcodebuild build-for-testing \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"generic/platform=visionOS Simulator\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO\nruntime_id=\"$(xcrun simctl list runtimes -j | jq -r '\n[.runtimes[]\n| select(.isAvailable == true)\n| select(.platform == \"visionOS\" or (.name | startswith(\"visionOS\")))\n| .identifier]\n| first // empty\n')\"\ndevice_type_id=\"$(xcrun simctl list devicetypes -j | jq -r '\n[.devicetypes[] | select(.name == \"Apple Vision Pro\") | .identifier]\n| first // empty\n')\"\nif [[ -z \"$runtime_id\" || -z \"$device_type_id\" ]]; then\necho \"::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none}).\"\nexit 0\nfi\nsimulator_name=\"BDToAVPPlayer CI ${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}\"\nsimulator_udid=\"$(xcrun simctl create \"$simulator_name\" \"$device_type_id\" \"$runtime_id\")\"\ncleanup_simulator() {\nxcrun simctl shutdown \"$simulator_udid\" >/dev/null 2>&1 || true\nxcrun simctl delete \"$simulator_udid\" >/dev/null 2>&1 || true\n}\ntrap cleanup_simulator EXIT\nxcrun simctl boot \"$simulator_udid\"\nxcrun simctl bootstatus \"$simulator_udid\" -b\nxcodebuild test-without-building \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"platform=visionOS Simulator,id=$simulator_udid\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO",
       "id": "ci.visionos.bd_to_avp_player",
       "kind": "ci",
       "maintained": true,
@@ -408,7 +408,7 @@
       "python-unittest-discovery": 106,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2601,
+    "ci_test_case_count": 2608,
     "classification_counts": {
       "accepted-cost": 54,
       "valuable": 172
@@ -419,7 +419,7 @@
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2623,
+    "test_case_count": 2630,
     "test_file_count": 156,
     "unmapped_test_file_count": 0
   },
@@ -1214,11 +1214,11 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 7,
+          "occurrences": 9,
           "signal": "filesystem_access"
         }
       ],
-      "test_case_count": 7
+      "test_case_count": 8
     },
     {
       "bundle": "BDToAVPPlayerTests",
@@ -1299,8 +1299,13 @@
       "special_requirements": [
         "visionOS simulator or physical Apple Vision Pro, depending on evidence"
       ],
-      "static_brittleness_signals": [],
-      "test_case_count": 8
+      "static_brittleness_signals": [
+        {
+          "occurrences": 6,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 14
     },
     {
       "bundle": "BDToAVPPlayerTests",
@@ -5117,7 +5122,7 @@
           "signal": "polling_or_waiting"
         },
         {
-          "occurrences": 5,
+          "occurrences": 6,
           "signal": "hardware_or_media"
         }
       ],

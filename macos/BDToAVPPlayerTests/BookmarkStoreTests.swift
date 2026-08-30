@@ -99,9 +99,45 @@ final class BookmarkStoreTests: XCTestCase {
         let lease = try store.open(id: "movie-1")
 
         XCTAssertEqual(store.bookmarkData(for: "movie-1"), refreshedBookmark)
-        XCTAssertEqual(starts, 1)
-        XCTAssertEqual(stops, 0)
+        XCTAssertEqual(starts, 2)
+        XCTAssertEqual(stops, 1)
         lease.close()
+        XCTAssertEqual(stops, 2)
+    }
+
+    func testResolvingStaleBookmarkRefreshesDataAndReturnsURL() throws {
+        let storageURL = temporaryURL()
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests")
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sourceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: sourceURL)
+
+        var starts = 0
+        var stops = 0
+        let refreshedBookmark = Data([4, 5, 6])
+        let store = BookmarkStore(
+            storageURL: storageURL,
+            resolveBookmark: { _ in (sourceURL, true) },
+            bookmarkDataForURL: { _ in refreshedBookmark },
+            makeLease: { url in
+                SecurityScopedResourceLease(
+                    url: url,
+                    startAccessing: {
+                        starts += 1
+                        return true
+                    },
+                    stopAccessing: {
+                        stops += 1
+                    }
+                )
+            }
+        )
+        try store.save(bookmarkData: Data([1, 2, 3]), for: "movie-1")
+
+        XCTAssertEqual(try store.resolve(id: "movie-1"), sourceURL)
+        XCTAssertEqual(store.bookmarkData(for: "movie-1"), refreshedBookmark)
+        XCTAssertEqual(starts, 1)
         XCTAssertEqual(stops, 1)
     }
 
