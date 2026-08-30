@@ -115,9 +115,11 @@ the repository test command or product behavior.
 
 The maintained executable lanes are Python unit discovery, the
 `BluRayToVisionPro` macOS unit-test scheme, support-diagnostics checks, and the
-`BDToAVPPlayer` visionOS test-bundle build. The player lane uses a generic
-visionOS Simulator destination and does not require a booted runtime. The
-installed UI and `SpatialPlaybackProbe` targets remain maintained documented
+`BDToAVPPlayer` visionOS unit lane. The player lane always builds against a
+generic visionOS Simulator destination with pinned Xcode 26.5, then conditionally
+creates and tests on a temporary Apple Vision Pro simulator when the required
+runtime and device type are available; otherwise it records a successful skip.
+The installed UI and `SpatialPlaybackProbe` targets remain maintained documented
 operator/device lanes; their absence from the CI `validate` job is an evidence
 boundary, not an orphan finding.
 

@@ -498,6 +498,9 @@ def _lane_definitions(
             and "BDToAVPPlayer" in command
             and "generic/platform=visionOS Simulator" in command
             and "CODE_SIGNING_ALLOWED=NO" in command
+            and 'DEVELOPER_DIR="/Applications/Xcode_26.5.app/Contents/Developer"' in command
+            and "xcodebuild -version" in command
+            and '"Xcode 26.5"' in command
         ),
         None,
     )
@@ -505,7 +508,7 @@ def _lane_definitions(
         lanes.append(
             {
                 "id": "ci.visionos.bd_to_avp_player",
-                "name": "CI visionOS BDToAVPPlayer test bundle build",
+                "name": "CI visionOS BDToAVPPlayer unit tests",
                 "kind": "ci",
                 "maintained": True,
                 "source_paths": [".github/workflows/ci.yml", "macos/project.yml"],
@@ -513,7 +516,12 @@ def _lane_definitions(
                 "authoritative_command": player_command,
                 "underlying_scheme": "BDToAVPPlayer",
                 "test_targets": player_scheme["test_targets"],
-                "requirements": ["Xcode 26.5", "generic visionOS Simulator destination", "CODE_SIGNING_ALLOWED=NO"],
+                "requirements": [
+                    "Xcode 26.5",
+                    "generic visionOS Simulator build destination",
+                    "available visionOS runtime and Apple Vision Pro simulator device type for unit execution",
+                    "CODE_SIGNING_ALLOWED=NO",
+                ],
             }
         )
     if any("npm run check" in command for command in commands):

@@ -41,7 +41,7 @@
       ]
     },
     "ci-visionos-player-build": {
-      "description": "Pinned Xcode 26.5 CI regenerates the Xcode project and compiles the BDToAVPPlayer app and unit-test bundle for a generic visionOS Simulator without requiring a booted runtime.",
+      "description": "Pinned Xcode 26.5 CI regenerates the Xcode project and compiles the BDToAVPPlayer app and unit-test bundle for a generic visionOS Simulator, then conditionally runs those unit tests on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
       "source_paths": [
         ".github/workflows/ci.yml",
         "macos/project.yml"
@@ -188,7 +188,7 @@
     {
       "id": "visionos-player-unit-tests",
       "classification": "valuable",
-      "rationale": "{path} protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with Xcode 26.5 for a generic visionOS Simulator without requiring a booted runtime or device.",
+      "rationale": "{path} protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with pinned Xcode 26.5 and conditionally executes it on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
       "evidence_ids": ["ci-visionos-player-build"],
       "paths": [
         "macos/BDToAVPPlayerTests/BookmarkStoreTests.swift",

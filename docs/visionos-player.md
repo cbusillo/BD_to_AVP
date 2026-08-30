@@ -14,9 +14,10 @@ validator.
 - Supported `.mov`, `.mp4`, and `.m4v` files already present in the app's
   Documents directory are indexed on launch. File Sharing and opening documents
   in place are enabled for this source path.
-- Library metadata, bookmarks, and resume positions are stored as bounded JSON
-  under the app's Application Support directory. Persisted media records do not
-  contain source filesystem URLs.
+- Library metadata and resume positions are stored as bounded JSON under the
+  app's Application Support directory. Library media records omit source
+  filesystem URLs, but bookmark blobs necessarily encode the source location so
+  the app can regain security-scoped access.
 
 ## Source Access
 
@@ -65,7 +66,8 @@ Generate the Xcode project from the checked-in specification:
 uv run python scripts/native_app.py generate
 ```
 
-Run the visionOS simulator unit suite:
+Run the visionOS simulator unit suite when a compatible runtime and Apple Vision
+Pro simulator device type are installed:
 
 ```sh
 xcodebuild test \
@@ -77,9 +79,12 @@ xcodebuild test \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-CI uses Xcode 26.5 to regenerate the project and run `build-for-testing` against
-the generic visionOS Simulator destination. This proves the app and its unit-test
-bundle compile without assuming that a simulator runtime is booted on the runner.
+CI pins Xcode 26.5, regenerates the project, and always runs
+`build-for-testing` against the generic visionOS Simulator destination. When an
+available visionOS runtime and Apple Vision Pro device type exist, CI creates,
+boots, tests, and deletes a temporary simulator with `test-without-building`.
+If either prerequisite is absent, CI logs a clear successful skip instead of
+assuming a pre-existing simulator.
 
 For a connected headset, build with automatic development provisioning:
 
