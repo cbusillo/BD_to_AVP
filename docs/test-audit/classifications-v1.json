@@ -195,6 +195,7 @@
         "macos/BDToAVPPlayerTests/LibraryStoreTests.swift",
         "macos/BDToAVPPlayerTests/MediaFormatInspectorTests.swift",
         "macos/BDToAVPPlayerTests/MediaLibraryModelTests.swift",
+        "macos/BDToAVPPlayerTests/MediaThumbnailTests.swift",
         "macos/BDToAVPPlayerTests/PlaybackPresentationTests.swift",
         "macos/BDToAVPPlayerTests/PlayerAppModelTests.swift",
         "macos/BDToAVPPlayerTests/ResumeStoreTests.swift"
