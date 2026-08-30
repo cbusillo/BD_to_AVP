@@ -174,7 +174,9 @@ struct MediaPosterCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 8) {
-                    FormatPill(format: item.format)
+                    Label("On My Vision Pro", systemImage: "visionpro")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Spacer(minLength: 4)
                     Text("Details ›")
                         .font(.caption.weight(.semibold))
@@ -199,6 +201,7 @@ struct MediaPosterCard: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("movie-card-\(item.id)")
         .accessibilityLabel("Details for \(item.title)")
         .accessibilityHint("Shows filename, format, source, and playback actions.")
     }

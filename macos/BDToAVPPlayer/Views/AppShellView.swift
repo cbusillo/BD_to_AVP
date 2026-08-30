@@ -19,7 +19,7 @@ struct AppShellView: View {
                 NavigationSplitView {
                     List {
                         Section("Sources") {
-                            Label("All Movies", systemImage: "film.stack")
+                            Label("On My Vision Pro", systemImage: "visionpro")
                                 .font(.headline)
                         }
                     }

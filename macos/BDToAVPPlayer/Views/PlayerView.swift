@@ -107,6 +107,7 @@ private struct PlayerHUDView: View {
                     .font(.caption.weight(.semibold))
                     .accessibilityLabel("Stereo format \(session.mediaItem?.format.displayName ?? "MV-HEVC")")
                 Button("Done", action: onDone)
+                    .accessibilityIdentifier("player-done")
                     .accessibilityLabel("Done playing movie")
             }
 
@@ -132,6 +133,7 @@ private struct PlayerHUDView: View {
                     Label(session.isPlaying ? "Pause" : "Play", systemImage: session.isPlaying ? "pause.fill" : "play.fill")
                 }
                 .disabled(!session.canControlPlayback)
+                .accessibilityIdentifier("player-play-pause")
                 .accessibilityLabel(session.isPlaying ? "Pause playback" : "Play movie")
 
                 Button(action: session.seekForward) {

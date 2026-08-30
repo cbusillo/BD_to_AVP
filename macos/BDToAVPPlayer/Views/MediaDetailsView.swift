@@ -83,6 +83,7 @@ struct MediaDetailsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color(red: 0.82, green: 0.48, blue: 0.12))
+                .accessibilityIdentifier("play-movie-\(item.id)")
                 .accessibilityHint("Sends this movie to the playback integrator.")
             case let .planned(message), let .unavailable(message):
                 Button {
@@ -185,10 +186,24 @@ struct FormatPill: View {
         Text(format.displayName)
             .font(.caption2.weight(.bold))
             .tracking(0.5)
-            .foregroundStyle(.primary)
+            .foregroundStyle(tint)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .background(.thinMaterial, in: Capsule())
+            .background(tint.opacity(0.16), in: Capsule())
+            .overlay {
+                Capsule().stroke(tint.opacity(0.38), lineWidth: 1)
+            }
             .accessibilityLabel("Format \(format.displayName)")
+    }
+
+    private var tint: Color {
+        switch format {
+        case .mvHEVC:
+            return Color(red: 0.45, green: 0.92, blue: 0.68)
+        case .sideBySide, .overUnder:
+            return Color(red: 0.72, green: 0.66, blue: 1.0)
+        case .unsupported:
+            return Color(red: 1.0, green: 0.72, blue: 0.34)
+        }
     }
 }
