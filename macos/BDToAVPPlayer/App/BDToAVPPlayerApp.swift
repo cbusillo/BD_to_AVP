@@ -2,9 +2,11 @@ import SwiftUI
 
 @main
 struct BDToAVPPlayerApp: App {
+    @StateObject private var model = PlayerAppModel()
+
     var body: some Scene {
         WindowGroup {
-            PlayerPlaceholderView()
+            AppShellView(model: model)
         }
     }
 }

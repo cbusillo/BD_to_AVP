@@ -107,7 +107,6 @@ final class BookmarkStore {
         }
 
         if isStale {
-            try? remove(id: id)
             throw BookmarkStoreError.staleBookmark(id)
         }
         return resolvedURL

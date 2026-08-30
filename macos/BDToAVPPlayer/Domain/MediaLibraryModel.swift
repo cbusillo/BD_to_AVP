@@ -24,6 +24,10 @@ final class MediaLibraryModel: ObservableObject {
         }
     }
 
+    func replaceAll(_ newItems: [MediaItem]) {
+        items = Self.deduplicated(newItems)
+    }
+
     func remove(id: String) {
         items.removeAll { $0.id == id }
     }

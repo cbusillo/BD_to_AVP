@@ -7,14 +7,12 @@ final class MediaLibraryModelTests: XCTestCase {
             id: "movie-1",
             title: "First",
             fileName: "first.mov",
-            sourceURL: URL(fileURLWithPath: "/tmp/first.mov"),
             format: .mvHEVC
         )
         let replacement = MediaItem(
             id: "movie-1",
             title: "Replacement",
             fileName: "replacement.mov",
-            sourceURL: URL(fileURLWithPath: "/tmp/replacement.mov"),
             format: .sideBySide
         )
         let second = MediaItem(url: URL(fileURLWithPath: "/tmp/second.mov"), format: .overUnder)
