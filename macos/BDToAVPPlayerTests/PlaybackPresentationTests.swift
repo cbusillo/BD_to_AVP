@@ -63,6 +63,56 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertNil(scrubState.finish())
     }
 
+    func testHUDVisibilitySchedulesAutomaticHidingOnlyDuringUnfocusedPlayback() {
+        var visibility = PlaybackHUDVisibilityState()
+
+        visibility.reconcile(isPlaying: true)
+
+        XCTAssertTrue(visibility.isVisible)
+        XCTAssertTrue(visibility.isAutoHideScheduled)
+        XCTAssertEqual(PlaybackHUDVisibilityState.autoHideDelay, 3)
+    }
+
+    func testHUDVisibilityHidesOnlyForTheCurrentScheduledTimer() {
+        var visibility = PlaybackHUDVisibilityState()
+        visibility.reconcile(isPlaying: true)
+        let initialGeneration = visibility.autoHideGeneration
+
+        visibility.reveal(isPlaying: true)
+        let replacementGeneration = visibility.autoHideGeneration
+        visibility.autoHideTimerFired(generation: initialGeneration)
+
+        XCTAssertTrue(visibility.isVisible)
+        XCTAssertTrue(visibility.isAutoHideScheduled)
+
+        visibility.autoHideTimerFired(generation: replacementGeneration)
+
+        XCTAssertFalse(visibility.isVisible)
+        XCTAssertFalse(visibility.isAutoHideScheduled)
+    }
+
+    func testHUDVisibilityRemainsVisibleWhilePausedHoveredOrScrubbing() {
+        var visibility = PlaybackHUDVisibilityState()
+
+        visibility.reconcile(isPlaying: false)
+        XCTAssertTrue(visibility.isVisible)
+        XCTAssertFalse(visibility.isAutoHideScheduled)
+
+        visibility.setHovered(true, isPlaying: true)
+        XCTAssertTrue(visibility.isVisible)
+        XCTAssertFalse(visibility.isAutoHideScheduled)
+
+        visibility.setHovered(false, isPlaying: true)
+        XCTAssertTrue(visibility.isAutoHideScheduled)
+
+        visibility.setInteracting(true, isPlaying: true)
+        XCTAssertTrue(visibility.isVisible)
+        XCTAssertFalse(visibility.isAutoHideScheduled)
+
+        visibility.setInteracting(false, isPlaying: true)
+        XCTAssertTrue(visibility.isAutoHideScheduled)
+    }
+
     func testResumePolicyWritesAnInProgressPosition() {
         XCTAssertEqual(ResumeWritePolicy.decision(currentTime: 42, duration: 120), .write(42))
     }

@@ -6,6 +6,7 @@ struct PlayerView: View {
     private let onDone: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
+    @State private var hudVisibility = PlaybackHUDVisibilityState()
 
     init(session: MVHEVCPlayerSession, onDone: @escaping () -> Void) {
         self.session = session
@@ -14,14 +15,58 @@ struct PlayerView: View {
 
     var body: some View {
         GeometryReader3D { geometry in
-            ZStack(alignment: .bottom) {
-                playerSurface(geometry: geometry)
-
-                PlayerHUDView(session: session, onDone: done)
-                    .padding(24)
-            }
+            playerSurface(geometry: geometry)
         }
         .background(.black)
+        .onAppear {
+            hudVisibility.reconcile(isPlaying: session.isPlaying)
+        }
+        .onHover { isHovered in
+            if isHovered {
+                hudVisibility.reveal(isPlaying: session.isPlaying)
+            }
+        }
+        .onChange(of: session.isPlaying) { _, isPlaying in
+            hudVisibility.reconcile(isPlaying: isPlaying)
+        }
+        .onChange(of: session.state) { _, _ in
+            hudVisibility.reconcile(isPlaying: session.isPlaying)
+        }
+        .task(id: hudVisibility.autoHideGeneration) {
+            let generation = hudVisibility.autoHideGeneration
+            guard hudVisibility.isAutoHideScheduled else {
+                return
+            }
+
+            do {
+                try await Task.sleep(nanoseconds: UInt64(PlaybackHUDVisibilityState.autoHideDelay * 1_000_000_000))
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else {
+                return
+            }
+            hudVisibility.autoHideTimerFired(generation: generation)
+        }
+        .ornament(
+            visibility: hudVisibility.isVisible ? .visible : .hidden,
+            attachmentAnchor: .scene(.bottom)
+        ) {
+            PlayerOrnamentView(
+                session: session,
+                onDone: done,
+                onHoverChanged: { isHovered in
+                    hudVisibility.setHovered(isHovered, isPlaying: session.isPlaying)
+                },
+                onScrubbingChanged: { isScrubbing in
+                    hudVisibility.setInteracting(isScrubbing, isPlaying: session.isPlaying)
+                },
+                onInteraction: {
+                    hudVisibility.reveal(isPlaying: session.isPlaying)
+                }
+            )
+        }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase != .active {
                 session.applicationBecameInactive()
@@ -36,24 +81,11 @@ struct PlayerView: View {
     private func playerSurface(geometry: GeometryProxy3D) -> some View {
         switch session.state {
         case .idle:
-            ContentUnavailableView(
-                "No Movie Selected",
-                systemImage: "film.stack",
-                description: Text("Choose an MV-HEVC movie to start spatial playback.")
-            )
-            .foregroundStyle(.white)
+            Color.clear
         case .loading:
-            ProgressView("Preparing MV-HEVC playback…")
-                .padding(24)
-                .glassBackgroundEffect()
-                .foregroundStyle(.white)
+            Color.clear
         case .failed:
-            ContentUnavailableView(
-                "Movie Unavailable",
-                systemImage: "exclamationmark.triangle",
-                description: Text(session.failureMessage ?? "The movie could not be prepared.")
-            )
-            .foregroundStyle(.white)
+            Color.clear
         case .ready:
             RealityView { content in
                 session.installPlayerComponent()
@@ -91,87 +123,195 @@ struct PlayerView: View {
     }
 }
 
-private struct PlayerHUDView: View {
+private struct PlayerOrnamentView: View {
     @ObservedObject var session: MVHEVCPlayerSession
     let onDone: () -> Void
+    let onHoverChanged: (Bool) -> Void
+    let onScrubbingChanged: (Bool) -> Void
+    let onInteraction: () -> Void
 
     @State private var scrubState = PlaybackScrubState()
 
     var body: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 12) {
-                Text(session.mediaItem?.title ?? "BD to AVP Player")
-                    .font(.headline)
-                    .lineLimit(1)
-                Spacer()
-                Label(session.mediaItem?.format.displayName ?? "MV-HEVC", systemImage: "view.3d")
-                    .font(.caption.weight(.semibold))
-                    .accessibilityLabel("Stereo format \(session.mediaItem?.format.displayName ?? "MV-HEVC")")
-                Button("Done", action: onDone)
-                    .accessibilityIdentifier("player-done")
-                    .accessibilityLabel("Done playing movie")
+        Group {
+            switch session.state {
+            case .ready:
+                readyControls
+            case .loading:
+                statusControls(
+                    title: "Preparing Playback",
+                    systemImage: "film.stack",
+                    message: "Preparing \(session.mediaItem?.title ?? "your movie")…",
+                    showsProgress: true
+                )
+            case .failed:
+                statusControls(
+                    title: "Movie Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    message: session.failureMessage ?? "The movie could not be prepared.",
+                    showsProgress: false
+                )
+            case .idle:
+                statusControls(
+                    title: "No Movie Selected",
+                    systemImage: "film.stack",
+                    message: "Choose an MV-HEVC movie to start spatial playback.",
+                    showsProgress: false
+                )
             }
+        }
+        .padding(20)
+        .frame(maxWidth: 880)
+        .glassBackgroundEffect()
+        .onHover(perform: onHoverChanged)
+        .accessibilityElement(children: .contain)
+    }
 
-            if session.state == .ready, let warning = session.failureMessage {
+    private var readyControls: some View {
+        VStack(spacing: 16) {
+            ornamentHeader
+
+            if let warning = session.failureMessage {
                 Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(.subheadline)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Slider(
-                value: Binding(
-                    get: { scrubState.value ?? session.currentTime },
-                    set: { scrubState.update(requestedTime: $0, duration: session.duration) }
-                ),
-                in: 0 ... max(1, session.duration),
-                onEditingChanged: { isEditing in
-                    if isEditing {
-                        scrubState.begin(currentTime: session.currentTime)
-                    } else if let scrubbedTime = scrubState.finish() {
-                        session.seek(to: scrubbedTime)
-                    }
-                }
-            )
-            .disabled(!session.canSeek)
-            .accessibilityLabel("Playback position")
-            .accessibilityValue(displayedTimeSummary)
-
-            HStack(spacing: 12) {
-                Button(action: session.seekBackward) {
-                    Label("Back 10 seconds", systemImage: "gobackward.10")
-                }
+            HStack(spacing: 28) {
+                transportButton(
+                    title: "Back 10 seconds",
+                    systemImage: "gobackward.10",
+                    action: session.seekBackward
+                )
                 .disabled(!session.canSeek)
-                .accessibilityLabel("Back 10 seconds")
 
-                Button(action: session.togglePlayback) {
-                    Label(session.isPlaying ? "Pause" : "Play", systemImage: session.isPlaying ? "pause.fill" : "play.fill")
+                Button(action: performPlaybackToggle) {
+                    Label(
+                        session.isPlaying ? "Pause" : "Play",
+                        systemImage: session.isPlaying ? "pause.fill" : "play.fill"
+                    )
+                    .labelStyle(.iconOnly)
+                    .frame(minWidth: 72, minHeight: 72)
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(!session.canControlPlayback)
                 .accessibilityIdentifier("player-play-pause")
                 .accessibilityLabel(session.isPlaying ? "Pause playback" : "Play movie")
 
-                Button(action: session.seekForward) {
-                    Label("Forward 30 seconds", systemImage: "goforward.30")
-                }
+                transportButton(
+                    title: "Forward 30 seconds",
+                    systemImage: "goforward.30",
+                    action: session.seekForward
+                )
                 .disabled(!session.canSeek)
-                .accessibilityLabel("Forward 30 seconds")
+            }
+            .frame(maxWidth: .infinity)
 
-                Spacer()
+            VStack(spacing: 8) {
+                Slider(
+                    value: Binding(
+                        get: { scrubState.value ?? session.currentTime },
+                        set: {
+                            scrubState.update(requestedTime: $0, duration: session.duration)
+                            onInteraction()
+                        }
+                    ),
+                    in: 0 ... max(1, session.duration),
+                    onEditingChanged: handleScrubbing
+                )
+                .disabled(!session.canSeek)
+                .accessibilityLabel("Playback position")
+                .accessibilityValue(displayedTimeSummary)
 
-                Text(displayedTimeSummary)
-                    .font(.system(.subheadline, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Playback time \(displayedTimeSummary)")
+                HStack {
+                    Text(PlaybackTimeFormatter.string(for: scrubState.value ?? session.currentTime))
+                    Spacer()
+                    Text(PlaybackTimeFormatter.string(for: session.duration))
+                }
+                .font(.system(.subheadline, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Playback time \(displayedTimeSummary)")
+            }
 
+            HStack(spacing: 16) {
                 audioMenu
                 subtitleMenu
+                Spacer(minLength: 0)
             }
         }
-        .padding(18)
-        .frame(maxWidth: 760)
-        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .accessibilityElement(children: .contain)
+    }
+
+    private var ornamentHeader: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(session.mediaItem?.title ?? "BD to AVP Player")
+                    .font(.headline)
+                    .lineLimit(1)
+                Label(session.mediaItem?.format.displayName ?? "MV-HEVC", systemImage: "view.3d")
+                    .font(.subheadline)
+                    .accessibilityLabel("Stereo format \(session.mediaItem?.format.displayName ?? "MV-HEVC")")
+            }
+            Spacer(minLength: 20)
+            doneButton
+        }
+    }
+
+    private func statusControls(title: String, systemImage: String, message: String, showsProgress: Bool) -> some View {
+        HStack(spacing: 16) {
+            if showsProgress {
+                ProgressView()
+                    .controlSize(.large)
+            } else {
+                Image(systemName: systemImage)
+                    .font(.title2)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                Text(message)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 20)
+            doneButton
+        }
+        .frame(maxWidth: 580, alignment: .leading)
+    }
+
+    private var doneButton: some View {
+        Button("Done", action: onDone)
+            .frame(minWidth: 60, minHeight: 60)
+            .accessibilityIdentifier("player-done")
+            .accessibilityLabel("Done playing movie")
+    }
+
+    private func transportButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button {
+            onInteraction()
+            action()
+        } label: {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 60, minHeight: 60)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel(title)
+    }
+
+    private func performPlaybackToggle() {
+        onInteraction()
+        session.togglePlayback()
+    }
+
+    private func handleScrubbing(_ isEditing: Bool) {
+        onScrubbingChanged(isEditing)
+        if isEditing {
+            scrubState.begin(currentTime: session.currentTime)
+        } else if let scrubbedTime = scrubState.finish() {
+            session.seek(to: scrubbedTime)
+        }
     }
 
     private var displayedTimeSummary: String {
@@ -183,11 +323,13 @@ private struct PlayerHUDView: View {
         Menu {
             ForEach(session.audioOptions) { option in
                 Button(option.displayName) {
+                    onInteraction()
                     session.selectAudio(id: option.id)
                 }
             }
         } label: {
             Label("Audio", systemImage: "speaker.wave.2")
+                .frame(minWidth: 60, minHeight: 60)
         }
         .disabled(session.audioOptions.isEmpty)
         .accessibilityLabel("Audio track")
@@ -197,11 +339,13 @@ private struct PlayerHUDView: View {
         Menu {
             ForEach(session.subtitleOptions) { option in
                 Button(option.displayName) {
+                    onInteraction()
                     session.selectSubtitle(id: option.id)
                 }
             }
         } label: {
             Label("CC", systemImage: "captions.bubble")
+                .frame(minWidth: 60, minHeight: 60)
         }
         .disabled(session.subtitleOptions.isEmpty)
         .accessibilityLabel("Closed captions")

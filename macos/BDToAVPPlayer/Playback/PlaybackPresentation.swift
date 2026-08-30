@@ -74,6 +74,82 @@ struct PlaybackScrubState: Equatable {
     }
 }
 
+struct PlaybackHUDVisibilityState: Equatable {
+    static let autoHideDelay: TimeInterval = 3
+
+    private(set) var isVisible = true
+    private(set) var isAutoHideScheduled = false
+    private(set) var autoHideGeneration = 0
+    private var isInteracting = false
+    private var isHovered = false
+
+    mutating func reconcile(isPlaying: Bool) {
+        guard PlaybackHUDVisibilityPolicy.shouldAutoHide(
+            isPlaying: isPlaying,
+            isInteracting: isInteracting,
+            isHovered: isHovered
+        )
+        else {
+            showAndCancelAutomaticHiding()
+            return
+        }
+
+        if isVisible, !isAutoHideScheduled {
+            scheduleAutomaticHiding()
+        }
+    }
+
+    mutating func setInteracting(_ isInteracting: Bool, isPlaying: Bool) {
+        self.isInteracting = isInteracting
+        reconcile(isPlaying: isPlaying)
+    }
+
+    mutating func setHovered(_ isHovered: Bool, isPlaying: Bool) {
+        self.isHovered = isHovered
+        reconcile(isPlaying: isPlaying)
+    }
+
+    mutating func reveal(isPlaying: Bool) {
+        isVisible = true
+        cancelAutomaticHiding()
+        reconcile(isPlaying: isPlaying)
+    }
+
+    mutating func autoHideTimerFired(generation: Int) {
+        guard generation == autoHideGeneration, isAutoHideScheduled else {
+            return
+        }
+
+        isAutoHideScheduled = false
+        isVisible = false
+    }
+
+    private mutating func showAndCancelAutomaticHiding() {
+        isVisible = true
+        cancelAutomaticHiding()
+    }
+
+    private mutating func scheduleAutomaticHiding() {
+        autoHideGeneration += 1
+        isAutoHideScheduled = true
+    }
+
+    private mutating func cancelAutomaticHiding() {
+        guard isAutoHideScheduled else {
+            return
+        }
+
+        autoHideGeneration += 1
+        isAutoHideScheduled = false
+    }
+}
+
+enum PlaybackHUDVisibilityPolicy {
+    static func shouldAutoHide(isPlaying: Bool, isInteracting: Bool, isHovered: Bool) -> Bool {
+        isPlaying && !isInteracting && !isHovered
+    }
+}
+
 enum ResumeWriteDecision: Equatable {
     case write(TimeInterval)
     case remove
