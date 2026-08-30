@@ -1,6 +1,6 @@
 # Test Audit Inventory v1
 
-- Baseline reference: `c12126871c60d08fe1a2c683e206eaeadb3f499f`
+- Baseline reference: `a190925415e66bc1e0c2789baab6223cede07951`
 - Test files: **156**
 - Support fixtures: **70**
 - Test cases counted: **2630**
@@ -30,6 +30,7 @@ runtime_id="$(xcrun simctl list runtimes -j | jq -r '
 [.runtimes[]
 | select(.isAvailable == true)
 | select(.platform == "visionOS" or (.name | startswith("visionOS")))
+| select((.version | split(".")[0] | tonumber) >= 26)
 | .identifier]
 | first // empty
 ')"

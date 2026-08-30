@@ -51,6 +51,7 @@ jobs:
             [.runtimes[]
               | select(.isAvailable == true)
               | select(.platform == "visionOS" or (.name | startswith("visionOS")))
+              | select((.version | split(".")[0] | tonumber) >= 26)
               | .identifier]
             | first // empty
           ')"
@@ -139,6 +140,7 @@ class TestTestAuditInventory(unittest.TestCase):
         self.assertIn("generic/platform=visionOS Simulator", player_command)
         self.assertIn("xcodebuild test-without-building", player_command)
         self.assertIn("xcrun simctl create", player_command)
+        self.assertIn('select((.version | split(".")[0] | tonumber) >= 26)', player_command)
         self.assertIn("trap cleanup_simulator EXIT", player_command)
         self.assertIn("CODE_SIGNING_ALLOWED=NO", player_command)
 

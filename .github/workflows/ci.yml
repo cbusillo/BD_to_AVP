@@ -139,6 +139,7 @@ jobs:
             [.runtimes[]
               | select(.isAvailable == true)
               | select(.platform == "visionOS" or (.name | startswith("visionOS")))
+              | select((.version | split(".")[0] | tonumber) >= 26)
               | .identifier]
             | first // empty
           ')"
