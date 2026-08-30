@@ -24,6 +24,7 @@ TEST_GLOBS = (
     "macos/BluRayToVisionProUITests/*.swift",
     "macos/SpatialPlaybackProbeTests/*.swift",
     "macos/SpatialPlaybackProbeUITests/*.swift",
+    "macos/BDToAVPPlayerTests/*.swift",
     "support-diagnostics/test/*.test.ts",
 )
 FIXTURE_GLOBS = ("tests/fixtures/*",)
@@ -218,7 +219,12 @@ def parse_ci_workflow(workflow: str) -> dict[str, Any]:
     commands = []
     for step in _step_commands(workflow):
         command = step.get("run", "")
-        if "unittest discover" in command or "scripts/native_app.py test" in command or "npm run check" in command:
+        if (
+            "unittest discover" in command
+            or "scripts/native_app.py test" in command
+            or "npm run check" in command
+            or "xcodebuild build-for-testing" in command
+        ):
             commands.append(
                 {"name": step["name"], "command": command, "working_directory": step.get("working_directory", ".")}
             )
@@ -364,7 +370,12 @@ def _requirements(relative_path: str, text: str) -> list[str]:
         requirements.add("physical Blu-ray device")
     if "xcuiapplication" in lowered or "installedui" in lowered or "tier 3" in lowered:
         requirements.add("Tier 3 clean-machine and Accessibility environment")
-    if "visionos" in lowered or "spatialplayback" in lowered or "realitydevice" in lowered:
+    if (
+        "visionos" in lowered
+        or "spatialplayback" in lowered
+        or "realitydevice" in lowered
+        or "bdtoavpplayer" in lowered
+    ):
         requirements.add("visionOS simulator or physical Apple Vision Pro, depending on evidence")
     if "urlsession" in lowered or "http://" in lowered or "https://" in lowered:
         requirements.add("network access")
@@ -395,6 +406,8 @@ def _lane_ids(relative_path: str, bundle: str) -> list[str]:
         return ["operator.tier3.installed_ui"]
     if bundle in {"SpatialPlaybackProbeTests", "SpatialPlaybackProbeUITests"}:
         return ["operator.visionos.playback_probe"]
+    if bundle == "BDToAVPPlayerTests":
+        return ["ci.visionos.bd_to_avp_player"]
     return []
 
 
@@ -476,6 +489,41 @@ def _lane_definitions(
                 "requirements": ["Xcode 26.5", "macOS 26"],
             }
         )
+    player_scheme = project["schemes"].get("BDToAVPPlayer", {})
+    player_command = next(
+        (
+            command
+            for command in commands
+            if "xcodebuild build-for-testing" in command
+            and "BDToAVPPlayer" in command
+            and "generic/platform=visionOS Simulator" in command
+            and "CODE_SIGNING_ALLOWED=NO" in command
+            and 'DEVELOPER_DIR="/Applications/Xcode_26.5.app/Contents/Developer"' in command
+            and "xcodebuild -version" in command
+            and '"Xcode 26.5"' in command
+        ),
+        None,
+    )
+    if player_command and "BDToAVPPlayerTests" in player_scheme.get("test_targets", []):
+        lanes.append(
+            {
+                "id": "ci.visionos.bd_to_avp_player",
+                "name": "CI visionOS BDToAVPPlayer unit tests",
+                "kind": "ci",
+                "maintained": True,
+                "source_paths": [".github/workflows/ci.yml", "macos/project.yml"],
+                "runner": runner,
+                "authoritative_command": player_command,
+                "underlying_scheme": "BDToAVPPlayer",
+                "test_targets": player_scheme["test_targets"],
+                "requirements": [
+                    "Xcode 26.5",
+                    "generic visionOS Simulator build destination",
+                    "available visionOS runtime and Apple Vision Pro simulator device type for unit execution",
+                    "CODE_SIGNING_ALLOWED=NO",
+                ],
+            }
+        )
     if any("npm run check" in command for command in commands):
         lanes.append(
             {
@@ -537,6 +585,14 @@ def build_inventory(
     ci_cases = sum(
         row["test_case_count"] for row in test_files if any(lane_id.startswith("ci.") for lane_id in row["lane_ids"])
     )
+    authoritative_commands = [
+        "uv run python -m unittest discover -s tests -t .",
+        "uv run python scripts/native_app.py test",
+        "(cd support-diagnostics && npm run check)",
+    ]
+    player_lane = next((lane for lane in lanes if lane["id"] == "ci.visionos.bd_to_avp_player"), None)
+    if player_lane:
+        authoritative_commands.append(player_lane["authoritative_command"])
     return {
         "schema_version": SCHEMA_VERSION,
         "artifact": "test-audit-inventory",
@@ -634,11 +690,7 @@ def build_inventory(
             },
             "comparison_caveat": "Local timings are not compared with CI runner timings.",
         },
-        "authoritative_commands": [
-            "uv run python -m unittest discover -s tests -t .",
-            "uv run python scripts/native_app.py test",
-            "(cd support-diagnostics && npm run check)",
-        ],
+        "authoritative_commands": authoritative_commands,
         "lanes": lanes,
         "summary": {
             "test_file_count": len(test_files),

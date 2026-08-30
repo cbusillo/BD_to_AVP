@@ -8,6 +8,7 @@ from pathlib import Path
 
 from scripts.test_audit_inventory import (
     _canonical_json,
+    _lane_definitions,
     InventoryError,
     build_inventory,
     check_artifacts,
@@ -32,6 +33,48 @@ jobs:
       - name: Validate support diagnostics service
         working-directory: support-diagnostics
         run: npm run check
+      - name: Build BDToAVPPlayer visionOS test bundle
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          cd macos
+          export DEVELOPER_DIR="/Applications/Xcode_26.5.app/Contents/Developer"
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 26.5"
+          xcodegen generate --spec project.yml
+          xcodebuild build-for-testing \
+            -scheme BDToAVPPlayer \
+            -destination "generic/platform=visionOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO
+          runtime_id="$(xcrun simctl list runtimes -j | jq -r '
+            [.runtimes[]
+              | select(.isAvailable == true)
+              | select(.platform == "visionOS" or (.name | startswith("visionOS")))
+              | select((.version | split(".")[0] | tonumber) >= 26)
+              | .identifier]
+            | first // empty
+          ')"
+          device_type_id="$(xcrun simctl list devicetypes -j | jq -r '
+            [.devicetypes[] | select(.name == "Apple Vision Pro") | .identifier]
+            | first // empty
+          ')"
+          if [[ -z "$runtime_id" || -z "$device_type_id" ]]; then
+            echo "::notice::Skipping BDToAVPPlayer visionOS 26+ unit tests"
+            exit 0
+          fi
+          simulator_udid="$(xcrun simctl create "BDToAVPPlayer CI" "$device_type_id" "$runtime_id")"
+          cleanup_simulator() {
+            xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
+            xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
+          }
+          trap cleanup_simulator EXIT INT TERM
+          xcrun simctl boot "$simulator_udid"
+          xcrun simctl bootstatus "$simulator_udid" -b
+          xcodebuild test-without-building \
+            -scheme BDToAVPPlayer \
+            -destination "platform=visionOS Simulator,id=$simulator_udid" \
+            CODE_SIGNING_ALLOWED=NO
 """
 
 PROJECT = """
@@ -56,6 +99,14 @@ schemes:
     test:
       targets:
         - SpatialPlaybackProbeTests
+  BDToAVPPlayer:
+    build:
+      targets:
+        BDToAVPPlayer: all
+        BDToAVPPlayerTests: [test]
+    test:
+      targets:
+        - BDToAVPPlayerTests
 """
 
 
@@ -74,7 +125,7 @@ class TestTestAuditInventory(unittest.TestCase):
         self.assertEqual(parsed["runner"], "macos-26")
         self.assertEqual(parsed["timeout_minutes"], 30)
         self.assertEqual(
-            [item["command"] for item in parsed["commands"]],
+            [item["command"] for item in parsed["commands"][:3]],
             [
                 "uv run python -m unittest discover -s tests -t .",
                 "uv run python scripts/native_app.py test",
@@ -82,11 +133,35 @@ class TestTestAuditInventory(unittest.TestCase):
             ],
         )
         self.assertEqual(parsed["commands"][2]["working_directory"], "support-diagnostics")
+        player_command = parsed["commands"][3]["command"]
+        self.assertIn("xcodebuild build-for-testing", player_command)
+        self.assertIn('export DEVELOPER_DIR="/Applications/Xcode_26.5.app/Contents/Developer"', player_command)
+        self.assertIn('test "$(xcodebuild -version | sed -n \'1p\')" = "Xcode 26.5"', player_command)
+        self.assertIn("generic/platform=visionOS Simulator", player_command)
+        self.assertIn("xcodebuild test-without-building", player_command)
+        self.assertIn("xcrun simctl create", player_command)
+        self.assertIn('select((.version | split(".")[0] | tonumber) >= 26)', player_command)
+        self.assertIn("trap cleanup_simulator EXIT INT TERM", player_command)
+        self.assertIn("CODE_SIGNING_ALLOWED=NO", player_command)
+
+    def test_requires_explicit_xcode_26_5_pin_for_player_lane(self) -> None:
+        parsed = parse_ci_workflow(CI)
+        unpinned_workflow = CI.replace(
+            '          export DEVELOPER_DIR="/Applications/Xcode_26.5.app/Contents/Developer"\n'
+            '          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"\n'
+            '          test "$(xcodebuild -version | sed -n \'1p\')" = "Xcode 26.5"\n',
+            "",
+        )
+        unpinned = parse_ci_workflow(unpinned_workflow)
+        self.assertTrue(any("xcodebuild build-for-testing" in item["command"] for item in parsed["commands"]))
+        lanes = _lane_definitions(unpinned, parse_project_yml(PROJECT), ())
+        self.assertNotIn("ci.visionos.bd_to_avp_player", {lane["id"] for lane in lanes})
 
     def test_parses_project_targets_and_scheme_membership(self) -> None:
         parsed = parse_project_yml(PROJECT)
         self.assertEqual(parsed["targets"]["BluRayToVisionProTests"]["type"], "bundle.unit-test")
         self.assertEqual(parsed["schemes"]["SpatialPlaybackProbe"]["test_targets"], ["SpatialPlaybackProbeTests"])
+        self.assertEqual(parsed["schemes"]["BDToAVPPlayer"]["test_targets"], ["BDToAVPPlayerTests"])
 
     def test_documented_lane_commands_are_extracted(self) -> None:
         tier3_document = "```sh\nuv run python -m scripts.tier3_clean_machine run \\\n  --route rc\n```"

@@ -117,6 +117,60 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Build and conditionally test BDToAVPPlayer visionOS bundle
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          cd macos
+          export DEVELOPER_DIR="/Applications/Xcode_26.5.app/Contents/Developer"
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 26.5"
+          xcodegen generate --spec project.yml
+          xcodebuild build-for-testing \
+            -project BluRayToVisionPro.xcodeproj \
+            -scheme BDToAVPPlayer \
+            -configuration Debug \
+            -destination "generic/platform=visionOS Simulator" \
+            -derivedDataPath build/BDToAVPPlayerDerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+          runtime_id="$(xcrun simctl list runtimes -j | jq -r '
+            [.runtimes[]
+              | select(.isAvailable == true)
+              | select(.platform == "visionOS" or (.name | startswith("visionOS")))
+              | select((.version | split(".")[0] | tonumber) >= 26)
+              | .identifier]
+            | first // empty
+          ')"
+          device_type_id="$(xcrun simctl list devicetypes -j | jq -r '
+            [.devicetypes[] | select(.name == "Apple Vision Pro") | .identifier]
+            | first // empty
+          ')"
+
+          if [[ -z "$runtime_id" || -z "$device_type_id" ]]; then
+            echo "::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS 26+ runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none})."
+            exit 0
+          fi
+
+          simulator_name="BDToAVPPlayer CI ${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
+          simulator_udid="$(xcrun simctl create "$simulator_name" "$device_type_id" "$runtime_id")"
+          cleanup_simulator() {
+            xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
+            xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
+          }
+          trap cleanup_simulator EXIT INT TERM
+
+          xcrun simctl boot "$simulator_udid"
+          xcrun simctl bootstatus "$simulator_udid" -b
+          xcodebuild test-without-building \
+            -project BluRayToVisionPro.xcodeproj \
+            -scheme BDToAVPPlayer \
+            -configuration Debug \
+            -destination "platform=visionOS Simulator,id=$simulator_udid" \
+            -derivedDataPath build/BDToAVPPlayerDerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: macOS app tests
         run: uv run python scripts/native_app.py test
 

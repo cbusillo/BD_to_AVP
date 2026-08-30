@@ -150,6 +150,49 @@ targets:
         TEST_TARGET_NAME: SpatialPlaybackProbe
         XROS_DEPLOYMENT_TARGET: "26.0"
 
+  BDToAVPPlayer:
+    type: application
+    platform: auto
+    supportedDestinations: [visionOS]
+    deploymentTarget:
+      visionOS: "26.0"
+    sources:
+      - path: BDToAVPPlayer
+    dependencies:
+      - sdk: AVFoundation.framework
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        CURRENT_PROJECT_VERSION: 1
+        DEVELOPMENT_TEAM: MM5YXC7T6E
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: BDToAVPPlayer/Info.plist
+        MARKETING_VERSION: 0.1.0
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.player
+        PRODUCT_MODULE_NAME: BDToAVPPlayer
+        PRODUCT_NAME: BDToAVPPlayer
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "7"
+        XROS_DEPLOYMENT_TARGET: "26.0"
+
+  BDToAVPPlayerTests:
+    type: bundle.unit-test
+    platform: auto
+    supportedDestinations: [visionOS]
+    deploymentTarget:
+      visionOS: "26.0"
+    sources:
+      - path: BDToAVPPlayerTests
+    dependencies:
+      - target: BDToAVPPlayer
+    settings:
+      base:
+        BUNDLE_LOADER: $(TEST_HOST)
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.player.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/BDToAVPPlayer.app/BDToAVPPlayer
+        XROS_DEPLOYMENT_TARGET: "26.0"
+
 schemes:
   BluRayToVisionPro:
     build:
@@ -190,3 +233,14 @@ schemes:
       targets:
         - SpatialPlaybackProbeTests
         - SpatialPlaybackProbeUITests
+
+  BDToAVPPlayer:
+    build:
+      targets:
+        BDToAVPPlayer: all
+        BDToAVPPlayerTests: [test]
+    run:
+      config: Debug
+    test:
+      targets:
+        - BDToAVPPlayerTests

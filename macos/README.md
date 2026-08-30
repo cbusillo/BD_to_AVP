@@ -108,3 +108,7 @@ profile, appearance, accessibility, window-size, and screenshot evidence.
 
 See [visionOS Playback Validator](../docs/visionos-playback-validator.md)
 for the isolated RealityKit companion target and physical-headset validation flow.
+
+See [visionOS Player](../docs/visionos-player.md) for the standalone movie
+library, persistent source-access contract, MV-HEVC playback behavior, and
+player-specific validation commands.

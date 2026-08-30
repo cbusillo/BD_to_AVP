@@ -40,6 +40,13 @@
         "macos/project.yml"
       ]
     },
+    "ci-visionos-player-build": {
+      "description": "Pinned Xcode 26.5 CI regenerates the Xcode project and compiles the BDToAVPPlayer app and unit-test bundle for a generic visionOS Simulator, then conditionally runs those unit tests on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
+      "source_paths": [
+        ".github/workflows/ci.yml",
+        "macos/project.yml"
+      ]
+    },
     "release-security-contract": {
       "description": "Release, signing, recovery, policy, and workflow assertions protect intentional operational contracts that the audit must not weaken without proof.",
       "source_paths": [
@@ -176,6 +183,21 @@
         "macos/BluRayToVisionProUITests/InstalledUIAcceptanceTests.swift",
         "macos/SpatialPlaybackProbeTests/PlaybackValidationTests.swift",
         "macos/SpatialPlaybackProbeUITests/SpatialPlaybackProbeUITests.swift"
+      ]
+    },
+    {
+      "id": "visionos-player-unit-tests",
+      "classification": "valuable",
+      "rationale": "{path} protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with pinned Xcode 26.5 and conditionally executes it on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
+      "evidence_ids": ["ci-visionos-player-build"],
+      "paths": [
+        "macos/BDToAVPPlayerTests/BookmarkStoreTests.swift",
+        "macos/BDToAVPPlayerTests/LibraryStoreTests.swift",
+        "macos/BDToAVPPlayerTests/MediaFormatInspectorTests.swift",
+        "macos/BDToAVPPlayerTests/MediaLibraryModelTests.swift",
+        "macos/BDToAVPPlayerTests/PlaybackPresentationTests.swift",
+        "macos/BDToAVPPlayerTests/PlayerAppModelTests.swift",
+        "macos/BDToAVPPlayerTests/ResumeStoreTests.swift"
       ]
     },
     {
