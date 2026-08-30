@@ -32,6 +32,16 @@ jobs:
       - name: Validate support diagnostics service
         working-directory: support-diagnostics
         run: npm run check
+      - name: Build BDToAVPPlayer visionOS test bundle
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          cd macos
+          xcodegen generate --spec project.yml
+          xcodebuild build-for-testing \
+            -scheme BDToAVPPlayer \
+            -destination "generic/platform=visionOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO
 """
 
 PROJECT = """
@@ -56,6 +66,14 @@ schemes:
     test:
       targets:
         - SpatialPlaybackProbeTests
+  BDToAVPPlayer:
+    build:
+      targets:
+        BDToAVPPlayer: all
+        BDToAVPPlayerTests: [test]
+    test:
+      targets:
+        - BDToAVPPlayerTests
 """
 
 
@@ -74,7 +92,7 @@ class TestTestAuditInventory(unittest.TestCase):
         self.assertEqual(parsed["runner"], "macos-26")
         self.assertEqual(parsed["timeout_minutes"], 30)
         self.assertEqual(
-            [item["command"] for item in parsed["commands"]],
+            [item["command"] for item in parsed["commands"][:3]],
             [
                 "uv run python -m unittest discover -s tests -t .",
                 "uv run python scripts/native_app.py test",
@@ -82,11 +100,16 @@ class TestTestAuditInventory(unittest.TestCase):
             ],
         )
         self.assertEqual(parsed["commands"][2]["working_directory"], "support-diagnostics")
+        player_command = parsed["commands"][3]["command"]
+        self.assertIn("xcodebuild build-for-testing", player_command)
+        self.assertIn("generic/platform=visionOS Simulator", player_command)
+        self.assertIn("CODE_SIGNING_ALLOWED=NO", player_command)
 
     def test_parses_project_targets_and_scheme_membership(self) -> None:
         parsed = parse_project_yml(PROJECT)
         self.assertEqual(parsed["targets"]["BluRayToVisionProTests"]["type"], "bundle.unit-test")
         self.assertEqual(parsed["schemes"]["SpatialPlaybackProbe"]["test_targets"], ["SpatialPlaybackProbeTests"])
+        self.assertEqual(parsed["schemes"]["BDToAVPPlayer"]["test_targets"], ["BDToAVPPlayerTests"])
 
     def test_documented_lane_commands_are_extracted(self) -> None:
         tier3_document = "```sh\nuv run python -m scripts.tier3_clean_machine run \\\n  --route rc\n```"

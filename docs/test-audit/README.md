@@ -9,9 +9,10 @@ refresh or check instead of receiving an implicit default.
 
 ## Current Disposition
 
-- **219 total rows:** 149 test files and 70 support fixtures.
-- **165 `valuable`:** direct product, release/security, workflow, protocol, and
-  structured-fixture contracts with no concrete evidence of redundancy.
+- **226 total rows:** 156 test files and 70 support fixtures.
+- **172 `valuable`:** direct product, release/security, workflow, protocol,
+  visionOS player, and structured-fixture contracts with no concrete evidence
+  of redundancy.
 - **54 `accepted-cost`:** conversion/worker coordination, media and codec
   qualification, clean-machine UI, and visionOS/device evidence. Their setup
   requirements are intentional costs, not removal signals.
@@ -113,13 +114,16 @@ the repository test command or product behavior.
 ## Lane Boundaries And Stop Rules
 
 The maintained executable lanes are Python unit discovery, the
-`BluRayToVisionPro` macOS unit-test scheme, and support-diagnostics checks. The
-installed UI and visionOS targets are maintained documented operator/device
-lanes; their absence from the CI `validate` job is an evidence boundary, not
-an orphan finding.
+`BluRayToVisionPro` macOS unit-test scheme, support-diagnostics checks, and the
+`BDToAVPPlayer` visionOS test-bundle build. The player lane uses a generic
+visionOS Simulator destination and does not require a booted runtime. The
+installed UI and `SpatialPlaybackProbe` targets remain maintained documented
+operator/device lanes; their absence from the CI `validate` job is an evidence
+boundary, not an orphan finding.
 
 Preserve protocol-version fixtures, release/security workflow contract tests,
 operator/device tests, and hardware/media-gated tests absent concrete contrary
-evidence. Do not delete or relax tests, change CI, alter Swift schemes, modify
-`native_app.py` scheme selection, or touch release/signing behavior in this
-audit. Stop and record no action when there is no evidence-backed candidate.
+evidence. Do not delete or relax tests, alter unrelated CI or Swift schemes,
+modify `native_app.py` scheme selection, or touch release/signing behavior in
+this audit. Stop and record no action when there is no evidence-backed
+candidate.

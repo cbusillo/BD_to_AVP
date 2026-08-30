@@ -3,11 +3,12 @@
   "authoritative_commands": [
     "uv run python -m unittest discover -s tests -t .",
     "uv run python scripts/native_app.py test",
-    "(cd support-diagnostics && npm run check)"
+    "(cd support-diagnostics && npm run check)",
+    "cd macos\nxcodegen generate --spec project.yml\ntest \"$(xcodebuild -version | sed -n '1p')\" = \"Xcode 26.5\"\nxcodebuild build-for-testing \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"generic/platform=visionOS Simulator\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO"
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "b4f980642c6e36140f458af3f3eaffafc9ae14fa",
+    "sha": "f151c7db25ef3aaeced7c71d1bda80557df460d9",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -39,6 +40,13 @@
         "source_paths": [
           ".github/workflows/ci.yml",
           "support-diagnostics/package.json"
+        ]
+      },
+      "ci-visionos-player-build": {
+        "description": "Pinned Xcode 26.5 CI regenerates the Xcode project and compiles the BDToAVPPlayer app and unit-test bundle for a generic visionOS Simulator without requiring a booted runtime.",
+        "source_paths": [
+          ".github/workflows/ci.yml",
+          "macos/project.yml"
         ]
       },
       "media-hardware-contract": {
@@ -302,6 +310,27 @@
       "working_directory": "support-diagnostics"
     },
     {
+      "authoritative_command": "cd macos\nxcodegen generate --spec project.yml\ntest \"$(xcodebuild -version | sed -n '1p')\" = \"Xcode 26.5\"\nxcodebuild build-for-testing \\\n-project BluRayToVisionPro.xcodeproj \\\n-scheme BDToAVPPlayer \\\n-configuration Debug \\\n-destination \"generic/platform=visionOS Simulator\" \\\n-derivedDataPath build/BDToAVPPlayerDerivedData \\\nCODE_SIGNING_ALLOWED=NO",
+      "id": "ci.visionos.bd_to_avp_player",
+      "kind": "ci",
+      "maintained": true,
+      "name": "CI visionOS BDToAVPPlayer test bundle build",
+      "requirements": [
+        "Xcode 26.5",
+        "generic visionOS Simulator destination",
+        "CODE_SIGNING_ALLOWED=NO"
+      ],
+      "runner": "macos-26",
+      "source_paths": [
+        ".github/workflows/ci.yml",
+        "macos/project.yml"
+      ],
+      "test_targets": [
+        "BDToAVPPlayerTests"
+      ],
+      "underlying_scheme": "BDToAVPPlayer"
+    },
+    {
       "commands": [
         "uv run python -m scripts.tier3_clean_machine preflight  --candidate-release-receipt docs/release-evidence/<candidate>/release-receipt.json  --candidate-dmg ~/Downloads/<candidate>.dmg  --prior-release-receipt docs/release-evidence/<prior>/release-receipt.json  --prior-dmg ~/Downloads/<prior>.dmg  --qualification-root ~/Tier3-BD-to-AVP-Qualification  --route rc  --environment-class restorable-location",
         "uv run python -m scripts.tier3_clean_machine run  --candidate-release-receipt docs/release-evidence/<candidate>/release-receipt.json  --candidate-dmg ~/Downloads/<candidate>.dmg  --prior-release-receipt docs/release-evidence/<prior>/release-receipt.json  --prior-dmg ~/Downloads/<prior>.dmg  --qualification-root ~/Tier3-BD-to-AVP-Qualification  --route rc  --environment-class restorable-location  --output-receipt /path/out/clean-machine-signed-update.json  --ui-output-receipt /path/out/installed-ui-accessibility.json  --evidence-directory /path/out/clean-machine-signed-update-evidence"
@@ -363,12 +392,14 @@
       "macos/BluRayToVisionProUITests/*.swift",
       "macos/SpatialPlaybackProbeTests/*.swift",
       "macos/SpatialPlaybackProbeUITests/*.swift",
+      "macos/BDToAVPPlayerTests/*.swift",
       "support-diagnostics/test/*.test.ts"
     ],
     "tracked_files_command": "git ls-files -z"
   },
   "summary": {
     "bundle_file_counts": {
+      "BDToAVPPlayerTests": 7,
       "BluRayToVisionProTests": 39,
       "BluRayToVisionProUITests": 1,
       "SpatialPlaybackProbeTests": 1,
@@ -376,19 +407,19 @@
       "python-unittest-discovery": 106,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2567,
+    "ci_test_case_count": 2596,
     "classification_counts": {
       "accepted-cost": 54,
-      "valuable": 165
+      "valuable": 172
     },
     "language_file_counts": {
       "Python": 106,
-      "Swift": 42,
+      "Swift": 49,
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2589,
-    "test_file_count": 149,
+    "test_case_count": 2618,
+    "test_file_count": 156,
     "unmapped_test_file_count": 0
   },
   "support_fixtures": [
@@ -1164,6 +1195,160 @@
     }
   ],
   "test_files": [
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/BookmarkStoreTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with Xcode 26.5 for a generic visionOS Simulator without requiring a booted runtime or device.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/BookmarkStoreTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 1,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 5
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/LibraryStoreTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with Xcode 26.5 for a generic visionOS Simulator without requiring a booted runtime or device.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/LibraryStoreTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 2,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 3
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/MediaFormatInspectorTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with Xcode 26.5 for a generic visionOS Simulator without requiring a booted runtime or device.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/MediaFormatInspectorTests.swift",
+      "special_requirements": [
+        "real-media or SSIF/ISO fixture may be required",
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [],
+      "test_case_count": 4
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/MediaLibraryModelTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with Xcode 26.5 for a generic visionOS Simulator without requiring a booted runtime or device.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/MediaLibraryModelTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [],
+      "test_case_count": 1
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/PlaybackPresentationTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with Xcode 26.5 for a generic visionOS Simulator without requiring a booted runtime or device.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/PlaybackPresentationTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [],
+      "test_case_count": 8
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/PlayerAppModelTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with Xcode 26.5 for a generic visionOS Simulator without requiring a booted runtime or device.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/PlayerAppModelTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 5,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 4
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/ResumeStoreTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with Xcode 26.5 for a generic visionOS Simulator without requiring a booted runtime or device.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/ResumeStoreTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 2,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 4
+    },
     {
       "bundle": "BluRayToVisionProTests",
       "classification": "valuable",
@@ -4923,12 +5108,16 @@
           "signal": "filesystem_access"
         },
         {
-          "occurrences": 7,
+          "occurrences": 9,
           "signal": "external_process"
         },
         {
           "occurrences": 2,
           "signal": "polling_or_waiting"
+        },
+        {
+          "occurrences": 3,
+          "signal": "hardware_or_media"
         }
       ],
       "test_case_count": 10

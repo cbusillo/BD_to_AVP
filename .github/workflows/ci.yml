@@ -117,6 +117,21 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Build BDToAVPPlayer visionOS test bundle
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          cd macos
+          xcodegen generate --spec project.yml
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 26.5"
+          xcodebuild build-for-testing \
+            -project BluRayToVisionPro.xcodeproj \
+            -scheme BDToAVPPlayer \
+            -configuration Debug \
+            -destination "generic/platform=visionOS Simulator" \
+            -derivedDataPath build/BDToAVPPlayerDerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: macOS app tests
         run: uv run python scripts/native_app.py test
 
