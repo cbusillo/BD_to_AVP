@@ -2,6 +2,9 @@ import RealityKit
 import SwiftUI
 
 struct PlayerView: View {
+    private static let playerScaleInset: Float = 0.86
+    private static let playerDepthOffset: Float = -0.14
+
     @ObservedObject private var session: MVHEVCPlayerSession
     private let onDone: () -> Void
 
@@ -74,7 +77,7 @@ struct PlayerView: View {
         .ornament(
             visibility: hudVisibility.isVisible ? .visible : .hidden,
             attachmentAnchor: .scene(.bottom),
-            contentAlignment: .top
+            contentAlignment: .topBack
         ) {
             VStack(spacing: 0) {
                 Color.clear
@@ -146,12 +149,12 @@ struct PlayerView: View {
             return
         }
 
-        let scale = min(frameSize.x / screenSize.x, frameSize.y / screenSize.y) * 0.94
+        let scale = min(frameSize.x / screenSize.x, frameSize.y / screenSize.y) * Self.playerScaleInset
         guard scale.isFinite, scale > 0 else {
             return
         }
         session.playerEntity.scale = SIMD3<Float>(repeating: scale)
-        session.playerEntity.position = SIMD3<Float>(0, 0, -0.03)
+        session.playerEntity.position = SIMD3<Float>(0, 0, Self.playerDepthOffset)
     }
 }
 

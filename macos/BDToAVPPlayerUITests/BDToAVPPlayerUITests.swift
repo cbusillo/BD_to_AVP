@@ -16,16 +16,33 @@ final class BDToAVPPlayerUITests: XCTestCase {
         guard movieTile.waitForExistence(timeout: 10) else {
             throw XCTSkip("Requires PlayerLongFixture.mov in the app Documents directory.")
         }
+        let libraryPlayButton = app.buttons["play-library-\(movieID)"]
+        XCTAssertTrue(libraryPlayButton.isHittable)
 
         attachScreenshot(named: "library-populated")
+        libraryPlayButton.tap()
+
+        let playPauseButton = app.buttons["player-play-pause"]
+        XCTAssertTrue(playPauseButton.waitForExistence(timeout: 30))
+        app.buttons["player-done"].tap()
+        XCTAssertTrue(waitForHittable(movieTile, timeout: 10))
+
         movieTile.tap()
 
         let playButton = app.buttons["play-movie-\(movieID)"]
         XCTAssertTrue(playButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(playButton.isHittable, "Play should be visible without scrolling the Details sheet.")
         attachScreenshot(named: "movie-details")
+
+        let detailsDoneButton = app.buttons["details-done"]
+        XCTAssertTrue(detailsDoneButton.isHittable)
+        detailsDoneButton.tap()
+        XCTAssertTrue(waitForHittable(movieTile, timeout: 10))
+
+        movieTile.tap()
+        XCTAssertTrue(waitForHittable(playButton, timeout: 10))
         playButton.tap()
 
-        let playPauseButton = app.buttons["player-play-pause"]
         XCTAssertTrue(playPauseButton.waitForExistence(timeout: 30))
         attachScreenshot(named: "player-controls-visible")
 
@@ -51,5 +68,13 @@ final class BDToAVPPlayerUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 }

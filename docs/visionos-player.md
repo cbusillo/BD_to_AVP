@@ -7,14 +7,16 @@ validator.
 
 ## Product Scope
 
-- One plain SwiftUI window contains the library, movie details, and player.
-- The library presents one content-first **Movies** grid with 16:9 source-frame
-  thumbnails, title or filename sorting, and a typography-first fallback when a
-  frame cannot be generated.
-- Selecting a movie opens a full in-window details page with system Back
-  navigation, source status, missing-source recovery, removal, and one prominent
-  Play action for supported media. A tile context menu provides optional quick
-  playback for experienced users.
+- One plain SwiftUI window contains a split-view library, modal movie details,
+  and the player.
+- The library presents an **On My Vision Pro** source sidebar and a **Your
+  movies** collection with Posters and Files modes, format filtering, title or
+  filename sorting, 16:9 source-frame thumbnails, and a typography-first
+  fallback when a frame cannot be generated.
+- Playable movies expose a visible direct Play action in both library modes.
+  Selecting the movie content opens a compact modal Details view with source
+  status, missing-source recovery, removal, technical metadata, and one
+  prominent Play action that remains visible without scrolling.
 - **Add Movie** imports one movie through the system Files picker.
 - Supported `.mov`, `.mp4`, and `.m4v` files already present in the app's
   Documents directory are indexed on launch. File Sharing and opening documents
@@ -91,8 +93,9 @@ xcodebuild test \
 
 The same scheme also contains `BDToAVPPlayerUITests`. Its seeded-media flow is
 skipped when `PlayerLongFixture.mov` is absent from the simulator app Documents
-directory; when present, it verifies Library → Details → Play and ornament
-auto-hide behavior, including that Done returns to the movie's Details page.
+directory; when present, it verifies direct Library → Play → Library, Library →
+Details → Play, Details Done → Library, player Done → Details, replay, and
+ornament auto-hide behavior.
 
 CI pins Xcode 26.5, regenerates the project, and always runs
 `build-for-testing` against the generic visionOS Simulator destination. When an
@@ -115,5 +118,8 @@ xcodebuild build \
 ```
 
 Simulator tests and screenshots do not prove stereoscopic depth, eye order,
-comfort, long-session thermals, or headset-visible interaction. Those remain
-physical Vision Pro validation boundaries.
+comfort, long-session thermals, or headset-visible interaction. The accepted
+physical layout keeps the RealityKit video surface at the playback probe's
+conservative scale and depth offset so foreground stereo content remains behind
+the native ornament; changes to that geometry still require physical Vision Pro
+validation.

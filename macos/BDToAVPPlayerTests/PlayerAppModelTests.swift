@@ -26,7 +26,13 @@ final class PlayerAppModelTests: XCTestCase {
             formatInspector: { _ in .mvHEVC }
         )
 
+        XCTAssertEqual(model.viewMode, .posters)
         XCTAssertEqual(model.visibleItems.map(\.id), ["alpha", "zulu"])
+
+        model.formatFilter = .mvHEVC
+
+        XCTAssertEqual(model.visibleItems.map(\.id), ["alpha"])
+        XCTAssertEqual(model.sourceTitle(for: items[0]), "Files")
         XCTAssertEqual(model.library.posters.map(\.id), ["zulu", "alpha"])
         XCTAssertEqual(model.library.files, model.library.posters)
     }
@@ -116,6 +122,7 @@ final class PlayerAppModelTests: XCTestCase {
         await model.bootstrap()
 
         XCTAssertEqual(model.library.items.map(\.fileName), ["Example.mov"])
+        XCTAssertEqual(model.sourceTitle(for: model.library.items[0]), "On My Vision Pro")
         XCTAssertEqual(model.sourceStatuses.values.first, .available)
         XCTAssertFalse(model.isShowingDetails)
         XCTAssertTrue(model.hasBootstrapped)

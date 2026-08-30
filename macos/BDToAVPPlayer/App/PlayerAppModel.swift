@@ -2,6 +2,53 @@ import AVFoundation
 import Combine
 import Foundation
 
+enum LibraryViewMode: String, CaseIterable, Sendable {
+    case posters
+    case files
+
+    var title: String {
+        rawValue.capitalized
+    }
+}
+
+enum MediaFormatFilter: String, CaseIterable, Sendable {
+    case all
+    case mvHEVC
+    case sideBySide
+    case overUnder
+    case unsupported
+
+    var title: String {
+        switch self {
+        case .all:
+            return "All Formats"
+        case .mvHEVC:
+            return "MV-HEVC"
+        case .sideBySide:
+            return "SBS"
+        case .overUnder:
+            return "OVER-UNDER"
+        case .unsupported:
+            return "Unsupported"
+        }
+    }
+
+    func matches(_ item: MediaItem) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .mvHEVC:
+            return item.format == .mvHEVC
+        case .sideBySide:
+            return item.format == .sideBySide
+        case .overUnder:
+            return item.format == .overUnder
+        case .unsupported:
+            return item.format == .unsupported
+        }
+    }
+}
+
 enum MediaSortOrder: String, CaseIterable, Sendable {
     case title
     case fileName
@@ -49,6 +96,8 @@ final class PlayerAppModel: ObservableObject {
 
     @Published private(set) var library: MediaLibraryModel
     @Published private(set) var sourceStatuses: [String: MediaSourceStatus]
+    @Published var viewMode: LibraryViewMode = .posters
+    @Published var formatFilter: MediaFormatFilter = .all
     @Published var sortOrder: MediaSortOrder = .title
     @Published var selectedItemID: String?
     @Published var isShowingDetails = false
@@ -82,6 +131,7 @@ final class PlayerAppModel: ObservableObject {
 
     var visibleItems: [MediaItem] {
         library.items
+            .filter { formatFilter.matches($0) }
             .sorted {
                 switch sortOrder {
                 case .title:
@@ -99,6 +149,10 @@ final class PlayerAppModel: ObservableObject {
 
     func item(id: String) -> MediaItem? {
         library.items.first { $0.id == id }
+    }
+
+    func sourceTitle(for item: MediaItem) -> String {
+        item.id.hasPrefix("documents:") ? "On My Vision Pro" : "Files"
     }
 
     func showDetails(for id: String) {

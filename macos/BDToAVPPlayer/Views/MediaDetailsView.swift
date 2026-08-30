@@ -8,14 +8,25 @@ struct MediaDetailsView: View {
     @State private var isLocatorPresented = false
 
     var body: some View {
-        Group {
-            if let item = model.item(id: itemID) {
-                details(for: item)
-            } else {
-                ContentUnavailableView("Movie unavailable", systemImage: "film")
+        NavigationStack {
+            Group {
+                if let item = model.item(id: itemID) {
+                    details(for: item)
+                } else {
+                    ContentUnavailableView("Movie unavailable", systemImage: "film")
+                }
+            }
+            .navigationTitle("Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        model.closeDetails()
+                    }
+                    .accessibilityIdentifier("details-done")
+                }
             }
         }
-        .navigationBarTitleDisplayMode(.inline)
         .fileImporter(
             isPresented: $isLocatorPresented,
             allowedContentTypes: [.movie],
@@ -29,38 +40,46 @@ struct MediaDetailsView: View {
     @ViewBuilder
     private func details(for item: MediaItem) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                MediaThumbnailView(
-                    item: item,
-                    bookmarkStore: model.bookmarkStore,
-                    sourceStatus: model.sourceStatuses[item.id]
-                )
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .frame(maxWidth: 900)
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .top, spacing: 24) {
+                    MediaThumbnailView(
+                        item: item,
+                        bookmarkStore: model.bookmarkStore,
+                        sourceStatus: model.sourceStatuses[item.id]
+                    )
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .frame(width: 250)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(item.title)
-                        .font(.largeTitle.weight(.semibold))
-                        .lineLimit(2)
-                    Text("\(item.format.displayName) · \(item.fileName)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    sourceStatusView(for: item)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(item.title)
+                            .font(.title.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
+
+                        HStack(spacing: 10) {
+                            FormatPill(format: item.format)
+                            sourceStatusLabel(for: item)
+                        }
+
+                        Text(item.fileName)
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+
+                        playbackAction(for: item)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                playbackSection(for: item)
+                metadataSection(for: item)
             }
-            .frame(maxWidth: 900, alignment: .leading)
-            .padding(.horizontal, LibraryTheme.contentPadding)
-            .padding(.vertical, 28)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(30)
         }
         .scrollIndicators(.hidden)
     }
 
     @ViewBuilder
-    private func playbackSection(for item: MediaItem) -> some View {
+    private func playbackAction(for item: MediaItem) -> some View {
         switch model.playbackAvailability(for: item) {
         case .playable:
             Button {
@@ -72,21 +91,22 @@ struct MediaDetailsView: View {
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("play-movie-\(item.id)")
             .accessibilityHint("Starts playback for this movie.")
-        case let .planned(message), let .unavailable(message):
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        case let .planned(message):
+            unavailablePlayback(message: message, label: "Playback coming later", item: item)
+        case let .unavailable(message):
+            unavailablePlayback(message: message, label: "Play unavailable", item: item)
         }
     }
 
-    private func sourceStatusView(for item: MediaItem) -> some View {
-        let status = model.sourceStatuses[item.id] ?? .missing
-        return VStack(alignment: .leading, spacing: 10) {
-            Label(status.title, systemImage: status == .available ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .font(.subheadline.weight(.semibold))
+    private func unavailablePlayback(message: String, label: String, item: MediaItem) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(label, systemImage: "play.slash")
+                .font(.headline)
+            Text(message)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            if status != .available {
+            if (model.sourceStatuses[item.id] ?? .missing) != .available {
                 HStack(spacing: 12) {
                     Button {
                         isLocatorPresented = true
@@ -106,5 +126,46 @@ struct MediaDetailsView: View {
                 }
             }
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func sourceStatusLabel(for item: MediaItem) -> some View {
+        let status = model.sourceStatuses[item.id] ?? .missing
+        return Label(
+            status.title,
+            systemImage: status == .available ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(status == .available ? Color.green : Color.orange)
+    }
+
+    private func metadataSection(for item: MediaItem) -> some View {
+        let status = model.sourceStatuses[item.id] ?? .missing
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("File & Technical")
+                .font(.title2.weight(.semibold))
+            LabeledContent("Filename", value: item.fileName)
+            LabeledContent("Format", value: item.format.displayName)
+            LabeledContent("Location", value: model.sourceTitle(for: item))
+            LabeledContent("Source status", value: status.title)
+        }
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+}
+
+struct FormatPill: View {
+    let format: StereoFormat
+
+    var body: some View {
+        Text(format.displayName)
+            .font(.caption2.weight(.bold))
+            .tracking(0.5)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.thinMaterial, in: Capsule())
+            .accessibilityLabel("Format \(format.displayName)")
     }
 }
