@@ -185,7 +185,10 @@ final class MVHEVCPlayerSession: ObservableObject {
             isRenderingReady = false
             return
         }
-        isRenderingReady = component.currentRenderingStatus == .ready
+        let renderingReady = component.currentRenderingStatus == .ready
+        if isRenderingReady != renderingReady {
+            isRenderingReady = renderingReady
+        }
     }
 
     func play() {
@@ -274,6 +277,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func finish() {
+        preparationGeneration += 1
         finishCurrentSession(persistResume: true)
         mediaItem = nil
         resumeStore = nil
@@ -337,6 +341,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             break
         case .readyToPlay:
             state = .ready
+            player.play()
         case .failed:
             presentFailure(item.error?.localizedDescription ?? "The player failed without an error description.")
         @unknown default:

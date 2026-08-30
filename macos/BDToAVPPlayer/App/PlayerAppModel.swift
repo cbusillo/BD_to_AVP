@@ -108,7 +108,7 @@ final class PlayerAppModel: ObservableObject {
     var onPlaybackRequested: ((MediaItem) -> Void)?
 
     private let libraryStore: LibraryStore
-    private let bookmarkStore: BookmarkStore
+    let bookmarkStore: BookmarkStore
     private let formatInspector: FormatInspector
 
     init(
@@ -181,6 +181,7 @@ final class PlayerAppModel: ObservableObject {
         }
         let request = PlaybackRequest(item: item)
         playbackRequest = request
+        closeDetails()
         onPlaybackRequested?(item)
     }
 

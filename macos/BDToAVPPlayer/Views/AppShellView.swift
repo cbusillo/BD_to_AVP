@@ -2,19 +2,33 @@ import SwiftUI
 
 struct AppShellView: View {
     @ObservedObject var model: PlayerAppModel
+    @ObservedObject var playerSession: MVHEVCPlayerSession
+    let resumeStore: ResumeStore
+
+    @State private var preparationTask: Task<Void, Never>?
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                Section("Sources") {
-                    Label("All Movies", systemImage: "film.stack")
-                        .font(.headline)
+        Group {
+            if model.playbackRequest != nil || playerSession.state != .idle {
+                PlayerView(session: playerSession) {
+                    preparationTask?.cancel()
+                    preparationTask = nil
+                    model.clearPlaybackRequest()
+                }
+            } else {
+                NavigationSplitView {
+                    List {
+                        Section("Sources") {
+                            Label("All Movies", systemImage: "film.stack")
+                                .font(.headline)
+                        }
+                    }
+                    .listStyle(.sidebar)
+                    .navigationTitle("Library")
+                } detail: {
+                    LibraryView(model: model)
                 }
             }
-            .listStyle(.sidebar)
-            .navigationTitle("Library")
-        } detail: {
-            LibraryView(model: model)
         }
         .sheet(isPresented: $model.isShowingDetails) {
             if let selectedItemID = model.selectedItemID {
@@ -27,6 +41,20 @@ struct AppShellView: View {
             }
         } message: {
             Text(model.errorMessage ?? "Please try again.")
+        }
+        .onChange(of: model.playbackRequest) { _, request in
+            guard let request else { return }
+            preparationTask?.cancel()
+            preparationTask = Task {
+                await playerSession.prepare(
+                    mediaItem: request.item,
+                    bookmarkStore: model.bookmarkStore,
+                    resumeStore: resumeStore
+                )
+            }
+        }
+        .onDisappear {
+            preparationTask?.cancel()
         }
     }
 
