@@ -258,9 +258,10 @@ final class PlayerAppModel: ObservableObject {
         do {
             let bookmarkData = try url.bookmarkData(options: [])
             let format = try await formatInspector(url)
-            let existingItem = itemID.flatMap(item(id:))
+            let importedItemID = itemID ?? documentsItemID(for: url)
+            let existingItem = importedItemID.flatMap(item(id:))
             let importedItem = MediaItem(
-                id: itemID ?? UUID().uuidString,
+                id: importedItemID ?? UUID().uuidString,
                 title: existingItem?.title ?? url.deletingPathExtension().lastPathComponent,
                 fileName: url.lastPathComponent,
                 format: format
@@ -282,6 +283,15 @@ final class PlayerAppModel: ObservableObject {
     }
 
     private static let supportedMovieExtensions = Set(["mov", "mp4", "m4v"])
+
+    private func documentsItemID(for url: URL) -> String? {
+        let documentsDirectory = documentsURL.standardizedFileURL.resolvingSymlinksInPath()
+        let fileURL = url.standardizedFileURL.resolvingSymlinksInPath()
+        guard fileURL.deletingLastPathComponent() == documentsDirectory else {
+            return nil
+        }
+        return "documents:\(fileURL.lastPathComponent.lowercased())"
+    }
 
     private func refreshSourceStatuses() {
         var statuses: [String: MediaSourceStatus] = [:]

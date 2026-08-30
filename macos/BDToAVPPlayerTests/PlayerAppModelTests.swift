@@ -123,6 +123,53 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertTrue(model.hasBootstrapped)
     }
 
+    func testAddingBootstrappedDocumentMovieUpdatesItsExistingLibraryEntry() async throws {
+        let documentsURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerDocuments")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
+        let movieURL = documentsURL.appendingPathComponent("Example.mov")
+        try Data().write(to: movieURL)
+
+        let model = PlayerAppModel(
+            libraryStore: LibraryStore(storageURL: temporaryURL()),
+            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
+            documentsURL: documentsURL,
+            formatInspector: { _ in .mvHEVC }
+        )
+
+        await model.bootstrap()
+        await model.importMovie(from: movieURL)
+
+        XCTAssertEqual(model.library.items.map(\.id), ["documents:example.mov"])
+        XCTAssertEqual(model.library.items.count, 1)
+    }
+
+    func testAddingMovieOutsideDocumentsUsesUUIDIdentity() async throws {
+        let documentsURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerDocuments")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
+        let externalDirectory = documentsURL.deletingLastPathComponent()
+            .appendingPathComponent("\(documentsURL.lastPathComponent)-copy", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalDirectory, withIntermediateDirectories: true)
+        let movieURL = externalDirectory.appendingPathComponent("Example.mov")
+        try Data().write(to: movieURL)
+
+        let model = PlayerAppModel(
+            libraryStore: LibraryStore(storageURL: temporaryURL()),
+            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
+            documentsURL: documentsURL,
+            formatInspector: { _ in .mvHEVC }
+        )
+
+        await model.importMovie(from: movieURL)
+
+        XCTAssertEqual(model.library.items.count, 1)
+        XCTAssertNotEqual(model.library.items[0].id, "documents:example.mov")
+        XCTAssertFalse(model.library.items[0].id.hasPrefix("documents:"))
+    }
+
     private func temporaryURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerTests")

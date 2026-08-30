@@ -47,11 +47,36 @@ final class BookmarkStore {
     private let storageURL: URL
     private let fileManager: FileManager
     private var bookmarks: [String: Data]
+    private let resolveBookmark: (Data) throws -> (URL, Bool)
+    private let bookmarkDataForURL: (URL) throws -> Data
+    private let makeLease: (URL) -> SecurityScopedResourceLease
 
-    init(storageURL: URL = BookmarkStore.defaultStorageURL(), fileManager: FileManager = .default) {
+    init(
+        storageURL: URL = BookmarkStore.defaultStorageURL(),
+        fileManager: FileManager = .default,
+        resolveBookmark: @escaping (Data) throws -> (URL, Bool) = { data in
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: data,
+                options: [],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            return (url, isStale)
+        },
+        bookmarkDataForURL: @escaping (URL) throws -> Data = { url in
+            try url.bookmarkData(options: [])
+        },
+        makeLease: @escaping (URL) -> SecurityScopedResourceLease = { url in
+            SecurityScopedResourceLease(url: url)
+        }
+    ) {
         self.storageURL = storageURL
         self.fileManager = fileManager
         self.bookmarks = (try? Self.decodeBookmarks(fileManager.contents(atPath: storageURL.path) ?? Data())) ?? [:]
+        self.resolveBookmark = resolveBookmark
+        self.bookmarkDataForURL = bookmarkDataForURL
+        self.makeLease = makeLease
     }
 
     static func defaultStorageURL(fileManager: FileManager = .default) -> URL {
@@ -93,33 +118,49 @@ final class BookmarkStore {
             throw BookmarkStoreError.missingBookmark(id)
         }
 
-        var isStale = false
-        let resolvedURL: URL
         do {
-            resolvedURL = try URL(
-                resolvingBookmarkData: bookmarkData,
-                options: [],
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
+            let (resolvedURL, isStale) = try resolveBookmark(bookmarkData)
+            if isStale {
+                throw BookmarkStoreError.staleBookmark(id)
+            }
+            return resolvedURL
+        } catch {
+            if error is BookmarkStoreError {
+                throw error
+            }
+            throw BookmarkStoreError.invalidBookmark(id)
+        }
+    }
+
+    func open(id: String) throws -> SecurityScopedResourceLease {
+        guard let bookmarkData = bookmarks[id] else {
+            throw BookmarkStoreError.missingBookmark(id)
+        }
+
+        let resolvedURL: URL
+        let isStale: Bool
+        do {
+            (resolvedURL, isStale) = try resolveBookmark(bookmarkData)
         } catch {
             throw BookmarkStoreError.invalidBookmark(id)
         }
 
-        if isStale {
-            throw BookmarkStoreError.staleBookmark(id)
-        }
-        return resolvedURL
-    }
-
-    func open(id: String) throws -> SecurityScopedResourceLease {
-        let url = try resolve(id: id)
-        let lease = SecurityScopedResourceLease(url: url)
-        guard fileManager.fileExists(atPath: url.path) else {
+        let lease = makeLease(resolvedURL)
+        do {
+            guard fileManager.fileExists(atPath: resolvedURL.path) else {
+                throw BookmarkStoreError.missingResource(resolvedURL)
+            }
+            if isStale {
+                try save(bookmarkData: bookmarkDataForURL(resolvedURL), for: id)
+            }
+            return lease
+        } catch {
             lease.close()
-            throw BookmarkStoreError.missingResource(url)
+            if isStale {
+                throw BookmarkStoreError.staleBookmark(id)
+            }
+            throw error
         }
-        return lease
     }
 
     func withResolvedURL<T>(for id: String, _ body: (URL) throws -> T) throws -> T {
