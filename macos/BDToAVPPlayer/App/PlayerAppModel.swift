@@ -203,13 +203,18 @@ final class PlayerAppModel: ObservableObject {
 
     func remove(itemID: String) {
         do {
-            try bookmarkStore.remove(id: itemID)
             try libraryStore.remove(id: itemID)
             objectWillChange.send()
             library.remove(id: itemID)
             sourceStatuses.removeValue(forKey: itemID)
             if selectedItemID == itemID {
                 closeDetails()
+            }
+
+            do {
+                try bookmarkStore.remove(id: itemID)
+            } catch {
+                errorMessage = "The movie was removed, but its saved file access could not be cleaned up."
             }
         } catch {
             errorMessage = "Could not remove this movie."

@@ -49,9 +49,9 @@ same window provides:
 - Done, which persists progress and releases the session.
 
 The app saves in-progress playback positions and restores them when the same
-library item is opened again. Entering the background pauses playback and saves
-progress. Completed or near-completed playback is cleared instead of resuming at
-the end.
+library item is opened again. Any non-active scene phase pauses playback and
+saves progress. Completed or near-completed playback is cleared instead of
+resuming at the end.
 
 SBS, over-under, MVC, network shares, relay playback, and live conversion are
 not implemented in this slice. SBS and over-under files may be classified and
@@ -81,8 +81,9 @@ xcodebuild test \
 
 CI pins Xcode 26.5, regenerates the project, and always runs
 `build-for-testing` against the generic visionOS Simulator destination. When an
-available visionOS runtime and Apple Vision Pro device type exist, CI creates,
-boots, tests, and deletes a temporary simulator with `test-without-building`.
+available visionOS 26-or-newer runtime and Apple Vision Pro device type exist,
+CI creates, boots, tests, and deletes a temporary simulator with
+`test-without-building`.
 If either prerequisite is absent, CI logs a clear successful skip instead of
 assuming a pre-existing simulator.
 

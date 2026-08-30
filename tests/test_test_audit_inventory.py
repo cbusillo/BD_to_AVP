@@ -60,7 +60,7 @@ jobs:
             | first // empty
           ')"
           if [[ -z "$runtime_id" || -z "$device_type_id" ]]; then
-            echo "::notice::Skipping BDToAVPPlayer visionOS unit tests"
+            echo "::notice::Skipping BDToAVPPlayer visionOS 26+ unit tests"
             exit 0
           fi
           simulator_udid="$(xcrun simctl create "BDToAVPPlayer CI" "$device_type_id" "$runtime_id")"
@@ -68,7 +68,7 @@ jobs:
             xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
             xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
           }
-          trap cleanup_simulator EXIT
+          trap cleanup_simulator EXIT INT TERM
           xcrun simctl boot "$simulator_udid"
           xcrun simctl bootstatus "$simulator_udid" -b
           xcodebuild test-without-building \
@@ -141,7 +141,7 @@ class TestTestAuditInventory(unittest.TestCase):
         self.assertIn("xcodebuild test-without-building", player_command)
         self.assertIn("xcrun simctl create", player_command)
         self.assertIn('select((.version | split(".")[0] | tonumber) >= 26)', player_command)
-        self.assertIn("trap cleanup_simulator EXIT", player_command)
+        self.assertIn("trap cleanup_simulator EXIT INT TERM", player_command)
         self.assertIn("CODE_SIGNING_ALLOWED=NO", player_command)
 
     def test_requires_explicit_xcode_26_5_pin_for_player_lane(self) -> None:

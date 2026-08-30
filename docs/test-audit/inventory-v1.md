@@ -1,6 +1,6 @@
 # Test Audit Inventory v1
 
-- Baseline reference: `a190925415e66bc1e0c2789baab6223cede07951`
+- Baseline reference: `7210339cef4aad1e23721a43e0b5055d869c4e76`
 - Test files: **156**
 - Support fixtures: **70**
 - Test cases counted: **2630**
@@ -39,7 +39,7 @@ device_type_id="$(xcrun simctl list devicetypes -j | jq -r '
 | first // empty
 ')"
 if [[ -z "$runtime_id" || -z "$device_type_id" ]]; then
-echo "::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none})."
+echo "::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS 26+ runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none})."
 exit 0
 fi
 simulator_name="BDToAVPPlayer CI ${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
@@ -48,7 +48,7 @@ cleanup_simulator() {
 xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
 xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
 }
-trap cleanup_simulator EXIT
+trap cleanup_simulator EXIT INT TERM
 xcrun simctl boot "$simulator_udid"
 xcrun simctl bootstatus "$simulator_udid" -b
 xcodebuild test-without-building \

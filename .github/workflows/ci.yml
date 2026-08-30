@@ -149,7 +149,7 @@ jobs:
           ')"
 
           if [[ -z "$runtime_id" || -z "$device_type_id" ]]; then
-            echo "::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none})."
+            echo "::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS 26+ runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none})."
             exit 0
           fi
 
@@ -159,7 +159,7 @@ jobs:
             xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
             xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
           }
-          trap cleanup_simulator EXIT
+          trap cleanup_simulator EXIT INT TERM
 
           xcrun simctl boot "$simulator_udid"
           xcrun simctl bootstatus "$simulator_udid" -b

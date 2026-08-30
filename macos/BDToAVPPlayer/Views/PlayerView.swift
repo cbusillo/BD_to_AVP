@@ -24,7 +24,7 @@ struct PlayerView: View {
         .background(.black)
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase != .active {
-                session.applicationDidEnterBackground()
+                session.applicationBecameInactive()
             }
         }
         .onDisappear {
@@ -57,9 +57,7 @@ struct PlayerView: View {
         case .ready:
             RealityView { content in
                 session.installPlayerComponent()
-                if session.playerEntity.parent == nil {
-                    content.add(session.playerEntity)
-                }
+                content.add(session.playerEntity)
                 fitPlayerEntity(proxy: geometry, content: content)
             } update: { content in
                 fitPlayerEntity(proxy: geometry, content: content)
@@ -112,6 +110,13 @@ private struct PlayerHUDView: View {
                 Button("Done", action: onDone)
                     .accessibilityIdentifier("player-done")
                     .accessibilityLabel("Done playing movie")
+            }
+
+            if session.state == .ready, let warning = session.failureMessage {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Slider(

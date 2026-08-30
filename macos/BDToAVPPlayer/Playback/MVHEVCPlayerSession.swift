@@ -80,10 +80,6 @@ final class MVHEVCPlayerSession: ObservableObject {
         canControlPlayback && duration.isFinite && duration > 0
     }
 
-    var timeSummary: String {
-        "\(PlaybackTimeFormatter.string(for: currentTime)) / \(PlaybackTimeFormatter.string(for: duration))"
-    }
-
     func prepare(
         mediaItem: MediaItem,
         bookmarkStore: BookmarkStore,
@@ -261,7 +257,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         selectedSubtitleID = id
     }
 
-    func applicationDidEnterBackground() {
+    func applicationBecameInactive() {
         pause()
     }
 
@@ -330,6 +326,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             break
         case .readyToPlay:
             state = .ready
+            refreshSelectedMediaOptionIDs()
             if let resumeTime = pendingResume.consume() {
                 seek(to: resumeTime) { [weak self] in
                     self?.player.play()
@@ -414,6 +411,26 @@ final class MVHEVCPlayerSession: ObservableObject {
         subtitleSelectionByID = selections.subtitleSelectionByID
     }
 
+    private func refreshSelectedMediaOptionIDs() {
+        if let audioGroup {
+            selectedAudioID = audioOptions.first(where: { option in
+                guard let selection = audioSelectionByID[option.id] else {
+                    return false
+                }
+                return playerItem?.currentMediaSelection.selectedMediaOption(in: audioGroup) === selection
+            })?.id ?? audioOptions.first?.id ?? ""
+        }
+
+        if let subtitleGroup {
+            selectedSubtitleID = subtitleOptions.first(where: { option in
+                guard let selection = subtitleSelectionByID[option.id] else {
+                    return false
+                }
+                return playerItem?.currentMediaSelection.selectedMediaOption(in: subtitleGroup) === selection
+            })?.id ?? "off"
+        }
+    }
+
     private func finishCurrentSession(persistResume shouldPersistResume: Bool) {
         if shouldPersistResume {
             persistResume()
@@ -457,6 +474,9 @@ final class MVHEVCPlayerSession: ObservableObject {
                 try resumeStore.remove(id: mediaItem.id)
             case .skip:
                 break
+            }
+            if state == .ready {
+                failureMessage = nil
             }
         } catch {
             failureMessage = "Playback position could not be saved: \(error.localizedDescription)"
