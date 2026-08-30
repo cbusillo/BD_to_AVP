@@ -23,9 +23,12 @@ struct PlayerView: View {
         }
         .background(.black)
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .background {
+            if newPhase != .active {
                 session.applicationDidEnterBackground()
             }
+        }
+        .onDisappear {
+            session.finish()
         }
     }
 
@@ -127,7 +130,7 @@ private struct PlayerHUDView: View {
             )
             .disabled(!session.canSeek)
             .accessibilityLabel("Playback position")
-            .accessibilityValue(session.timeSummary)
+            .accessibilityValue(displayedTimeSummary)
 
             HStack(spacing: 12) {
                 Button(action: session.seekBackward) {
@@ -151,10 +154,10 @@ private struct PlayerHUDView: View {
 
                 Spacer()
 
-                Text(session.timeSummary)
+                Text(displayedTimeSummary)
                     .font(.system(.subheadline, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Playback time \(session.timeSummary)")
+                    .accessibilityLabel("Playback time \(displayedTimeSummary)")
 
                 audioMenu
                 subtitleMenu
@@ -164,6 +167,11 @@ private struct PlayerHUDView: View {
         .frame(maxWidth: 760)
         .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .accessibilityElement(children: .contain)
+    }
+
+    private var displayedTimeSummary: String {
+        let displayedTime = scrubState.value ?? session.currentTime
+        return "\(PlaybackTimeFormatter.string(for: displayedTime)) / \(PlaybackTimeFormatter.string(for: session.duration))"
     }
 
     private var audioMenu: some View {
