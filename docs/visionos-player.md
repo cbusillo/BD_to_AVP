@@ -7,9 +7,16 @@ validator.
 
 ## Product Scope
 
-- One plain SwiftUI window contains the library, movie details, and player.
-- The library supports poster and file views, format filtering, title or
-  filename sorting, missing-source recovery, and removal.
+- One plain SwiftUI window contains a split-view library, modal movie details,
+  and the player.
+- The library presents an **On My Vision Pro** source sidebar and a **Your
+  movies** collection with Posters and Files modes, format filtering, title or
+  filename sorting, 16:9 source-frame thumbnails, and a typography-first
+  fallback when a frame cannot be generated.
+- Playable movies expose a visible direct Play action in both library modes.
+  Selecting the movie content opens a compact modal Details view with source
+  status, missing-source recovery, removal, technical metadata, and one
+  prominent Play action that remains visible without scrolling.
 - **Add Movie** imports one movie through the system Files picker.
 - Supported `.mov`, `.mp4`, and `.m4v` files already present in the app's
   Documents directory are indexed on launch. File Sharing and opening documents
@@ -38,8 +45,8 @@ proof of MV-HEVC.
 
 `MVHEVCPlayerSession` owns one `AVPlayer`, `AVPlayerItem`, RealityKit entity, and
 source lease. Its `VideoPlayerComponent` requests stereo viewing, screen spatial
-video mode, and portal immersive viewing mode. A glass HUD rendered inside the
-same window provides:
+video mode, and portal immersive viewing mode. A native glass ornament attached
+below the same window keeps controls off the stereo image and provides:
 
 - play and pause;
 - 10-second backward and 30-second forward seeks;
@@ -47,6 +54,11 @@ same window provides:
 - audio-track selection;
 - subtitle selection, including Off; and
 - Done, which persists progress and releases the session.
+
+The ornament remains visible while playback is paused, loading, failed, or being
+scrubbed, and automatic hiding is disabled while VoiceOver or Switch Control is
+active. During uninterrupted playback it hides after three seconds. Pinching the
+video surface reveals the controls again.
 
 The app saves in-progress playback positions and restores them when the same
 library item is opened again. Any non-active scene phase pauses playback and
@@ -79,6 +91,12 @@ xcodebuild test \
   CODE_SIGNING_ALLOWED=NO
 ```
 
+The same scheme also contains `BDToAVPPlayerUITests`. Its seeded-media flow is
+skipped when `PlayerLongFixture.mov` is absent from the simulator app Documents
+directory; when present, it verifies direct Library → Play → Library, Library →
+Details → Play, Details Done → Library, player Done → Details, replay, and
+ornament auto-hide behavior.
+
 CI pins Xcode 26.5, regenerates the project, and always runs
 `build-for-testing` against the generic visionOS Simulator destination. When an
 available visionOS 26-or-newer runtime and Apple Vision Pro device type exist,
@@ -100,5 +118,8 @@ xcodebuild build \
 ```
 
 Simulator tests and screenshots do not prove stereoscopic depth, eye order,
-comfort, long-session thermals, or headset-visible interaction. Those remain
-physical Vision Pro validation boundaries.
+comfort, long-session thermals, or headset-visible interaction. The accepted
+physical layout keeps the RealityKit video surface at the playback probe's
+conservative scale and depth offset so foreground stereo content remains behind
+the native ornament; changes to that geometry still require physical Vision Pro
+validation.

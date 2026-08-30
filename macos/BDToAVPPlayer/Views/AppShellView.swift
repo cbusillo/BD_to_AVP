@@ -5,6 +5,7 @@ struct AppShellView: View {
     @ObservedObject var playerSession: MVHEVCPlayerSession
     let resumeStore: ResumeStore
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var preparationTask: Task<Void, Never>?
 
     var body: some View {
@@ -30,9 +31,9 @@ struct AppShellView: View {
                 }
             }
         }
-        .sheet(isPresented: $model.isShowingDetails) {
-            if let selectedItemID = model.selectedItemID {
-                MediaDetailsView(model: model, itemID: selectedItemID)
+        .sheet(isPresented: detailsPresented) {
+            if let itemID = model.selectedItemID {
+                MediaDetailsView(model: model, itemID: itemID)
             }
         }
         .alert("Something went wrong", isPresented: errorPresented) {
@@ -56,6 +57,11 @@ struct AppShellView: View {
         .onDisappear {
             preparationTask?.cancel()
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                model.refreshSourceStatuses()
+            }
+        }
         .task {
             await model.bootstrap()
         }
@@ -65,6 +71,21 @@ struct AppShellView: View {
         Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.clearError() } }
+        )
+    }
+
+    private var detailsPresented: Binding<Bool> {
+        Binding(
+            get: {
+                model.isShowingDetails
+                    && model.selectedItemID != nil
+                    && model.playbackRequest == nil
+            },
+            set: { isPresented in
+                if !isPresented && model.playbackRequest == nil {
+                    model.closeDetails()
+                }
+            }
         )
     }
 }

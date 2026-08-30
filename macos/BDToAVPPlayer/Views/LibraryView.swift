@@ -10,8 +10,10 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 28) {
                 header
 
-                if model.visibleItems.isEmpty {
+                if model.library.items.isEmpty {
                     emptyState
+                } else if model.visibleItems.isEmpty {
+                    noMatchesState
                 } else if model.viewMode == .posters {
                     posterGrid
                 } else {
@@ -21,6 +23,7 @@ struct LibraryView: View {
             .padding(.horizontal, 34)
             .padding(.vertical, 28)
         }
+        .scrollIndicators(.hidden)
         .navigationTitle("All Movies")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -44,7 +47,7 @@ struct LibraryView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Your movies")
                 .font(.largeTitle.weight(.semibold))
-            Text("Choose a movie to inspect its source and playback format.")
+            Text("Choose a movie to review its source, format, and playback options.")
                 .foregroundStyle(.secondary)
         }
     }
@@ -59,19 +62,38 @@ struct LibraryView: View {
         }
         .frame(maxWidth: .infinity, minHeight: 360)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .stroke(.white.opacity(0.32), lineWidth: 1)
+    }
+
+    private var noMatchesState: some View {
+        ContentUnavailableView {
+            Label("No matching movies", systemImage: "line.3.horizontal.decrease.circle")
+        } description: {
+            Text("No movies match the \(model.formatFilter.title) filter.")
+        } actions: {
+            Button("Show All Movies") {
+                model.formatFilter = .all
+            }
+            .buttonStyle(.borderedProminent)
         }
+        .frame(maxWidth: .infinity, minHeight: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
     }
 
     private var posterGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 185), spacing: 22)], spacing: 24) {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: LibraryTheme.minimumTileWidth), spacing: LibraryTheme.gridSpacing)],
+            spacing: LibraryTheme.gridSpacing
+        ) {
             ForEach(model.visibleItems) { item in
                 MediaPosterCard(
                     item: item,
                     sourceStatus: model.sourceStatuses[item.id],
-                    showDetails: { model.showDetails(for: item.id) }
+                    sourceTitle: model.sourceTitle(for: item),
+                    bookmarkStore: model.bookmarkStore,
+                    showDetails: { model.showDetails(for: item.id) },
+                    play: model.playbackAvailability(for: item) == .playable
+                        ? { model.requestPlayback(for: item.id) }
+                        : nil
                 )
             }
         }
@@ -80,14 +102,40 @@ struct LibraryView: View {
     private var fileList: some View {
         LazyVStack(spacing: 10) {
             ForEach(model.visibleItems) { item in
-                Button {
-                    model.showDetails(for: item.id)
-                } label: {
-                    MediaFileRow(item: item, sourceStatus: model.sourceStatuses[item.id])
+                HStack(spacing: 12) {
+                    Button {
+                        model.showDetails(for: item.id)
+                    } label: {
+                        MediaFileRow(
+                            item: item,
+                            sourceStatus: model.sourceStatuses[item.id],
+                            sourceTitle: model.sourceTitle(for: item),
+                            bookmarkStore: model.bookmarkStore
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .hoverEffect(.highlight)
+                    .accessibilityIdentifier("movie-tile-\(item.id)")
+
+                    if model.playbackAvailability(for: item) == .playable {
+                        libraryPlayButton(for: item)
+                    }
                 }
-                .buttonStyle(.plain)
             }
         }
+    }
+
+    private func libraryPlayButton(for item: MediaItem) -> some View {
+        Button {
+            model.requestPlayback(for: item.id)
+        } label: {
+            Label("Play", systemImage: "play.fill")
+                .frame(minWidth: 72, minHeight: 60)
+        }
+        .buttonStyle(.borderedProminent)
+        .accessibilityIdentifier("play-library-\(item.id)")
+        .accessibilityHint("Starts playback without opening movie details.")
     }
 
     private var viewControls: some View {
@@ -97,7 +145,7 @@ struct LibraryView: View {
             }
         }
         .pickerStyle(.segmented)
-        .frame(width: 170)
+        .frame(width: 180)
         .accessibilityLabel("Library view")
     }
 
@@ -146,7 +194,7 @@ struct LibraryView: View {
             Label("Add Movie", systemImage: "plus")
         }
         .buttonStyle(.borderedProminent)
-        .tint(Color(red: 0.82, green: 0.48, blue: 0.12))
+        .disabled(model.isImporting)
         .accessibilityHint("Choose one movie file from Files.")
     }
 }
@@ -154,69 +202,101 @@ struct LibraryView: View {
 struct MediaPosterCard: View {
     let item: MediaItem
     let sourceStatus: MediaSourceStatus?
+    let sourceTitle: String
+    let bookmarkStore: BookmarkStore
     let showDetails: () -> Void
+    let play: (() -> Void)?
 
     var body: some View {
-        Button(action: showDetails) {
-            VStack(alignment: .leading, spacing: 10) {
-                PosterPlaceholderView(fileName: item.fileName, format: item.format)
-                    .aspectRatio(0.72, contentMode: .fit)
+        VStack(alignment: .leading, spacing: 12) {
+            Button(action: showDetails) {
+                cardContent
+            }
+            .buttonStyle(.plain)
+            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .hoverEffect(.highlight)
+            .accessibilityIdentifier("movie-tile-\(item.id)")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityHint("Opens movie details.")
 
-                Text(item.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .topLeading)
+            HStack(spacing: 10) {
+                Label(sourceTitle, systemImage: sourceTitle == "On My Vision Pro" ? "visionpro" : "folder")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                Text(item.fileName)
+                Spacer(minLength: 8)
+
+                if let play {
+                    Button(action: play) {
+                        Label("Play", systemImage: "play.fill")
+                            .frame(minHeight: 60)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("play-library-\(item.id)")
+                    .accessibilityLabel("Play \(item.title)")
+                    .accessibilityHint("Starts playback without opening movie details.")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            MediaThumbnailView(
+                item: item,
+                bookmarkStore: bookmarkStore,
+                sourceStatus: sourceStatus
+            )
+            .aspectRatio(16 / 9, contentMode: .fit)
+
+            Text(item.title)
+                .font(.headline)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
+
+            Text(item.fileName)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            if sourceStatus != .available {
+                Label(sourceStatus?.title ?? "Source unavailable", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                HStack(spacing: 8) {
-                    Label("On My Vision Pro", systemImage: "visionpro")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    Text("Details ›")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.thinMaterial, in: Capsule())
-                }
-
-                if sourceStatus != .available {
-                    Label(sourceStatus?.title ?? "Source unavailable", systemImage: "exclamationmark.triangle")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(14)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(.white.opacity(0.28), lineWidth: 1)
             }
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("movie-card-\(item.id)")
-        .accessibilityLabel("Details for \(item.title)")
-        .accessibilityHint("Shows filename, format, source, and playback actions.")
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var accessibilityLabel: String {
+        let status = sourceStatus ?? .missing
+        return "\(item.title), \(item.fileName), \(item.format.displayName), \(sourceTitle), \(status.title)"
     }
 }
 
 struct MediaFileRow: View {
     let item: MediaItem
     let sourceStatus: MediaSourceStatus?
+    let sourceTitle: String
+    let bookmarkStore: BookmarkStore
 
     var body: some View {
         HStack(spacing: 16) {
-            PosterPlaceholderView(fileName: item.fileName, format: item.format)
-                .frame(width: 68, height: 82)
+            MediaThumbnailView(
+                item: item,
+                bookmarkStore: bookmarkStore,
+                sourceStatus: sourceStatus
+            )
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .frame(width: 120)
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text(item.title)
                     .font(.headline)
                 Text(item.fileName)
@@ -228,7 +308,7 @@ struct MediaFileRow: View {
                     if sourceStatus != .available {
                         Text(sourceStatus?.title ?? "Source unavailable")
                             .font(.caption)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -238,11 +318,13 @@ struct MediaFileRow: View {
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(.white.opacity(0.25), lineWidth: 1)
-        }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.title), \(item.fileName), \(item.format.displayName)")
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint("Opens movie details.")
+    }
+
+    private var accessibilityLabel: String {
+        let status = sourceStatus ?? .missing
+        return "\(item.title), \(item.fileName), \(item.format.displayName), \(sourceTitle), \(status.title)"
     }
 }

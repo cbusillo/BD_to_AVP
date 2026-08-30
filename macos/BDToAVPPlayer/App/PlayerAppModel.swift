@@ -151,6 +151,10 @@ final class PlayerAppModel: ObservableObject {
         library.items.first { $0.id == id }
     }
 
+    func sourceTitle(for item: MediaItem) -> String {
+        item.id.hasPrefix("documents:") ? "On My Vision Pro" : "Files"
+    }
+
     func showDetails(for id: String) {
         guard item(id: id) != nil else { return }
         selectedItemID = id
@@ -171,9 +175,9 @@ final class PlayerAppModel: ObservableObject {
         case .mvHEVC:
             return .playable
         case .sideBySide:
-            return .planned("SBS playback is planned for a later slice.")
+            return .planned("Side-by-side movies are not playable yet.")
         case .overUnder:
-            return .planned("Over-under playback is planned for a later slice.")
+            return .planned("Over-under movies are not playable yet.")
         case .unsupported:
             return .unavailable("This media format is not supported for playback.")
         }
@@ -185,7 +189,6 @@ final class PlayerAppModel: ObservableObject {
         }
         let request = PlaybackRequest(item: item)
         playbackRequest = request
-        closeDetails()
         onPlaybackRequested?(item)
     }
 
@@ -298,7 +301,7 @@ final class PlayerAppModel: ObservableObject {
         return "documents:\(fileURL.lastPathComponent.lowercased())"
     }
 
-    private func refreshSourceStatuses() {
+    func refreshSourceStatuses() {
         var statuses: [String: MediaSourceStatus] = [:]
         for item in library.items {
             do {

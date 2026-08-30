@@ -193,6 +193,25 @@ targets:
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/BDToAVPPlayer.app/BDToAVPPlayer
         XROS_DEPLOYMENT_TARGET: "26.0"
 
+  BDToAVPPlayerUITests:
+    type: bundle.ui-testing
+    platform: auto
+    supportedDestinations: [visionOS]
+    deploymentTarget:
+      visionOS: "26.0"
+    sources:
+      - path: BDToAVPPlayerUITests
+    dependencies:
+      - target: BDToAVPPlayer
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.player.ui-tests
+        TARGETED_DEVICE_FAMILY: "7"
+        TEST_TARGET_NAME: BDToAVPPlayer
+        XROS_DEPLOYMENT_TARGET: "26.0"
+
 schemes:
   BluRayToVisionPro:
     build:
@@ -244,3 +263,4 @@ schemes:
     test:
       targets:
         - BDToAVPPlayerTests
+        - BDToAVPPlayerUITests
