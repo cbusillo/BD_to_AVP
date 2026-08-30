@@ -32,6 +32,48 @@ enum PlaybackSeekPolicy {
     }
 }
 
+struct PlaybackPendingResumeState: Equatable {
+    private(set) var value: TimeInterval? = nil
+
+    mutating func store(_ requestedTime: TimeInterval?, duration: TimeInterval) {
+        guard let requestedTime, requestedTime.isFinite, requestedTime >= 0 else {
+            value = nil
+            return
+        }
+        value = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
+    }
+
+    mutating func consume() -> TimeInterval? {
+        defer { value = nil }
+        return value
+    }
+
+    mutating func clear() {
+        value = nil
+    }
+}
+
+struct PlaybackScrubState: Equatable {
+    private(set) var value: TimeInterval? = nil
+
+    mutating func begin(currentTime: TimeInterval) {
+        value = max(0, currentTime.isFinite ? currentTime : 0)
+    }
+
+    mutating func update(requestedTime: TimeInterval, duration: TimeInterval) {
+        value = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
+    }
+
+    mutating func finish() -> TimeInterval? {
+        defer { value = nil }
+        return value
+    }
+
+    mutating func cancel() {
+        value = nil
+    }
+}
+
 enum ResumeWriteDecision: Equatable {
     case write(TimeInterval)
     case remove

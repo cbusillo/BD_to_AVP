@@ -58,10 +58,8 @@ struct PlayerView: View {
                     content.add(session.playerEntity)
                 }
                 fitPlayerEntity(proxy: geometry, content: content)
-                session.refreshRenderingReadiness()
             } update: { content in
                 fitPlayerEntity(proxy: geometry, content: content)
-                session.refreshRenderingReadiness()
             }
         }
     }
@@ -96,6 +94,8 @@ private struct PlayerHUDView: View {
     @ObservedObject var session: MVHEVCPlayerSession
     let onDone: () -> Void
 
+    @State private var scrubState = PlaybackScrubState()
+
     var body: some View {
         VStack(spacing: 14) {
             HStack(spacing: 12) {
@@ -113,10 +113,17 @@ private struct PlayerHUDView: View {
 
             Slider(
                 value: Binding(
-                    get: { session.currentTime },
-                    set: { session.seek(to: $0) }
+                    get: { scrubState.value ?? session.currentTime },
+                    set: { scrubState.update(requestedTime: $0, duration: session.duration) }
                 ),
-                in: 0 ... max(1, session.duration)
+                in: 0 ... max(1, session.duration),
+                onEditingChanged: { isEditing in
+                    if isEditing {
+                        scrubState.begin(currentTime: session.currentTime)
+                    } else if let scrubbedTime = scrubState.finish() {
+                        session.seek(to: scrubbedTime)
+                    }
+                }
             )
             .disabled(!session.canSeek)
             .accessibilityLabel("Playback position")

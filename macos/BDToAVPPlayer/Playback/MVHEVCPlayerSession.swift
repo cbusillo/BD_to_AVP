@@ -26,7 +26,6 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
-    @Published private(set) var isRenderingReady = false
     @Published private(set) var audioOptions: [PlaybackMediaOption] = []
     @Published private(set) var subtitleOptions: [PlaybackMediaOption] = []
     @Published private(set) var selectedAudioID = ""
@@ -45,7 +44,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var audioSelectionByID: [String: AVMediaSelectionOption] = [:]
     private var subtitleSelectionByID: [String: AVMediaSelectionOption] = [:]
     private var preparationGeneration = 0
-    private var playerComponentInstalled = false
+    private var pendingResume = PlaybackPendingResumeState()
 
     init() {
         timeControlStatusObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] observedPlayer, _ in
@@ -100,7 +99,6 @@ final class MVHEVCPlayerSession: ObservableObject {
         failureMessage = nil
         currentTime = 0
         duration = 0
-        isRenderingReady = false
         audioOptions = []
         subtitleOptions = []
         selectedAudioID = ""
@@ -151,14 +149,14 @@ final class MVHEVCPlayerSession: ObservableObject {
             playerItem = item
             duration = preparedDuration.seconds.isFinite ? max(0, preparedDuration.seconds) : 0
             configureMediaSelections(preparedSelections)
+            pendingResume.store(resumeStore.resumeTime(for: mediaItem.id), duration: duration)
             observe(item, generation: generation)
             player.replaceCurrentItem(with: item)
-
-            if let resumeTime = resumeStore.resumeTime(for: mediaItem.id) {
-                seek(to: resumeTime)
-            }
         } catch is CancellationError {
             openedLease.close()
+            if generation == preparationGeneration {
+                pendingResume.clear()
+            }
         } catch {
             openedLease.close()
             guard generation == preparationGeneration else {
@@ -174,21 +172,6 @@ final class MVHEVCPlayerSession: ObservableObject {
         component.desiredSpatialVideoMode = .screen
         component.desiredImmersiveViewingMode = .portal
         playerEntity.components.set(component)
-        playerComponentInstalled = true
-        refreshRenderingReadiness()
-    }
-
-    func refreshRenderingReadiness() {
-        guard playerComponentInstalled,
-              let component = playerEntity.components[VideoPlayerComponent.self]
-        else {
-            isRenderingReady = false
-            return
-        }
-        let renderingReady = component.currentRenderingStatus == .ready
-        if isRenderingReady != renderingReady {
-            isRenderingReady = renderingReady
-        }
     }
 
     func play() {
@@ -341,6 +324,9 @@ final class MVHEVCPlayerSession: ObservableObject {
             break
         case .readyToPlay:
             state = .ready
+            if let resumeTime = pendingResume.consume() {
+                seek(to: resumeTime)
+            }
             player.play()
         case .failed:
             presentFailure(item.error?.localizedDescription ?? "The player failed without an error description.")
@@ -446,7 +432,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         selectedAudioID = ""
         selectedSubtitleID = "off"
         isPlaying = false
-        isRenderingReady = false
+        pendingResume.clear()
     }
 
     private func persistResume() {
@@ -473,7 +459,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         state = .failed
         failureMessage = message
         isPlaying = false
-        isRenderingReady = false
+        pendingResume.clear()
     }
 }
 
