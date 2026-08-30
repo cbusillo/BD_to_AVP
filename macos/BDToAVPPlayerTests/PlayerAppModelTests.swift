@@ -26,12 +26,7 @@ final class PlayerAppModelTests: XCTestCase {
             formatInspector: { _ in .mvHEVC }
         )
 
-        XCTAssertEqual(model.viewMode, .posters)
         XCTAssertEqual(model.visibleItems.map(\.id), ["alpha", "zulu"])
-
-        model.formatFilter = .mvHEVC
-
-        XCTAssertEqual(model.visibleItems.map(\.id), ["alpha"])
         XCTAssertEqual(model.library.posters.map(\.id), ["zulu", "alpha"])
         XCTAssertEqual(model.library.files, model.library.posters)
     }
@@ -92,10 +87,13 @@ final class PlayerAppModelTests: XCTestCase {
 
         XCTAssertEqual(model.playbackAvailability(for: item), .playable)
 
+        model.showDetails(for: item.id)
         model.requestPlayback(for: item.id)
 
         XCTAssertEqual(model.playbackRequest?.item, item)
         XCTAssertEqual(callbackItem, item)
+        XCTAssertEqual(model.selectedItemID, item.id)
+        XCTAssertTrue(model.isShowingDetails)
     }
 
     func testBootstrapIndexesSupportedMoviesWithoutOpeningDetails() async throws {

@@ -6,6 +6,8 @@ struct PlayerView: View {
     private let onDone: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityVoiceOverEnabled) private var isVoiceOverEnabled
+    @Environment(\.accessibilitySwitchControlEnabled) private var isSwitchControlEnabled
     @State private var hudVisibility = PlaybackHUDVisibilityState()
 
     init(session: MVHEVCPlayerSession, onDone: @escaping () -> Void) {
@@ -18,19 +20,39 @@ struct PlayerView: View {
             playerSurface(geometry: geometry)
         }
         .background(.black)
+        .overlay {
+            Button {
+                hudVisibility.reveal(isPlaying: session.isPlaying)
+            } label: {
+                Color.clear
+                    .contentShape(Rectangle())
+            }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("player-surface")
+                .accessibilityLabel("Show playback controls")
+                .accessibilityHint("Reveals playback controls for three seconds.")
+        }
         .onAppear {
-            hudVisibility.reconcile(isPlaying: session.isPlaying)
+            hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
         }
         .onHover { isHovered in
             if isHovered {
-                hudVisibility.reveal(isPlaying: session.isPlaying)
+                hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
             }
         }
         .onChange(of: session.isPlaying) { _, isPlaying in
-            hudVisibility.reconcile(isPlaying: isPlaying)
+            hudVisibility.reconcile(
+                isPlaying: isPlaying && !isVoiceOverEnabled && !isSwitchControlEnabled
+            )
         }
         .onChange(of: session.state) { _, _ in
-            hudVisibility.reconcile(isPlaying: session.isPlaying)
+            hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
+        }
+        .onChange(of: isVoiceOverEnabled) { _, _ in
+            hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
+        }
+        .onChange(of: isSwitchControlEnabled) { _, _ in
+            hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
         }
         .task(id: hudVisibility.autoHideGeneration) {
             let generation = hudVisibility.autoHideGeneration
@@ -51,19 +73,20 @@ struct PlayerView: View {
         }
         .ornament(
             visibility: hudVisibility.isVisible ? .visible : .hidden,
-            attachmentAnchor: .scene(.bottom)
+            attachmentAnchor: .scene(.bottom),
+            contentAlignment: .top
         ) {
             PlayerOrnamentView(
                 session: session,
                 onDone: done,
                 onHoverChanged: { isHovered in
-                    hudVisibility.setHovered(isHovered, isPlaying: session.isPlaying)
+                    hudVisibility.setHovered(isHovered, isPlaying: isAutomaticHidingAllowed)
                 },
                 onScrubbingChanged: { isScrubbing in
-                    hudVisibility.setInteracting(isScrubbing, isPlaying: session.isPlaying)
+                    hudVisibility.setInteracting(isScrubbing, isPlaying: isAutomaticHidingAllowed)
                 },
                 onInteraction: {
-                    hudVisibility.reveal(isPlaying: session.isPlaying)
+                    hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
                 }
             )
         }
@@ -100,6 +123,10 @@ struct PlayerView: View {
     private func done() {
         session.finish()
         onDone()
+    }
+
+    private var isAutomaticHidingAllowed: Bool {
+        session.isPlaying && !isVoiceOverEnabled && !isSwitchControlEnabled
     }
 
     private func fitPlayerEntity(proxy: GeometryProxy3D, content: RealityViewContent) {
@@ -155,57 +182,29 @@ private struct PlayerOrnamentView: View {
                 statusControls(
                     title: "No Movie Selected",
                     systemImage: "film.stack",
-                    message: "Choose an MV-HEVC movie to start spatial playback.",
+                    message: "Choose a movie from your library to begin playback.",
                     showsProgress: false
                 )
             }
         }
-        .padding(20)
-        .frame(maxWidth: 880)
+        .padding(.horizontal, 20)
+        .padding(.top, 30)
+        .padding(.bottom, 20)
+        .frame(maxWidth: 980)
         .glassBackgroundEffect()
         .onHover(perform: onHoverChanged)
         .accessibilityElement(children: .contain)
     }
 
     private var readyControls: some View {
-        VStack(spacing: 16) {
-            ornamentHeader
+        VStack(spacing: 14) {
+            controlBar
 
             if let warning = session.failureMessage {
                 Label(warning, systemImage: "exclamationmark.triangle")
                     .font(.subheadline)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            HStack(spacing: 28) {
-                transportButton(
-                    title: "Back 10 seconds",
-                    systemImage: "gobackward.10",
-                    action: session.seekBackward
-                )
-                .disabled(!session.canSeek)
-
-                Button(action: performPlaybackToggle) {
-                    Label(
-                        session.isPlaying ? "Pause" : "Play",
-                        systemImage: session.isPlaying ? "pause.fill" : "play.fill"
-                    )
-                    .labelStyle(.iconOnly)
-                    .frame(minWidth: 72, minHeight: 72)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!session.canControlPlayback)
-                .accessibilityIdentifier("player-play-pause")
-                .accessibilityLabel(session.isPlaying ? "Pause playback" : "Play movie")
-
-                transportButton(
-                    title: "Forward 30 seconds",
-                    systemImage: "goforward.30",
-                    action: session.seekForward
-                )
-                .disabled(!session.canSeek)
-            }
-            .frame(maxWidth: .infinity)
 
             VStack(spacing: 8) {
                 Slider(
@@ -230,19 +229,15 @@ private struct PlayerOrnamentView: View {
                 }
                 .font(.system(.subheadline, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Playback time \(displayedTimeSummary)")
             }
 
-            HStack(spacing: 16) {
-                audioMenu
-                subtitleMenu
-                Spacer(minLength: 0)
-            }
         }
     }
 
-    private var ornamentHeader: some View {
-        HStack(spacing: 12) {
+    private var controlBar: some View {
+        HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.mediaItem?.title ?? "BD to AVP Player")
                     .font(.headline)
@@ -251,7 +246,41 @@ private struct PlayerOrnamentView: View {
                     .font(.subheadline)
                     .accessibilityLabel("Stereo format \(session.mediaItem?.format.displayName ?? "MV-HEVC")")
             }
-            Spacer(minLength: 20)
+            .frame(width: 180, alignment: .leading)
+
+            Spacer(minLength: 8)
+
+            transportButton(
+                title: "Back 10 seconds",
+                systemImage: "gobackward.10",
+                action: session.seekBackward
+            )
+            .disabled(!session.canSeek)
+
+            Button(action: performPlaybackToggle) {
+                Label(
+                    session.isPlaying ? "Pause" : "Play",
+                    systemImage: session.isPlaying ? "pause.fill" : "play.fill"
+                )
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 72, minHeight: 72)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!session.canControlPlayback)
+            .accessibilityIdentifier("player-play-pause")
+            .accessibilityLabel(session.isPlaying ? "Pause playback" : "Play movie")
+
+            transportButton(
+                title: "Forward 30 seconds",
+                systemImage: "goforward.30",
+                action: session.seekForward
+            )
+            .disabled(!session.canSeek)
+
+            Spacer(minLength: 8)
+
+            audioMenu
+            subtitleMenu
             doneButton
         }
     }
@@ -281,8 +310,11 @@ private struct PlayerOrnamentView: View {
     }
 
     private var doneButton: some View {
-        Button("Done", action: onDone)
-            .frame(minWidth: 60, minHeight: 60)
+        Button(action: onDone) {
+            Label("Done", systemImage: "xmark")
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 60, minHeight: 60)
+        }
             .accessibilityIdentifier("player-done")
             .accessibilityLabel("Done playing movie")
     }
@@ -329,6 +361,7 @@ private struct PlayerOrnamentView: View {
             }
         } label: {
             Label("Audio", systemImage: "speaker.wave.2")
+                .labelStyle(.iconOnly)
                 .frame(minWidth: 60, minHeight: 60)
         }
         .disabled(session.audioOptions.isEmpty)
@@ -345,6 +378,7 @@ private struct PlayerOrnamentView: View {
             }
         } label: {
             Label("CC", systemImage: "captions.bubble")
+                .labelStyle(.iconOnly)
                 .frame(minWidth: 60, minHeight: 60)
         }
         .disabled(session.subtitleOptions.isEmpty)

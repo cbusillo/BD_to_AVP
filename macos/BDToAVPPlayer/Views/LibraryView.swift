@@ -24,7 +24,12 @@ struct LibraryView: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .contentShape(
+                            .hoverEffect,
+                            RoundedRectangle(cornerRadius: LibraryTheme.tileCornerRadius, style: .continuous)
+                        )
                         .hoverEffect(.highlight)
+                        .accessibilityIdentifier("movie-tile-\(item.id)")
                         .contextMenu {
                             if model.playbackAvailability(for: item) == .playable {
                                 Button {

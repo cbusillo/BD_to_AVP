@@ -8,8 +8,13 @@ validator.
 ## Product Scope
 
 - One plain SwiftUI window contains the library, movie details, and player.
-- The library supports poster and file views, format filtering, title or
-  filename sorting, missing-source recovery, and removal.
+- The library presents one content-first **Movies** grid with 16:9 source-frame
+  thumbnails, title or filename sorting, and a typography-first fallback when a
+  frame cannot be generated.
+- Selecting a movie opens a full in-window details page with system Back
+  navigation, source status, missing-source recovery, removal, and one prominent
+  Play action for supported media. A tile context menu provides optional quick
+  playback for experienced users.
 - **Add Movie** imports one movie through the system Files picker.
 - Supported `.mov`, `.mp4`, and `.m4v` files already present in the app's
   Documents directory are indexed on launch. File Sharing and opening documents
@@ -38,8 +43,8 @@ proof of MV-HEVC.
 
 `MVHEVCPlayerSession` owns one `AVPlayer`, `AVPlayerItem`, RealityKit entity, and
 source lease. Its `VideoPlayerComponent` requests stereo viewing, screen spatial
-video mode, and portal immersive viewing mode. A glass HUD rendered inside the
-same window provides:
+video mode, and portal immersive viewing mode. A native glass ornament attached
+below the same window keeps controls off the stereo image and provides:
 
 - play and pause;
 - 10-second backward and 30-second forward seeks;
@@ -47,6 +52,10 @@ same window provides:
 - audio-track selection;
 - subtitle selection, including Off; and
 - Done, which persists progress and releases the session.
+
+The ornament remains visible while playback is paused, loading, failed, or being
+scrubbed. During uninterrupted playback it hides after three seconds. Looking
+back at or pinching the video surface reveals the controls again.
 
 The app saves in-progress playback positions and restores them when the same
 library item is opened again. Any non-active scene phase pauses playback and
@@ -78,6 +87,11 @@ xcodebuild test \
   -derivedDataPath macos/build/BDToAVPPlayerDerivedData \
   CODE_SIGNING_ALLOWED=NO
 ```
+
+The same scheme also contains `BDToAVPPlayerUITests`. Its seeded-media flow is
+skipped when `PlayerLongFixture.mov` is absent from the simulator app Documents
+directory; when present, it verifies Library → Details → Play and ornament
+auto-hide behavior.
 
 CI pins Xcode 26.5, regenerates the project, and always runs
 `build-for-testing` against the generic visionOS Simulator destination. When an

@@ -3,6 +3,7 @@ import SwiftUI
 
 final class MediaThumbnailCache {
     static let defaultCountLimit = 48
+    static let defaultTotalCostLimit = 96 * 1_024 * 1_024
 
     private final class Entry: NSObject {
         let image: CGImage
@@ -14,9 +15,13 @@ final class MediaThumbnailCache {
 
     private let cache: NSCache<NSString, Entry>
 
-    init(countLimit: Int = MediaThumbnailCache.defaultCountLimit) {
+    init(
+        countLimit: Int = MediaThumbnailCache.defaultCountLimit,
+        totalCostLimit: Int = MediaThumbnailCache.defaultTotalCostLimit
+    ) {
         cache = NSCache<NSString, Entry>()
         cache.countLimit = max(1, countLimit)
+        cache.totalCostLimit = max(1, totalCostLimit)
     }
 
     func image(for key: String) -> CGImage? {
@@ -24,7 +29,11 @@ final class MediaThumbnailCache {
     }
 
     func insert(_ image: CGImage, for key: String) {
-        cache.setObject(Entry(image: image), forKey: key as NSString)
+        cache.setObject(
+            Entry(image: image),
+            forKey: key as NSString,
+            cost: image.bytesPerRow * image.height
+        )
     }
 }
 
@@ -39,48 +48,46 @@ final class MediaThumbnailLoader {
     }
 
     func image(for item: MediaItem, bookmarkStore: BookmarkStore) async -> CGImage? {
-        let key = Self.cacheKey(for: item)
+        let key = Self.cacheKey(for: item, bookmarkData: bookmarkStore.bookmarkData(for: item.id))
         if let cachedImage = cache.image(for: key) {
             return cachedImage
         }
 
-        let image = await Task.detached(priority: .userInitiated) {
-            Self.extractFrame(for: item, bookmarkStore: bookmarkStore)
-        }.value
-
-        if let image {
-            cache.insert(image, for: key)
-        }
-        return image
-    }
-
-    nonisolated static func cacheKey(for item: MediaItem) -> String {
-        "\(item.id)|\(item.fileName)|\(item.format.rawValue)"
-    }
-
-    private nonisolated static func extractFrame(for item: MediaItem, bookmarkStore: BookmarkStore) -> CGImage? {
-        guard let result = try? bookmarkStore.withResolvedURL(for: item.id, { url in
-            let asset = AVAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 1600, height: 900)
-
-            let semaphore = DispatchSemaphore(value: 0)
-            var generatedImage: CGImage?
-            let requestedTime = CMTime(seconds: 1, preferredTimescale: 600)
-            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: requestedTime)]) { _, image, _, result, _ in
-                if result == .succeeded {
-                    generatedImage = image
-                }
-                semaphore.signal()
-            }
-            semaphore.wait()
-            return generatedImage
-        }) else {
+        guard !Task.isCancelled,
+              let lease = try? bookmarkStore.open(id: item.id)
+        else {
             return nil
         }
-        return result
+        defer { lease.close() }
+
+        let asset = AVURLAsset(url: lease.url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 1600, height: 900)
+
+        let duration = try? await asset.load(.duration)
+        let requestedTime = Self.requestedTime(for: duration?.seconds)
+        let image = try? await generator.image(at: requestedTime).image
+
+        if let image, !Task.isCancelled {
+            cache.insert(image, for: key)
+            return image
+        }
+        return nil
     }
+
+    nonisolated static func cacheKey(for item: MediaItem, bookmarkData: Data? = nil) -> String {
+        "\(item.id)|\(item.fileName)|\(item.format.rawValue)|\(bookmarkData?.hashValue ?? 0)"
+    }
+
+    nonisolated static func requestedTime(for duration: TimeInterval?) -> CMTime {
+        guard let duration, duration.isFinite, duration > 0 else {
+            return CMTime(seconds: 1, preferredTimescale: 600)
+        }
+        let seconds = min(max(duration * 0.1, 0), min(30, duration))
+        return CMTime(seconds: seconds, preferredTimescale: 600)
+    }
+
 }
 
 struct MediaThumbnailView: View {
@@ -103,14 +110,24 @@ struct MediaThumbnailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .clipShape(RoundedRectangle(cornerRadius: LibraryTheme.tileCornerRadius - 6, style: .continuous))
-        .task(id: MediaThumbnailLoader.cacheKey(for: item)) {
+        .task(id: thumbnailTaskID) {
             guard sourceStatus == .available else {
                 image = nil
                 return
             }
-            image = await MediaThumbnailLoader.shared.image(for: item, bookmarkStore: bookmarkStore)
+            let loadedImage = await MediaThumbnailLoader.shared.image(for: item, bookmarkStore: bookmarkStore)
+            guard !Task.isCancelled else { return }
+            image = loadedImage
         }
-        .accessibilityLabel("Thumbnail for \(item.title)")
+        .accessibilityHidden(true)
+    }
+
+    private var thumbnailTaskID: String {
+        let cacheKey = MediaThumbnailLoader.cacheKey(
+            for: item,
+            bookmarkData: bookmarkStore.bookmarkData(for: item.id)
+        )
+        return "\(cacheKey)|\(sourceStatus == .available)"
     }
 }
 

@@ -24,16 +24,6 @@ struct MediaDetailsView: View {
             guard case let .success(urls) = result, let url = urls.first else { return }
             Task { await model.locate(itemID: itemID, at: url) }
         }
-        .onAppear {
-            model.selectedItemID = itemID
-            model.isShowingDetails = true
-        }
-        .onDisappear {
-            guard model.playbackRequest == nil else { return }
-            if model.selectedItemID == itemID {
-                model.closeDetails()
-            }
-        }
     }
 
     @ViewBuilder
@@ -102,13 +92,13 @@ struct MediaDetailsView: View {
                         isLocatorPresented = true
                     }
                     .buttonStyle(.bordered)
-                    .frame(minHeight: 48)
+                    .frame(minHeight: 60)
 
                     Button("Remove", role: .destructive) {
                         model.remove(itemID: item.id)
                     }
                     .buttonStyle(.bordered)
-                    .frame(minHeight: 48)
+                    .frame(minHeight: 60)
                 }
             }
         }

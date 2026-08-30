@@ -12,10 +12,14 @@ struct AppShellView: View {
         NavigationStack(path: $navigationPath) {
             Group {
                 if model.playbackRequest != nil || playerSession.state != .idle {
-                    PlayerView(session: playerSession) {
-                        preparationTask?.cancel()
-                        preparationTask = nil
-                        model.clearPlaybackRequest()
+                    if playerSession.state == .idle {
+                        Color.black
+                    } else {
+                        PlayerView(session: playerSession) {
+                            preparationTask?.cancel()
+                            preparationTask = nil
+                            model.clearPlaybackRequest()
+                        }
                     }
                 } else {
                     LibraryView(model: model)
@@ -33,18 +37,23 @@ struct AppShellView: View {
             Text(model.errorMessage ?? "Please try again.")
         }
         .onChange(of: model.selectedItemID) { _, itemID in
-            guard model.isShowingDetails, let itemID else { return }
-            if navigationPath.last != itemID {
-                navigationPath.append(itemID)
-            }
+            synchronizeNavigationPath(selectedItemID: itemID, isShowingDetails: model.isShowingDetails)
         }
         .onChange(of: model.isShowingDetails) { _, isShowingDetails in
-            if !isShowingDetails {
-                navigationPath.removeAll()
-            }
+            synchronizeNavigationPath(selectedItemID: model.selectedItemID, isShowingDetails: isShowingDetails)
+        }
+        .onChange(of: navigationPath) { _, path in
+            synchronizeDetailsState(navigationPath: path)
         }
         .onChange(of: model.playbackRequest) { _, request in
-            guard let request else { return }
+            guard let request else {
+                synchronizeNavigationPath(
+                    selectedItemID: model.selectedItemID,
+                    isShowingDetails: model.isShowingDetails
+                )
+                return
+            }
+            navigationPath.removeAll()
             preparationTask?.cancel()
             preparationTask = Task {
                 await playerSession.prepare(
@@ -67,5 +76,31 @@ struct AppShellView: View {
             get: { model.errorMessage != nil },
             set: { if !$0 { model.clearError() } }
         )
+    }
+
+    private func synchronizeNavigationPath(selectedItemID: String?, isShowingDetails: Bool) {
+        guard model.playbackRequest == nil, isShowingDetails, let selectedItemID else {
+            if !navigationPath.isEmpty {
+                navigationPath.removeAll()
+            }
+            return
+        }
+
+        if navigationPath.last != selectedItemID {
+            navigationPath = [selectedItemID]
+        }
+    }
+
+    private func synchronizeDetailsState(navigationPath: [String]) {
+        guard model.playbackRequest == nil else { return }
+
+        if let itemID = navigationPath.last {
+            if model.selectedItemID != itemID || !model.isShowingDetails {
+                model.selectedItemID = itemID
+                model.isShowingDetails = true
+            }
+        } else if model.selectedItemID != nil || model.isShowingDetails {
+            model.closeDetails()
+        }
     }
 }
