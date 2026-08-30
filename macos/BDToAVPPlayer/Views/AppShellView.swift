@@ -5,34 +5,24 @@ struct AppShellView: View {
     @ObservedObject var playerSession: MVHEVCPlayerSession
     let resumeStore: ResumeStore
 
+    @State private var navigationPath: [String] = []
     @State private var preparationTask: Task<Void, Never>?
 
     var body: some View {
-        Group {
-            if model.playbackRequest != nil || playerSession.state != .idle {
-                PlayerView(session: playerSession) {
-                    preparationTask?.cancel()
-                    preparationTask = nil
-                    model.clearPlaybackRequest()
-                }
-            } else {
-                NavigationSplitView {
-                    List {
-                        Section("Sources") {
-                            Label("On My Vision Pro", systemImage: "visionpro")
-                                .font(.headline)
-                        }
+        NavigationStack(path: $navigationPath) {
+            Group {
+                if model.playbackRequest != nil || playerSession.state != .idle {
+                    PlayerView(session: playerSession) {
+                        preparationTask?.cancel()
+                        preparationTask = nil
+                        model.clearPlaybackRequest()
                     }
-                    .listStyle(.sidebar)
-                    .navigationTitle("Library")
-                } detail: {
+                } else {
                     LibraryView(model: model)
                 }
             }
-        }
-        .sheet(isPresented: $model.isShowingDetails) {
-            if let selectedItemID = model.selectedItemID {
-                MediaDetailsView(model: model, itemID: selectedItemID)
+            .navigationDestination(for: String.self) { itemID in
+                MediaDetailsView(model: model, itemID: itemID)
             }
         }
         .alert("Something went wrong", isPresented: errorPresented) {
@@ -41,6 +31,17 @@ struct AppShellView: View {
             }
         } message: {
             Text(model.errorMessage ?? "Please try again.")
+        }
+        .onChange(of: model.selectedItemID) { _, itemID in
+            guard model.isShowingDetails, let itemID else { return }
+            if navigationPath.last != itemID {
+                navigationPath.append(itemID)
+            }
+        }
+        .onChange(of: model.isShowingDetails) { _, isShowingDetails in
+            if !isShowingDetails {
+                navigationPath.removeAll()
+            }
         }
         .onChange(of: model.playbackRequest) { _, request in
             guard let request else { return }

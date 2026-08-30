@@ -5,29 +5,17 @@ struct MediaDetailsView: View {
     @ObservedObject var model: PlayerAppModel
     let itemID: String
 
-    @Environment(\.dismiss) private var dismiss
     @State private var isLocatorPresented = false
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let item = model.item(id: itemID) {
-                    details(for: item)
-                } else {
-                    ContentUnavailableView("Movie unavailable", systemImage: "film")
-                }
-            }
-            .navigationTitle("Details")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        model.closeDetails()
-                        dismiss()
-                    }
-                }
+        Group {
+            if let item = model.item(id: itemID) {
+                details(for: item)
+            } else {
+                ContentUnavailableView("Movie unavailable", systemImage: "film")
             }
         }
+        .navigationBarTitleDisplayMode(.inline)
         .fileImporter(
             isPresented: $isLocatorPresented,
             allowedContentTypes: [.movie],
@@ -36,174 +24,93 @@ struct MediaDetailsView: View {
             guard case let .success(urls) = result, let url = urls.first else { return }
             Task { await model.locate(itemID: itemID, at: url) }
         }
+        .onAppear {
+            model.selectedItemID = itemID
+            model.isShowingDetails = true
+        }
+        .onDisappear {
+            guard model.playbackRequest == nil else { return }
+            if model.selectedItemID == itemID {
+                model.closeDetails()
+            }
+        }
     }
 
     @ViewBuilder
     private func details(for item: MediaItem) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                HStack(alignment: .top, spacing: 22) {
-                    PosterPlaceholderView(fileName: item.fileName, format: item.format)
-                        .frame(width: 170, height: 235)
+            VStack(alignment: .leading, spacing: 28) {
+                MediaThumbnailView(
+                    item: item,
+                    bookmarkStore: model.bookmarkStore,
+                    sourceStatus: model.sourceStatuses[item.id]
+                )
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(maxWidth: 900)
 
-                    VStack(alignment: .leading, spacing: 13) {
-                        Text(item.title)
-                            .font(.largeTitle.weight(.semibold))
-                        FormatPill(format: item.format)
-                        Text(item.fileName)
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        sourceStatusView(for: item)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(item.title)
+                        .font(.largeTitle.weight(.semibold))
+                        .lineLimit(2)
+                    Text("\(item.format.displayName) · \(item.fileName)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    sourceStatusView(for: item)
                 }
 
                 playbackSection(for: item)
-                metadataSection(for: item)
             }
-            .padding(34)
+            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, LibraryTheme.contentPadding)
+            .padding(.vertical, 28)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
+        .scrollIndicators(.hidden)
     }
 
     @ViewBuilder
     private func playbackSection(for item: MediaItem) -> some View {
-        let availability = model.playbackAvailability(for: item)
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Playback")
-                .font(.title2.weight(.semibold))
-
-            switch availability {
-            case .playable:
-                Button {
-                    model.requestPlayback(for: item.id)
-                } label: {
-                    Label("Play", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Color(red: 0.82, green: 0.48, blue: 0.12))
-                .accessibilityIdentifier("play-movie-\(item.id)")
-                .accessibilityHint("Sends this movie to the playback integrator.")
-            case let .planned(message), let .unavailable(message):
-                Button {
-                } label: {
-                    Label(
-                        item.format == .unsupported ? "Play unavailable" : "Play — planned",
-                        systemImage: "play.slash"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .disabled(true)
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        switch model.playbackAvailability(for: item) {
+        case .playable:
+            Button {
+                model.requestPlayback(for: item.id)
+            } label: {
+                Label("Play", systemImage: "play.fill")
+                    .frame(maxWidth: .infinity, minHeight: 60)
             }
-        }
-        .padding(22)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(.white.opacity(0.28), lineWidth: 1)
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("play-movie-\(item.id)")
+            .accessibilityHint("Starts playback for this movie.")
+        case let .planned(message), let .unavailable(message):
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
     }
 
     private func sourceStatusView(for item: MediaItem) -> some View {
         let status = model.sourceStatuses[item.id] ?? .missing
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 10) {
             Label(status.title, systemImage: status == .available ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(status == .available ? .green : .orange)
+                .foregroundStyle(.secondary)
 
             if status != .available {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Button("Locate") {
                         isLocatorPresented = true
                     }
                     .buttonStyle(.bordered)
+                    .frame(minHeight: 48)
+
                     Button("Remove", role: .destructive) {
                         model.remove(itemID: item.id)
-                        dismiss()
                     }
                     .buttonStyle(.bordered)
+                    .frame(minHeight: 48)
                 }
             }
-        }
-    }
-
-    private func metadataSection(for item: MediaItem) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("File & Technical")
-                .font(.title2.weight(.semibold))
-            LabeledContent("Filename", value: item.fileName)
-            LabeledContent("Format", value: item.format.displayName)
-            LabeledContent("Source", value: "Files")
-        }
-        .padding(22)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-    }
-}
-
-struct PosterPlaceholderView: View {
-    let fileName: String
-    let format: StereoFormat
-
-    var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            LinearGradient(
-                colors: [Color(red: 0.22, green: 0.24, blue: 0.26), Color(red: 0.08, green: 0.09, blue: 0.10)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            VStack(alignment: .leading, spacing: 8) {
-                Image(systemName: "film.stack")
-                    .font(.system(size: 30, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.8))
-                Text(fileName)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.88))
-                    .lineLimit(3)
-            }
-            .padding(16)
-            FormatPill(format: format)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .frame(maxHeight: .infinity, alignment: .topTrailing)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(.white.opacity(0.22), lineWidth: 1)
-        }
-        .accessibilityLabel("Filename placeholder for \(fileName), \(format.displayName)")
-    }
-}
-
-struct FormatPill: View {
-    let format: StereoFormat
-
-    var body: some View {
-        Text(format.displayName)
-            .font(.caption2.weight(.bold))
-            .tracking(0.5)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(tint.opacity(0.16), in: Capsule())
-            .overlay {
-                Capsule().stroke(tint.opacity(0.38), lineWidth: 1)
-            }
-            .accessibilityLabel("Format \(format.displayName)")
-    }
-
-    private var tint: Color {
-        switch format {
-        case .mvHEVC:
-            return Color(red: 0.45, green: 0.92, blue: 0.68)
-        case .sideBySide, .overUnder:
-            return Color(red: 0.72, green: 0.66, blue: 1.0)
-        case .unsupported:
-            return Color(red: 1.0, green: 0.72, blue: 0.34)
         }
     }
 }
