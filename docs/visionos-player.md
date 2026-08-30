@@ -54,8 +54,9 @@ below the same window keeps controls off the stereo image and provides:
 - Done, which persists progress and releases the session.
 
 The ornament remains visible while playback is paused, loading, failed, or being
-scrubbed. During uninterrupted playback it hides after three seconds. Looking
-back at or pinching the video surface reveals the controls again.
+scrubbed, and automatic hiding is disabled while VoiceOver or Switch Control is
+active. During uninterrupted playback it hides after three seconds. Pinching the
+video surface reveals the controls again.
 
 The app saves in-progress playback positions and restores them when the same
 library item is opened again. Any non-active scene phase pauses playback and
@@ -91,7 +92,7 @@ xcodebuild test \
 The same scheme also contains `BDToAVPPlayerUITests`. Its seeded-media flow is
 skipped when `PlayerLongFixture.mov` is absent from the simulator app Documents
 directory; when present, it verifies Library → Details → Play and ornament
-auto-hide behavior.
+auto-hide behavior, including that Done returns to the movie's Details page.
 
 CI pins Xcode 26.5, regenerates the project, and always runs
 `build-for-testing` against the generic visionOS Simulator destination. When an

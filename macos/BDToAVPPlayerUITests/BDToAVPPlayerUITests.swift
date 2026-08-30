@@ -29,8 +29,19 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(playPauseButton.waitForExistence(timeout: 30))
         attachScreenshot(named: "player-controls-visible")
 
-        sleep(4)
-        XCTAssertFalse(playPauseButton.exists)
+        let doneButton = app.buttons["player-done"]
+        XCTAssertTrue(doneButton.exists)
+        doneButton.tap()
+        XCTAssertTrue(playButton.waitForExistence(timeout: 10))
+
+        playButton.tap()
+        XCTAssertTrue(playPauseButton.waitForExistence(timeout: 30))
+
+        let hiddenExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: playPauseButton
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [hiddenExpectation], timeout: 6), .completed)
         attachScreenshot(named: "player-controls-hidden")
         XCTAssertTrue(app.buttons["player-surface"].exists)
     }

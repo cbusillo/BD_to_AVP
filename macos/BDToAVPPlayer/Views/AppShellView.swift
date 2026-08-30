@@ -5,6 +5,7 @@ struct AppShellView: View {
     @ObservedObject var playerSession: MVHEVCPlayerSession
     let resumeStore: ResumeStore
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var navigationPath: [String] = []
     @State private var preparationTask: Task<Void, Never>?
 
@@ -12,14 +13,10 @@ struct AppShellView: View {
         NavigationStack(path: $navigationPath) {
             Group {
                 if model.playbackRequest != nil || playerSession.state != .idle {
-                    if playerSession.state == .idle {
-                        Color.black
-                    } else {
-                        PlayerView(session: playerSession) {
-                            preparationTask?.cancel()
-                            preparationTask = nil
-                            model.clearPlaybackRequest()
-                        }
+                    PlayerView(session: playerSession) {
+                        preparationTask?.cancel()
+                        preparationTask = nil
+                        model.clearPlaybackRequest()
                     }
                 } else {
                     LibraryView(model: model)
@@ -49,11 +46,12 @@ struct AppShellView: View {
             guard let request else {
                 synchronizeNavigationPath(
                     selectedItemID: model.selectedItemID,
-                    isShowingDetails: model.isShowingDetails
+                    isShowingDetails: model.isShowingDetails,
+                    animated: false
                 )
                 return
             }
-            navigationPath.removeAll()
+            setNavigationPath([], animated: false)
             preparationTask?.cancel()
             preparationTask = Task {
                 await playerSession.prepare(
@@ -65,6 +63,11 @@ struct AppShellView: View {
         }
         .onDisappear {
             preparationTask?.cancel()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                model.refreshSourceStatuses()
+            }
         }
         .task {
             await model.bootstrap()
@@ -78,16 +81,33 @@ struct AppShellView: View {
         )
     }
 
-    private func synchronizeNavigationPath(selectedItemID: String?, isShowingDetails: Bool) {
+    private func synchronizeNavigationPath(
+        selectedItemID: String?,
+        isShowingDetails: Bool,
+        animated: Bool = true
+    ) {
         guard model.playbackRequest == nil, isShowingDetails, let selectedItemID else {
             if !navigationPath.isEmpty {
-                navigationPath.removeAll()
+                setNavigationPath([], animated: animated)
             }
             return
         }
 
         if navigationPath.last != selectedItemID {
-            navigationPath = [selectedItemID]
+            setNavigationPath([selectedItemID], animated: animated)
+        }
+    }
+
+    private func setNavigationPath(_ path: [String], animated: Bool) {
+        guard !animated else {
+            navigationPath = path
+            return
+        }
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            navigationPath = path
         }
     }
 

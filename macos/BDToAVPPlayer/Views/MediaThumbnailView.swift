@@ -1,6 +1,34 @@
 import AVFoundation
 import SwiftUI
 
+private actor MediaThumbnailGenerationLimiter {
+    private var availablePermits: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) {
+        availablePermits = max(1, limit)
+    }
+
+    func acquire() async {
+        if availablePermits > 0 {
+            availablePermits -= 1
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            availablePermits += 1
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 final class MediaThumbnailCache {
     static let defaultCountLimit = 48
     static let defaultTotalCostLimit = 96 * 1_024 * 1_024
@@ -42,15 +70,27 @@ final class MediaThumbnailLoader {
     static let shared = MediaThumbnailLoader()
 
     let cache: MediaThumbnailCache
+    private let generationLimiter: MediaThumbnailGenerationLimiter
 
-    init(cache: MediaThumbnailCache = MediaThumbnailCache()) {
+    init(
+        cache: MediaThumbnailCache = MediaThumbnailCache(),
+        maximumConcurrentGenerations: Int = 4
+    ) {
         self.cache = cache
+        generationLimiter = MediaThumbnailGenerationLimiter(limit: maximumConcurrentGenerations)
     }
 
     func image(for item: MediaItem, bookmarkStore: BookmarkStore) async -> CGImage? {
         let key = Self.cacheKey(for: item, bookmarkData: bookmarkStore.bookmarkData(for: item.id))
         if let cachedImage = cache.image(for: key) {
             return cachedImage
+        }
+
+        await generationLimiter.acquire()
+        defer {
+            Task {
+                await generationLimiter.release()
+            }
         }
 
         guard !Task.isCancelled,
@@ -63,14 +103,15 @@ final class MediaThumbnailLoader {
         let asset = AVURLAsset(url: lease.url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 1600, height: 900)
+        generator.maximumSize = CGSize(width: 1280, height: 720)
 
         let duration = try? await asset.load(.duration)
         let requestedTime = Self.requestedTime(for: duration?.seconds)
         let image = try? await generator.image(at: requestedTime).image
 
-        if let image, !Task.isCancelled {
+        if let image {
             cache.insert(image, for: key)
+            guard !Task.isCancelled else { return nil }
             return image
         }
         return nil

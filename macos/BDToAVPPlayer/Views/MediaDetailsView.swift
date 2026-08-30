@@ -88,17 +88,21 @@ struct MediaDetailsView: View {
 
             if status != .available {
                 HStack(spacing: 12) {
-                    Button("Locate") {
+                    Button {
                         isLocatorPresented = true
+                    } label: {
+                        Text("Locate")
+                            .frame(minWidth: 60, minHeight: 60)
                     }
                     .buttonStyle(.bordered)
-                    .frame(minHeight: 60)
 
-                    Button("Remove", role: .destructive) {
+                    Button(role: .destructive) {
                         model.remove(itemID: item.id)
+                    } label: {
+                        Text("Remove")
+                            .frame(minWidth: 60, minHeight: 60)
                     }
                     .buttonStyle(.bordered)
-                    .frame(minHeight: 60)
                 }
             }
         }

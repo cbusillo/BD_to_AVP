@@ -247,7 +247,7 @@ final class PlayerAppModel: ObservableObject {
         return "documents:\(fileURL.lastPathComponent.lowercased())"
     }
 
-    private func refreshSourceStatuses() {
+    func refreshSourceStatuses() {
         var statuses: [String: MediaSourceStatus] = [:]
         for item in library.items {
             do {

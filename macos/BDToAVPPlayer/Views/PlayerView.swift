@@ -22,7 +22,7 @@ struct PlayerView: View {
         .background(.black)
         .overlay {
             Button {
-                hudVisibility.reveal(isPlaying: session.isPlaying)
+                hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
             } label: {
                 Color.clear
                     .contentShape(Rectangle())
@@ -76,19 +76,24 @@ struct PlayerView: View {
             attachmentAnchor: .scene(.bottom),
             contentAlignment: .top
         ) {
-            PlayerOrnamentView(
-                session: session,
-                onDone: done,
-                onHoverChanged: { isHovered in
-                    hudVisibility.setHovered(isHovered, isPlaying: isAutomaticHidingAllowed)
-                },
-                onScrubbingChanged: { isScrubbing in
-                    hudVisibility.setInteracting(isScrubbing, isPlaying: isAutomaticHidingAllowed)
-                },
-                onInteraction: {
-                    hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
-                }
-            )
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: 16)
+                    .accessibilityHidden(true)
+                PlayerOrnamentView(
+                    session: session,
+                    onDone: done,
+                    onHoverChanged: { isHovered in
+                        hudVisibility.setHovered(isHovered, isPlaying: isAutomaticHidingAllowed)
+                    },
+                    onScrubbingChanged: { isScrubbing in
+                        hudVisibility.setInteracting(isScrubbing, isPlaying: isAutomaticHidingAllowed)
+                    },
+                    onInteraction: {
+                        hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                    }
+                )
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase != .active {
@@ -180,10 +185,10 @@ private struct PlayerOrnamentView: View {
                 )
             case .idle:
                 statusControls(
-                    title: "No Movie Selected",
+                    title: "Preparing Playback",
                     systemImage: "film.stack",
-                    message: "Choose a movie from your library to begin playback.",
-                    showsProgress: false
+                    message: "Opening \(session.mediaItem?.title ?? "your movie")…",
+                    showsProgress: true
                 )
             }
         }
