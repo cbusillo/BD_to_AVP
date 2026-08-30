@@ -104,20 +104,24 @@ final class PlayerAppModel: ObservableObject {
     @Published var isImporting = false
     @Published var errorMessage: String?
     @Published private(set) var playbackRequest: PlaybackRequest?
+    @Published private(set) var hasBootstrapped = false
 
     var onPlaybackRequested: ((MediaItem) -> Void)?
 
     private let libraryStore: LibraryStore
     let bookmarkStore: BookmarkStore
     private let formatInspector: FormatInspector
+    private let documentsURL: URL
 
     init(
         libraryStore: LibraryStore = LibraryStore(),
         bookmarkStore: BookmarkStore = BookmarkStore(),
+        documentsURL: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0],
         formatInspector: @escaping FormatInspector = MediaFormatInspector.inspect
     ) {
         self.libraryStore = libraryStore
         self.bookmarkStore = bookmarkStore
+        self.documentsURL = documentsURL
         self.formatInspector = formatInspector
         let loadedLibrary = MediaLibraryModel(items: libraryStore.load())
         self.library = loadedLibrary
@@ -216,7 +220,35 @@ final class PlayerAppModel: ObservableObject {
         errorMessage = nil
     }
 
+    func bootstrap() async {
+        guard !hasBootstrapped else { return }
+        hasBootstrapped = true
+
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+                  at: documentsURL,
+                  includingPropertiesForKeys: [.isRegularFileKey],
+                  options: [.skipsHiddenFiles]
+              )
+        else {
+            return
+        }
+
+        for url in urls where Self.supportedMovieExtensions.contains(url.pathExtension.lowercased()) {
+            let itemID = "documents:\(url.lastPathComponent.lowercased())"
+            await importMovie(from: url, replacing: itemID, shouldShowDetails: false, reportErrors: false)
+        }
+    }
+
     private func importMovie(from url: URL, replacing itemID: String?) async {
+        await importMovie(from: url, replacing: itemID, shouldShowDetails: true, reportErrors: true)
+    }
+
+    private func importMovie(
+        from url: URL,
+        replacing itemID: String?,
+        shouldShowDetails: Bool,
+        reportErrors: Bool
+    ) async {
         isImporting = true
         defer { isImporting = false }
 
@@ -239,11 +271,17 @@ final class PlayerAppModel: ObservableObject {
             objectWillChange.send()
             library.upsert(importedItem)
             sourceStatuses[importedItem.id] = .available
-            showDetails(for: importedItem.id)
+            if shouldShowDetails {
+                showDetails(for: importedItem.id)
+            }
         } catch {
-            errorMessage = "Could not inspect or add this movie."
+            if reportErrors {
+                errorMessage = "Could not inspect or add this movie."
+            }
         }
     }
+
+    private static let supportedMovieExtensions = Set(["mov", "mp4", "m4v"])
 
     private func refreshSourceStatuses() {
         var statuses: [String: MediaSourceStatus] = [:]

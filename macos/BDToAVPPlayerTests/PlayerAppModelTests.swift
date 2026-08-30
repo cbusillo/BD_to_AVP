@@ -98,6 +98,31 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertEqual(callbackItem, item)
     }
 
+    func testBootstrapIndexesSupportedMoviesWithoutOpeningDetails() async throws {
+        let documentsURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerDocuments")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
+        let movieURL = documentsURL.appendingPathComponent("Example.mov")
+        let ignoredURL = documentsURL.appendingPathComponent("Notes.txt")
+        try Data().write(to: movieURL)
+        try Data().write(to: ignoredURL)
+
+        let model = PlayerAppModel(
+            libraryStore: LibraryStore(storageURL: temporaryURL()),
+            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
+            documentsURL: documentsURL,
+            formatInspector: { _ in .mvHEVC }
+        )
+
+        await model.bootstrap()
+
+        XCTAssertEqual(model.library.items.map(\.fileName), ["Example.mov"])
+        XCTAssertEqual(model.sourceStatuses.values.first, .available)
+        XCTAssertFalse(model.isShowingDetails)
+        XCTAssertTrue(model.hasBootstrapped)
+    }
+
     private func temporaryURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerTests")

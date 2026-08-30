@@ -164,6 +164,7 @@ targets:
       base:
         CODE_SIGN_STYLE: Automatic
         CURRENT_PROJECT_VERSION: 1
+        DEVELOPMENT_TEAM: MM5YXC7T6E
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: BDToAVPPlayer/Info.plist
         MARKETING_VERSION: 0.1.0

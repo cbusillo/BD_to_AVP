@@ -56,6 +56,9 @@ struct AppShellView: View {
         .onDisappear {
             preparationTask?.cancel()
         }
+        .task {
+            await model.bootstrap()
+        }
     }
 
     private var errorPresented: Binding<Bool> {
