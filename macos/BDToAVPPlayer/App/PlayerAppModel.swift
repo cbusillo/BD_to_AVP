@@ -172,12 +172,8 @@ final class PlayerAppModel: ObservableObject {
         }
 
         switch item.format {
-        case .mvHEVC:
+        case .mvHEVC, .sideBySide, .overUnder:
             return .playable
-        case .sideBySide:
-            return .planned("Side-by-side movies are not playable yet.")
-        case .overUnder:
-            return .planned("Over-under movies are not playable yet.")
         case .unsupported:
             return .unavailable("This media format is not supported for playback.")
         }

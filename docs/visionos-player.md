@@ -39,12 +39,19 @@ that state and offers a locate flow instead of attempting playback.
 
 ## Playback Contract
 
-The first slice plays MV-HEVC only. Format detection uses AVFoundation stereo
-multiview playback characteristics; an HEVC codec tag alone is not accepted as
-proof of MV-HEVC.
+The player supports MV-HEVC plus explicitly identified HEVC side-by-side and
+over-under movies. MV-HEVC detection uses AVFoundation stereo multiview playback
+characteristics; an HEVC codec tag alone is not accepted as proof of MV-HEVC.
+Packed stereo detection prefers embedded packing metadata and otherwise accepts
+conservative, separator-delimited filename tokens such as `SBS`, `FSBS`, `OU`,
+or `FOU`. These tokens are treated as full-resolution packing; half-resolution
+markers such as `HSBS`, `HOU`, `Half-SBS`, and `H-OU` remain unsupported because
+they require anamorphic aspect reconstruction. The packed-stereo compositor is currently
+qualified for SDR HEVC only. It does not infer stereo from an unusually wide or
+tall frame alone.
 
-`MVHEVCPlayerSession` owns one `AVPlayer`, `AVPlayerItem`, RealityKit entity, and
-source lease. Its `VideoPlayerComponent` requests stereo viewing, screen spatial
+`MVHEVCPlayerSession` owns one `AVPlayer`, one active `AVPlayerItem`, one
+RealityKit entity, and one source lease. Its `VideoPlayerComponent` requests stereo viewing, screen spatial
 video mode, and portal immersive viewing mode. A native glass ornament attached
 below the same window keeps controls off the stereo image and provides:
 
@@ -52,7 +59,8 @@ below the same window keeps controls off the stereo image and provides:
 - 10-second backward and 30-second forward seeks;
 - a position slider and elapsed/duration display;
 - audio-track selection;
-- subtitle selection, including Off; and
+- subtitle selection, including Off;
+- eye-order swapping for side-by-side and over-under playback; and
 - Done, which persists progress and releases the session.
 
 The ornament remains visible while playback is paused, loading, failed, or being
@@ -65,10 +73,19 @@ library item is opened again. Any non-active scene phase pauses playback and
 saves progress. Completed or near-completed playback is cleared instead of
 resuming at the end.
 
-SBS, over-under, MVC, network shares, relay playback, and live conversion are
-not implemented in this slice. SBS and over-under files may be classified and
-shown in the library, but their details views identify playback as planned rather
-than pretending they are playable.
+Packed stereo playback uses a visionOS 26 custom video composition with one
+stable two-buffer output contract: output zero is always tagged as the left eye
+and output one as the right eye. A custom composition instruction carries the
+packed layout and requested eye order, and the compositor swaps source regions
+into those fixed semantic outputs. Rendering copies native biplanar YUV planes
+and propagates source color attachments instead of converting through device
+RGB. Eye-order changes replace only the immutable `AVPlayerItem` while retaining
+the `AVPlayer`, RealityKit entity, source lease, playback time and intent, audio
+selection, and subtitle selection. Composition-backed seeks wait for the newly
+rendered frame before restoration completes.
+
+MVC, network shares, relay playback, and live conversion are not implemented in
+this slice.
 
 ## Build And Test
 
@@ -122,4 +139,11 @@ comfort, long-session thermals, or headset-visible interaction. The accepted
 physical layout keeps the RealityKit video surface at the playback probe's
 conservative scale and depth offset so foreground stereo content remains behind
 the native ornament; changes to that geometry still require physical Vision Pro
-validation.
+validation. Tagged custom-compositor playback may also be rejected while the
+same build is otherwise testable in the visionOS Simulator. The automated suite
+therefore exercises the production rendering core directly with synthetic
+side-by-side and over-under biplanar fixtures. It asserts normal and reversed
+eye pixels, fixed output tags, native pixel format, chroma routing, and color
+attachment propagation without `AVPlayer`. Physical Vision Pro remains the only
+way to prove that RealityKit routes those tagged outputs to the intended eyes;
+that qualification is a single instrumented gate after local tests pass.

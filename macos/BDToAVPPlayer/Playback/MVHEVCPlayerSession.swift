@@ -30,6 +30,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var subtitleOptions: [PlaybackMediaOption] = []
     @Published private(set) var selectedAudioID = ""
     @Published private(set) var selectedSubtitleID = "off"
+    @Published private(set) var isEyeSwapped = false
+    @Published private(set) var isChangingEyeOrder = false
 
     private(set) var playerItem: AVPlayerItem?
 
@@ -43,6 +45,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var subtitleGroup: AVMediaSelectionGroup?
     private var audioSelectionByID: [String: AVMediaSelectionOption] = [:]
     private var subtitleSelectionByID: [String: AVMediaSelectionOption] = [:]
+    private var packedStereoSource: PackedStereoSource?
+    private var pendingItemRestoration: PlaybackItemRestorationState?
+    private var shouldResumeAfterEyeOrderChange = false
+    private var eyeOrderChangeTask: Task<Void, Never>?
     private var preparationGeneration = 0
     private var pendingResume = PlaybackPendingResumeState()
 
@@ -73,11 +79,15 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     var canControlPlayback: Bool {
-        isReady && playerItem?.status == .readyToPlay
+        isReady && !isChangingEyeOrder && playerItem?.status == .readyToPlay
     }
 
     var canSeek: Bool {
         canControlPlayback && duration.isFinite && duration > 0
+    }
+
+    var supportsEyeSwap: Bool {
+        packedStereoSource != nil
     }
 
     func prepare(
@@ -99,11 +109,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         subtitleOptions = []
         selectedAudioID = ""
         selectedSubtitleID = "off"
+        isEyeSwapped = false
+        isChangingEyeOrder = false
 
-        guard mediaItem.format == .mvHEVC else {
-            presentFailure(
-                "\(mediaItem.format.displayName) playback is not supported here. Choose an MV-HEVC spatial video."
-            )
+        guard mediaItem.format != .unsupported else {
+            presentFailure("This media format is not supported for playback.")
             return
         }
 
@@ -121,10 +131,11 @@ final class MVHEVCPlayerSession: ObservableObject {
                 openedLease.close()
                 return
             }
-            guard detectedFormat == .mvHEVC else {
+            guard detectedFormat == mediaItem.format else {
                 openedLease.close()
                 presentFailure(
-                    "This movie is \(detectedFormat.displayName), not MV-HEVC. It cannot be played by the spatial player."
+                    "This movie is \(detectedFormat.displayName), not \(mediaItem.format.displayName). "
+                        + "Locate the intended source and try again."
                 )
                 return
             }
@@ -135,6 +146,24 @@ final class MVHEVCPlayerSession: ObservableObject {
             async let mediaSelections = prepareMediaSelections(for: asset, item: item)
             let preparedDuration = try await loadedDuration
             let preparedSelections = try await mediaSelections
+            let preparedPackedStereo: PackedStereoSource?
+            switch mediaItem.format {
+            case .sideBySide, .overUnder:
+                item.videoComposition = try await PackedStereoComposition.make(
+                    asset: asset,
+                    format: mediaItem.format,
+                    duration: preparedDuration,
+                    eyeOrder: .normal
+                )
+                item.seekingWaitsForVideoCompositionRendering = true
+                preparedPackedStereo = PackedStereoSource(
+                    url: openedLease.url,
+                    format: mediaItem.format,
+                    duration: preparedDuration
+                )
+            case .mvHEVC, .unsupported:
+                preparedPackedStereo = nil
+            }
 
             guard generation == preparationGeneration, !Task.isCancelled else {
                 openedLease.close()
@@ -143,6 +172,7 @@ final class MVHEVCPlayerSession: ObservableObject {
 
             resourceLease = openedLease
             playerItem = item
+            packedStereoSource = preparedPackedStereo
             duration = preparedDuration.seconds.isFinite ? max(0, preparedDuration.seconds) : 0
             configureMediaSelections(preparedSelections)
             pendingResume.store(resumeStore.resumeTime(for: mediaItem.id), duration: duration)
@@ -193,7 +223,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         seek(to: requestedTime, completion: nil)
     }
 
-    private func seek(to requestedTime: TimeInterval, completion: (() -> Void)?) {
+    private func seek(to requestedTime: TimeInterval, completion: ((Bool) -> Void)?) {
         guard let playerItem else {
             return
         }
@@ -215,7 +245,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                 if completed {
                     self.currentTime = targetTime
                 }
-                completion?()
+                completion?(completed)
             }
         }
     }
@@ -257,7 +287,87 @@ final class MVHEVCPlayerSession: ObservableObject {
         selectedSubtitleID = id
     }
 
+    func toggleEyeSwap() {
+        guard let packedStereoSource,
+              let playerItem,
+              canControlPlayback,
+              !isChangingEyeOrder
+        else {
+            return
+        }
+
+        let targetEyeOrder: PackedStereoEyeOrder = isEyeSwapped ? .normal : .reversed
+        let restoration = PlaybackItemRestorationState(
+            time: player.currentTime(),
+            wasPlaying: player.timeControlStatus == .playing,
+            audioID: selectedAudioID,
+            subtitleID: selectedSubtitleID
+        )
+        let generation = preparationGeneration
+        isChangingEyeOrder = true
+        shouldResumeAfterEyeOrderChange = restoration.wasPlaying
+        player.pause()
+
+        eyeOrderChangeTask = Task { [weak self, weak playerItem] in
+            guard let self else {
+                return
+            }
+            defer { eyeOrderChangeTask = nil }
+            do {
+                let replacementAsset = AVURLAsset(url: packedStereoSource.url)
+                let replacementItem = AVPlayerItem(asset: replacementAsset)
+                async let replacementComposition = PackedStereoComposition.make(
+                    asset: replacementAsset,
+                    format: packedStereoSource.format,
+                    duration: packedStereoSource.duration,
+                    eyeOrder: targetEyeOrder
+                )
+                async let replacementSelections = prepareMediaSelections(
+                    for: replacementAsset,
+                    item: replacementItem
+                )
+                replacementItem.videoComposition = try await replacementComposition
+                replacementItem.seekingWaitsForVideoCompositionRendering = true
+                let preparedSelections = try await replacementSelections
+
+                guard generation == preparationGeneration,
+                      playerItem === self.playerItem,
+                      !Task.isCancelled
+                else {
+                    if generation == preparationGeneration {
+                        isChangingEyeOrder = false
+                        shouldResumeAfterEyeOrderChange = false
+                    }
+                    return
+                }
+
+                preparationGeneration += 1
+                let replacementGeneration = preparationGeneration
+                self.playerItem = replacementItem
+                configureMediaSelections(preparedSelections)
+                pendingItemRestoration = restoration
+                isEyeSwapped = targetEyeOrder == .reversed
+                failureMessage = nil
+                observe(replacementItem, generation: replacementGeneration)
+                player.replaceCurrentItem(with: replacementItem)
+            } catch {
+                guard generation == preparationGeneration,
+                      playerItem === self.playerItem
+                else {
+                    return
+                }
+                isChangingEyeOrder = false
+                failureMessage = "Eye order could not be changed: \(error.localizedDescription)"
+                if shouldResumeAfterEyeOrderChange {
+                    player.play()
+                }
+                shouldResumeAfterEyeOrderChange = false
+            }
+        }
+    }
+
     func applicationBecameInactive() {
+        shouldResumeAfterEyeOrderChange = false
         pause()
     }
 
@@ -326,9 +436,32 @@ final class MVHEVCPlayerSession: ObservableObject {
             break
         case .readyToPlay:
             state = .ready
+            if let restoration = pendingItemRestoration {
+                pendingItemRestoration = nil
+                restoreMediaSelections(
+                    audioID: restoration.audioID,
+                    subtitleID: restoration.subtitleID,
+                    on: item
+                )
+                refreshSelectedMediaOptionIDs()
+                seek(to: restoration.time.seconds) { [weak self] completed in
+                    guard let self else {
+                        return
+                    }
+                    self.isChangingEyeOrder = false
+                    if !completed {
+                        self.failureMessage = "Eye order changed, but the previous playback position could not be restored."
+                    }
+                    if self.shouldResumeAfterEyeOrderChange {
+                        self.player.play()
+                    }
+                    self.shouldResumeAfterEyeOrderChange = false
+                }
+                return
+            }
             refreshSelectedMediaOptionIDs()
             if let resumeTime = pendingResume.consume() {
-                seek(to: resumeTime) { [weak self] in
+                seek(to: resumeTime) { [weak self] _ in
                     self?.player.play()
                 }
             } else {
@@ -431,7 +564,26 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
     }
 
+    private func restoreMediaSelections(audioID: String, subtitleID: String, on item: AVPlayerItem) {
+        if let audioGroup, let selection = audioSelectionByID[audioID] {
+            item.select(selection, in: audioGroup)
+            selectedAudioID = audioID
+        }
+
+        if let subtitleGroup {
+            if subtitleID == "off" {
+                item.select(nil, in: subtitleGroup)
+                selectedSubtitleID = subtitleID
+            } else if let selection = subtitleSelectionByID[subtitleID] {
+                item.select(selection, in: subtitleGroup)
+                selectedSubtitleID = subtitleID
+            }
+        }
+    }
+
     private func finishCurrentSession(persistResume shouldPersistResume: Bool) {
+        eyeOrderChangeTask?.cancel()
+        eyeOrderChangeTask = nil
         if shouldPersistResume {
             persistResume()
         }
@@ -453,16 +605,21 @@ final class MVHEVCPlayerSession: ObservableObject {
         subtitleGroup = nil
         audioSelectionByID = [:]
         subtitleSelectionByID = [:]
+        packedStereoSource = nil
+        pendingItemRestoration = nil
+        shouldResumeAfterEyeOrderChange = false
         audioOptions = []
         subtitleOptions = []
         selectedAudioID = ""
         selectedSubtitleID = "off"
+        isEyeSwapped = false
+        isChangingEyeOrder = false
         isPlaying = false
         pendingResume.clear()
     }
 
     private func persistResume() {
-        guard let mediaItem, let resumeStore else {
+        guard !isChangingEyeOrder, let mediaItem, let resumeStore else {
             return
         }
 
@@ -488,6 +645,9 @@ final class MVHEVCPlayerSession: ObservableObject {
         state = .failed
         failureMessage = message
         isPlaying = false
+        isChangingEyeOrder = false
+        pendingItemRestoration = nil
+        shouldResumeAfterEyeOrderChange = false
         pendingResume.clear()
     }
 }
@@ -501,4 +661,17 @@ private struct PreparedMediaSelections {
     let selectedSubtitleID: String
     let audioSelectionByID: [String: AVMediaSelectionOption]
     let subtitleSelectionByID: [String: AVMediaSelectionOption]
+}
+
+private struct PackedStereoSource {
+    let url: URL
+    let format: StereoFormat
+    let duration: CMTime
+}
+
+private struct PlaybackItemRestorationState {
+    let time: CMTime
+    let wasPlaying: Bool
+    let audioID: String
+    let subtitleID: String
 }

@@ -61,6 +61,11 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [hiddenExpectation], timeout: 6), .completed)
         attachScreenshot(named: "player-controls-hidden")
         XCTAssertTrue(app.buttons["player-surface"].exists)
+
+        let showControlsButton = app.buttons["player-show-controls"]
+        XCTAssertTrue(waitForHittable(showControlsButton, timeout: 5))
+        showControlsButton.tap()
+        XCTAssertTrue(playPauseButton.waitForExistence(timeout: 5))
     }
 
     private func attachScreenshot(named name: String) {

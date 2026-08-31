@@ -102,6 +102,33 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertTrue(model.isShowingDetails)
     }
 
+    func testAvailablePackedStereoFormatsArePlayable() throws {
+        for format in [StereoFormat.sideBySide, .overUnder] {
+            let sourceURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("BDToAVPPlayerTests")
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("mov")
+            try FileManager.default.createDirectory(
+                at: sourceURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data().write(to: sourceURL)
+
+            let item = MediaItem(url: sourceURL, format: format)
+            let libraryStore = LibraryStore(storageURL: temporaryURL())
+            try libraryStore.save([item])
+            let bookmarkStore = BookmarkStore(storageURL: temporaryURL())
+            try bookmarkStore.save(url: sourceURL, for: item.id)
+            let model = PlayerAppModel(
+                libraryStore: libraryStore,
+                bookmarkStore: bookmarkStore,
+                formatInspector: { _ in format }
+            )
+
+            XCTAssertEqual(model.playbackAvailability(for: item), .playable)
+        }
+    }
+
     func testBootstrapIndexesSupportedMoviesWithoutOpeningDetails() async throws {
         let documentsURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerDocuments")

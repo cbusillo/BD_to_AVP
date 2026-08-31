@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "7210339cef4aad1e23721a43e0b5055d869c4e76",
+    "sha": "40f57be583c1747216579f4f25a1e66fc8c5477b",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -409,7 +409,7 @@
       "python-unittest-discovery": 106,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2616,
+    "ci_test_case_count": 2632,
     "classification_counts": {
       "accepted-cost": 54,
       "valuable": 173
@@ -420,7 +420,7 @@
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2638,
+    "test_case_count": 2654,
     "test_file_count": 157,
     "unmapped_test_file_count": 0
   },
@@ -1263,7 +1263,7 @@
         "visionOS simulator or physical Apple Vision Pro, depending on evidence"
       ],
       "static_brittleness_signals": [],
-      "test_case_count": 4
+      "test_case_count": 9
     },
     {
       "bundle": "BDToAVPPlayerTests",
@@ -1325,7 +1325,7 @@
           "signal": "filesystem_access"
         }
       ],
-      "test_case_count": 17
+      "test_case_count": 27
     },
     {
       "bundle": "BDToAVPPlayerTests",
@@ -1345,11 +1345,11 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 10,
+          "occurrences": 12,
           "signal": "filesystem_access"
         }
       ],
-      "test_case_count": 6
+      "test_case_count": 7
     },
     {
       "bundle": "BDToAVPPlayerTests",

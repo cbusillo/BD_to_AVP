@@ -75,28 +75,46 @@ struct PlayerView: View {
             hudVisibility.autoHideTimerFired(generation: generation)
         }
         .ornament(
-            visibility: hudVisibility.isVisible ? .visible : .hidden,
+            visibility: .visible,
             attachmentAnchor: .scene(.bottom),
             contentAlignment: .topBack
         ) {
-            VStack(spacing: 0) {
-                Color.clear
-                    .frame(height: 16)
-                    .accessibilityHidden(true)
-                PlayerOrnamentView(
-                    session: session,
-                    onDone: done,
-                    onHoverChanged: { isHovered in
-                        hudVisibility.setHovered(isHovered, isPlaying: isAutomaticHidingAllowed)
-                    },
-                    onScrubbingChanged: { isScrubbing in
-                        hudVisibility.setInteracting(isScrubbing, isPlaying: isAutomaticHidingAllowed)
-                    },
-                    onInteraction: {
-                        hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+            Group {
+                if hudVisibility.isVisible {
+                    VStack(spacing: 0) {
+                        Color.clear
+                            .frame(height: 16)
+                            .accessibilityHidden(true)
+                        PlayerOrnamentView(
+                            session: session,
+                            onDone: done,
+                            onHoverChanged: { isHovered in
+                                if isHovered {
+                                    hudVisibility.hoverBegan(isPlaying: isAutomaticHidingAllowed)
+                                }
+                            },
+                            onScrubbingChanged: { isScrubbing in
+                                hudVisibility.setInteracting(isScrubbing, isPlaying: isAutomaticHidingAllowed)
+                            },
+                            onInteraction: {
+                                hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                            }
+                        )
                     }
-                )
+                } else {
+                    Button {
+                        hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                    } label: {
+                        Label("Show controls", systemImage: "chevron.up")
+                            .frame(minWidth: 60, minHeight: 60)
+                    }
+                    .buttonStyle(.bordered)
+                    .glassBackgroundEffect()
+                    .accessibilityIdentifier("player-show-controls")
+                    .accessibilityHint("Expands the playback controls.")
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: hudVisibility.isVisible)
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase != .active {
@@ -287,6 +305,9 @@ private struct PlayerOrnamentView: View {
 
             Spacer(minLength: 8)
 
+            if session.supportsEyeSwap {
+                eyeSwapButton
+            }
             audioMenu
             subtitleMenu
             doneButton
@@ -343,6 +364,31 @@ private struct PlayerOrnamentView: View {
     private func performPlaybackToggle() {
         onInteraction()
         session.togglePlayback()
+    }
+
+    private var eyeSwapButton: some View {
+        let presentation = PlaybackEyeOrderPresentation.value(isEyeSwapped: session.isEyeSwapped)
+        return Button {
+            onInteraction()
+            session.toggleEyeSwap()
+        } label: {
+            VStack(spacing: 2) {
+                if session.isChangingEyeOrder {
+                    ProgressView()
+                } else {
+                    Image(systemName: presentation.systemImage)
+                }
+                Text(presentation.title)
+                    .font(.caption2)
+            }
+            .frame(minWidth: 72, minHeight: 60)
+        }
+        .buttonStyle(.bordered)
+        .disabled(session.isChangingEyeOrder || !session.canControlPlayback)
+        .accessibilityIdentifier("player-eye-swap")
+        .accessibilityLabel("Eye order")
+        .accessibilityValue(presentation.title)
+        .accessibilityAddTraits(presentation.isSelected ? .isSelected : [])
     }
 
     private func handleScrubbing(_ isEditing: Bool) {
