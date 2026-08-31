@@ -191,6 +191,10 @@ enum ResumeWriteDecision: Equatable {
 enum ResumeWritePolicy {
     static let completedPlaybackThreshold: TimeInterval = 5
 
+    static func allowsWrite(isChangingEyeOrder: Bool, isFinishing: Bool) -> Bool {
+        !isChangingEyeOrder || isFinishing
+    }
+
     static func decision(currentTime: TimeInterval, duration: TimeInterval) -> ResumeWriteDecision {
         guard currentTime.isFinite, currentTime >= 0 else {
             return .skip

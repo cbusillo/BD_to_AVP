@@ -28,6 +28,12 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(PlaybackSeekPolicy.clampedTime(40, duration: .nan), 40)
     }
 
+    func testResumeWriteAllowsFinishingDuringEyeOrderChange() {
+        XCTAssertFalse(ResumeWritePolicy.allowsWrite(isChangingEyeOrder: true, isFinishing: false))
+        XCTAssertTrue(ResumeWritePolicy.allowsWrite(isChangingEyeOrder: true, isFinishing: true))
+        XCTAssertTrue(ResumeWritePolicy.allowsWrite(isChangingEyeOrder: false, isFinishing: false))
+    }
+
     func testPendingResumeIsClampedAndConsumedOnlyOnce() {
         var pendingResume = PlaybackPendingResumeState()
 

@@ -624,7 +624,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         eyeOrderChangeTask?.cancel()
         eyeOrderChangeTask = nil
         if shouldPersistResume {
-            persistResume()
+            persistResume(isFinishing: true)
         }
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -657,8 +657,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         pendingResume.clear()
     }
 
-    private func persistResume() {
-        guard !isChangingEyeOrder, let mediaItem, let resumeStore else {
+    private func persistResume(isFinishing: Bool = false) {
+        guard ResumeWritePolicy.allowsWrite(
+            isChangingEyeOrder: isChangingEyeOrder,
+            isFinishing: isFinishing
+        ), let mediaItem, let resumeStore else {
             return
         }
 
