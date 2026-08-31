@@ -409,7 +409,7 @@
       "python-unittest-discovery": 106,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2638,
+    "ci_test_case_count": 2640,
     "classification_counts": {
       "accepted-cost": 54,
       "valuable": 173
@@ -420,7 +420,7 @@
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2660,
+    "test_case_count": 2662,
     "test_file_count": 157,
     "unmapped_test_file_count": 0
   },
@@ -1325,7 +1325,7 @@
           "signal": "filesystem_access"
         }
       ],
-      "test_case_count": 28
+      "test_case_count": 30
     },
     {
       "bundle": "BDToAVPPlayerTests",
