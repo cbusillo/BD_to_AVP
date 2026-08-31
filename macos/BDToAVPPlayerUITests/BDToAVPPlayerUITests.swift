@@ -79,16 +79,19 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(startButton.isHittable)
         startButton.tap()
 
-        let normalEyeOrderButton = app.buttons["Eye Order: Normal"]
-        XCTAssertTrue(waitForHittable(normalEyeOrderButton, timeout: 30), app.debugDescription)
-
-        let doneButton = app.buttons["Done"]
-        XCTAssertTrue(waitForHittable(doneButton, timeout: 5), app.debugDescription)
+        guard firstHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 30) != nil else {
+            XCTFail(app.debugDescription)
+            return
+        }
+        guard firstHittableButton(labeled: "Done", in: app, timeout: 5) != nil else {
+            XCTFail(app.debugDescription)
+            return
+        }
 
         sleep(5)
 
-        XCTAssertTrue(normalEyeOrderButton.exists)
-        XCTAssertTrue(doneButton.exists)
+        XCTAssertNotNil(firstHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 5))
+        XCTAssertNotNil(firstHittableButton(labeled: "Done", in: app, timeout: 5))
     }
 
     private func attachScreenshot(named name: String) {
@@ -104,6 +107,22 @@ final class BDToAVPPlayerUITests: XCTestCase {
             object: element
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func firstHittableButton(
+        labeled label: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval
+    ) -> XCUIElement? {
+        let buttons = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let button = buttons.allElementsBoundByIndex.first(where: \.isHittable) {
+                return button
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        } while Date() < deadline
+        return nil
     }
 
 }
