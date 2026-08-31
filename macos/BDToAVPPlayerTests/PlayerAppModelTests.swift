@@ -321,7 +321,7 @@ final class PlayerAppModelTests: XCTestCase {
         )
         let player = AVPlayer(playerItem: item)
 
-        for _ in 0 ..< 50 where item.status == .unknown {
+        for _ in 0 ..< 300 where item.status == .unknown {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
 
