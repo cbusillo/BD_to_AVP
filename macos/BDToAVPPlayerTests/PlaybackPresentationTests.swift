@@ -34,6 +34,27 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertTrue(ResumeWritePolicy.allowsWrite(isChangingEyeOrder: false, isFinishing: false))
     }
 
+    func testResumeWriteUsesCapturedPositionWhenFinishingEyeOrderChange() {
+        XCTAssertEqual(
+            ResumeWritePolicy.position(
+                currentTime: 0,
+                eyeOrderChangeTime: 2_400,
+                isChangingEyeOrder: true,
+                isFinishing: true
+            ),
+            2_400
+        )
+        XCTAssertEqual(
+            ResumeWritePolicy.position(
+                currentTime: 15,
+                eyeOrderChangeTime: 2_400,
+                isChangingEyeOrder: true,
+                isFinishing: false
+            ),
+            15
+        )
+    }
+
     func testPendingResumeIsClampedAndConsumedOnlyOnce() {
         var pendingResume = PlaybackPendingResumeState()
 

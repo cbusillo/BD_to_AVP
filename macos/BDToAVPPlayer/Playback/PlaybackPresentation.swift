@@ -195,6 +195,22 @@ enum ResumeWritePolicy {
         !isChangingEyeOrder || isFinishing
     }
 
+    static func position(
+        currentTime: TimeInterval,
+        eyeOrderChangeTime: TimeInterval?,
+        isChangingEyeOrder: Bool,
+        isFinishing: Bool
+    ) -> TimeInterval {
+        if isChangingEyeOrder,
+           isFinishing,
+           let eyeOrderChangeTime,
+           eyeOrderChangeTime.isFinite
+        {
+            return eyeOrderChangeTime
+        }
+        return currentTime
+    }
+
     static func decision(currentTime: TimeInterval, duration: TimeInterval) -> ResumeWriteDecision {
         guard currentTime.isFinite, currentTime >= 0 else {
             return .skip

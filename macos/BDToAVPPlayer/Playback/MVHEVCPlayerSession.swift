@@ -48,6 +48,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var packedStereoSource: PackedStereoSource?
     private var pendingItemRestoration: PlaybackItemRestorationState?
     private var shouldResumeAfterEyeOrderChange = false
+    private var eyeOrderChangeResumeTime: TimeInterval?
     private var eyeOrderChangeTask: Task<Void, Never>?
     private var preparationGeneration = 0
     private var pendingResume = PlaybackPendingResumeState()
@@ -314,6 +315,9 @@ final class MVHEVCPlayerSession: ObservableObject {
             mediaSelection: currentMediaSelectionRestoration()
         )
         let generation = preparationGeneration
+        eyeOrderChangeResumeTime = restoration.time.seconds.isFinite
+            ? restoration.time.seconds
+            : currentTime
         isChangingEyeOrder = true
         shouldResumeAfterEyeOrderChange = restoration.wasPlaying
         player.pause()
@@ -348,6 +352,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                     if generation == preparationGeneration {
                         isChangingEyeOrder = false
                         shouldResumeAfterEyeOrderChange = false
+                        eyeOrderChangeResumeTime = nil
                     }
                     return
                 }
@@ -373,6 +378,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                     player.play()
                 }
                 shouldResumeAfterEyeOrderChange = false
+                eyeOrderChangeResumeTime = nil
             }
         }
     }
@@ -456,6 +462,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                         return
                     }
                     self.isChangingEyeOrder = false
+                    self.eyeOrderChangeResumeTime = nil
                     if !completed {
                         self.failureMessage = "Eye order changed, but the previous playback position could not be restored."
                     }
@@ -647,6 +654,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         packedStereoSource = nil
         pendingItemRestoration = nil
         shouldResumeAfterEyeOrderChange = false
+        eyeOrderChangeResumeTime = nil
         audioOptions = []
         subtitleOptions = []
         selectedAudioID = ""
@@ -665,8 +673,15 @@ final class MVHEVCPlayerSession: ObservableObject {
             return
         }
 
+        let resumeTime = ResumeWritePolicy.position(
+            currentTime: currentTime,
+            eyeOrderChangeTime: eyeOrderChangeResumeTime,
+            isChangingEyeOrder: isChangingEyeOrder,
+            isFinishing: isFinishing
+        )
+
         do {
-            switch ResumeWritePolicy.decision(currentTime: currentTime, duration: duration) {
+            switch ResumeWritePolicy.decision(currentTime: resumeTime, duration: duration) {
             case let .write(position):
                 try resumeStore.setResumeTime(position, for: mediaItem.id)
             case .remove:
@@ -690,6 +705,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         isChangingEyeOrder = false
         pendingItemRestoration = nil
         shouldResumeAfterEyeOrderChange = false
+        eyeOrderChangeResumeTime = nil
         pendingResume.clear()
     }
 }
