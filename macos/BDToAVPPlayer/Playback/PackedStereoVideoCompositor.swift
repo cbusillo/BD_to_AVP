@@ -258,7 +258,7 @@ final class PackedStereoVideoCompositor: NSObject, AVVideoCompositing, @unchecke
     }
 
     var requiredPixelBufferAttributesForRenderContext: [String: any Sendable] {
-        [kCVPixelBufferPixelFormatTypeKey as String: PackedStereoFrameRenderer.pixelFormat]
+        [kCVPixelBufferPixelFormatTypeKey as String: [PackedStereoFrameRenderer.pixelFormat]]
     }
 
     func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {}
@@ -283,6 +283,8 @@ final class PackedStereoVideoCompositor: NSObject, AVVideoCompositing, @unchecke
                 leftOutput: &leftBuffer,
                 rightOutput: &rightBuffer
             )
+            try request.attach(instruction.spatialConfiguration, to: &leftBuffer)
+            try request.attach(instruction.spatialConfiguration, to: &rightBuffer)
 
             request.finish(withComposedTaggedBuffers: [
                 CMTaggedDynamicBuffer(

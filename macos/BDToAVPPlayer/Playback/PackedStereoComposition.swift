@@ -1,6 +1,18 @@
 import AVFoundation
 import CoreMedia
 
+struct PackedStereoSpatialMetadata: Equatable, Sendable {
+    let horizontalFieldOfView: UInt32?
+    let cameraSystemBaseline: UInt32?
+    let disparityAdjustment: Int32?
+
+    static let qualificationFixture = PackedStereoSpatialMetadata(
+        horizontalFieldOfView: 90_000,
+        cameraSystemBaseline: 64_000,
+        disparityAdjustment: 0
+    )
+}
+
 final class PackedStereoCompositionInstruction: NSObject, AVVideoCompositionInstructionProtocol, @unchecked Sendable {
     let timeRange: CMTimeRange
     let enablePostProcessing = false
@@ -10,22 +22,29 @@ final class PackedStereoCompositionInstruction: NSObject, AVVideoCompositionInst
     let sourceTrackID: CMPersistentTrackID
     let geometry: PackedStereoGeometry
     let eyeOrder: PackedStereoEyeOrder
+    let spatialConfiguration: AVSpatialVideoConfiguration
 
     init(
         timeRange: CMTimeRange,
         sourceTrackID: CMPersistentTrackID,
         geometry: PackedStereoGeometry,
-        eyeOrder: PackedStereoEyeOrder
+        eyeOrder: PackedStereoEyeOrder,
+        spatialConfiguration: AVSpatialVideoConfiguration
     ) {
         self.timeRange = timeRange
         self.sourceTrackID = sourceTrackID
         self.geometry = geometry
         self.eyeOrder = eyeOrder
+        self.spatialConfiguration = spatialConfiguration
         requiredSourceTrackIDs = [NSNumber(value: sourceTrackID)]
     }
 }
 
 enum PackedStereoComposition {
+    static let outputColorYCbCrMatrix = kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String
+    static let outputColorPrimaries = kCVImageBufferColorPrimaries_ITU_R_709_2 as String
+    static let outputColorTransferFunction = kCVImageBufferTransferFunction_ITU_R_709_2 as String
+
     enum Error: LocalizedError {
         case invalidPackedDimensions
         case unsupportedFormat
@@ -49,13 +68,11 @@ enum PackedStereoComposition {
     static let outputBufferDescription: [[CMTag]] = [
         [
             CMTag.mediaType(.video),
-            CMTag.videoLayerID(0),
             CMTag.stereoView(.leftEye),
             CMTag.projectionType(.rectangular),
         ],
         [
             CMTag.mediaType(.video),
-            CMTag.videoLayerID(1),
             CMTag.stereoView(.rightEye),
             CMTag.projectionType(.rectangular),
         ],
@@ -65,7 +82,8 @@ enum PackedStereoComposition {
         asset: AVAsset,
         format: StereoFormat,
         duration: CMTime,
-        eyeOrder: PackedStereoEyeOrder
+        eyeOrder: PackedStereoEyeOrder,
+        spatialMetadataFallback: PackedStereoSpatialMetadata? = nil
     ) async throws -> AVVideoComposition {
         guard format == .sideBySide || format == .overUnder else {
             throw Error.unsupportedFormat
@@ -102,19 +120,35 @@ enum PackedStereoComposition {
             throw Error.invalidPackedDimensions
         }
 
+        let extensions = formatDescription.extensions
+        var spatialConfiguration = AVSpatialVideoConfiguration()
+        spatialConfiguration.horizontalFieldOfView =
+            (extensions[kCMFormatDescriptionExtension_HorizontalFieldOfView] as? NSNumber)?.uint32Value
+                ?? spatialMetadataFallback?.horizontalFieldOfView
+        spatialConfiguration.cameraSystemBaseline =
+            (extensions[kCMFormatDescriptionExtension_StereoCameraBaseline] as? NSNumber)?.uint32Value
+                ?? spatialMetadataFallback?.cameraSystemBaseline
+        spatialConfiguration.disparityAdjustment =
+            (extensions[kCMFormatDescriptionExtension_HorizontalDisparityAdjustment] as? NSNumber)?.int32Value
+                ?? spatialMetadataFallback?.disparityAdjustment
         let instruction = PackedStereoCompositionInstruction(
             timeRange: CMTimeRange(start: .zero, duration: duration),
             sourceTrackID: videoTrack.trackID,
             geometry: geometry,
-            eyeOrder: eyeOrder
+            eyeOrder: eyeOrder,
+            spatialConfiguration: spatialConfiguration
         )
         var configuration = try await AVVideoComposition.Configuration(for: asset)
         configuration.customVideoCompositorClass = PackedStereoVideoCompositor.self
         configuration.instructions = [instruction]
         configuration.outputBufferDescription = outputBufferDescription
+        configuration.spatialVideoConfigurations = [spatialConfiguration]
         configuration.renderScale = 1
         configuration.renderSize = geometry.outputSize
         configuration.sourceTrackIDForFrameTiming = videoTrack.trackID
+        configuration.colorYCbCrMatrix = outputColorYCbCrMatrix
+        configuration.colorPrimaries = outputColorPrimaries
+        configuration.colorTransferFunction = outputColorTransferFunction
         return AVVideoComposition(configuration: configuration)
     }
 }

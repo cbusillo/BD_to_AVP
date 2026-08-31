@@ -163,6 +163,25 @@ struct PlaybackEyeOrderPresentation: Equatable {
     }
 }
 
+enum PackedStereoStatusPresentation {
+    static func message(
+        mediaItem: MediaItem?,
+        isReady: Bool,
+        failureMessage: String?
+    ) -> String {
+        if let failureMessage {
+            return failureMessage
+        }
+        if BuiltInStereoChecks.contains(mediaItem) {
+            return isReady ? "Cover one eye at a time" : "Preparing the built-in stereo check…"
+        }
+        if isReady {
+            return "Packed stereo playback"
+        }
+        return "Preparing \(mediaItem?.title ?? "your movie")…"
+    }
+}
+
 enum ResumeWriteDecision: Equatable {
     case write(TimeInterval)
     case remove

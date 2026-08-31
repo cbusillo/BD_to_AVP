@@ -68,6 +68,29 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(playPauseButton.waitForExistence(timeout: 5))
     }
 
+    func testBuiltInStereoCheckExposesNativeEyeOrderAndDoneActions() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["built-in-stereo-checks-title"].waitForExistence(timeout: 10))
+
+        let startButton = app.buttons["play-builtin:stereo-check-sbs"]
+        XCTAssertTrue(startButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(startButton.isHittable)
+        startButton.tap()
+
+        let normalEyeOrderButton = app.buttons["Eye Order: Normal"]
+        XCTAssertTrue(waitForHittable(normalEyeOrderButton, timeout: 30), app.debugDescription)
+
+        let doneButton = app.buttons["Done"]
+        XCTAssertTrue(waitForHittable(doneButton, timeout: 5), app.debugDescription)
+
+        sleep(5)
+
+        XCTAssertTrue(normalEyeOrderButton.exists)
+        XCTAssertTrue(doneButton.exists)
+    }
+
     private func attachScreenshot(named name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
@@ -82,4 +105,5 @@ final class BDToAVPPlayerUITests: XCTestCase {
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
+
 }

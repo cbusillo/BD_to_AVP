@@ -100,6 +100,9 @@ final class MVHEVCPlayerSession: ObservableObject {
         finishCurrentSession(persistResume: true)
 
         self.mediaItem = mediaItem
+        if mediaItem.format != .mvHEVC {
+            playerEntity.components.remove(VideoPlayerComponent.self)
+        }
         self.resumeStore = resumeStore
         state = .loading
         failureMessage = nil
@@ -149,17 +152,21 @@ final class MVHEVCPlayerSession: ObservableObject {
             let preparedPackedStereo: PackedStereoSource?
             switch mediaItem.format {
             case .sideBySide, .overUnder:
+                let spatialMetadataFallback: PackedStereoSpatialMetadata? =
+                    BuiltInStereoChecks.contains(mediaItem) ? .qualificationFixture : nil
                 item.videoComposition = try await PackedStereoComposition.make(
                     asset: asset,
                     format: mediaItem.format,
                     duration: preparedDuration,
-                    eyeOrder: .normal
+                    eyeOrder: .normal,
+                    spatialMetadataFallback: spatialMetadataFallback
                 )
                 item.seekingWaitsForVideoCompositionRendering = true
                 preparedPackedStereo = PackedStereoSource(
                     url: openedLease.url,
                     format: mediaItem.format,
-                    duration: preparedDuration
+                    duration: preparedDuration,
+                    spatialMetadataFallback: spatialMetadataFallback
                 )
             case .mvHEVC, .unsupported:
                 preparedPackedStereo = nil
@@ -193,6 +200,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func installPlayerComponent() {
+        guard mediaItem?.format == .mvHEVC else {
+            playerEntity.components.remove(VideoPlayerComponent.self)
+            return
+        }
         var component = playerEntity.components[VideoPlayerComponent.self] ?? VideoPlayerComponent(avPlayer: player)
         component.desiredViewingMode = .stereo
         component.desiredSpatialVideoMode = .screen
@@ -300,8 +311,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         let restoration = PlaybackItemRestorationState(
             time: player.currentTime(),
             wasPlaying: player.timeControlStatus == .playing,
-            audioID: selectedAudioID,
-            subtitleID: selectedSubtitleID
+            mediaSelection: currentMediaSelectionRestoration()
         )
         let generation = preparationGeneration
         isChangingEyeOrder = true
@@ -320,7 +330,8 @@ final class MVHEVCPlayerSession: ObservableObject {
                     asset: replacementAsset,
                     format: packedStereoSource.format,
                     duration: packedStereoSource.duration,
-                    eyeOrder: targetEyeOrder
+                    eyeOrder: targetEyeOrder,
+                    spatialMetadataFallback: packedStereoSource.spatialMetadataFallback
                 )
                 async let replacementSelections = prepareMediaSelections(
                     for: replacementAsset,
@@ -438,11 +449,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             state = .ready
             if let restoration = pendingItemRestoration {
                 pendingItemRestoration = nil
-                restoreMediaSelections(
-                    audioID: restoration.audioID,
-                    subtitleID: restoration.subtitleID,
-                    on: item
-                )
+                restoreMediaSelections(restoration.mediaSelection, on: item)
                 refreshSelectedMediaOptionIDs()
                 seek(to: restoration.time.seconds) { [weak self] completed in
                     guard let self else {
@@ -468,10 +475,27 @@ final class MVHEVCPlayerSession: ObservableObject {
                 player.play()
             }
         case .failed:
-            presentFailure(item.error?.localizedDescription ?? "The player failed without an error description.")
+            presentFailure(Self.playbackFailureMessage(for: item.error))
         @unknown default:
             presentFailure("The player returned an unknown playback status.")
         }
+    }
+
+    private static func playbackFailureMessage(for error: Error?) -> String {
+        guard let error else {
+            return "The player failed without an error description."
+        }
+
+        var messages: [String] = []
+        var currentError: NSError? = error as NSError
+        while let unwrappedError = currentError {
+            let message = unwrappedError.localizedDescription
+            if !messages.contains(message) {
+                messages.append(message)
+            }
+            currentError = unwrappedError.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return messages.joined(separator: " ")
     }
 
     private func prepareMediaSelections(
@@ -564,19 +588,34 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
     }
 
-    private func restoreMediaSelections(audioID: String, subtitleID: String, on item: AVPlayerItem) {
-        if let audioGroup, let selection = audioSelectionByID[audioID] {
+    private func currentMediaSelectionRestoration() -> MediaSelectionRestorationState {
+        let audioPropertyList = audioGroup.flatMap {
+            playerItem?.currentMediaSelection.selectedMediaOption(in: $0)?.propertyList()
+        }
+        let subtitlePropertyList = subtitleGroup.flatMap {
+            playerItem?.currentMediaSelection.selectedMediaOption(in: $0)?.propertyList()
+        }
+        return MediaSelectionRestorationState(
+            audioPropertyList: audioPropertyList,
+            subtitlePropertyList: subtitlePropertyList
+        )
+    }
+
+    private func restoreMediaSelections(_ restoration: MediaSelectionRestorationState, on item: AVPlayerItem) {
+        if let audioGroup,
+           let propertyList = restoration.audioPropertyList,
+           let selection = audioGroup.mediaSelectionOption(withPropertyList: propertyList)
+        {
             item.select(selection, in: audioGroup)
-            selectedAudioID = audioID
         }
 
         if let subtitleGroup {
-            if subtitleID == "off" {
-                item.select(nil, in: subtitleGroup)
-                selectedSubtitleID = subtitleID
-            } else if let selection = subtitleSelectionByID[subtitleID] {
+            if let propertyList = restoration.subtitlePropertyList,
+               let selection = subtitleGroup.mediaSelectionOption(withPropertyList: propertyList)
+            {
                 item.select(selection, in: subtitleGroup)
-                selectedSubtitleID = subtitleID
+            } else {
+                item.select(nil, in: subtitleGroup)
             }
         }
     }
@@ -667,11 +706,16 @@ private struct PackedStereoSource {
     let url: URL
     let format: StereoFormat
     let duration: CMTime
+    let spatialMetadataFallback: PackedStereoSpatialMetadata?
 }
 
 private struct PlaybackItemRestorationState {
     let time: CMTime
     let wasPlaying: Bool
-    let audioID: String
-    let subtitleID: String
+    let mediaSelection: MediaSelectionRestorationState
+}
+
+private struct MediaSelectionRestorationState {
+    let audioPropertyList: Any?
+    let subtitlePropertyList: Any?
 }

@@ -140,6 +140,46 @@ final class PlaybackPresentationTests: XCTestCase {
         )
     }
 
+    func testPackedStereoStatusUsesQualificationCopyOnlyForBuiltInChecks() {
+        let builtInItem = MediaItem(
+            id: BuiltInStereoChecks.sideBySideID,
+            title: "Side-by-Side Stereo Check",
+            fileName: "Stereo-Check-SBS.mov",
+            format: .sideBySide
+        )
+        let importedItem = MediaItem(
+            id: "movie-1",
+            title: "Feature Film",
+            fileName: "Feature-Film-SBS.mov",
+            format: .sideBySide
+        )
+
+        XCTAssertEqual(
+            PackedStereoStatusPresentation.message(
+                mediaItem: builtInItem,
+                isReady: true,
+                failureMessage: nil
+            ),
+            "Cover one eye at a time"
+        )
+        XCTAssertEqual(
+            PackedStereoStatusPresentation.message(
+                mediaItem: importedItem,
+                isReady: false,
+                failureMessage: nil
+            ),
+            "Preparing Feature Film…"
+        )
+        XCTAssertEqual(
+            PackedStereoStatusPresentation.message(
+                mediaItem: importedItem,
+                isReady: true,
+                failureMessage: nil
+            ),
+            "Packed stereo playback"
+        )
+    }
+
     func testResumePolicyWritesAnInProgressPosition() {
         XCTAssertEqual(ResumeWritePolicy.decision(currentTime: 42, duration: 120), .write(42))
     }
@@ -158,13 +198,11 @@ final class PlaybackPresentationTests: XCTestCase {
             [
                 [
                     CMTag.mediaType(.video),
-                    CMTag.videoLayerID(0),
                     CMTag.stereoView(.leftEye),
                     CMTag.projectionType(.rectangular),
                 ],
                 [
                     CMTag.mediaType(.video),
-                    CMTag.videoLayerID(1),
                     CMTag.stereoView(.rightEye),
                     CMTag.projectionType(.rectangular),
                 ],
@@ -180,7 +218,8 @@ final class PlaybackPresentationTests: XCTestCase {
             timeRange: CMTimeRange(start: .zero, duration: CMTime(seconds: 12, preferredTimescale: 600)),
             sourceTrackID: 7,
             geometry: geometry,
-            eyeOrder: .reversed
+            eyeOrder: .reversed,
+            spatialConfiguration: AVSpatialVideoConfiguration()
         )
 
         XCTAssertEqual(instruction.eyeOrder, .reversed)
@@ -232,12 +271,12 @@ final class PlaybackPresentationTests: XCTestCase {
         let compositor = PackedStereoVideoCompositor()
         let sourceFormats = compositor.sourcePixelBufferAttributes?[kCVPixelBufferPixelFormatTypeKey as String]
             as? [OSType]
-        let outputFormat = compositor.requiredPixelBufferAttributesForRenderContext[
+        let outputFormats = compositor.requiredPixelBufferAttributesForRenderContext[
             kCVPixelBufferPixelFormatTypeKey as String
-        ] as? OSType
+        ] as? [OSType]
 
         XCTAssertEqual(sourceFormats, [kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange])
-        XCTAssertEqual(outputFormat, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+        XCTAssertEqual(outputFormats, [kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange])
     }
 
     func testPackedStereoRendererMapsSBSAndOverUnderPixelsForBothEyeOrders() throws {

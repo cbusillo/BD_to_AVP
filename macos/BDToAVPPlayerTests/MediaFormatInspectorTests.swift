@@ -97,6 +97,14 @@ final class MediaFormatInspectorTests: XCTestCase {
         XCTAssertEqual(MediaFormatInspector.packedStereoFormat(fileName: "Movie_SBS.mov"), .sideBySide)
         XCTAssertEqual(MediaFormatInspector.packedStereoFormat(fileName: "Movie_OU.mov"), .overUnder)
         XCTAssertEqual(MediaFormatInspector.packedStereoFormat(fileName: "Movie.FOU.mov"), .overUnder)
+        XCTAssertEqual(
+            MediaFormatInspector.packedStereoFormat(fileName: "Stereo-Check-SBS.mov"),
+            .sideBySide
+        )
+        XCTAssertEqual(
+            MediaFormatInspector.packedStereoFormat(fileName: "Stereo-Check-OU.mov"),
+            .overUnder
+        )
         XCTAssertNil(MediaFormatInspector.packedStereoFormat(fileName: "The.Tab.2019.mp4"))
         XCTAssertNil(MediaFormatInspector.packedStereoFormat(fileName: "Movie-TB.m4v"))
         XCTAssertNil(MediaFormatInspector.packedStereoFormat(fileName: "Movie.HSBS.mov"))

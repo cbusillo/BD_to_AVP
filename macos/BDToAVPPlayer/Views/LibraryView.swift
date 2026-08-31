@@ -10,9 +10,11 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 28) {
                 header
 
-                if model.library.items.isEmpty {
+                stereoChecksPanel
+
+                if model.importedItems.isEmpty {
                     emptyState
-                } else if model.visibleItems.isEmpty {
+                } else if model.visibleImportedItems.isEmpty {
                     noMatchesState
                 } else if model.viewMode == .posters {
                     posterGrid
@@ -84,7 +86,7 @@ struct LibraryView: View {
             columns: [GridItem(.adaptive(minimum: LibraryTheme.minimumTileWidth), spacing: LibraryTheme.gridSpacing)],
             spacing: LibraryTheme.gridSpacing
         ) {
-            ForEach(model.visibleItems) { item in
+            ForEach(model.visibleImportedItems) { item in
                 MediaPosterCard(
                     item: item,
                     sourceStatus: model.sourceStatuses[item.id],
@@ -101,7 +103,7 @@ struct LibraryView: View {
 
     private var fileList: some View {
         LazyVStack(spacing: 10) {
-            ForEach(model.visibleItems) { item in
+            ForEach(model.visibleImportedItems) { item in
                 HStack(spacing: 12) {
                     Button {
                         model.showDetails(for: item.id)
@@ -136,6 +138,55 @@ struct LibraryView: View {
         .buttonStyle(.borderedProminent)
         .accessibilityIdentifier("play-library-\(item.id)")
         .accessibilityHint("Starts playback without opening movie details.")
+    }
+
+    private var stereoChecksPanel: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "eye.circle.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(.blue)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Built-in stereo checks")
+                        .font(.title2.weight(.semibold))
+                        .accessibilityIdentifier("built-in-stereo-checks-title")
+                    Text("No files are needed. Start either check, then cover one eye at a time. Normal shows LEFT EYE ONLY to your left eye and RIGHT EYE ONLY to your right eye; Reversed swaps them.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if let message = model.stereoCheckErrorMessage {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            } else {
+                HStack(spacing: 14) {
+                    ForEach(model.builtInStereoCheckItems) { item in
+                        Button {
+                            model.requestPlayback(for: item.id)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label(
+                                    item.format == .sideBySide ? "Start SBS Check" : "Start Over-Under Check",
+                                    systemImage: "play.fill"
+                                )
+                                .font(.headline)
+                                Text(item.format.displayName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.playbackAvailability(for: item) != .playable)
+                        .accessibilityIdentifier("play-\(item.id)")
+                    }
+                }
+            }
+        }
+        .padding(22)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
     private var viewControls: some View {
