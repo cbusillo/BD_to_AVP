@@ -93,6 +93,7 @@ enum PlaybackAvailability: Equatable, Sendable {
 @MainActor
 final class PlayerAppModel: ObservableObject {
     typealias FormatInspector = (URL) async throws -> StereoFormat
+    typealias StereoCheckInstaller = @Sendable () throws -> [InstalledStereoCheck]
 
     @Published private(set) var library: MediaLibraryModel
     @Published private(set) var sourceStatuses: [String: MediaSourceStatus]
@@ -103,6 +104,7 @@ final class PlayerAppModel: ObservableObject {
     @Published var isShowingDetails = false
     @Published var isImporting = false
     @Published var errorMessage: String?
+    @Published private(set) var stereoCheckErrorMessage: String?
     @Published private(set) var playbackRequest: PlaybackRequest?
     @Published private(set) var hasBootstrapped = false
 
@@ -111,18 +113,21 @@ final class PlayerAppModel: ObservableObject {
     private let libraryStore: LibraryStore
     let bookmarkStore: BookmarkStore
     private let formatInspector: FormatInspector
+    private let stereoCheckInstaller: StereoCheckInstaller
     private let documentsURL: URL
 
     init(
         libraryStore: LibraryStore = LibraryStore(),
         bookmarkStore: BookmarkStore = BookmarkStore(),
         documentsURL: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0],
-        formatInspector: @escaping FormatInspector = MediaFormatInspector.inspect
+        formatInspector: @escaping FormatInspector = MediaFormatInspector.inspect,
+        stereoCheckInstaller: @escaping StereoCheckInstaller = { try BuiltInStereoChecks.install() }
     ) {
         self.libraryStore = libraryStore
         self.bookmarkStore = bookmarkStore
         self.documentsURL = documentsURL
         self.formatInspector = formatInspector
+        self.stereoCheckInstaller = stereoCheckInstaller
         let loadedLibrary = MediaLibraryModel(items: libraryStore.load())
         self.library = loadedLibrary
         self.sourceStatuses = [:]
@@ -142,6 +147,18 @@ final class PlayerAppModel: ObservableObject {
             }
     }
 
+    var builtInStereoCheckItems: [MediaItem] {
+        BuiltInStereoChecks.orderedIDs.compactMap(item(id:))
+    }
+
+    var importedItems: [MediaItem] {
+        library.items.filter { !BuiltInStereoChecks.contains($0) }
+    }
+
+    var visibleImportedItems: [MediaItem] {
+        visibleItems.filter { !BuiltInStereoChecks.contains($0) }
+    }
+
     var selectedItem: MediaItem? {
         guard let selectedItemID else { return nil }
         return library.items.first { $0.id == selectedItemID }
@@ -152,7 +169,10 @@ final class PlayerAppModel: ObservableObject {
     }
 
     func sourceTitle(for item: MediaItem) -> String {
-        item.id.hasPrefix("documents:") ? "On My Vision Pro" : "Files"
+        if BuiltInStereoChecks.contains(item) {
+            return "Built-in Stereo Check"
+        }
+        return item.id.hasPrefix("documents:") ? "On My Vision Pro" : "Files"
     }
 
     func showDetails(for id: String) {
@@ -172,12 +192,8 @@ final class PlayerAppModel: ObservableObject {
         }
 
         switch item.format {
-        case .mvHEVC:
+        case .mvHEVC, .sideBySide, .overUnder:
             return .playable
-        case .sideBySide:
-            return .planned("Side-by-side movies are not playable yet.")
-        case .overUnder:
-            return .planned("Over-under movies are not playable yet.")
         case .unsupported:
             return .unavailable("This media format is not supported for playback.")
         }
@@ -205,6 +221,9 @@ final class PlayerAppModel: ObservableObject {
     }
 
     func remove(itemID: String) {
+        guard !BuiltInStereoChecks.orderedIDs.contains(itemID) else {
+            return
+        }
         do {
             try libraryStore.remove(id: itemID)
             objectWillChange.send()
@@ -232,6 +251,8 @@ final class PlayerAppModel: ObservableObject {
         guard !hasBootstrapped else { return }
         hasBootstrapped = true
 
+        await installBuiltInStereoChecks()
+
         guard let urls = try? FileManager.default.contentsOfDirectory(
                   at: documentsURL,
                   includingPropertiesForKeys: [.isRegularFileKey],
@@ -244,6 +265,25 @@ final class PlayerAppModel: ObservableObject {
         for url in urls where Self.supportedMovieExtensions.contains(url.pathExtension.lowercased()) {
             let itemID = "documents:\(url.lastPathComponent.lowercased())"
             await importMovie(from: url, replacing: itemID, shouldShowDetails: false, reportErrors: false)
+        }
+    }
+
+    private func installBuiltInStereoChecks() async {
+        do {
+            let installer = stereoCheckInstaller
+            let installedChecks = try await Task.detached(priority: .utility) {
+                try installer()
+            }.value
+            for installedCheck in installedChecks {
+                try bookmarkStore.save(url: installedCheck.url, for: installedCheck.item.id)
+                try libraryStore.upsert(installedCheck.item)
+                objectWillChange.send()
+                library.upsert(installedCheck.item)
+                sourceStatuses[installedCheck.item.id] = .available
+            }
+            stereoCheckErrorMessage = nil
+        } catch {
+            stereoCheckErrorMessage = "The built-in stereo checks could not be prepared."
         }
     }
 

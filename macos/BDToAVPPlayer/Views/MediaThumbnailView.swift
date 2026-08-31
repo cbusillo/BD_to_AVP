@@ -139,18 +139,20 @@ struct MediaThumbnailView: View {
     @State private var image: CGImage?
 
     var body: some View {
-        Group {
-            if let image {
-                Image(decorative: image, scale: 1, orientation: .up)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                MediaThumbnailFallback(title: item.title)
+        GeometryReader { geometry in
+            Group {
+                if let image {
+                    Image(decorative: image, scale: 1, orientation: .up)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    MediaThumbnailFallback(title: item.title)
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: LibraryTheme.tileCornerRadius - 6, style: .continuous))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: LibraryTheme.tileCornerRadius - 6, style: .continuous))
         .task(id: thumbnailTaskID) {
             guard sourceStatus == .available else {
                 image = nil

@@ -1,3 +1,4 @@
+import AVKit
 import RealityKit
 import SwiftUI
 
@@ -19,21 +20,29 @@ struct PlayerView: View {
     }
 
     var body: some View {
-        GeometryReader3D { geometry in
-            playerSurface(geometry: geometry)
+        Group {
+            if isPackedStereoMedia {
+                PackedStereoPlayerSurface(session: session, onDone: done)
+            } else {
+                GeometryReader3D { geometry in
+                    playerSurface(geometry: geometry)
+                }
+            }
         }
         .background(.black)
         .overlay {
-            Button {
-                hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
-            } label: {
-                Color.clear
-                    .contentShape(Rectangle())
+            if !isPackedStereoMedia {
+                Button {
+                    hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                } label: {
+                    Color.clear
+                        .contentShape(Rectangle())
+                }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("player-surface")
+                    .accessibilityLabel("Show playback controls")
+                    .accessibilityHint("Reveals playback controls for three seconds.")
             }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("player-surface")
-                .accessibilityLabel("Show playback controls")
-                .accessibilityHint("Reveals playback controls for three seconds.")
         }
         .onAppear {
             hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
@@ -75,27 +84,47 @@ struct PlayerView: View {
             hudVisibility.autoHideTimerFired(generation: generation)
         }
         .ornament(
-            visibility: hudVisibility.isVisible ? .visible : .hidden,
+            visibility: .visible,
             attachmentAnchor: .scene(.bottom),
             contentAlignment: .topBack
         ) {
-            VStack(spacing: 0) {
-                Color.clear
-                    .frame(height: 16)
-                    .accessibilityHidden(true)
-                PlayerOrnamentView(
-                    session: session,
-                    onDone: done,
-                    onHoverChanged: { isHovered in
-                        hudVisibility.setHovered(isHovered, isPlaying: isAutomaticHidingAllowed)
-                    },
-                    onScrubbingChanged: { isScrubbing in
-                        hudVisibility.setInteracting(isScrubbing, isPlaying: isAutomaticHidingAllowed)
-                    },
-                    onInteraction: {
-                        hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+            if !isPackedStereoMedia {
+                Group {
+                    if hudVisibility.isVisible {
+                        VStack(spacing: 0) {
+                            Color.clear
+                                .frame(height: 16)
+                                .accessibilityHidden(true)
+                            PlayerOrnamentView(
+                                session: session,
+                                onDone: done,
+                                onHoverChanged: { isHovered in
+                                    if isHovered {
+                                        hudVisibility.hoverBegan(isPlaying: isAutomaticHidingAllowed)
+                                    }
+                                },
+                                onScrubbingChanged: { isScrubbing in
+                                    hudVisibility.setInteracting(isScrubbing, isPlaying: isAutomaticHidingAllowed)
+                                },
+                                onInteraction: {
+                                    hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                                }
+                            )
+                        }
+                    } else {
+                        Button {
+                            hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                        } label: {
+                            Label("Show controls", systemImage: "chevron.up")
+                                .frame(minWidth: 60, minHeight: 60)
+                        }
+                        .buttonStyle(.bordered)
+                        .glassBackgroundEffect()
+                        .accessibilityIdentifier("player-show-controls")
+                        .accessibilityHint("Expands the playback controls.")
                     }
-                )
+                }
+                .animation(.easeInOut(duration: 0.2), value: hudVisibility.isVisible)
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -134,7 +163,13 @@ struct PlayerView: View {
     }
 
     private var isAutomaticHidingAllowed: Bool {
-        session.isPlaying && !isVoiceOverEnabled && !isSwitchControlEnabled
+        session.isPlaying
+            && !isVoiceOverEnabled
+            && !isSwitchControlEnabled
+    }
+
+    private var isPackedStereoMedia: Bool {
+        session.mediaItem?.format == .sideBySide || session.mediaItem?.format == .overUnder
     }
 
     private func fitPlayerEntity(proxy: GeometryProxy3D, content: RealityViewContent) {
@@ -155,6 +190,128 @@ struct PlayerView: View {
         }
         session.playerEntity.scale = SIMD3<Float>(repeating: scale)
         session.playerEntity.position = SIMD3<Float>(0, 0, Self.playerDepthOffset)
+    }
+}
+
+private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
+    @ObservedObject var session: MVHEVCPlayerSession
+    let onDone: () -> Void
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private struct ActionState: Equatable {
+            let eyeOrder: PackedStereoEyeOrder
+            let isChangingEyeOrder: Bool
+            let canControlPlayback: Bool
+        }
+
+        var session: MVHEVCPlayerSession
+        var onDone: () -> Void
+        weak var statusLabel: UILabel?
+        private var actionState: ActionState?
+
+        init(session: MVHEVCPlayerSession, onDone: @escaping () -> Void) {
+            self.session = session
+            self.onDone = onDone
+        }
+
+        func installInfoView(in viewController: AVPlayerViewController) {
+            let titleLabel = UILabel()
+            titleLabel.text = session.mediaItem?.title ?? "Packed Stereo Check"
+            titleLabel.font = .preferredFont(forTextStyle: .headline)
+            titleLabel.adjustsFontForContentSizeCategory = true
+            titleLabel.textColor = .label
+
+            let statusLabel = UILabel()
+            statusLabel.font = .preferredFont(forTextStyle: .subheadline)
+            statusLabel.adjustsFontForContentSizeCategory = true
+            statusLabel.textColor = .secondaryLabel
+            statusLabel.numberOfLines = 2
+            statusLabel.accessibilityIdentifier = "player-packed-stereo-status"
+            self.statusLabel = statusLabel
+
+            let labels = UIStackView(arrangedSubviews: [titleLabel, statusLabel])
+            labels.axis = .vertical
+            labels.spacing = 4
+            labels.translatesAutoresizingMaskIntoConstraints = false
+            let infoView = viewController.contextualActionsInfoView
+            infoView.addSubview(labels)
+            NSLayoutConstraint.activate([
+                labels.leadingAnchor.constraint(equalTo: infoView.leadingAnchor),
+                labels.trailingAnchor.constraint(equalTo: infoView.trailingAnchor),
+                labels.topAnchor.constraint(equalTo: infoView.topAnchor),
+                labels.bottomAnchor.constraint(equalTo: infoView.bottomAnchor),
+            ])
+        }
+
+        func update(viewController: AVPlayerViewController) {
+            statusLabel?.text = PackedStereoStatusPresentation.message(
+                mediaItem: session.mediaItem,
+                isReady: session.isReady,
+                failureMessage: session.failureMessage
+            )
+
+            let newState = ActionState(
+                eyeOrder: session.isEyeSwapped ? .reversed : .normal,
+                isChangingEyeOrder: session.isChangingEyeOrder,
+                canControlPlayback: session.canControlPlayback
+            )
+            guard newState != actionState else {
+                return
+            }
+            actionState = newState
+
+            let eyeOrderTitle: String
+            if newState.isChangingEyeOrder {
+                eyeOrderTitle = "Changing Eye Order…"
+            } else {
+                eyeOrderTitle = "Eye Order: \(newState.eyeOrder == .reversed ? "Reversed" : "Normal")"
+            }
+            let eyeOrderAction = UIAction(
+                title: eyeOrderTitle,
+                image: UIImage(systemName: "arrow.left.arrow.right"),
+                attributes: newState.canControlPlayback ? [] : .disabled
+            ) { [weak self] _ in
+                self?.session.toggleEyeSwap()
+            }
+            let doneAction = UIAction(
+                title: "Done",
+                image: UIImage(systemName: "xmark")
+            ) { [weak self] _ in
+                self?.onDone()
+            }
+            viewController.contextualActions = [eyeOrderAction, doneAction]
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(session: session, onDone: onDone)
+    }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let viewController = AVPlayerViewController()
+        viewController.showsPlaybackControls = true
+        viewController.allowsPictureInPicturePlayback = false
+        viewController.player = session.player
+        context.coordinator.installInfoView(in: viewController)
+        context.coordinator.update(viewController: viewController)
+        return viewController
+    }
+
+    func updateUIViewController(_ viewController: AVPlayerViewController, context: Context) {
+        if viewController.player !== session.player {
+            viewController.player = session.player
+        }
+        context.coordinator.session = session
+        context.coordinator.onDone = onDone
+        context.coordinator.update(viewController: viewController)
+    }
+
+    static func dismantleUIViewController(_ viewController: AVPlayerViewController, coordinator: Coordinator) {
+        viewController.contextualActions = []
+        viewController.contextualActionsInfoView.subviews.forEach { $0.removeFromSuperview() }
+        viewController.player = nil
+        coordinator.statusLabel = nil
     }
 }
 
@@ -253,8 +410,13 @@ private struct PlayerOrnamentView: View {
                 Label(session.mediaItem?.format.displayName ?? "MV-HEVC", systemImage: "view.3d")
                     .font(.subheadline)
                     .accessibilityLabel("Stereo format \(session.mediaItem?.format.displayName ?? "MV-HEVC")")
+                if BuiltInStereoChecks.contains(session.mediaItem) {
+                    Text("Cover one eye at a time")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .frame(width: 180, alignment: .leading)
+            .frame(width: BuiltInStereoChecks.contains(session.mediaItem) ? 220 : 180, alignment: .leading)
 
             Spacer(minLength: 8)
 
@@ -287,6 +449,9 @@ private struct PlayerOrnamentView: View {
 
             Spacer(minLength: 8)
 
+            if session.supportsEyeSwap {
+                eyeSwapButton
+            }
             audioMenu
             subtitleMenu
             doneButton
@@ -343,6 +508,33 @@ private struct PlayerOrnamentView: View {
     private func performPlaybackToggle() {
         onInteraction()
         session.togglePlayback()
+    }
+
+    private var eyeSwapButton: some View {
+        let presentation = PlaybackEyeOrderPresentation.value(isEyeSwapped: session.isEyeSwapped)
+        return Button {
+            onInteraction()
+            session.toggleEyeSwap()
+        } label: {
+            VStack(spacing: 2) {
+                if session.isChangingEyeOrder {
+                    ProgressView()
+                } else {
+                    Image(systemName: presentation.systemImage)
+                }
+                Text("Eye Order")
+                    .font(.caption2.weight(.semibold))
+                Text(presentation.title)
+                    .font(.caption2)
+            }
+            .frame(minWidth: 92, minHeight: 60)
+        }
+        .buttonStyle(.bordered)
+        .disabled(session.isChangingEyeOrder || !session.canControlPlayback)
+        .accessibilityIdentifier("player-eye-swap")
+        .accessibilityLabel("Eye order")
+        .accessibilityValue(presentation.title)
+        .accessibilityAddTraits(presentation.isSelected ? .isSelected : [])
     }
 
     private func handleScrubbing(_ isEditing: Bool) {

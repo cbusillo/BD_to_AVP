@@ -81,13 +81,11 @@ struct PlaybackHUDVisibilityState: Equatable {
     private(set) var isAutoHideScheduled = false
     private(set) var autoHideGeneration = 0
     private var isInteracting = false
-    private var isHovered = false
 
     mutating func reconcile(isPlaying: Bool) {
         guard PlaybackHUDVisibilityPolicy.shouldAutoHide(
             isPlaying: isPlaying,
-            isInteracting: isInteracting,
-            isHovered: isHovered
+            isInteracting: isInteracting
         )
         else {
             showAndCancelAutomaticHiding()
@@ -104,9 +102,8 @@ struct PlaybackHUDVisibilityState: Equatable {
         reconcile(isPlaying: isPlaying)
     }
 
-    mutating func setHovered(_ isHovered: Bool, isPlaying: Bool) {
-        self.isHovered = isHovered
-        reconcile(isPlaying: isPlaying)
+    mutating func hoverBegan(isPlaying: Bool) {
+        reveal(isPlaying: isPlaying)
     }
 
     mutating func reveal(isPlaying: Bool) {
@@ -145,8 +142,43 @@ struct PlaybackHUDVisibilityState: Equatable {
 }
 
 enum PlaybackHUDVisibilityPolicy {
-    static func shouldAutoHide(isPlaying: Bool, isInteracting: Bool, isHovered: Bool) -> Bool {
-        isPlaying && !isInteracting && !isHovered
+    static func shouldAutoHide(isPlaying: Bool, isInteracting: Bool) -> Bool {
+        isPlaying && !isInteracting
+    }
+}
+
+struct PlaybackEyeOrderPresentation: Equatable {
+    let title: String
+    let systemImage: String
+    let isSelected: Bool
+
+    static func value(isEyeSwapped: Bool) -> PlaybackEyeOrderPresentation {
+        PlaybackEyeOrderPresentation(
+            title: isEyeSwapped ? "Reversed" : "Normal",
+            systemImage: isEyeSwapped
+                ? "arrow.left.arrow.right.circle.fill"
+                : "arrow.left.arrow.right",
+            isSelected: isEyeSwapped
+        )
+    }
+}
+
+enum PackedStereoStatusPresentation {
+    static func message(
+        mediaItem: MediaItem?,
+        isReady: Bool,
+        failureMessage: String?
+    ) -> String {
+        if let failureMessage {
+            return failureMessage
+        }
+        if BuiltInStereoChecks.contains(mediaItem) {
+            return isReady ? "Cover one eye at a time" : "Preparing the built-in stereo check…"
+        }
+        if isReady {
+            return "Packed stereo playback"
+        }
+        return "Preparing \(mediaItem?.title ?? "your movie")…"
     }
 }
 
@@ -158,6 +190,26 @@ enum ResumeWriteDecision: Equatable {
 
 enum ResumeWritePolicy {
     static let completedPlaybackThreshold: TimeInterval = 5
+
+    static func allowsWrite(isChangingEyeOrder: Bool, isFinishing: Bool) -> Bool {
+        !isChangingEyeOrder || isFinishing
+    }
+
+    static func position(
+        currentTime: TimeInterval,
+        eyeOrderChangeTime: TimeInterval?,
+        isChangingEyeOrder: Bool,
+        isFinishing: Bool
+    ) -> TimeInterval {
+        if isChangingEyeOrder,
+           isFinishing,
+           let eyeOrderChangeTime,
+           eyeOrderChangeTime.isFinite
+        {
+            return eyeOrderChangeTime
+        }
+        return currentTime
+    }
 
     static func decision(currentTime: TimeInterval, duration: TimeInterval) -> ResumeWriteDecision {
         guard currentTime.isFinite, currentTime >= 0 else {

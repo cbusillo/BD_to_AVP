@@ -160,6 +160,7 @@ targets:
       - path: BDToAVPPlayer
     dependencies:
       - sdk: AVFoundation.framework
+      - sdk: AVKit.framework
     settings:
       base:
         CODE_SIGN_STYLE: Automatic
