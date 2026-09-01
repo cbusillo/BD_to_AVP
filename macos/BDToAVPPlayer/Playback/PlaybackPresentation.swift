@@ -53,6 +53,40 @@ struct PlaybackPendingResumeState: Equatable {
     }
 }
 
+struct PlaybackIntentState: Equatable {
+    private(set) var isSceneActive = true
+    private(set) var wantsPlayback = false
+
+    var shouldPlay: Bool {
+        isSceneActive && wantsPlayback
+    }
+
+    mutating func requestPlayback() {
+        wantsPlayback = isSceneActive
+    }
+
+    mutating func preservePlaybackIntent(wasPlaying: Bool) {
+        wantsPlayback = isSceneActive && wasPlaying
+    }
+
+    mutating func pause() {
+        wantsPlayback = false
+    }
+
+    mutating func sceneBecameActive() {
+        isSceneActive = true
+    }
+
+    mutating func sceneBecameInactive() {
+        isSceneActive = false
+        wantsPlayback = false
+    }
+
+    mutating func reset() {
+        wantsPlayback = false
+    }
+}
+
 struct PlaybackScrubState: Equatable {
     private(set) var value: TimeInterval? = nil
 

@@ -75,6 +75,50 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertNil(pendingResume.consume())
     }
 
+    func testPlaybackIntentInactiveSceneCancelsAutoplayWithoutRearmingOnReturn() {
+        var intent = PlaybackIntentState()
+        intent.requestPlayback()
+
+        intent.sceneBecameInactive()
+
+        XCTAssertFalse(intent.isSceneActive)
+        XCTAssertFalse(intent.shouldPlay)
+
+        intent.sceneBecameActive()
+
+        XCTAssertTrue(intent.isSceneActive)
+        XCTAssertFalse(intent.shouldPlay)
+    }
+
+    func testPlaybackIntentRequiresANewRequestAfterInactivePreparation() {
+        var intent = PlaybackIntentState()
+        intent.sceneBecameInactive()
+
+        intent.requestPlayback()
+        intent.sceneBecameActive()
+
+        XCTAssertFalse(intent.shouldPlay)
+
+        intent.requestPlayback()
+
+        XCTAssertTrue(intent.shouldPlay)
+    }
+
+    func testPlaybackIntentPreservesEyeOrderResumeOnlyForActivePlayback() {
+        var intent = PlaybackIntentState()
+
+        intent.preservePlaybackIntent(wasPlaying: true)
+        XCTAssertTrue(intent.shouldPlay)
+
+        intent.pause()
+        intent.preservePlaybackIntent(wasPlaying: false)
+        XCTAssertFalse(intent.shouldPlay)
+
+        intent.sceneBecameInactive()
+        intent.preservePlaybackIntent(wasPlaying: true)
+        XCTAssertFalse(intent.shouldPlay)
+    }
+
     func testScrubStateKeepsLocalThumbValueUntilEditingEnds() {
         var scrubState = PlaybackScrubState()
         scrubState.begin(currentTime: 12)

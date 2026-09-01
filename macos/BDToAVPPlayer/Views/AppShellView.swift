@@ -57,9 +57,12 @@ struct AppShellView: View {
         .onDisappear {
             preparationTask?.cancel()
         }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
                 model.refreshSourceStatuses()
+                playerSession.applicationBecameActive()
+            } else {
+                playerSession.applicationBecameInactive()
             }
         }
         .task {

@@ -353,6 +353,10 @@ final class PlayerAppModelTests: XCTestCase {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         XCTAssertTrue(session.isReady, session.failureMessage ?? "Packed stereo session did not become ready.")
+        for _ in 0 ..< 50 where session.player.rate == 0 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertGreaterThan(session.player.rate, 0)
 
         session.toggleEyeSwap()
         for _ in 0 ..< 100 where session.isChangingEyeOrder || !session.isEyeSwapped {
@@ -362,6 +366,101 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertTrue(session.isEyeSwapped, session.failureMessage ?? "Eye order did not reverse.")
         XCTAssertFalse(session.isChangingEyeOrder)
         XCTAssertTrue(session.isReady)
+        for _ in 0 ..< 50 where session.player.rate == 0 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertGreaterThan(session.player.rate, 0)
+        session.finish()
+    }
+
+    @MainActor
+    func testBackgroundingDuringInitialPreparationPreventsAutoplay() async throws {
+        let destinationDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerInactivePreparationFixture")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let installedCheck = try BuiltInStereoChecks.install(destinationDirectory: destinationDirectory)[0]
+        let bookmarkStore = BookmarkStore(storageURL: temporaryURL())
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        try bookmarkStore.save(url: installedCheck.url, for: installedCheck.item.id)
+        let session = MVHEVCPlayerSession()
+
+        let preparationTask = Task {
+            await session.prepare(
+                mediaItem: installedCheck.item,
+                bookmarkStore: bookmarkStore,
+                resumeStore: resumeStore
+            )
+        }
+        await Task.yield()
+        XCTAssertTrue(session.isLoading)
+        session.applicationBecameInactive()
+        await preparationTask.value
+
+        for _ in 0 ..< 100 where !session.isReady {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        XCTAssertTrue(session.isReady, session.failureMessage ?? "Packed stereo session did not become ready.")
+        XCTAssertEqual(session.player.rate, 0)
+
+        session.applicationBecameActive()
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        XCTAssertEqual(session.player.rate, 0)
+        XCTAssertTrue(session.canControlPlayback)
+
+        session.play()
+        for _ in 0 ..< 50 where session.player.rate == 0 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        XCTAssertGreaterThan(session.player.rate, 0)
+        session.finish()
+    }
+
+    @MainActor
+    func testBackgroundingDuringEyeOrderChangePreventsResume() async throws {
+        let destinationDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerInactiveEyeOrderFixture")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let installedCheck = try BuiltInStereoChecks.install(destinationDirectory: destinationDirectory)[0]
+        let bookmarkStore = BookmarkStore(storageURL: temporaryURL())
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        try bookmarkStore.save(url: installedCheck.url, for: installedCheck.item.id)
+        let session = MVHEVCPlayerSession()
+
+        await session.prepare(
+            mediaItem: installedCheck.item,
+            bookmarkStore: bookmarkStore,
+            resumeStore: resumeStore
+        )
+        for _ in 0 ..< 100 where !session.isReady {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(session.isReady, session.failureMessage ?? "Packed stereo session did not become ready.")
+
+        session.play()
+        for _ in 0 ..< 50 where session.player.rate == 0 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertGreaterThan(session.player.rate, 0)
+
+        session.toggleEyeSwap()
+        XCTAssertTrue(session.isChangingEyeOrder)
+        session.applicationBecameInactive()
+
+        for _ in 0 ..< 100 where session.isChangingEyeOrder || !session.isEyeSwapped {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        XCTAssertTrue(session.isEyeSwapped, session.failureMessage ?? "Eye order did not reverse.")
+        XCTAssertFalse(session.isChangingEyeOrder)
+        XCTAssertEqual(session.player.rate, 0)
+
+        session.applicationBecameActive()
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        XCTAssertEqual(session.player.rate, 0)
         session.finish()
     }
 
