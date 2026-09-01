@@ -33,6 +33,7 @@ LANE_SOURCE_PATHS = (
     "macos/project.yml",
     "docs/tier3-clean-machine.md",
     "docs/visionos-playback-validator.md",
+    "docs/visionos-sustained-playback-qualification.md",
     "docs/tier3-operator-hardware.md",
 )
 SIGNAL_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -45,6 +46,20 @@ SIGNAL_PATTERNS: tuple[tuple[str, str], ...] = (
     ("hardware_or_media", r"/dev/disk|physical|Blu-ray|RealityDevice|visionOS|AVPlayer|AVAsset"),
     ("skip_or_conditional", r"XCTSkip|skipTest|pytest\.skip|unittest\.skip|expectedFailure"),
 )
+OPERATOR_LANE_REASONS = {
+    "operator.tier3.installed_ui": (
+        "Configured test target is not part of the maintained CI validate job; "
+        "coverage is documented as operator/device evidence."
+    ),
+    "operator.visionos.playback_probe": (
+        "Configured test target is not part of the maintained CI validate job; "
+        "coverage is documented as operator/device evidence."
+    ),
+    "operator.visionos.sustained_playback_qualification": (
+        "Tests require the BD_TO_AVP_QUALIFICATION compilation condition and are intentionally excluded "
+        "from the ordinary CI player test lane; coverage is documented as operator/device evidence."
+    ),
+}
 
 
 class InventoryError(RuntimeError):
@@ -304,6 +319,7 @@ def _command_blocks(document: str) -> tuple[str, ...]:
 def parse_documented_lanes(documents: dict[str, str]) -> tuple[dict[str, Any], ...]:
     tier3_commands = _command_blocks(documents["docs/tier3-clean-machine.md"])
     visionos_commands = _command_blocks(documents["docs/visionos-playback-validator.md"])
+    qualification_commands = _command_blocks(documents.get("docs/visionos-sustained-playback-qualification.md", ""))
     return (
         {
             "id": "operator.tier3.installed_ui",
@@ -330,6 +346,26 @@ def parse_documented_lanes(documents: dict[str, str]) -> tuple[dict[str, Any], .
                 "physical Apple Vision Pro for presentation evidence",
             ],
             "test_targets": ["SpatialPlaybackProbeTests", "SpatialPlaybackProbeUITests"],
+        },
+        {
+            "id": "operator.visionos.sustained_playback_qualification",
+            "name": "visionOS sustained playback qualification recorder",
+            "kind": "documented_device",
+            "source_paths": [
+                "docs/visionos-sustained-playback-qualification.md",
+                "macos/project.yml",
+            ],
+            "commands": [
+                command
+                for command in qualification_commands
+                if "xcodebuild test" in command and "BD_TO_AVP_QUALIFICATION" in command
+            ],
+            "requirements": [
+                "visionOS simulator for recorder unit tests",
+                "physical Apple Vision Pro for sustained playback evidence",
+                "BD_TO_AVP_QUALIFICATION compilation condition",
+            ],
+            "test_targets": ["BDToAVPPlayerTests"],
         },
     )
 
@@ -407,6 +443,8 @@ def _lane_ids(relative_path: str, bundle: str) -> list[str]:
     if bundle in {"SpatialPlaybackProbeTests", "SpatialPlaybackProbeUITests"}:
         return ["operator.visionos.playback_probe"]
     if bundle == "BDToAVPPlayerTests":
+        if relative_path == "macos/BDToAVPPlayerTests/PlaybackQualificationRecorderTests.swift":
+            return ["operator.visionos.sustained_playback_qualification"]
         return ["ci.visionos.bd_to_avp_player"]
     return []
 
@@ -570,15 +608,12 @@ def build_inventory(
     not_in_ci_lanes = [
         {
             "lane_id": lane["id"],
-            "reason": (
-                "Configured test target is not part of the maintained CI validate job; "
-                "coverage is documented as operator/device evidence."
-            ),
+            "reason": OPERATOR_LANE_REASONS[lane["id"]],
             "test_targets": lane.get("test_targets", []),
             "test_case_count": sum(row["test_case_count"] for row in test_files if lane["id"] in row["lane_ids"]),
         }
         for lane in lanes
-        if lane["id"] in {"operator.tier3.installed_ui", "operator.visionos.playback_probe"}
+        if lane["id"] in OPERATOR_LANE_REASONS
     ]
     unmaintained = [row["path"] for row in test_files if not row["lane_ids"]]
     total_cases = sum(row["test_case_count"] for row in test_files)

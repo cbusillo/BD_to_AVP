@@ -40,6 +40,13 @@
         "macos/project.yml"
       ]
     },
+    "operator-visionos-sustained-playback-contract": {
+      "description": "The qualification-gated recorder tests are an explicit simulator/device evidence lane compiled only with BD_TO_AVP_QUALIFICATION.",
+      "source_paths": [
+        "docs/visionos-sustained-playback-qualification.md",
+        "macos/project.yml"
+      ]
+    },
     "ci-visionos-player-build": {
       "description": "Pinned Xcode 26.5 CI regenerates the Xcode project and compiles the BDToAVPPlayer app and unit-test bundle for a generic visionOS Simulator, then conditionally runs those unit tests on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
       "source_paths": [
@@ -202,6 +209,18 @@
       ]
     },
     {
+      "id": "visionos-player-qualification-recorder-tests",
+      "classification": "valuable",
+      "rationale": "{path} protects the qualification-only playback recorder and is intentionally compiled through the documented BD_TO_AVP_QUALIFICATION simulator/device lane rather than ordinary CI builds.",
+      "evidence_ids": [
+        "operator-visionos-sustained-playback-contract",
+        "media-hardware-contract"
+      ],
+      "paths": [
+        "macos/BDToAVPPlayerTests/PlaybackQualificationRecorderTests.swift"
+      ]
+    },
+    {
       "id": "support-diagnostics-service-contract",
       "classification": "valuable",
       "rationale": "{path} is the maintained support-diagnostics service contract suite executed by CI; its fixture and request coverage protects a separately deployed interface.",
@@ -223,6 +242,7 @@
         "tests/test_qualify_apple_aac_layouts.py",
         "tests/test_qualify_release_notes_links.py",
         "tests/test_qualify_release_scope.py",
+        "tests/test_qualify_visionos_sustained_playback.py",
         "tests/test_release.py",
         "tests/test_release_evidence_orphan_audit.py",
         "tests/test_release_evidence_reconcile.py",

@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "contract_version": "visionos-sustained-playback-v1",
+  "log": {
+    "record_order": "header first and footer last; samples and events are normalized by capture time because callback write order may differ",
+    "sample_interval_seconds": 15,
+    "common": {
+      "schema_version": 1,
+      "captured_at": "RFC3339 UTC ending in Z",
+      "elapsed_seconds": "nonnegative number"
+    },
+    "header": {
+      "required": [
+        "run_id",
+        "media_id",
+        "sample_interval_seconds",
+        "app",
+        "device"
+      ],
+      "app": ["bundle_id", "version", "build"],
+      "device": ["hardware_model", "operating_system"]
+    },
+    "sample": {
+      "thermal_state": ["nominal", "fair", "serious", "critical", "unknown"],
+      "physical_footprint_bytes": "nonnegative integer or null",
+      "player_time_seconds": "nonnegative number",
+      "duration_seconds": "nonnegative number",
+      "rate": "finite nonnegative number",
+      "time_control_status": ["paused", "waiting", "playing", "unknown"],
+      "waiting_reason": [
+        "none",
+        "evaluating_buffering_rate",
+        "to_minimize_stalls",
+        "no_item",
+        "other"
+      ],
+      "item_status": ["unknown", "ready", "failed"],
+      "likely_to_keep_up": "boolean or null",
+      "item_error_category": [
+        "none",
+        "decoder",
+        "network",
+        "media_services",
+        "unknown"
+      ]
+    },
+    "event": {
+      "event": [
+        "prepare",
+        "ready",
+        "play_requested",
+        "pause_requested",
+        "seek_started",
+        "seek_completed",
+        "eye_order_change_started",
+        "eye_order_change_completed",
+        "eye_order_change_failed",
+        "scene_inactive",
+        "scene_active",
+        "time_control_changed",
+        "playback_finished",
+        "failure",
+        "session_finished"
+      ],
+      "detail": [
+        null,
+        "playing->waiting",
+        "paused->waiting",
+        "waiting->playing",
+        "waiting->paused",
+        "playing",
+        "paused",
+        "waiting",
+        "none",
+        "user_pause",
+        "user_resume",
+        "seek",
+        "resume_restore",
+        "eye_order_restore",
+        "eye_order_change",
+        "scene_inactive",
+        "scene_active",
+        "finished",
+        "failed"
+      ]
+    },
+    "footer": {
+      "reason": ["playback_finished", "session_finished", "failure"],
+      "final_player_time_seconds": "nonnegative number",
+      "duration_seconds": "nonnegative number"
+    }
+  },
+  "private_input": {
+    "required": [
+      "generated_at",
+      "contract_version",
+      "app_identity",
+      "device_identity",
+      "cells"
+    ],
+    "device_identity_private_fields": ["identifier", "udid"],
+    "cell_required": [
+      "case_id",
+      "media",
+      "source_class",
+      "coverage",
+      "battery",
+      "observations"
+    ],
+    "cell_evidence_choice": ["log_path", "unavailable_reason"],
+    "unavailable_reason": [
+      "provider_unavailable",
+      "asset_unavailable",
+      "redistribution_constraint"
+    ]
+  },
+  "record": {
+    "required": [
+      "schema_version",
+      "contract_version",
+      "generated_at",
+      "identity",
+      "cells",
+      "matrix",
+      "record_sha256"
+    ],
+    "cell_evidence_field": "evidence_summary",
+    "persisted_device_identity": [
+      "product_type",
+      "os_version",
+      "os_build",
+      "transport",
+      "developer_mode"
+    ],
+    "omitted_private_device_identity": ["identifier", "udid"],
+    "omitted_private_input_fields": ["log_path"]
+  },
+  "matrix": {
+    "cells": {
+      "mvhevc-local-full": {
+        "source_class": "local_documents",
+        "coverage": "full_length",
+        "codec_tag": "mv-hevc",
+        "stereo_format": "mv-hevc",
+        "mandatory": true
+      },
+      "packed-sbs-local-full": {
+        "source_class": "local_documents",
+        "coverage": "full_length",
+        "stereo_format": ["side-by-side", "sbs", "packed-sbs"],
+        "mandatory": true
+      },
+      "mvhevc-files-provider-sustained": {
+        "source_class": "files_provider",
+        "coverage": "sustained",
+        "codec_tag": "mv-hevc",
+        "stereo_format": "mv-hevc",
+        "minimum_elapsed_seconds": 1800,
+        "same_sha256_as": "mvhevc-local-full",
+        "mandatory_when_available": true
+      },
+      "packed-ou-local-sustained": {
+        "source_class": "local_documents",
+        "coverage": "sustained",
+        "stereo_format": ["over-under", "ou", "packed-ou"],
+        "minimum_elapsed_seconds": 1800,
+        "mandatory_when_available": true
+      }
+    },
+    "passing_dispositions": ["accepted", "accepted_limitation"],
+    "failing_dispositions": [
+      "evidence_failed",
+      "product_failed",
+      "needs_review"
+    ],
+    "unavailable_full_length_never_passes": true
+  },
+  "acceptance": {
+    "evidence_failed": [
+      "missing_samples",
+      "null_physical_footprint",
+      "missing_required_event:<event>",
+      "missing_required_interaction:<interaction>",
+      "malformed_log",
+      "log_unreadable",
+      "invalid_full_length_footer_reason",
+      "invalid_sustained_footer_reason",
+      "insufficient_duration",
+      "insufficient_active_playback",
+      "insufficient_media_progress",
+      "clock_span_mismatch",
+      "media_duration_mismatch",
+      "insufficient_memory_samples",
+      "insufficient_memory_span",
+      "insufficient_post_warmup_memory_samples",
+      "insufficient_final_third_memory_samples",
+      "unknown_thermal_state",
+      "run_id_mismatch",
+      "media_id_mismatch",
+      "app_identity_mismatch",
+      "device_identity_mismatch"
+    ],
+    "full_length_completion_fraction": 0.995,
+    "full_length_active_playback_fraction": 0.98,
+    "full_length_sampled_media_progress_fraction": 0.95,
+    "sustained_active_playback_fraction": 0.995,
+    "sustained_sampled_media_progress_fraction": 0.98,
+    "clock_span_tolerance": {
+      "seconds": 5,
+      "elapsed_fraction": 0.02
+    },
+    "identity_binding": {
+      "run_id": "must equal the matrix case_id",
+      "app": ["bundle_id", "version", "build"],
+      "device": [
+        "hardware_model equals product_type",
+        "operating_system exact parsed os_version",
+        "operating_system exact parsed os_build"
+      ]
+    },
+    "required_interactions": {
+      "full_length": [
+        "ordered user_pause then user_resume",
+        "ordered user seek start then completion"
+      ],
+      "packed_stereo": ["ordered eye-order change start then completion"]
+    },
+    "product_failed": [
+      "full_length_completion_below_99_5_percent",
+      "critical_thermal",
+      "serious_thermal_with_playback_degradation",
+      "item_error",
+      "playback_failure",
+      "eye_order_change_failed",
+      "local_unplanned_waiting_over_5_seconds",
+      "provider_unplanned_waiting_limit_exceeded",
+      "memory_growth_slope_no_plateau",
+      "battery_start_below_90_percent",
+      "battery_was_charging",
+      "battery_low_power_interruption",
+      "observation_<field>_no"
+    ],
+    "accepted_limitation": ["serious_thermal_without_degradation"],
+    "needs_review": ["observation_<field>_not_sure"],
+    "memory": {
+      "minimum_samples": 8,
+      "minimum_span_seconds": 300,
+      "minimum_post_warmup_samples": 4,
+      "minimum_final_third_samples": 2,
+      "warmup_seconds": "min(1200, expected_coverage / 3)",
+      "growth_bytes": 268435456,
+      "slope_mib_per_minute": 2,
+      "final_third_range_bytes": 134217728
+    },
+    "waiting": {
+      "local_max_unplanned_seconds": 5,
+      "provider_max_unplanned_seconds": 15,
+      "provider_max_unrecovered_seconds": 15,
+      "provider_total_unplanned_seconds": 60,
+      "excluded_controls": [
+        "pause",
+        "seek",
+        "eye_order_change",
+        "scene_inactive"
+      ]
+    },
+    "battery": {
+      "full_length_minimum_start_percent": 90,
+      "full_length_charging_allowed": false,
+      "full_length_low_power_interruption_allowed": false
+    },
+    "privacy": {
+      "forbidden_key_substrings": [
+        "path",
+        "url",
+        "bookmark",
+        "filename",
+        "file_name",
+        "title",
+        "error_message",
+        "localized"
+      ],
+      "maximum_string_length": 256,
+      "sha256_exception_length": 64,
+      "persisted_device_identity": [
+        "product_type",
+        "os_version",
+        "os_build",
+        "transport",
+        "developer_mode"
+      ]
+    },
+    "hashing": {
+      "record_sha256": "SHA-256 of canonical sorted-key JSON with record_sha256 omitted",
+      "canonical_json": "UTF-8, sorted keys, compact separators, no NaN or Infinity",
+      "security_scope": "integrity checksum for deterministic revalidation, not an authenticity signature"
+    }
+  }
+}
