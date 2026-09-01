@@ -52,14 +52,32 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var playbackIntent = PlaybackIntentState()
     private var eyeOrderChangeResumeTime: TimeInterval?
     private var eyeOrderChangeTask: Task<Void, Never>?
+#if BD_TO_AVP_QUALIFICATION
+    private var pendingQualificationEyeOrderChange = false
+    private var qualificationRecorder: PlaybackQualificationRecorder?
+#endif
     private var preparationGeneration = 0
     private var pendingResume = PlaybackPendingResumeState()
     private var hasEstablishedPlayback = false
 
     init() {
-        timeControlStatusObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] observedPlayer, _ in
+        timeControlStatusObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] observedPlayer, change in
+            let status = change.newValue ?? observedPlayer.timeControlStatus
+#if BD_TO_AVP_QUALIFICATION
+            let capturedAt = Date()
+            let capturedUptime = ProcessInfo.processInfo.systemUptime
+            let playerTimeSeconds = observedPlayer.currentTime().seconds
+#endif
             Task { @MainActor in
-                self?.isPlaying = observedPlayer.timeControlStatus == .playing
+                self?.isPlaying = status == .playing
+#if BD_TO_AVP_QUALIFICATION
+                self?.qualificationRecorder?.recordTimeControlChanged(
+                    status: status,
+                    playerTimeSeconds: playerTimeSeconds,
+                    capturedAt: capturedAt,
+                    capturedUptime: capturedUptime
+                )
+#endif
             }
         }
     }
@@ -124,6 +142,10 @@ final class MVHEVCPlayerSession: ObservableObject {
         isEyeSwapped = false
         isChangingEyeOrder = false
         playbackIntent.requestPlayback()
+#if BD_TO_AVP_QUALIFICATION
+        configureQualificationRecorder(for: mediaItem)
+        qualificationRecorder?.recordPrepare(player: player)
+#endif
 
         guard mediaItem.format != .unsupported else {
             presentFailure(.unsupported)
@@ -246,9 +268,15 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     func play() {
         playbackIntent.requestPlayback()
-        guard canControlPlayback, playbackIntent.shouldPlay else {
+        guard canControlPlayback,
+              playbackIntent.shouldPlay,
+              player.timeControlStatus != .playing
+        else {
             return
         }
+#if BD_TO_AVP_QUALIFICATION
+        qualificationRecorder?.recordPlayRequested(player: player)
+#endif
         player.play()
     }
 
@@ -257,7 +285,15 @@ final class MVHEVCPlayerSession: ObservableObject {
         guard playerItem != nil else {
             return
         }
-        player.pause()
+        let shouldPausePlayer = player.timeControlStatus != .paused
+#if BD_TO_AVP_QUALIFICATION
+        if shouldPausePlayer {
+            qualificationRecorder?.recordPauseRequested(player: player)
+        }
+#endif
+        if shouldPausePlayer {
+            player.pause()
+        }
         persistResume()
     }
 
@@ -266,16 +302,36 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func seek(to requestedTime: TimeInterval) {
-        seek(to: requestedTime, completion: nil)
+        seek(to: requestedTime, origin: .user, completion: nil)
     }
 
-    private func seek(to requestedTime: TimeInterval, completion: ((Bool) -> Void)?) {
+    private func seek(
+        to requestedTime: TimeInterval,
+        origin: PlaybackSeekOrigin,
+        completion: ((Bool) -> Void)?
+    ) {
         guard let playerItem else {
             return
         }
 
         let generation = preparationGeneration
         let targetTime = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
+        if origin == .user {
+            guard canSeek else {
+                return
+            }
+            let currentPlayerTime = player.currentTime().seconds
+            if currentPlayerTime.isFinite, abs(currentPlayerTime - targetTime) < 0.05 {
+                completion?(true)
+                return
+            }
+        }
+#if BD_TO_AVP_QUALIFICATION
+        qualificationRecorder?.recordSeekStarted(
+            player: player,
+            detail: origin.qualificationDetail
+        )
+#endif
         player.seek(
             to: CMTime(seconds: targetTime, preferredTimescale: 600),
             toleranceBefore: .zero,
@@ -291,6 +347,14 @@ final class MVHEVCPlayerSession: ObservableObject {
                 if completed {
                     self.currentTime = targetTime
                 }
+#if BD_TO_AVP_QUALIFICATION
+                if completed {
+                    self.qualificationRecorder?.recordSeekCompleted(
+                        player: self.player,
+                        detail: origin.qualificationDetail
+                    )
+                }
+#endif
                 completion?(completed)
             }
         }
@@ -353,6 +417,10 @@ final class MVHEVCPlayerSession: ObservableObject {
             ? restoration.time.seconds
             : currentTime
         isChangingEyeOrder = true
+#if BD_TO_AVP_QUALIFICATION
+        pendingQualificationEyeOrderChange = true
+        qualificationRecorder?.recordEyeOrderChangeStarted(player: player)
+#endif
         playbackIntent.preservePlaybackIntent(wasPlaying: restoration.wasPlaying)
         player.pause()
 
@@ -407,6 +475,10 @@ final class MVHEVCPlayerSession: ObservableObject {
                     return
                 }
                 isChangingEyeOrder = false
+#if BD_TO_AVP_QUALIFICATION
+                qualificationRecorder?.recordEyeOrderChangeFailed(player: player)
+                pendingQualificationEyeOrderChange = false
+#endif
                 failureMessage = "Eye order could not be changed: \(error.localizedDescription)"
                 if playbackIntent.shouldPlay {
                     player.play()
@@ -418,11 +490,21 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     func applicationBecameInactive() {
         playbackIntent.sceneBecameInactive()
-        pause()
+#if BD_TO_AVP_QUALIFICATION
+        qualificationRecorder?.recordSceneInactive(player: player)
+#endif
+        guard playerItem != nil else {
+            return
+        }
+        player.pause()
+        persistResume()
     }
 
     func applicationBecameActive() {
         playbackIntent.sceneBecameActive()
+#if BD_TO_AVP_QUALIFICATION
+        qualificationRecorder?.recordSceneActive(player: player)
+#endif
     }
 
     func finish() {
@@ -458,6 +540,12 @@ final class MVHEVCPlayerSession: ObservableObject {
                     return
                 }
                 self.currentTime = max(0, time.seconds.isFinite ? time.seconds : 0)
+#if BD_TO_AVP_QUALIFICATION
+                self.qualificationRecorder?.recordSampleIfNeeded(
+                    player: self.player,
+                    durationSeconds: self.duration
+                )
+#endif
             }
         }
 
@@ -477,6 +565,12 @@ final class MVHEVCPlayerSession: ObservableObject {
                     return
                 }
                 self.currentTime = self.duration
+#if BD_TO_AVP_QUALIFICATION
+                self.qualificationRecorder?.recordPlaybackFinished(
+                    player: self.player,
+                    durationSeconds: self.duration
+                )
+#endif
                 self.persistResume()
             }
         }
@@ -494,11 +588,17 @@ final class MVHEVCPlayerSession: ObservableObject {
             state = .ready
             hasEstablishedPlayback = true
             failurePresentation = nil
+#if BD_TO_AVP_QUALIFICATION
+            qualificationRecorder?.recordReady(player: player)
+#endif
             if let restoration = pendingItemRestoration {
                 pendingItemRestoration = nil
                 restoreMediaSelections(restoration.mediaSelection, on: item)
                 refreshSelectedMediaOptionIDs()
-                seek(to: restoration.time.seconds) { [weak self] completed in
+                seek(
+                    to: restoration.time.seconds,
+                    origin: .eyeOrderRestoration
+                ) { [weak self] completed in
                     guard let self else {
                         return
                     }
@@ -506,6 +606,17 @@ final class MVHEVCPlayerSession: ObservableObject {
                     self.eyeOrderChangeResumeTime = nil
                     if !completed {
                         self.failureMessage = "Eye order changed, but the previous playback position could not be restored."
+#if BD_TO_AVP_QUALIFICATION
+                        self.qualificationRecorder?.recordEyeOrderChangeFailed(player: self.player)
+                        self.pendingQualificationEyeOrderChange = false
+#endif
+                    } else {
+#if BD_TO_AVP_QUALIFICATION
+                        if self.pendingQualificationEyeOrderChange {
+                            self.qualificationRecorder?.recordEyeOrderChangeCompleted(player: self.player)
+                        }
+                        self.pendingQualificationEyeOrderChange = false
+#endif
                     }
                     if self.playbackIntent.shouldPlay {
                         self.player.play()
@@ -515,7 +626,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
             refreshSelectedMediaOptionIDs()
             if let resumeTime = pendingResume.consume() {
-                seek(to: resumeTime) { [weak self] _ in
+                seek(to: resumeTime, origin: .resumeRestoration) { [weak self] _ in
                     guard let self, self.playbackIntent.shouldPlay else {
                         return
                     }
@@ -683,6 +794,14 @@ final class MVHEVCPlayerSession: ObservableObject {
         if shouldPersistResume {
             persistResume(isFinishing: true)
         }
+#if BD_TO_AVP_QUALIFICATION
+        qualificationRecorder?.recordSessionFinished(
+            player: player,
+            durationSeconds: duration
+        )
+        qualificationRecorder = nil
+        pendingQualificationEyeOrderChange = false
+#endif
         player.pause()
         player.replaceCurrentItem(with: nil)
         itemStatusObservation = nil
@@ -753,6 +872,12 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     private func presentFailure(_ presentation: PlaybackFailurePresentation) {
         player.pause()
+#if BD_TO_AVP_QUALIFICATION
+        qualificationRecorder?.recordFailure(
+            player: player,
+            durationSeconds: duration
+        )
+#endif
         state = .failed
         failureMessage = presentation.message
         failurePresentation = presentation
@@ -763,6 +888,24 @@ final class MVHEVCPlayerSession: ObservableObject {
         eyeOrderChangeResumeTime = nil
         pendingResume.clear()
     }
+
+#if BD_TO_AVP_QUALIFICATION
+    private func configureQualificationRecorder(for mediaItem: MediaItem) {
+        let environment = ProcessInfo.processInfo.environment
+        guard let runID = environment["BD_TO_AVP_QUALIFICATION_RUN_ID"],
+              let evidenceMediaID = environment["BD_TO_AVP_QUALIFICATION_MEDIA_ID"],
+              let expectedItemID = environment["BD_TO_AVP_QUALIFICATION_ITEM_ID"],
+              expectedItemID == mediaItem.id
+        else {
+            qualificationRecorder = nil
+            return
+        }
+        qualificationRecorder = PlaybackQualificationRecorder(
+            runID: runID,
+            mediaID: evidenceMediaID
+        )
+    }
+#endif
 
     private static func sourceFailurePresentation(for error: Error) -> PlaybackFailurePresentation {
         guard let bookmarkError = error as? BookmarkStoreError else {
@@ -778,6 +921,25 @@ final class MVHEVCPlayerSession: ObservableObject {
             return .sourceNeedsLocation
         }
     }
+}
+
+private enum PlaybackSeekOrigin {
+    case user
+    case resumeRestoration
+    case eyeOrderRestoration
+
+#if BD_TO_AVP_QUALIFICATION
+    var qualificationDetail: String {
+        switch self {
+        case .user:
+            return "seek"
+        case .resumeRestoration:
+            return "resume_restore"
+        case .eyeOrderRestoration:
+            return "eye_order_restore"
+        }
+    }
+#endif
 }
 
 private struct PreparedMediaSelections {

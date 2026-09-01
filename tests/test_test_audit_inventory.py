@@ -119,6 +119,14 @@ class TestTestAuditInventory(unittest.TestCase):
             root / "docs/test-audit/inventory-v1.md",
         )
         self.assertTrue(matches, differences)
+        inventory = json.loads((root / "docs/test-audit/inventory-v1.json").read_text())
+        qualification = next(
+            finding
+            for finding in inventory["findings"]["not_in_ci_lanes"]
+            if finding["lane_id"] == "operator.visionos.sustained_playback_qualification"
+        )
+        self.assertEqual(qualification["test_case_count"], 8)
+        self.assertIn("BD_TO_AVP_QUALIFICATION", qualification["reason"])
 
     def test_parses_authoritative_ci_commands(self) -> None:
         parsed = parse_ci_workflow(CI)
@@ -166,15 +174,26 @@ class TestTestAuditInventory(unittest.TestCase):
     def test_documented_lane_commands_are_extracted(self) -> None:
         tier3_document = "```sh\nuv run python -m scripts.tier3_clean_machine run \\\n  --route rc\n```"
         visionos_document = "```bash\nxcodebuild test \\\n  -scheme SpatialPlaybackProbe\n```"
+        qualification_document = (
+            "```sh\n"
+            "xcodebuild test \\\n"
+            "  -scheme BDToAVPPlayer \\\n"
+            "  'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) "
+            "BD_TO_AVP_QUALIFICATION'\n"
+            "```"
+        )
         lanes = parse_documented_lanes(
             {
                 "docs/tier3-clean-machine.md": tier3_document,
                 "docs/visionos-playback-validator.md": visionos_document,
+                "docs/visionos-sustained-playback-qualification.md": qualification_document,
             }
         )
         self.assertEqual(lanes[0]["id"], "operator.tier3.installed_ui")
         self.assertIn("tier3_clean_machine run", lanes[0]["commands"][0])
         self.assertIn("xcodebuild test", lanes[1]["commands"][0])
+        self.assertEqual(lanes[2]["id"], "operator.visionos.sustained_playback_qualification")
+        self.assertIn("BD_TO_AVP_QUALIFICATION", lanes[2]["commands"][0])
 
     def test_inventory_and_markdown_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

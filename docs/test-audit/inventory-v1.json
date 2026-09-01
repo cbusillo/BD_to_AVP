@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "cb1be01cdccdf358d5c2572baecfdbc94c01946e",
+    "sha": "d56793a881417d6a7919ca63c307e5fa2db8e396",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -69,6 +69,13 @@
         "description": "The spatial-playback targets are explicit simulator/device evidence lanes with a physical-Vision-Pro presentation boundary.",
         "source_paths": [
           "docs/visionos-playback-validator.md",
+          "macos/project.yml"
+        ]
+      },
+      "operator-visionos-sustained-playback-contract": {
+        "description": "The qualification-gated recorder tests are an explicit simulator/device evidence lane compiled only with BD_TO_AVP_QUALIFICATION.",
+        "source_paths": [
+          "docs/visionos-sustained-playback-qualification.md",
           "macos/project.yml"
         ]
       },
@@ -249,6 +256,14 @@
           "SpatialPlaybackProbeTests",
           "SpatialPlaybackProbeUITests"
         ]
+      },
+      {
+        "lane_id": "operator.visionos.sustained_playback_qualification",
+        "reason": "Tests require the BD_TO_AVP_QUALIFICATION compilation condition and are intentionally excluded from the ordinary CI player test lane; coverage is documented as operator/device evidence.",
+        "test_case_count": 8,
+        "test_targets": [
+          "BDToAVPPlayerTests"
+        ]
       }
     ],
     "unmaintained_test_files": []
@@ -373,6 +388,26 @@
         "SpatialPlaybackProbeTests",
         "SpatialPlaybackProbeUITests"
       ]
+    },
+    {
+      "commands": [
+        "export DEVICE_ID='<connected-vision-pro-device-id>' export BUNDLE_ID='com.shinycomputers.bd-to-avp.player' export DERIVED_DATA=\"$PWD/macos/build/BDToAVPPlayerQualificationDerivedData\" export APP_PATH=\"$DERIVED_DATA/Build/Products/Release-xros/BDToAVPPlayer.app\" export PULL_ROOT=\"$PWD/qualification-evidence/$DEVICE_ID\" mkdir -p \"$PULL_ROOT\" uv run python scripts/native_app.py generate xcodebuild test  -project macos/BluRayToVisionPro.xcodeproj  -scheme BDToAVPPlayer  -configuration Debug  -destination 'platform=visionOS Simulator,name=Apple Vision Pro'  -derivedDataPath macos/build/BDToAVPPlayerQualificationDerivedData  -only-testing:BDToAVPPlayerTests/PlaybackQualificationRecorderTests  CODE_SIGNING_ALLOWED=NO  'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) BD_TO_AVP_QUALIFICATION' xcodebuild build  -project macos/BluRayToVisionPro.xcodeproj  -scheme BDToAVPPlayer  -configuration Release  -destination \"platform=visionOS,id=$DEVICE_ID\"  -derivedDataPath \"$DERIVED_DATA\"  -allowProvisioningUpdates  'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) BD_TO_AVP_QUALIFICATION' xcrun devicectl device install app --device \"$DEVICE_ID\" \"$APP_PATH\""
+      ],
+      "id": "operator.visionos.sustained_playback_qualification",
+      "kind": "documented_device",
+      "name": "visionOS sustained playback qualification recorder",
+      "requirements": [
+        "visionOS simulator for recorder unit tests",
+        "physical Apple Vision Pro for sustained playback evidence",
+        "BD_TO_AVP_QUALIFICATION compilation condition"
+      ],
+      "source_paths": [
+        "docs/visionos-sustained-playback-qualification.md",
+        "macos/project.yml"
+      ],
+      "test_targets": [
+        "BDToAVPPlayerTests"
+      ]
     }
   ],
   "schema_version": 1,
@@ -386,6 +421,7 @@
       "macos/project.yml",
       "docs/tier3-clean-machine.md",
       "docs/visionos-playback-validator.md",
+      "docs/visionos-sustained-playback-qualification.md",
       "docs/tier3-operator-hardware.md"
     ],
     "test_globs": [
@@ -401,27 +437,27 @@
   },
   "summary": {
     "bundle_file_counts": {
-      "BDToAVPPlayerTests": 8,
+      "BDToAVPPlayerTests": 9,
       "BluRayToVisionProTests": 39,
       "BluRayToVisionProUITests": 1,
       "SpatialPlaybackProbeTests": 1,
       "SpatialPlaybackProbeUITests": 1,
-      "python-unittest-discovery": 106,
+      "python-unittest-discovery": 107,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2656,
+    "ci_test_case_count": 2687,
     "classification_counts": {
       "accepted-cost": 54,
-      "valuable": 173
+      "valuable": 175
     },
     "language_file_counts": {
-      "Python": 106,
-      "Swift": 50,
+      "Python": 107,
+      "Swift": 51,
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2678,
-    "test_file_count": 157,
+    "test_case_count": 2717,
+    "test_file_count": 159,
     "unmapped_test_file_count": 0
   },
   "support_fixtures": [
@@ -1330,6 +1366,35 @@
         }
       ],
       "test_case_count": 36
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-qualification-recorder-tests",
+      "classification_evidence_ids": [
+        "operator-visionos-sustained-playback-contract",
+        "media-hardware-contract"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/PlaybackQualificationRecorderTests.swift protects the qualification-only playback recorder and is intentionally compiled through the documented BD_TO_AVP_QUALIFICATION simulator/device lane rather than ordinary CI builds.",
+      "lane_ids": [
+        "operator.visionos.sustained_playback_qualification"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/PlaybackQualificationRecorderTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 4,
+          "signal": "filesystem_access"
+        },
+        {
+          "occurrences": 13,
+          "signal": "hardware_or_media"
+        }
+      ],
+      "test_case_count": 8
     },
     {
       "bundle": "BDToAVPPlayerTests",
@@ -4103,6 +4168,44 @@
     },
     {
       "bundle": "python-unittest-discovery",
+      "classification": "valuable",
+      "classification_cohort": "python-release-security-workflow-contracts",
+      "classification_evidence_ids": [
+        "ci-python-discovery",
+        "release-security-contract"
+      ],
+      "classification_rationale": "tests/test_qualify_visionos_sustained_playback.py protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change.",
+      "lane_ids": [
+        "ci.python.unittest"
+      ],
+      "language": "Python",
+      "path": "tests/test_qualify_visionos_sustained_playback.py",
+      "special_requirements": [
+        "real-media or SSIF/ISO fixture may be required",
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 1,
+          "signal": "environment_dependent"
+        },
+        {
+          "occurrences": 45,
+          "signal": "filesystem_access"
+        },
+        {
+          "occurrences": 2,
+          "signal": "external_process"
+        },
+        {
+          "occurrences": 7,
+          "signal": "hardware_or_media"
+        }
+      ],
+      "test_case_count": 31
+    },
+    {
+      "bundle": "python-unittest-discovery",
       "classification": "accepted-cost",
       "classification_cohort": "python-media-hardware-and-quality-qualification",
       "classification_evidence_ids": [
@@ -5143,11 +5246,11 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 11,
+          "occurrences": 12,
           "signal": "filesystem_access"
         },
         {
-          "occurrences": 25,
+          "occurrences": 26,
           "signal": "external_process"
         },
         {
