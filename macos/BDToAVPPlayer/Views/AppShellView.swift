@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AppShellView: View {
     @ObservedObject var model: PlayerAppModel
@@ -7,15 +8,17 @@ struct AppShellView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var preparationTask: Task<Void, Never>?
+    @State private var isPlayerLocatorPresented = false
 
     var body: some View {
         Group {
             if model.playbackRequest != nil || playerSession.state != .idle {
-                PlayerView(session: playerSession) {
-                    preparationTask?.cancel()
-                    preparationTask = nil
-                    model.clearPlaybackRequest()
-                }
+                PlayerView(
+                    session: playerSession,
+                    onRetry: retryPlayback,
+                    onLocate: { isPlayerLocatorPresented = true },
+                    onDone: finishPlayback
+                )
             } else {
                 NavigationSplitView {
                     List {
@@ -43,23 +46,45 @@ struct AppShellView: View {
         } message: {
             Text(model.errorMessage ?? "Please try again.")
         }
-        .onChange(of: model.playbackRequest) { _, request in
-            guard let request else { return }
+        .fileImporter(
+            isPresented: $isPlayerLocatorPresented,
+            allowedContentTypes: [.movie],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case let .success(urls) = result,
+                  let url = urls.first,
+                  let item = playerSession.mediaItem
+            else {
+                return
+            }
             preparationTask?.cancel()
             preparationTask = Task {
+                guard await model.locate(
+                    itemID: item.id,
+                    at: url,
+                    shouldShowDetails: false
+                ), !Task.isCancelled else {
+                    return
+                }
                 await playerSession.prepare(
-                    mediaItem: request.item,
+                    mediaItem: model.item(id: item.id) ?? item,
                     bookmarkStore: model.bookmarkStore,
                     resumeStore: resumeStore
                 )
             }
+        }
+        .onChange(of: model.playbackRequest) { _, request in
+            guard let request else { return }
+            prepareForPlayback(request.item)
         }
         .onDisappear {
             preparationTask?.cancel()
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
-                model.refreshSourceStatuses()
+                Task {
+                    await model.refreshSourceStatuses()
+                }
                 playerSession.applicationBecameActive()
             } else {
                 playerSession.applicationBecameInactive()
@@ -68,6 +93,30 @@ struct AppShellView: View {
         .task {
             await model.bootstrap()
         }
+    }
+
+    private func prepareForPlayback(_ item: MediaItem) {
+        preparationTask?.cancel()
+        preparationTask = Task {
+            await playerSession.prepare(
+                mediaItem: item,
+                bookmarkStore: model.bookmarkStore,
+                resumeStore: resumeStore
+            )
+        }
+    }
+
+    private func retryPlayback() {
+        guard let item = playerSession.mediaItem else {
+            return
+        }
+        prepareForPlayback(item)
+    }
+
+    private func finishPlayback() {
+        preparationTask?.cancel()
+        preparationTask = nil
+        model.clearPlaybackRequest()
     }
 
     private var errorPresented: Binding<Bool> {

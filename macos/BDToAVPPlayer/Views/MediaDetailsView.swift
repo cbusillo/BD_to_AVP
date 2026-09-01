@@ -6,6 +6,7 @@ struct MediaDetailsView: View {
     let itemID: String
 
     @State private var isLocatorPresented = false
+    @State private var isRetryingSource = false
 
     var body: some View {
         NavigationStack {
@@ -106,8 +107,31 @@ struct MediaDetailsView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            if (model.sourceStatuses[item.id] ?? .missing) != .available {
+            let status = model.sourceStatuses[item.id] ?? .missing
+            if status != .available && status != .checking {
                 HStack(spacing: 12) {
+                    if status == .unavailable || status == .stale {
+                        Button {
+                            Task {
+                                isRetryingSource = true
+                                await model.refreshSourceStatus(for: item.id)
+                                isRetryingSource = false
+                            }
+                        } label: {
+                            if isRetryingSource {
+                                ProgressView()
+                                    .frame(minWidth: 60, minHeight: 60)
+                                    .accessibilityLabel("Retrying source")
+                            } else {
+                                Text("Try Again")
+                                    .frame(minWidth: 60, minHeight: 60)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isRetryingSource)
+                        .accessibilityIdentifier("details-retry-source")
+                    }
+
                     Button {
                         isLocatorPresented = true
                     } label: {
@@ -115,6 +139,7 @@ struct MediaDetailsView: View {
                             .frame(minWidth: 60, minHeight: 60)
                     }
                     .buttonStyle(.bordered)
+                    .accessibilityIdentifier("details-locate-source")
 
                     Button(role: .destructive) {
                         model.remove(itemID: item.id)
@@ -133,12 +158,25 @@ struct MediaDetailsView: View {
 
     private func sourceStatusLabel(for item: MediaItem) -> some View {
         let status = model.sourceStatuses[item.id] ?? .missing
+        let systemImage: String
+        let color: Color
+        switch status {
+        case .available:
+            systemImage = "checkmark.circle.fill"
+            color = .green
+        case .checking:
+            systemImage = "clock"
+            color = .blue
+        case .unavailable, .missing, .stale:
+            systemImage = "exclamationmark.triangle.fill"
+            color = .orange
+        }
         return Label(
             status.title,
-            systemImage: status == .available ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            systemImage: systemImage
         )
         .font(.subheadline.weight(.semibold))
-        .foregroundStyle(status == .available ? Color.green : Color.orange)
+        .foregroundStyle(color)
     }
 
     private func metadataSection(for item: MediaItem) -> some View {

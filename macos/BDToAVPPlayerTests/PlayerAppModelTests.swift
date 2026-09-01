@@ -95,6 +95,7 @@ final class PlayerAppModelTests: XCTestCase {
         var callbackItem: MediaItem?
         model.onPlaybackRequested = { callbackItem = $0 }
 
+        XCTAssertEqual(model.sourceStatuses[item.id], .checking)
         XCTAssertEqual(model.playbackAvailability(for: item), .playable)
 
         model.showDetails(for: item.id)
@@ -132,6 +133,262 @@ final class PlayerAppModelTests: XCTestCase {
 
             XCTAssertEqual(model.playbackAvailability(for: item), .playable)
         }
+    }
+
+    func testRefreshingMissingResourceClassifiesSourceAsUnavailable() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests")
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+        let item = MediaItem(id: "offline", title: "Offline", fileName: "offline.mov", format: .mvHEVC)
+        let libraryStore = LibraryStore(storageURL: temporaryURL())
+        try libraryStore.save([item])
+        let bookmarkStore = BookmarkStore(
+            storageURL: temporaryURL(),
+            resolveBookmark: { _ in (sourceURL, false) },
+            resourceExists: { _ in false }
+        )
+        try bookmarkStore.save(bookmarkData: Data([1]), for: item.id)
+        let model = PlayerAppModel(
+            libraryStore: libraryStore,
+            bookmarkStore: bookmarkStore,
+            formatInspector: { _ in .mvHEVC },
+            stereoCheckInstaller: { [] }
+        )
+
+        await model.refreshSourceStatus(for: item.id)
+
+        XCTAssertEqual(model.sourceStatuses[item.id], .unavailable)
+        XCTAssertEqual(
+            model.playbackAvailability(for: item),
+            .unavailable("Try the source again or locate it before playing.")
+        )
+    }
+
+    func testRefreshingStaleBookmarkMarksSourceAvailableAfterRepair() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests")
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+        try FileManager.default.createDirectory(
+            at: sourceURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: sourceURL)
+
+        let item = MediaItem(id: "moved", title: "Moved", fileName: "moved.mov", format: .mvHEVC)
+        let libraryStore = LibraryStore(storageURL: temporaryURL())
+        try libraryStore.save([item])
+        let refreshedBookmarkData = Data([4, 5, 6])
+        let bookmarkStore = BookmarkStore(
+            storageURL: temporaryURL(),
+            resolveBookmark: { _ in (sourceURL, true) },
+            bookmarkDataForURL: { _ in refreshedBookmarkData }
+        )
+        try bookmarkStore.save(bookmarkData: Data([1]), for: item.id)
+        let model = PlayerAppModel(
+            libraryStore: libraryStore,
+            bookmarkStore: bookmarkStore,
+            formatInspector: { _ in .mvHEVC },
+            stereoCheckInstaller: { [] }
+        )
+
+        await model.refreshSourceStatus(for: item.id)
+
+        XCTAssertEqual(model.sourceStatuses[item.id], .available)
+        XCTAssertEqual(bookmarkStore.bookmarkData(for: item.id), refreshedBookmarkData)
+    }
+
+    func testNewerSingleSourceProbeWinsOverOlderFullRefresh() async throws {
+        let unavailableURL = URL(fileURLWithPath: "/tmp/provider-unavailable.mov")
+        let availableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests")
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+        try FileManager.default.createDirectory(
+            at: availableURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: availableURL)
+
+        let firstProbeStarted = expectation(description: "first probe started")
+        let releaseFirstProbe = DispatchSemaphore(value: 0)
+        let attempts = LockedAttemptCounter()
+        let item = MediaItem(id: "movie-1", title: "Movie", fileName: "movie.mov", format: .mvHEVC)
+        let libraryStore = LibraryStore(storageURL: temporaryURL())
+        try libraryStore.save([item])
+        let bookmarkStore = BookmarkStore(
+            storageURL: temporaryURL(),
+            resolveBookmark: { _ in
+                if attempts.next() == 1 {
+                    firstProbeStarted.fulfill()
+                    releaseFirstProbe.wait()
+                    return (unavailableURL, false)
+                }
+                return (availableURL, false)
+            },
+            resourceExists: { $0 == availableURL }
+        )
+        try bookmarkStore.save(bookmarkData: Data([1]), for: item.id)
+        let model = PlayerAppModel(
+            libraryStore: libraryStore,
+            bookmarkStore: bookmarkStore,
+            formatInspector: { _ in .mvHEVC },
+            stereoCheckInstaller: { [] }
+        )
+
+        let fullRefresh = Task {
+            await model.refreshSourceStatuses()
+        }
+        await fulfillment(of: [firstProbeStarted], timeout: 1)
+        await model.refreshSourceStatus(for: item.id)
+        releaseFirstProbe.signal()
+        await fullRefresh.value
+
+        XCTAssertEqual(model.sourceStatuses[item.id], .available)
+        XCTAssertEqual(attempts.value, 2)
+    }
+
+    func testOverlappingFullRefreshRequestsCoalesceIntoFollowupPass() async throws {
+        let unavailableURL = URL(fileURLWithPath: "/tmp/provider-unavailable.mov")
+        let availableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests")
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+        try FileManager.default.createDirectory(
+            at: availableURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: availableURL)
+
+        let firstProbeStarted = expectation(description: "first probe started")
+        let releaseFirstProbe = DispatchSemaphore(value: 0)
+        let attempts = LockedAttemptCounter()
+        let item = MediaItem(id: "movie-1", title: "Movie", fileName: "movie.mov", format: .mvHEVC)
+        let libraryStore = LibraryStore(storageURL: temporaryURL())
+        try libraryStore.save([item])
+        let bookmarkStore = BookmarkStore(
+            storageURL: temporaryURL(),
+            resolveBookmark: { _ in
+                if attempts.next() == 1 {
+                    firstProbeStarted.fulfill()
+                    releaseFirstProbe.wait()
+                    return (unavailableURL, false)
+                }
+                return (availableURL, false)
+            },
+            resourceExists: { $0 == availableURL }
+        )
+        try bookmarkStore.save(bookmarkData: Data([1]), for: item.id)
+        let model = PlayerAppModel(
+            libraryStore: libraryStore,
+            bookmarkStore: bookmarkStore,
+            formatInspector: { _ in .mvHEVC },
+            stereoCheckInstaller: { [] }
+        )
+
+        let firstRefresh = Task {
+            await model.refreshSourceStatuses()
+        }
+        await fulfillment(of: [firstProbeStarted], timeout: 1)
+        await model.refreshSourceStatuses()
+        releaseFirstProbe.signal()
+        await firstRefresh.value
+
+        XCTAssertEqual(model.sourceStatuses[item.id], .available)
+        XCTAssertEqual(attempts.value, 2)
+    }
+
+    func testLocatePreservesLibraryIdentityAndRestoresAvailability() async throws {
+        let replacementURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests")
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+        try FileManager.default.createDirectory(
+            at: replacementURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: replacementURL)
+
+        let item = MediaItem(id: "movie-1", title: "Movie", fileName: "old.mov", format: .mvHEVC)
+        let libraryStore = LibraryStore(storageURL: temporaryURL())
+        try libraryStore.save([item])
+        let bookmarkStore = BookmarkStore(storageURL: temporaryURL())
+        let model = PlayerAppModel(
+            libraryStore: libraryStore,
+            bookmarkStore: bookmarkStore,
+            formatInspector: { _ in .sideBySide },
+            stereoCheckInstaller: { [] }
+        )
+
+        let located = await model.locate(
+            itemID: item.id,
+            at: replacementURL,
+            shouldShowDetails: false
+        )
+
+        XCTAssertTrue(located)
+        XCTAssertEqual(model.library.items.count, 1)
+        XCTAssertEqual(model.library.items[0].id, item.id)
+        XCTAssertEqual(model.library.items[0].title, item.title)
+        XCTAssertEqual(model.library.items[0].fileName, replacementURL.lastPathComponent)
+        XCTAssertEqual(model.library.items[0].format, .sideBySide)
+        XCTAssertEqual(model.sourceStatuses[item.id], .available)
+        XCTAssertNotNil(bookmarkStore.bookmarkData(for: item.id))
+        XCTAssertFalse(model.isShowingDetails)
+    }
+
+    func testLateFullRefreshCannotOverwriteSuccessfulLocate() async throws {
+        let oldURL = URL(fileURLWithPath: "/tmp/offline-old.mov")
+        let replacementURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests")
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+        try FileManager.default.createDirectory(
+            at: replacementURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: replacementURL)
+
+        let resolverStarted = expectation(description: "old source probe started")
+        let releaseResolver = DispatchSemaphore(value: 0)
+        let item = MediaItem(id: "movie-1", title: "Movie", fileName: "old.mov", format: .mvHEVC)
+        let libraryStore = LibraryStore(storageURL: temporaryURL())
+        try libraryStore.save([item])
+        let bookmarkStore = BookmarkStore(
+            storageURL: temporaryURL(),
+            resolveBookmark: { _ in
+                resolverStarted.fulfill()
+                releaseResolver.wait()
+                return (oldURL, true)
+            },
+            bookmarkDataForURL: { _ in Data([2]) },
+            resourceExists: { _ in true }
+        )
+        try bookmarkStore.save(bookmarkData: Data([1]), for: item.id)
+        let model = PlayerAppModel(
+            libraryStore: libraryStore,
+            bookmarkStore: bookmarkStore,
+            formatInspector: { _ in .mvHEVC },
+            stereoCheckInstaller: { [] }
+        )
+
+        let refreshTask = Task {
+            await model.refreshSourceStatuses()
+        }
+        await fulfillment(of: [resolverStarted], timeout: 1)
+
+        let located = await model.locate(itemID: item.id, at: replacementURL)
+        let locatedBookmarkData = bookmarkStore.bookmarkData(for: item.id)
+        releaseResolver.signal()
+        await refreshTask.value
+
+        XCTAssertTrue(located)
+        XCTAssertEqual(model.sourceStatuses[item.id], .available)
+        XCTAssertEqual(model.library.items.count, 1)
+        XCTAssertEqual(model.library.items[0].fileName, replacementURL.lastPathComponent)
+        XCTAssertEqual(bookmarkStore.bookmarkData(for: item.id), locatedBookmarkData)
+        XCTAssertNotEqual(bookmarkStore.bookmarkData(for: item.id), Data([2]))
     }
 
     func testBootstrapIndexesSupportedMoviesWithoutOpeningDetails() async throws {
@@ -469,5 +726,24 @@ final class PlayerAppModelTests: XCTestCase {
             .appendingPathComponent("BDToAVPPlayerTests")
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("json")
+    }
+
+    private final class LockedAttemptCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storedValue = 0
+
+        var value: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedValue
+        }
+
+        func next() -> Int {
+            lock.lock()
+            storedValue += 1
+            let value = storedValue
+            lock.unlock()
+            return value
+        }
     }
 }

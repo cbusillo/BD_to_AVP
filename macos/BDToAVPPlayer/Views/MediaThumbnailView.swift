@@ -94,7 +94,7 @@ final class MediaThumbnailLoader {
         }
 
         guard !Task.isCancelled,
-              let lease = try? bookmarkStore.open(id: item.id)
+              let lease = try? await bookmarkStore.open(id: item.id)
         else {
             return nil
         }

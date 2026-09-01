@@ -29,9 +29,53 @@ final class PlaybackPresentationTests: XCTestCase {
     }
 
     func testResumeWriteAllowsFinishingDuringEyeOrderChange() {
-        XCTAssertFalse(ResumeWritePolicy.allowsWrite(isChangingEyeOrder: true, isFinishing: false))
-        XCTAssertTrue(ResumeWritePolicy.allowsWrite(isChangingEyeOrder: true, isFinishing: true))
-        XCTAssertTrue(ResumeWritePolicy.allowsWrite(isChangingEyeOrder: false, isFinishing: false))
+        XCTAssertFalse(
+            ResumeWritePolicy.allowsWrite(
+                isChangingEyeOrder: true,
+                isFinishing: false,
+                hasEstablishedPlayback: true
+            )
+        )
+        XCTAssertTrue(
+            ResumeWritePolicy.allowsWrite(
+                isChangingEyeOrder: true,
+                isFinishing: true,
+                hasEstablishedPlayback: true
+            )
+        )
+        XCTAssertTrue(
+            ResumeWritePolicy.allowsWrite(
+                isChangingEyeOrder: false,
+                isFinishing: false,
+                hasEstablishedPlayback: true
+            )
+        )
+        XCTAssertFalse(
+            ResumeWritePolicy.allowsWrite(
+                isChangingEyeOrder: false,
+                isFinishing: true,
+                hasEstablishedPlayback: false
+            )
+        )
+    }
+
+    func testSourceOpeningPresentationIsHonestAboutFilesStaging() {
+        XCTAssertEqual(PlaybackPreparationPhase.openingSource.title, "Opening Source")
+        XCTAssertEqual(
+            PlaybackPreparationPhase.openingSource.message(for: "Movie"),
+            "Opening Movie from Files. This may take longer while its source becomes available."
+        )
+    }
+
+    func testFailurePresentationsExposeOnlySupportedRecoveryActions() {
+        XCTAssertFalse(PlaybackFailurePresentation.unsupported.canRetry)
+        XCTAssertFalse(PlaybackFailurePresentation.unsupported.canLocate)
+        XCTAssertFalse(PlaybackFailurePresentation.sourceNeedsLocation.canRetry)
+        XCTAssertTrue(PlaybackFailurePresentation.sourceNeedsLocation.canLocate)
+        XCTAssertTrue(PlaybackFailurePresentation.sourceUnavailable.canRetry)
+        XCTAssertTrue(PlaybackFailurePresentation.sourceUnavailable.canLocate)
+        XCTAssertFalse(PlaybackFailurePresentation.sourceUnavailable.message.localizedCaseInsensitiveContains("reconnect"))
+        XCTAssertFalse(PlaybackFailurePresentation.sourceUnavailable.message.contains("%"))
     }
 
     func testResumeWriteUsesCapturedPositionWhenFinishingEyeOrderChange() {
@@ -439,7 +483,24 @@ final class PlaybackPresentationTests: XCTestCase {
         await session.prepare(mediaItem: mediaItem, bookmarkStore: bookmarkStore, resumeStore: resumeStore)
 
         XCTAssertEqual(session.state, .failed)
-        XCTAssertTrue(session.failureMessage?.hasPrefix("The movie could not be opened:") == true)
+        XCTAssertEqual(session.failurePresentation, .sourceNeedsLocation)
+        XCTAssertEqual(session.failureMessage, PlaybackFailurePresentation.sourceNeedsLocation.message)
+    }
+
+    @MainActor
+    func testFailedPreparationDoesNotOverwriteExistingResumePosition() async throws {
+        let session = MVHEVCPlayerSession()
+        let mediaItem = MediaItem(id: "offline", title: "Offline", fileName: "offline.mov", format: .mvHEVC)
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests-\(UUID().uuidString)", isDirectory: true)
+        let bookmarkStore = BookmarkStore(storageURL: temporaryDirectory.appendingPathComponent("bookmarks.json"))
+        let resumeStore = ResumeStore(storageURL: temporaryDirectory.appendingPathComponent("resume.json"))
+        try resumeStore.setResumeTime(2_700, for: mediaItem.id)
+
+        await session.prepare(mediaItem: mediaItem, bookmarkStore: bookmarkStore, resumeStore: resumeStore)
+        session.finish()
+
+        XCTAssertEqual(resumeStore.resumeTime(for: mediaItem.id), 2_700)
     }
 
     @MainActor
