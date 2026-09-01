@@ -78,8 +78,12 @@ reveals actions labeled **Eye Order: Normal** or **Eye Order: Reversed** and
 **Done**.
 
 The app saves in-progress playback positions and restores them when the same
-library item is opened again. Any non-active scene phase pauses playback and
-saves progress. Completed or near-completed playback is cleared instead of
+library item is opened again. Any non-active scene phase cancels pending
+autoplay and pauses playback, saving current progress when a player item is
+available. Initial preparation and eye-order replacement remain paused if they
+complete while the scene is inactive. Returning active restores scene
+permission but never infers a new play request; playback remains paused until
+the user starts it. Completed or near-completed playback is cleared instead of
 resuming at the end.
 
 Packed stereo playback uses a visionOS 26 custom video composition with one

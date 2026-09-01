@@ -9,7 +9,6 @@ struct PlayerView: View {
     @ObservedObject private var session: MVHEVCPlayerSession
     private let onDone: () -> Void
 
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityVoiceOverEnabled) private var isVoiceOverEnabled
     @Environment(\.accessibilitySwitchControlEnabled) private var isSwitchControlEnabled
     @State private var hudVisibility = PlaybackHUDVisibilityState()
@@ -125,11 +124,6 @@ struct PlayerView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.2), value: hudVisibility.isVisible)
-            }
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase != .active {
-                session.applicationBecameInactive()
             }
         }
         .onDisappear {

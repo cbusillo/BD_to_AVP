@@ -47,7 +47,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var subtitleSelectionByID: [String: AVMediaSelectionOption] = [:]
     private var packedStereoSource: PackedStereoSource?
     private var pendingItemRestoration: PlaybackItemRestorationState?
-    private var shouldResumeAfterEyeOrderChange = false
+    private var playbackIntent = PlaybackIntentState()
     private var eyeOrderChangeResumeTime: TimeInterval?
     private var eyeOrderChangeTask: Task<Void, Never>?
     private var preparationGeneration = 0
@@ -80,7 +80,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     var canControlPlayback: Bool {
-        isReady && !isChangingEyeOrder && playerItem?.status == .readyToPlay
+        playbackIntent.isSceneActive
+            && isReady
+            && !isChangingEyeOrder
+            && playerItem?.status == .readyToPlay
     }
 
     var canSeek: Bool {
@@ -115,6 +118,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         selectedSubtitleID = "off"
         isEyeSwapped = false
         isChangingEyeOrder = false
+        playbackIntent.requestPlayback()
 
         guard mediaItem.format != .unsupported else {
             presentFailure("This media format is not supported for playback.")
@@ -213,13 +217,15 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func play() {
-        guard canControlPlayback else {
+        playbackIntent.requestPlayback()
+        guard canControlPlayback, playbackIntent.shouldPlay else {
             return
         }
         player.play()
     }
 
     func pause() {
+        playbackIntent.pause()
         guard playerItem != nil else {
             return
         }
@@ -319,7 +325,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             ? restoration.time.seconds
             : currentTime
         isChangingEyeOrder = true
-        shouldResumeAfterEyeOrderChange = restoration.wasPlaying
+        playbackIntent.preservePlaybackIntent(wasPlaying: restoration.wasPlaying)
         player.pause()
 
         eyeOrderChangeTask = Task { [weak self, weak playerItem] in
@@ -351,7 +357,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                 else {
                     if generation == preparationGeneration {
                         isChangingEyeOrder = false
-                        shouldResumeAfterEyeOrderChange = false
+                        playbackIntent.pause()
                         eyeOrderChangeResumeTime = nil
                     }
                     return
@@ -374,18 +380,21 @@ final class MVHEVCPlayerSession: ObservableObject {
                 }
                 isChangingEyeOrder = false
                 failureMessage = "Eye order could not be changed: \(error.localizedDescription)"
-                if shouldResumeAfterEyeOrderChange {
+                if playbackIntent.shouldPlay {
                     player.play()
                 }
-                shouldResumeAfterEyeOrderChange = false
                 eyeOrderChangeResumeTime = nil
             }
         }
     }
 
     func applicationBecameInactive() {
-        shouldResumeAfterEyeOrderChange = false
+        playbackIntent.sceneBecameInactive()
         pause()
+    }
+
+    func applicationBecameActive() {
+        playbackIntent.sceneBecameActive()
     }
 
     func finish() {
@@ -466,19 +475,21 @@ final class MVHEVCPlayerSession: ObservableObject {
                     if !completed {
                         self.failureMessage = "Eye order changed, but the previous playback position could not be restored."
                     }
-                    if self.shouldResumeAfterEyeOrderChange {
+                    if self.playbackIntent.shouldPlay {
                         self.player.play()
                     }
-                    self.shouldResumeAfterEyeOrderChange = false
                 }
                 return
             }
             refreshSelectedMediaOptionIDs()
             if let resumeTime = pendingResume.consume() {
                 seek(to: resumeTime) { [weak self] _ in
-                    self?.player.play()
+                    guard let self, self.playbackIntent.shouldPlay else {
+                        return
+                    }
+                    self.player.play()
                 }
-            } else {
+            } else if playbackIntent.shouldPlay {
                 player.play()
             }
         case .failed:
@@ -653,7 +664,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         subtitleSelectionByID = [:]
         packedStereoSource = nil
         pendingItemRestoration = nil
-        shouldResumeAfterEyeOrderChange = false
+        playbackIntent.reset()
         eyeOrderChangeResumeTime = nil
         audioOptions = []
         subtitleOptions = []
@@ -704,7 +715,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         isPlaying = false
         isChangingEyeOrder = false
         pendingItemRestoration = nil
-        shouldResumeAfterEyeOrderChange = false
+        playbackIntent.reset()
         eyeOrderChangeResumeTime = nil
         pendingResume.clear()
     }
