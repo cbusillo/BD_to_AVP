@@ -7,21 +7,35 @@ struct PlayerView: View {
     private static let playerDepthOffset: Float = -0.14
 
     @ObservedObject private var session: MVHEVCPlayerSession
+    private let onRetry: () -> Void
+    private let onLocate: () -> Void
     private let onDone: () -> Void
 
     @Environment(\.accessibilityVoiceOverEnabled) private var isVoiceOverEnabled
     @Environment(\.accessibilitySwitchControlEnabled) private var isSwitchControlEnabled
     @State private var hudVisibility = PlaybackHUDVisibilityState()
 
-    init(session: MVHEVCPlayerSession, onDone: @escaping () -> Void) {
+    init(
+        session: MVHEVCPlayerSession,
+        onRetry: @escaping () -> Void,
+        onLocate: @escaping () -> Void,
+        onDone: @escaping () -> Void
+    ) {
         self.session = session
+        self.onRetry = onRetry
+        self.onLocate = onLocate
         self.onDone = onDone
     }
 
     var body: some View {
         Group {
             if isPackedStereoMedia {
-                PackedStereoPlayerSurface(session: session, onDone: done)
+                PackedStereoPlayerSurface(
+                    session: session,
+                    onRetry: onRetry,
+                    onLocate: onLocate,
+                    onDone: done
+                )
             } else {
                 GeometryReader3D { geometry in
                     playerSurface(geometry: geometry)
@@ -96,6 +110,8 @@ struct PlayerView: View {
                                 .accessibilityHidden(true)
                             PlayerOrnamentView(
                                 session: session,
+                                onRetry: onRetry,
+                                onLocate: onLocate,
                                 onDone: done,
                                 onHoverChanged: { isHovered in
                                     if isHovered {
@@ -189,6 +205,8 @@ struct PlayerView: View {
 
 private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
     @ObservedObject var session: MVHEVCPlayerSession
+    let onRetry: () -> Void
+    let onLocate: () -> Void
     let onDone: () -> Void
 
     @MainActor
@@ -197,15 +215,27 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
             let eyeOrder: PackedStereoEyeOrder
             let isChangingEyeOrder: Bool
             let canControlPlayback: Bool
+            let showsEyeOrder: Bool
+            let canRetry: Bool
+            let canLocate: Bool
         }
 
         var session: MVHEVCPlayerSession
+        var onRetry: () -> Void
+        var onLocate: () -> Void
         var onDone: () -> Void
         weak var statusLabel: UILabel?
         private var actionState: ActionState?
 
-        init(session: MVHEVCPlayerSession, onDone: @escaping () -> Void) {
+        init(
+            session: MVHEVCPlayerSession,
+            onRetry: @escaping () -> Void,
+            onLocate: @escaping () -> Void,
+            onDone: @escaping () -> Void
+        ) {
             self.session = session
+            self.onRetry = onRetry
+            self.onLocate = onLocate
             self.onDone = onDone
         }
 
@@ -242,13 +272,17 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
             statusLabel?.text = PackedStereoStatusPresentation.message(
                 mediaItem: session.mediaItem,
                 isReady: session.isReady,
-                failureMessage: session.failureMessage
+                failureMessage: session.failureMessage,
+                preparationPhase: session.preparationPhase
             )
 
             let newState = ActionState(
                 eyeOrder: session.isEyeSwapped ? .reversed : .normal,
                 isChangingEyeOrder: session.isChangingEyeOrder,
-                canControlPlayback: session.canControlPlayback
+                canControlPlayback: session.canControlPlayback,
+                showsEyeOrder: session.state != .failed || BuiltInStereoChecks.contains(session.mediaItem),
+                canRetry: session.failurePresentation?.canRetry == true,
+                canLocate: session.failurePresentation?.canLocate == true
             )
             guard newState != actionState else {
                 return
@@ -274,12 +308,36 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
             ) { [weak self] _ in
                 self?.onDone()
             }
-            viewController.contextualActions = [eyeOrderAction, doneAction]
+            var actions: [UIAction] = []
+            if newState.showsEyeOrder {
+                actions.append(eyeOrderAction)
+            }
+            if newState.canRetry {
+                actions.append(
+                    UIAction(title: "Try Again", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+                        self?.onRetry()
+                    }
+                )
+            }
+            if newState.canLocate {
+                actions.append(
+                    UIAction(title: "Locate", image: UIImage(systemName: "folder")) { [weak self] _ in
+                        self?.onLocate()
+                    }
+                )
+            }
+            actions.append(doneAction)
+            viewController.contextualActions = actions
         }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(session: session, onDone: onDone)
+        Coordinator(
+            session: session,
+            onRetry: onRetry,
+            onLocate: onLocate,
+            onDone: onDone
+        )
     }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
@@ -297,6 +355,8 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
             viewController.player = session.player
         }
         context.coordinator.session = session
+        context.coordinator.onRetry = onRetry
+        context.coordinator.onLocate = onLocate
         context.coordinator.onDone = onDone
         context.coordinator.update(viewController: viewController)
     }
@@ -311,6 +371,8 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
 
 private struct PlayerOrnamentView: View {
     @ObservedObject var session: MVHEVCPlayerSession
+    let onRetry: () -> Void
+    let onLocate: () -> Void
     let onDone: () -> Void
     let onHoverChanged: (Bool) -> Void
     let onScrubbingChanged: (Bool) -> Void
@@ -325,24 +387,28 @@ private struct PlayerOrnamentView: View {
                 readyControls
             case .loading:
                 statusControls(
-                    title: "Preparing Playback",
+                    title: session.preparationPhase.title,
                     systemImage: "film.stack",
-                    message: "Preparing \(session.mediaItem?.title ?? "your movie")…",
-                    showsProgress: true
+                    message: session.preparationPhase.message(for: session.mediaItem?.title),
+                    showsProgress: true,
+                    failure: nil
                 )
             case .failed:
+                let failure = session.failurePresentation
                 statusControls(
-                    title: "Movie Unavailable",
+                    title: failure?.title ?? "Movie Unavailable",
                     systemImage: "exclamationmark.triangle",
                     message: session.failureMessage ?? "The movie could not be prepared.",
-                    showsProgress: false
+                    showsProgress: false,
+                    failure: failure
                 )
             case .idle:
                 statusControls(
                     title: "Preparing Playback",
                     systemImage: "film.stack",
                     message: "Opening \(session.mediaItem?.title ?? "your movie")…",
-                    showsProgress: true
+                    showsProgress: true,
+                    failure: nil
                 )
             }
         }
@@ -452,7 +518,13 @@ private struct PlayerOrnamentView: View {
         }
     }
 
-    private func statusControls(title: String, systemImage: String, message: String, showsProgress: Bool) -> some View {
+    private func statusControls(
+        title: String,
+        systemImage: String,
+        message: String,
+        showsProgress: Bool,
+        failure: PlaybackFailurePresentation?
+    ) -> some View {
         HStack(spacing: 16) {
             if showsProgress {
                 ProgressView()
@@ -471,9 +543,41 @@ private struct PlayerOrnamentView: View {
             }
 
             Spacer(minLength: 20)
+            if failure?.canRetry == true {
+                recoveryButton(
+                    title: "Try Again",
+                    systemImage: "arrow.clockwise",
+                    identifier: "player-retry",
+                    action: onRetry
+                )
+            }
+            if failure?.canLocate == true {
+                recoveryButton(
+                    title: "Locate",
+                    systemImage: "folder",
+                    identifier: "player-locate",
+                    action: onLocate
+                )
+            }
             doneButton
         }
         .frame(maxWidth: 580, alignment: .leading)
+    }
+
+    private func recoveryButton(
+        title: String,
+        systemImage: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 60, minHeight: 60)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(title)
     }
 
     private var doneButton: some View {

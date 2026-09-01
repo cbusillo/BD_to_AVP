@@ -64,16 +64,22 @@ enum MediaSortOrder: String, CaseIterable, Sendable {
 }
 
 enum MediaSourceStatus: Equatable, Sendable {
+    case checking
     case available
+    case unavailable
     case missing
     case stale
 
     var title: String {
         switch self {
+        case .checking:
+            return "Checking source"
         case .available:
             return "Available"
-        case .missing:
+        case .unavailable:
             return "Source unavailable"
+        case .missing:
+            return "Source missing"
         case .stale:
             return "Source moved"
         }
@@ -115,23 +121,33 @@ final class PlayerAppModel: ObservableObject {
     private let formatInspector: FormatInspector
     private let stereoCheckInstaller: StereoCheckInstaller
     private let documentsURL: URL
+    private var isRefreshingSourceStatuses = false
+    private var needsSourceStatusRefresh = false
+    private var sourceStatusProbeGenerations: [String: Int] = [:]
 
     init(
         libraryStore: LibraryStore = LibraryStore(),
-        bookmarkStore: BookmarkStore = BookmarkStore(),
+        bookmarkStore: BookmarkStore? = nil,
         documentsURL: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0],
         formatInspector: @escaping FormatInspector = MediaFormatInspector.inspect,
         stereoCheckInstaller: @escaping StereoCheckInstaller = { try BuiltInStereoChecks.install() }
     ) {
+        let resolvedBookmarkStore = bookmarkStore ?? BookmarkStore()
         self.libraryStore = libraryStore
-        self.bookmarkStore = bookmarkStore
+        self.bookmarkStore = resolvedBookmarkStore
         self.documentsURL = documentsURL
         self.formatInspector = formatInspector
         self.stereoCheckInstaller = stereoCheckInstaller
         let loadedLibrary = MediaLibraryModel(items: libraryStore.load())
         self.library = loadedLibrary
-        self.sourceStatuses = [:]
-        refreshSourceStatuses()
+        self.sourceStatuses = Dictionary(
+            uniqueKeysWithValues: loadedLibrary.items.map { item in
+                (
+                    item.id,
+                    resolvedBookmarkStore.bookmarkData(for: item.id) == nil ? .missing : .checking
+                )
+            }
+        )
     }
 
     var visibleItems: [MediaItem] {
@@ -187,7 +203,11 @@ final class PlayerAppModel: ObservableObject {
     }
 
     func playbackAvailability(for item: MediaItem) -> PlaybackAvailability {
-        guard sourceStatuses[item.id] == .available else {
+        let sourceStatus = sourceStatuses[item.id] ?? .missing
+        guard sourceStatus == .available || sourceStatus == .checking else {
+            if sourceStatus == .unavailable {
+                return .unavailable("Try the source again or locate it before playing.")
+            }
             return .unavailable("Locate the source before playing.")
         }
 
@@ -213,11 +233,17 @@ final class PlayerAppModel: ObservableObject {
     }
 
     func importMovie(from url: URL) async {
-        await importMovie(from: url, replacing: nil)
+        _ = await importMovie(from: url, replacing: nil)
     }
 
-    func locate(itemID: String, at url: URL) async {
-        await importMovie(from: url, replacing: itemID)
+    @discardableResult
+    func locate(itemID: String, at url: URL, shouldShowDetails: Bool = true) async -> Bool {
+        await importMovie(
+            from: url,
+            replacing: itemID,
+            shouldShowDetails: shouldShowDetails,
+            reportErrors: true
+        )
     }
 
     func remove(itemID: String) {
@@ -226,6 +252,7 @@ final class PlayerAppModel: ObservableObject {
         }
         do {
             try libraryStore.remove(id: itemID)
+            invalidateSourceStatusProbe(for: itemID)
             objectWillChange.send()
             library.remove(id: itemID)
             sourceStatuses.removeValue(forKey: itemID)
@@ -264,8 +291,10 @@ final class PlayerAppModel: ObservableObject {
 
         for url in urls where Self.supportedMovieExtensions.contains(url.pathExtension.lowercased()) {
             let itemID = "documents:\(url.lastPathComponent.lowercased())"
-            await importMovie(from: url, replacing: itemID, shouldShowDetails: false, reportErrors: false)
+            _ = await importMovie(from: url, replacing: itemID, shouldShowDetails: false, reportErrors: false)
         }
+
+        await refreshSourceStatuses()
     }
 
     private func installBuiltInStereoChecks() async {
@@ -277,6 +306,7 @@ final class PlayerAppModel: ObservableObject {
             for installedCheck in installedChecks {
                 try bookmarkStore.save(url: installedCheck.url, for: installedCheck.item.id)
                 try libraryStore.upsert(installedCheck.item)
+                invalidateSourceStatusProbe(for: installedCheck.item.id)
                 objectWillChange.send()
                 library.upsert(installedCheck.item)
                 sourceStatuses[installedCheck.item.id] = .available
@@ -287,7 +317,7 @@ final class PlayerAppModel: ObservableObject {
         }
     }
 
-    private func importMovie(from url: URL, replacing itemID: String?) async {
+    private func importMovie(from url: URL, replacing itemID: String?) async -> Bool {
         await importMovie(from: url, replacing: itemID, shouldShowDetails: true, reportErrors: true)
     }
 
@@ -296,7 +326,7 @@ final class PlayerAppModel: ObservableObject {
         replacing itemID: String?,
         shouldShowDetails: Bool,
         reportErrors: Bool
-    ) async {
+    ) async -> Bool {
         isImporting = true
         defer { isImporting = false }
 
@@ -317,16 +347,19 @@ final class PlayerAppModel: ObservableObject {
 
             try bookmarkStore.save(bookmarkData: bookmarkData, for: importedItem.id)
             try libraryStore.upsert(importedItem)
+            invalidateSourceStatusProbe(for: importedItem.id)
             objectWillChange.send()
             library.upsert(importedItem)
             sourceStatuses[importedItem.id] = .available
             if shouldShowDetails {
                 showDetails(for: importedItem.id)
             }
+            return true
         } catch {
             if reportErrors {
                 errorMessage = "Could not inspect or add this movie."
             }
+            return false
         }
     }
 
@@ -341,19 +374,81 @@ final class PlayerAppModel: ObservableObject {
         return "documents:\(fileURL.lastPathComponent.lowercased())"
     }
 
-    func refreshSourceStatuses() {
-        var statuses: [String: MediaSourceStatus] = [:]
-        for item in library.items {
-            do {
-                let lease = try bookmarkStore.open(id: item.id)
-                lease.close()
-                statuses[item.id] = .available
-            } catch BookmarkStoreError.staleBookmark {
-                statuses[item.id] = .stale
-            } catch {
-                statuses[item.id] = .missing
-            }
+    func refreshSourceStatuses() async {
+        guard !isRefreshingSourceStatuses else {
+            needsSourceStatusRefresh = true
+            return
         }
-        sourceStatuses = statuses
+        isRefreshingSourceStatuses = true
+        defer { isRefreshingSourceStatuses = false }
+
+        repeat {
+            needsSourceStatusRefresh = false
+            for item in library.items {
+                guard !Task.isCancelled else {
+                    return
+                }
+                let probeGeneration = beginSourceStatusProbe(for: item.id)
+                guard let result = await sourceStatus(for: item.id),
+                      sourceStatusProbeGenerations[item.id] == probeGeneration,
+                      self.item(id: item.id) != nil,
+                      bookmarkStore.bookmarkData(for: item.id) == result.bookmarkData
+                else {
+                    continue
+                }
+                sourceStatuses[item.id] = result.status
+            }
+        } while needsSourceStatusRefresh && !Task.isCancelled
     }
+
+    func refreshSourceStatus(for itemID: String) async {
+        guard item(id: itemID) != nil else {
+            return
+        }
+        let probeGeneration = beginSourceStatusProbe(for: itemID)
+        guard let result = await sourceStatus(for: itemID),
+              sourceStatusProbeGenerations[itemID] == probeGeneration,
+              item(id: itemID) != nil,
+              bookmarkStore.bookmarkData(for: itemID) == result.bookmarkData
+        else {
+            return
+        }
+        sourceStatuses[itemID] = result.status
+    }
+
+    private func sourceStatus(for itemID: String) async -> SourceStatusResult? {
+        let originalBookmarkData = bookmarkStore.bookmarkData(for: itemID)
+        do {
+            let lease = try await bookmarkStore.open(id: itemID)
+            lease.close()
+            return SourceStatusResult(
+                status: .available,
+                bookmarkData: bookmarkStore.bookmarkData(for: itemID)
+            )
+        } catch is CancellationError {
+            return nil
+        } catch BookmarkStoreError.staleBookmark {
+            return SourceStatusResult(status: .stale, bookmarkData: originalBookmarkData)
+        } catch BookmarkStoreError.missingBookmark,
+                BookmarkStoreError.invalidBookmark {
+            return SourceStatusResult(status: .missing, bookmarkData: originalBookmarkData)
+        } catch {
+            return SourceStatusResult(status: .unavailable, bookmarkData: originalBookmarkData)
+        }
+    }
+
+    private func beginSourceStatusProbe(for itemID: String) -> Int {
+        let generation = (sourceStatusProbeGenerations[itemID] ?? 0) + 1
+        sourceStatusProbeGenerations[itemID] = generation
+        return generation
+    }
+
+    private func invalidateSourceStatusProbe(for itemID: String) {
+        sourceStatusProbeGenerations[itemID] = (sourceStatusProbeGenerations[itemID] ?? 0) + 1
+    }
+}
+
+private struct SourceStatusResult {
+    let status: MediaSourceStatus
+    let bookmarkData: Data?
 }

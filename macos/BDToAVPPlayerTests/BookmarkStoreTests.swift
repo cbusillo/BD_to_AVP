@@ -1,6 +1,7 @@
 import XCTest
 @testable import BDToAVPPlayer
 
+@MainActor
 final class BookmarkStoreTests: XCTestCase {
     func testBookmarkDataJSONRoundTripPreservesOpaqueBytes() throws {
         let source: [String: Data] = [
@@ -26,10 +27,13 @@ final class BookmarkStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.bookmarkData(for: "movie-1"), bookmarkData)
     }
 
-    func testMissingBookmarkIsReportedWithoutResolving() throws {
+    func testMissingBookmarkIsReportedWithoutResolving() async throws {
         let store = BookmarkStore(storageURL: temporaryURL())
 
-        XCTAssertThrowsError(try store.resolve(id: "missing")) { error in
+        do {
+            _ = try await store.open(id: "missing")
+            XCTFail("Expected missing bookmark failure")
+        } catch {
             XCTAssertEqual(error as? BookmarkStoreError, .missingBookmark("missing"))
         }
     }
@@ -43,27 +47,27 @@ final class BookmarkStoreTests: XCTestCase {
     }
 
     func testScopedLeaseStopsExactlyOnceAfterStart() {
-        var starts = 0
-        var stops = 0
+        let starts = LockedCounter()
+        let stops = LockedCounter()
         let lease = SecurityScopedResourceLease(
             url: URL(fileURLWithPath: "/tmp/movie.mov"),
             startAccessing: {
-                starts += 1
+                starts.increment()
                 return true
             },
             stopAccessing: {
-                stops += 1
+                stops.increment()
             }
         )
 
         lease.close()
         lease.close()
 
-        XCTAssertEqual(starts, 1)
-        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(starts.value, 1)
+        XCTAssertEqual(stops.value, 1)
     }
 
-    func testOpeningStaleBookmarkRefreshesDataAndKeepsLeaseBalanced() throws {
+    func testOpeningStaleBookmarkRefreshesDataAndKeepsLeaseBalanced() async throws {
         let storageURL = temporaryURL()
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerTests")
@@ -71,8 +75,8 @@ final class BookmarkStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: sourceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: sourceURL)
 
-        var starts = 0
-        var stops = 0
+        let starts = LockedCounter()
+        let stops = LockedCounter()
         let refreshedBookmark = Data([4, 5, 6])
         let store = BookmarkStore(
             storageURL: storageURL,
@@ -85,27 +89,27 @@ final class BookmarkStoreTests: XCTestCase {
                 SecurityScopedResourceLease(
                     url: url,
                     startAccessing: {
-                        starts += 1
+                        starts.increment()
                         return true
                     },
                     stopAccessing: {
-                        stops += 1
+                        stops.increment()
                     }
                 )
             }
         )
         try store.save(bookmarkData: Data([1, 2, 3]), for: "movie-1")
 
-        let lease = try store.open(id: "movie-1")
+        let lease = try await store.open(id: "movie-1")
 
         XCTAssertEqual(store.bookmarkData(for: "movie-1"), refreshedBookmark)
-        XCTAssertEqual(starts, 2)
-        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(starts.value, 1)
+        XCTAssertEqual(stops.value, 0)
         lease.close()
-        XCTAssertEqual(stops, 2)
+        XCTAssertEqual(stops.value, 1)
     }
 
-    func testResolvingStaleBookmarkRefreshesDataAndReturnsURL() throws {
+    func testOpeningStaleBookmarkRefreshesDataAndReturnsURL() async throws {
         let storageURL = temporaryURL()
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerTests")
@@ -113,8 +117,8 @@ final class BookmarkStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: sourceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: sourceURL)
 
-        var starts = 0
-        var stops = 0
+        let starts = LockedCounter()
+        let stops = LockedCounter()
         let refreshedBookmark = Data([4, 5, 6])
         let store = BookmarkStore(
             storageURL: storageURL,
@@ -124,24 +128,28 @@ final class BookmarkStoreTests: XCTestCase {
                 SecurityScopedResourceLease(
                     url: url,
                     startAccessing: {
-                        starts += 1
+                        starts.increment()
                         return true
                     },
                     stopAccessing: {
-                        stops += 1
+                        stops.increment()
                     }
                 )
             }
         )
         try store.save(bookmarkData: Data([1, 2, 3]), for: "movie-1")
 
-        XCTAssertEqual(try store.resolve(id: "movie-1"), sourceURL)
+        let lease = try await store.open(id: "movie-1")
+        let resolvedURL = lease.url
+        lease.close()
+
+        XCTAssertEqual(resolvedURL, sourceURL)
         XCTAssertEqual(store.bookmarkData(for: "movie-1"), refreshedBookmark)
-        XCTAssertEqual(starts, 1)
-        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(starts.value, 1)
+        XCTAssertEqual(stops.value, 1)
     }
 
-    func testOpeningStaleBookmarkClosesLeaseAndReportsStaleWhenRefreshFails() throws {
+    func testOpeningStaleBookmarkClosesLeaseAndReportsStaleWhenRefreshFails() async throws {
         let storageURL = temporaryURL()
         let sourceURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerTests")
@@ -149,8 +157,8 @@ final class BookmarkStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: sourceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: sourceURL)
 
-        var starts = 0
-        var stops = 0
+        let starts = LockedCounter()
+        let stops = LockedCounter()
         let store = BookmarkStore(
             storageURL: storageURL,
             resolveBookmark: { _ in (sourceURL, true) },
@@ -159,26 +167,123 @@ final class BookmarkStoreTests: XCTestCase {
                 SecurityScopedResourceLease(
                     url: url,
                     startAccessing: {
-                        starts += 1
+                        starts.increment()
                         return true
                     },
                     stopAccessing: {
-                        stops += 1
+                        stops.increment()
                     }
                 )
             }
         )
         try store.save(bookmarkData: Data([1, 2, 3]), for: "movie-1")
 
-        XCTAssertThrowsError(try store.open(id: "movie-1")) { error in
+        do {
+            _ = try await store.open(id: "movie-1")
+            XCTFail("Expected stale bookmark failure")
+        } catch {
             XCTAssertEqual(error as? BookmarkStoreError, .staleBookmark("movie-1"))
         }
-        XCTAssertEqual(starts, 1)
-        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(starts.value, 1)
+        XCTAssertEqual(stops.value, 1)
+    }
+
+    func testOpeningBookmarkDoesNotBlockMainActorWhileProviderResolves() async throws {
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerTests")
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sourceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: sourceURL)
+
+        let resolverStarted = expectation(description: "resolver started")
+        let releaseResolver = DispatchSemaphore(value: 0)
+        let store = BookmarkStore(
+            storageURL: temporaryURL(),
+            resolveBookmark: { _ in
+                resolverStarted.fulfill()
+                releaseResolver.wait()
+                return (sourceURL, false)
+            }
+        )
+        try store.save(bookmarkData: Data([1]), for: "movie-1")
+
+        let openTask = Task {
+            try await store.open(id: "movie-1")
+        }
+        await fulfillment(of: [resolverStarted], timeout: 1)
+
+        var mainActorHeartbeat = false
+        Task { @MainActor in
+            mainActorHeartbeat = true
+        }
+        await Task.yield()
+
+        XCTAssertTrue(mainActorHeartbeat)
+        releaseResolver.signal()
+        let lease = try await openTask.value
+        lease.close()
+    }
+
+    func testCancellingBookmarkOpenBeforeResolutionAvoidsStartingResourceAccess() async throws {
+        let sourceURL = URL(fileURLWithPath: "/tmp/cancelled.mov")
+        let resolverStarted = expectation(description: "resolver started")
+        let releaseResolver = DispatchSemaphore(value: 0)
+        let starts = LockedCounter()
+        let store = BookmarkStore(
+            storageURL: temporaryURL(),
+            resolveBookmark: { _ in
+                resolverStarted.fulfill()
+                releaseResolver.wait()
+                return (sourceURL, false)
+            },
+            makeLease: { url in
+                SecurityScopedResourceLease(
+                    url: url,
+                    startAccessing: {
+                        starts.increment()
+                        return true
+                    },
+                    stopAccessing: {}
+                )
+            },
+            resourceExists: { _ in true }
+        )
+        try store.save(bookmarkData: Data([1]), for: "movie-1")
+
+        let openTask = Task {
+            try await store.open(id: "movie-1")
+        }
+        await fulfillment(of: [resolverStarted], timeout: 1)
+        openTask.cancel()
+        releaseResolver.signal()
+
+        do {
+            _ = try await openTask.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        }
+        XCTAssertEqual(starts.value, 0)
     }
 
     private enum BookmarkRefreshError: Error {
         case failed
+    }
+
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storedValue = 0
+
+        var value: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedValue
+        }
+
+        func increment() {
+            lock.lock()
+            storedValue += 1
+            lock.unlock()
+        }
     }
 
     private func temporaryURL() -> URL {

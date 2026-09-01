@@ -8,9 +8,10 @@ enum BookmarkStoreError: Error, Equatable {
     case missingResource(URL)
 }
 
-final class SecurityScopedResourceLease {
+final class SecurityScopedResourceLease: @unchecked Sendable {
     let url: URL
 
+    private let lock = NSLock()
     private var isActive: Bool
     private let stopAccessing: () -> Void
 
@@ -29,9 +30,13 @@ final class SecurityScopedResourceLease {
     }
 
     func close() {
-        guard isActive else { return }
+        lock.lock()
+        let shouldStop = isActive
         isActive = false
-        stopAccessing()
+        lock.unlock()
+        if shouldStop {
+            stopAccessing()
+        }
     }
 
     deinit {
@@ -39,6 +44,7 @@ final class SecurityScopedResourceLease {
     }
 }
 
+@MainActor
 final class BookmarkStore {
     private struct Document: Codable {
         var bookmarks: [String: Data]
@@ -47,9 +53,7 @@ final class BookmarkStore {
     private let storageURL: URL
     private let fileManager: FileManager
     private var bookmarks: [String: Data]
-    private let resolveBookmark: (Data) throws -> (URL, Bool)
-    private let bookmarkDataForURL: (URL) throws -> Data
-    private let makeLease: (URL) -> SecurityScopedResourceLease
+    private let access: BookmarkAccess
 
     init(
         storageURL: URL = BookmarkStore.defaultStorageURL(),
@@ -69,27 +73,33 @@ final class BookmarkStore {
         },
         makeLease: @escaping (URL) -> SecurityScopedResourceLease = { url in
             SecurityScopedResourceLease(url: url)
+        },
+        resourceExists: @escaping (URL) -> Bool = { url in
+            FileManager.default.fileExists(atPath: url.path)
         }
     ) {
         self.storageURL = storageURL
         self.fileManager = fileManager
         self.bookmarks = (try? Self.decodeBookmarks(fileManager.contents(atPath: storageURL.path) ?? Data())) ?? [:]
-        self.resolveBookmark = resolveBookmark
-        self.bookmarkDataForURL = bookmarkDataForURL
-        self.makeLease = makeLease
+        self.access = BookmarkAccess(
+            resolveBookmark: resolveBookmark,
+            bookmarkDataForURL: bookmarkDataForURL,
+            makeLease: makeLease,
+            resourceExists: resourceExists
+        )
     }
 
-    static func defaultStorageURL(fileManager: FileManager = .default) -> URL {
+    nonisolated static func defaultStorageURL(fileManager: FileManager = .default) -> URL {
         let directory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("BDToAVPPlayer", isDirectory: true)
         return directory.appendingPathComponent("bookmarks.json")
     }
 
-    static func encodeBookmarks(_ bookmarks: [String: Data]) throws -> Data {
+    nonisolated static func encodeBookmarks(_ bookmarks: [String: Data]) throws -> Data {
         try JSONEncoder().encode(Document(bookmarks: bookmarks))
     }
 
-    static func decodeBookmarks(_ data: Data) throws -> [String: Data] {
+    nonisolated static func decodeBookmarks(_ data: Data) throws -> [String: Data] {
         try JSONDecoder().decode(Document.self, from: data).bookmarks
     }
 
@@ -113,52 +123,50 @@ final class BookmarkStore {
         try persist()
     }
 
-    func resolve(id: String) throws -> URL {
+    func open(id: String) async throws -> SecurityScopedResourceLease {
         guard let bookmarkData = bookmarks[id] else {
             throw BookmarkStoreError.missingBookmark(id)
         }
 
-        let resolvedURL: URL
-        let isStale: Bool
+        try Task.checkCancellation()
+        let openTask = Task.detached(priority: .userInitiated) { [access] in
+            try access.open(bookmarkData: bookmarkData)
+        }
+        let opened: OpenedBookmark
         do {
-            (resolvedURL, isStale) = try resolveBookmark(bookmarkData)
+            opened = try await withTaskCancellationHandler {
+                try await openTask.value
+            } onCancel: {
+                openTask.cancel()
+            }
         } catch {
+            if error is CancellationError {
+                throw error
+            }
+            if let bookmarkError = error as? BookmarkStoreError {
+                switch bookmarkError {
+                case .invalidBookmark:
+                    throw BookmarkStoreError.invalidBookmark(id)
+                case .staleBookmark:
+                    throw BookmarkStoreError.staleBookmark(id)
+                default:
+                    throw bookmarkError
+                }
+            }
             throw BookmarkStoreError.invalidBookmark(id)
         }
 
-        guard isStale else {
-            return resolvedURL
-        }
-
-        let lease = makeLease(resolvedURL)
-        defer { lease.close() }
-        do {
-            guard fileManager.fileExists(atPath: resolvedURL.path) else {
-                throw BookmarkStoreError.missingResource(resolvedURL)
+        if let refreshedBookmarkData = opened.refreshedBookmarkData {
+            guard bookmarks[id] == bookmarkData else {
+                return opened.lease
             }
-            try save(bookmarkData: bookmarkDataForURL(resolvedURL), for: id)
-            return resolvedURL
-        } catch let error as BookmarkStoreError {
-            throw error
-        } catch {
-            throw BookmarkStoreError.staleBookmark(id)
+            do {
+                try save(bookmarkData: refreshedBookmarkData, for: id)
+            } catch {
+                return opened.lease
+            }
         }
-    }
-
-    func open(id: String) throws -> SecurityScopedResourceLease {
-        let resolvedURL = try resolve(id: id)
-        let lease = makeLease(resolvedURL)
-        guard fileManager.fileExists(atPath: resolvedURL.path) else {
-            lease.close()
-            throw BookmarkStoreError.missingResource(resolvedURL)
-        }
-        return lease
-    }
-
-    func withResolvedURL<T>(for id: String, _ body: (URL) throws -> T) throws -> T {
-        let lease = try open(id: id)
-        defer { lease.close() }
-        return try body(lease.url)
+        return opened.lease
     }
 
     private func persist() throws {
@@ -166,5 +174,62 @@ final class BookmarkStore {
         let directory = storageURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: storageURL, options: .atomic)
+    }
+}
+
+private struct OpenedBookmark: @unchecked Sendable {
+    let lease: SecurityScopedResourceLease
+    let refreshedBookmarkData: Data?
+}
+
+private final class BookmarkAccess: @unchecked Sendable {
+    private let resolveBookmark: (Data) throws -> (URL, Bool)
+    private let bookmarkDataForURL: (URL) throws -> Data
+    private let makeLease: (URL) -> SecurityScopedResourceLease
+    private let resourceExists: (URL) -> Bool
+
+    init(
+        resolveBookmark: @escaping (Data) throws -> (URL, Bool),
+        bookmarkDataForURL: @escaping (URL) throws -> Data,
+        makeLease: @escaping (URL) -> SecurityScopedResourceLease,
+        resourceExists: @escaping (URL) -> Bool
+    ) {
+        self.resolveBookmark = resolveBookmark
+        self.bookmarkDataForURL = bookmarkDataForURL
+        self.makeLease = makeLease
+        self.resourceExists = resourceExists
+    }
+
+    func open(bookmarkData: Data) throws -> OpenedBookmark {
+        try Task.checkCancellation()
+
+        let resolvedURL: URL
+        let isStale: Bool
+        do {
+            (resolvedURL, isStale) = try resolveBookmark(bookmarkData)
+        } catch {
+            throw BookmarkStoreError.invalidBookmark("")
+        }
+
+        try Task.checkCancellation()
+        let lease = makeLease(resolvedURL)
+        do {
+            try Task.checkCancellation()
+            guard resourceExists(resolvedURL) else {
+                throw BookmarkStoreError.missingResource(resolvedURL)
+            }
+            let refreshedBookmarkData = isStale ? try bookmarkDataForURL(resolvedURL) : nil
+            try Task.checkCancellation()
+            return OpenedBookmark(
+                lease: lease,
+                refreshedBookmarkData: refreshedBookmarkData
+            )
+        } catch {
+            lease.close()
+            if error is CancellationError || error is BookmarkStoreError {
+                throw error
+            }
+            throw BookmarkStoreError.staleBookmark("")
+        }
     }
 }

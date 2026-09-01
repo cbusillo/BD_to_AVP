@@ -316,7 +316,10 @@ struct MediaPosterCard: View {
                 .lineLimit(1)
 
             if sourceStatus != .available {
-                Label(sourceStatus?.title ?? "Source unavailable", systemImage: "exclamationmark.triangle")
+                Label(
+                    sourceStatus?.title ?? "Source unavailable",
+                    systemImage: sourceStatus == .checking ? "clock" : "exclamationmark.triangle"
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

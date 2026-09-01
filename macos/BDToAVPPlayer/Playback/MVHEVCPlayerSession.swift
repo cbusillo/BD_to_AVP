@@ -23,6 +23,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var state: MVHEVCPlayerSessionState = .idle
     @Published private(set) var mediaItem: MediaItem?
     @Published private(set) var failureMessage: String?
+    @Published private(set) var failurePresentation: PlaybackFailurePresentation?
+    @Published private(set) var preparationPhase: PlaybackPreparationPhase = .openingSource
     @Published private(set) var isPlaying = false
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
@@ -52,6 +54,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var eyeOrderChangeTask: Task<Void, Never>?
     private var preparationGeneration = 0
     private var pendingResume = PlaybackPendingResumeState()
+    private var hasEstablishedPlayback = false
 
     init() {
         timeControlStatusObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] observedPlayer, _ in
@@ -110,6 +113,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         self.resumeStore = resumeStore
         state = .loading
         failureMessage = nil
+        failurePresentation = nil
+        preparationPhase = .openingSource
         currentTime = 0
         duration = 0
         audioOptions = []
@@ -121,30 +126,43 @@ final class MVHEVCPlayerSession: ObservableObject {
         playbackIntent.requestPlayback()
 
         guard mediaItem.format != .unsupported else {
-            presentFailure("This media format is not supported for playback.")
+            presentFailure(.unsupported)
             return
         }
 
         let openedLease: SecurityScopedResourceLease
         do {
-            openedLease = try bookmarkStore.open(id: mediaItem.id)
+            openedLease = try await bookmarkStore.open(id: mediaItem.id)
         } catch {
-            presentFailure("The movie could not be opened: \(error.localizedDescription)")
+            guard generation == preparationGeneration, !Task.isCancelled else {
+                return
+            }
+            presentFailure(Self.sourceFailurePresentation(for: error))
             return
         }
+
+        guard generation == preparationGeneration, !Task.isCancelled else {
+            openedLease.close()
+            return
+        }
+        resourceLease = openedLease
+        preparationPhase = .preparingMedia
 
         do {
             let detectedFormat = try await MediaFormatInspector.inspect(url: openedLease.url)
             guard generation == preparationGeneration, !Task.isCancelled else {
+                if resourceLease === openedLease {
+                    resourceLease = nil
+                }
                 openedLease.close()
                 return
             }
             guard detectedFormat == mediaItem.format else {
+                if resourceLease === openedLease {
+                    resourceLease = nil
+                }
                 openedLease.close()
-                presentFailure(
-                    "This movie is \(detectedFormat.displayName), not \(mediaItem.format.displayName). "
-                        + "Locate the intended source and try again."
-                )
+                presentFailure(.sourceMismatch(detectedFormat: detectedFormat, expectedFormat: mediaItem.format))
                 return
             }
 
@@ -178,11 +196,13 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
 
             guard generation == preparationGeneration, !Task.isCancelled else {
+                if resourceLease === openedLease {
+                    resourceLease = nil
+                }
                 openedLease.close()
                 return
             }
 
-            resourceLease = openedLease
             playerItem = item
             packedStereoSource = preparedPackedStereo
             duration = preparedDuration.seconds.isFinite ? max(0, preparedDuration.seconds) : 0
@@ -191,16 +211,24 @@ final class MVHEVCPlayerSession: ObservableObject {
             observe(item, generation: generation)
             player.replaceCurrentItem(with: item)
         } catch is CancellationError {
+            if resourceLease === openedLease {
+                resourceLease = nil
+            }
             openedLease.close()
             if generation == preparationGeneration {
                 pendingResume.clear()
             }
         } catch {
+            if resourceLease === openedLease {
+                resourceLease = nil
+            }
             openedLease.close()
             guard generation == preparationGeneration else {
                 return
             }
-            presentFailure("The movie could not be prepared: \(error.localizedDescription)")
+            presentFailure(
+                .preparationFailed("The movie could not be prepared: \(Self.playbackFailureMessage(for: error))")
+            )
         }
     }
 
@@ -404,6 +432,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         resumeStore = nil
         state = .idle
         failureMessage = nil
+        failurePresentation = nil
+        preparationPhase = .openingSource
     }
 
     private func observe(_ item: AVPlayerItem, generation: Int) {
@@ -462,6 +492,8 @@ final class MVHEVCPlayerSession: ObservableObject {
             break
         case .readyToPlay:
             state = .ready
+            hasEstablishedPlayback = true
+            failurePresentation = nil
             if let restoration = pendingItemRestoration {
                 pendingItemRestoration = nil
                 restoreMediaSelections(restoration.mediaSelection, on: item)
@@ -493,9 +525,16 @@ final class MVHEVCPlayerSession: ObservableObject {
                 player.play()
             }
         case .failed:
-            presentFailure(Self.playbackFailureMessage(for: item.error))
+            let message = Self.playbackFailureMessage(for: item.error)
+            if BuiltInStereoChecks.contains(mediaItem) {
+                presentFailure(.builtInStereoCheckUnavailable(message))
+            } else {
+                presentFailure(.preparationFailed(message))
+            }
         @unknown default:
-            presentFailure("The player returned an unknown playback status.")
+            presentFailure(
+                .preparationFailed("The player returned an unknown playback status.")
+            )
         }
     }
 
@@ -674,12 +713,16 @@ final class MVHEVCPlayerSession: ObservableObject {
         isChangingEyeOrder = false
         isPlaying = false
         pendingResume.clear()
+        hasEstablishedPlayback = false
+        failurePresentation = nil
+        preparationPhase = .openingSource
     }
 
     private func persistResume(isFinishing: Bool = false) {
         guard ResumeWritePolicy.allowsWrite(
             isChangingEyeOrder: isChangingEyeOrder,
-            isFinishing: isFinishing
+            isFinishing: isFinishing,
+            hasEstablishedPlayback: hasEstablishedPlayback
         ), let mediaItem, let resumeStore else {
             return
         }
@@ -708,16 +751,32 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
     }
 
-    private func presentFailure(_ message: String) {
+    private func presentFailure(_ presentation: PlaybackFailurePresentation) {
         player.pause()
         state = .failed
-        failureMessage = message
+        failureMessage = presentation.message
+        failurePresentation = presentation
         isPlaying = false
         isChangingEyeOrder = false
         pendingItemRestoration = nil
         playbackIntent.reset()
         eyeOrderChangeResumeTime = nil
         pendingResume.clear()
+    }
+
+    private static func sourceFailurePresentation(for error: Error) -> PlaybackFailurePresentation {
+        guard let bookmarkError = error as? BookmarkStoreError else {
+            return .sourceUnavailable
+        }
+
+        switch bookmarkError {
+        case .missingBookmark, .invalidBookmark:
+            return .sourceNeedsLocation
+        case .staleBookmark, .missingResource:
+            return .sourceUnavailable
+        case .invalidIdentifier:
+            return .sourceNeedsLocation
+        }
     }
 }
 

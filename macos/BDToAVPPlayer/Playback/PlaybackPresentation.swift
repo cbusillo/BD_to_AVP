@@ -201,7 +201,8 @@ enum PackedStereoStatusPresentation {
     static func message(
         mediaItem: MediaItem?,
         isReady: Bool,
-        failureMessage: String?
+        failureMessage: String?,
+        preparationPhase: PlaybackPreparationPhase = .preparingMedia
     ) -> String {
         if let failureMessage {
             return failureMessage
@@ -212,7 +213,86 @@ enum PackedStereoStatusPresentation {
         if isReady {
             return "Packed stereo playback"
         }
-        return "Preparing \(mediaItem?.title ?? "your movie")…"
+        return preparationPhase.message(for: mediaItem?.title)
+    }
+}
+
+enum PlaybackPreparationPhase: Equatable {
+    case openingSource
+    case preparingMedia
+
+    var title: String {
+        switch self {
+        case .openingSource:
+            return "Opening Source"
+        case .preparingMedia:
+            return "Preparing Playback"
+        }
+    }
+
+    func message(for mediaTitle: String?) -> String {
+        let title = mediaTitle ?? "your movie"
+        switch self {
+        case .openingSource:
+            return "Opening \(title) from Files. This may take longer while its source becomes available."
+        case .preparingMedia:
+            return "Preparing \(title)…"
+        }
+    }
+}
+
+struct PlaybackFailurePresentation: Equatable {
+    let title: String
+    let message: String
+    let canRetry: Bool
+    let canLocate: Bool
+
+    static let unsupported = PlaybackFailurePresentation(
+        title: "Format Not Supported",
+        message: "This media format is not supported for playback.",
+        canRetry: false,
+        canLocate: false
+    )
+
+    static let sourceNeedsLocation = PlaybackFailurePresentation(
+        title: "Source Needs Attention",
+        message: "Locate this movie in Files, then try again.",
+        canRetry: false,
+        canLocate: true
+    )
+
+    static let sourceUnavailable = PlaybackFailurePresentation(
+        title: "Source Unavailable",
+        message: "The movie's source is not responding. Make it available in Files, then try again or locate the file.",
+        canRetry: true,
+        canLocate: true
+    )
+
+    static func sourceMismatch(detectedFormat: StereoFormat, expectedFormat: StereoFormat) -> PlaybackFailurePresentation {
+        PlaybackFailurePresentation(
+            title: "Different Movie Found",
+            message: "This movie is \(detectedFormat.displayName), not \(expectedFormat.displayName). Locate the intended source and try again.",
+            canRetry: false,
+            canLocate: true
+        )
+    }
+
+    static func preparationFailed(_ message: String) -> PlaybackFailurePresentation {
+        PlaybackFailurePresentation(
+            title: "Movie Unavailable",
+            message: message,
+            canRetry: true,
+            canLocate: true
+        )
+    }
+
+    static func builtInStereoCheckUnavailable(_ message: String) -> PlaybackFailurePresentation {
+        PlaybackFailurePresentation(
+            title: "Stereo Check Unavailable",
+            message: message,
+            canRetry: false,
+            canLocate: false
+        )
     }
 }
 
@@ -225,8 +305,12 @@ enum ResumeWriteDecision: Equatable {
 enum ResumeWritePolicy {
     static let completedPlaybackThreshold: TimeInterval = 5
 
-    static func allowsWrite(isChangingEyeOrder: Bool, isFinishing: Bool) -> Bool {
-        !isChangingEyeOrder || isFinishing
+    static func allowsWrite(
+        isChangingEyeOrder: Bool,
+        isFinishing: Bool,
+        hasEstablishedPlayback: Bool
+    ) -> Bool {
+        hasEstablishedPlayback && (!isChangingEyeOrder || isFinishing)
     }
 
     static func position(

@@ -31,11 +31,25 @@ validator.
 Imported files receive persistent bookmark data. Playback resolves the bookmark
 and keeps one balanced security-scoped access lease open for the complete player
 session. The lease closes when playback finishes, preparation is replaced, or
-the session is destroyed.
+the session is destroyed. Bookmark resolution, provider access, and existence
+probing run outside the main actor, so a slow Files or SMB-backed provider cannot
+freeze the window before playback's loading state appears.
 
 Files in the app's Documents directory use the same library and bookmark path as
 Files-picker imports. If a source moves or disappears, the details view reports
-that state and offers a locate flow instead of attempting playback.
+that state and offers retry or locate recovery instead of treating a temporary
+provider outage as deletion. A successful locate preserves the stable library
+identity while refreshing its filename, detected format, and bookmark only after
+inspection succeeds.
+
+Playback preparation distinguishes opening the source from preparing the media.
+The source-opening state is indeterminate and cancellable because third-party
+File Providers do not guarantee portable download percentages. Recoverable
+failures expose **Try Again**, **Locate**, and **Done** in both the RealityKit
+ornament and packed-stereo AVKit actions. Retry starts a fresh bounded session
+generation; Locate updates the existing item and then prepares it again. Done
+invalidates the active generation, closes any acquired lease, and prevents late
+provider completion from installing an item or starting playback.
 
 ## Playback Contract
 
@@ -66,7 +80,8 @@ Together the controls provide:
 - a position slider and elapsed/duration display;
 - audio-track selection;
 - subtitle selection, including Off;
-- eye-order swapping for side-by-side and over-under playback; and
+- eye-order swapping for side-by-side and over-under playback;
+- retry and locate recovery when Files-backed preparation fails; and
 - Done, which persists progress and releases the session.
 
 The MV-HEVC ornament remains visible while playback is paused, loading, failed,
@@ -83,8 +98,10 @@ autoplay and pauses playback, saving current progress when a player item is
 available. Initial preparation and eye-order replacement remain paused if they
 complete while the scene is inactive. Returning active restores scene
 permission but never infers a new play request; playback remains paused until
-the user starts it. Completed or near-completed playback is cleared instead of
-resuming at the end.
+the user starts it. Loading or failed preparations never overwrite an existing
+resume point because resume writes begin only after a player item has reached
+ready state. Completed or near-completed playback is cleared instead of resuming
+at the end.
 
 Packed stereo playback uses a visionOS 26 custom video composition with one
 stable two-buffer output contract: output zero is always tagged as the left eye
@@ -112,8 +129,10 @@ their stable library records and bookmarks on every launch so app updates cannot
 leave stale bundle-path references. During a check, AVKit exposes Eye Order as a
 native playback action labeled Normal or Reversed.
 
-MVC, network shares, relay playback, and live conversion are not implemented in
-this slice.
+Files-provider sources may be backed by SMB or other network storage, but the app
+does not implement direct `smb://` transport, automatic mid-stream reconnection,
+offline pinning, provider-specific progress percentages, MVC, relay playback, or
+live conversion in this slice.
 
 ## Build And Test
 
