@@ -8,6 +8,107 @@ struct PlaybackMediaOption: Identifiable, Equatable, Hashable {
     let displayName: String
 }
 
+#if BD_TO_AVP_QUALIFICATION
+struct PlaybackQualificationProgrammaticSeek: Equatable {
+    let id: UUID
+    let targetTime: TimeInterval
+    var isInFlight: Bool
+    var expiresAtUptime: TimeInterval
+}
+
+enum PlaybackQualificationNativeControlPolicy {
+    static func shouldRecordPause(
+        previousStatus: AVPlayer.TimeControlStatus?,
+        currentStatus: AVPlayer.TimeControlStatus,
+        shouldPlay: Bool,
+        isChangingEyeOrder: Bool,
+        hasCurrentItem: Bool,
+        playerTime: TimeInterval,
+        duration: TimeInterval
+    ) -> Bool {
+        guard previousStatus == .playing,
+              currentStatus == .paused,
+              shouldPlay,
+              !isChangingEyeOrder,
+              hasCurrentItem
+        else {
+            return false
+        }
+        guard duration.isFinite, duration > 0, playerTime.isFinite else {
+            return true
+        }
+        return duration - playerTime > 2
+    }
+
+    static func shouldRecordSeek(
+        isSceneActive: Bool,
+        isChangingEyeOrder: Bool,
+        hasEstablishedPlayback: Bool,
+        playerTime: TimeInterval
+    ) -> Bool {
+        isSceneActive
+            && !isChangingEyeOrder
+            && hasEstablishedPlayback
+            && playerTime.isFinite
+            && playerTime > 0.05
+    }
+
+    static func programmaticSeekSuppressionIndex(
+        playerTime: TimeInterval,
+        currentUptime: TimeInterval,
+        suppressions: [PlaybackQualificationProgrammaticSeek]
+    ) -> Int? {
+        guard playerTime.isFinite else {
+            return nil
+        }
+        let activeSuppressions = suppressions.indices.filter {
+            suppressions[$0].expiresAtUptime >= currentUptime
+        }
+        return activeSuppressions.first {
+            abs(suppressions[$0].targetTime - playerTime) <= 1
+        } ?? activeSuppressions.first {
+            suppressions[$0].isInFlight
+        }
+    }
+
+    static func isDuplicateNativeSeek(
+        playerTime: TimeInterval,
+        currentUptime: TimeInterval,
+        previousPlayerTime: TimeInterval?,
+        previousUptime: TimeInterval?
+    ) -> Bool {
+        guard let previousPlayerTime,
+              let previousUptime,
+              currentUptime >= previousUptime
+        else {
+            return false
+        }
+        return currentUptime - previousUptime <= 1
+            && abs(playerTime - previousPlayerTime) <= 1
+    }
+
+    static func shouldSuppressSeekAfterNativeResume(
+        playerTime: TimeInterval,
+        nativePausePlayerTime: TimeInterval?,
+        nativePausePending: Bool,
+        currentUptime: TimeInterval,
+        suppressionUntilUptime: TimeInterval
+    ) -> Bool {
+        if currentUptime <= suppressionUntilUptime {
+            return true
+        }
+        guard nativePausePending,
+              let nativePausePlayerTime,
+              playerTime.isFinite,
+              nativePausePlayerTime.isFinite
+        else {
+            return false
+        }
+        return abs(playerTime - nativePausePlayerTime) <= 1
+    }
+}
+#endif
+
 enum MVHEVCPlayerSessionState: Equatable {
     case idle
     case loading
@@ -55,6 +156,14 @@ final class MVHEVCPlayerSession: ObservableObject {
 #if BD_TO_AVP_QUALIFICATION
     private var pendingQualificationEyeOrderChange = false
     private var qualificationRecorder: PlaybackQualificationRecorder?
+    private var qualificationLastTimeControlStatus: AVPlayer.TimeControlStatus?
+    private var qualificationNativePausePending = false
+    private var qualificationNativePausePlayerTime: TimeInterval?
+    private var qualificationProgrammaticSeeks: [PlaybackQualificationProgrammaticSeek] = []
+    private var qualificationLastNativeSeekTime: TimeInterval?
+    private var qualificationLastNativeSeekUptime: TimeInterval?
+    private var qualificationNativeResumeSeekSuppressionUntilUptime: TimeInterval = 0
+    private var qualificationTimeJumpedObserver: NSObjectProtocol?
 #endif
     private var preparationGeneration = 0
     private var pendingResume = PlaybackPendingResumeState()
@@ -77,6 +186,11 @@ final class MVHEVCPlayerSession: ObservableObject {
                     capturedAt: capturedAt,
                     capturedUptime: capturedUptime
                 )
+                self?.handleNativeTimeControlTransition(
+                    to: status,
+                    playerTimeSeconds: playerTimeSeconds,
+                    capturedUptime: capturedUptime
+                )
 #endif
             }
         }
@@ -89,6 +203,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         if let playbackFinishedObserver {
             NotificationCenter.default.removeObserver(playbackFinishedObserver)
         }
+#if BD_TO_AVP_QUALIFICATION
+        if let qualificationTimeJumpedObserver {
+            NotificationCenter.default.removeObserver(qualificationTimeJumpedObserver)
+        }
+#endif
         resourceLease?.close()
     }
 
@@ -331,6 +450,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             player: player,
             detail: origin.qualificationDetail
         )
+        let qualificationSeekID = registerQualificationProgrammaticSeek(targetTime: targetTime)
 #endif
         player.seek(
             to: CMTime(seconds: targetTime, preferredTimescale: 600),
@@ -354,6 +474,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                         detail: origin.qualificationDetail
                     )
                 }
+                self.completeQualificationProgrammaticSeek(id: qualificationSeekID)
 #endif
                 completion?(completed)
             }
@@ -491,6 +612,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     func applicationBecameInactive() {
         playbackIntent.sceneBecameInactive()
 #if BD_TO_AVP_QUALIFICATION
+        qualificationNativePausePending = false
+        qualificationNativePausePlayerTime = nil
         qualificationRecorder?.recordSceneInactive(player: player)
 #endif
         guard playerItem != nil else {
@@ -574,6 +697,20 @@ final class MVHEVCPlayerSession: ObservableObject {
                 self.persistResume()
             }
         }
+#if BD_TO_AVP_QUALIFICATION
+        if let qualificationTimeJumpedObserver {
+            NotificationCenter.default.removeObserver(qualificationTimeJumpedObserver)
+        }
+        qualificationTimeJumpedObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemTimeJumped,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleNativeTimeJump(item: item, generation: generation)
+            }
+        }
+#endif
     }
 
     private func handleItemStatus(_ item: AVPlayerItem, generation: Int) {
@@ -801,6 +938,17 @@ final class MVHEVCPlayerSession: ObservableObject {
         )
         qualificationRecorder = nil
         pendingQualificationEyeOrderChange = false
+        qualificationLastTimeControlStatus = nil
+        qualificationNativePausePending = false
+        qualificationNativePausePlayerTime = nil
+        qualificationProgrammaticSeeks = []
+        qualificationLastNativeSeekTime = nil
+        qualificationLastNativeSeekUptime = nil
+        qualificationNativeResumeSeekSuppressionUntilUptime = 0
+        if let qualificationTimeJumpedObserver {
+            NotificationCenter.default.removeObserver(qualificationTimeJumpedObserver)
+            self.qualificationTimeJumpedObserver = nil
+        }
 #endif
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -890,6 +1038,116 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
 #if BD_TO_AVP_QUALIFICATION
+    private func handleNativeTimeControlTransition(
+        to status: AVPlayer.TimeControlStatus,
+        playerTimeSeconds: TimeInterval,
+        capturedUptime: TimeInterval
+    ) {
+        let previousStatus = qualificationLastTimeControlStatus
+        qualificationLastTimeControlStatus = status
+        guard qualificationRecorder != nil else {
+            qualificationNativePausePending = false
+            qualificationNativePausePlayerTime = nil
+            return
+        }
+
+        if PlaybackQualificationNativeControlPolicy.shouldRecordPause(
+            previousStatus: previousStatus,
+            currentStatus: status,
+            shouldPlay: playbackIntent.shouldPlay,
+            isChangingEyeOrder: isChangingEyeOrder,
+            hasCurrentItem: playerItem != nil,
+            playerTime: playerTimeSeconds,
+            duration: duration
+        ) {
+            qualificationRecorder?.recordPauseRequested(player: player)
+            qualificationNativePausePending = true
+            qualificationNativePausePlayerTime = playerTimeSeconds
+            playbackIntent.pause()
+            return
+        }
+
+        if status == .playing, qualificationNativePausePending {
+            let shouldRecordNativeResume = !playbackIntent.shouldPlay
+            qualificationNativePausePending = false
+            qualificationNativePausePlayerTime = nil
+            qualificationNativeResumeSeekSuppressionUntilUptime = capturedUptime + 0.5
+            if shouldRecordNativeResume {
+                qualificationRecorder?.recordPlayRequested(player: player)
+                playbackIntent.requestPlayback()
+            }
+        }
+    }
+
+    private func handleNativeTimeJump(item: AVPlayerItem, generation: Int) {
+        guard generation == preparationGeneration, item === playerItem else {
+            return
+        }
+        let playerTime = player.currentTime().seconds
+        let currentUptime = ProcessInfo.processInfo.systemUptime
+        qualificationProgrammaticSeeks.removeAll {
+            $0.expiresAtUptime < currentUptime
+        }
+        if PlaybackQualificationNativeControlPolicy.shouldSuppressSeekAfterNativeResume(
+            playerTime: playerTime,
+            nativePausePlayerTime: qualificationNativePausePlayerTime,
+            nativePausePending: qualificationNativePausePending,
+            currentUptime: currentUptime,
+            suppressionUntilUptime: qualificationNativeResumeSeekSuppressionUntilUptime
+        ) {
+            return
+        }
+        if PlaybackQualificationNativeControlPolicy.programmaticSeekSuppressionIndex(
+            playerTime: playerTime,
+            currentUptime: currentUptime,
+            suppressions: qualificationProgrammaticSeeks
+        ) != nil {
+            return
+        }
+        guard PlaybackQualificationNativeControlPolicy.shouldRecordSeek(
+            isSceneActive: playbackIntent.isSceneActive,
+            isChangingEyeOrder: isChangingEyeOrder,
+            hasEstablishedPlayback: hasEstablishedPlayback,
+            playerTime: playerTime
+        ), !PlaybackQualificationNativeControlPolicy.isDuplicateNativeSeek(
+            playerTime: playerTime,
+            currentUptime: currentUptime,
+            previousPlayerTime: qualificationLastNativeSeekTime,
+            previousUptime: qualificationLastNativeSeekUptime
+        ) else {
+            return
+        }
+        qualificationLastNativeSeekTime = playerTime
+        qualificationLastNativeSeekUptime = currentUptime
+        qualificationRecorder?.recordSeekStarted(player: player)
+        qualificationRecorder?.recordSeekCompleted(player: player)
+    }
+
+    private func registerQualificationProgrammaticSeek(targetTime: TimeInterval) -> UUID {
+        let currentUptime = ProcessInfo.processInfo.systemUptime
+        qualificationProgrammaticSeeks.removeAll {
+            $0.expiresAtUptime < currentUptime
+        }
+        let id = UUID()
+        qualificationProgrammaticSeeks.append(
+            PlaybackQualificationProgrammaticSeek(
+                id: id,
+                targetTime: targetTime,
+                isInFlight: true,
+                expiresAtUptime: currentUptime + 60
+            )
+        )
+        return id
+    }
+
+    private func completeQualificationProgrammaticSeek(id: UUID) {
+        guard let index = qualificationProgrammaticSeeks.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        qualificationProgrammaticSeeks[index].isInFlight = false
+        qualificationProgrammaticSeeks[index].expiresAtUptime = ProcessInfo.processInfo.systemUptime + 5
+    }
+
     private func configureQualificationRecorder(for mediaItem: MediaItem) {
         let environment = ProcessInfo.processInfo.environment
         guard let runID = environment["BD_TO_AVP_QUALIFICATION_RUN_ID"],
@@ -904,6 +1162,13 @@ final class MVHEVCPlayerSession: ObservableObject {
             runID: runID,
             mediaID: evidenceMediaID
         )
+        qualificationLastTimeControlStatus = player.timeControlStatus
+        qualificationNativePausePending = false
+        qualificationNativePausePlayerTime = nil
+        qualificationProgrammaticSeeks = []
+        qualificationLastNativeSeekTime = nil
+        qualificationLastNativeSeekUptime = nil
+        qualificationNativeResumeSeekSuppressionUntilUptime = 0
     }
 #endif
 
