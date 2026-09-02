@@ -652,9 +652,17 @@ private struct PlayerOrnamentView: View {
     private var audioMenu: some View {
         Menu {
             ForEach(session.audioOptions) { option in
-                Button(option.displayName) {
+                Button {
                     onInteraction()
                     session.selectAudio(id: option.id)
+                } label: {
+                    Label(
+                        option.displayName,
+                        systemImage: session.selectedAudioID == option.id ? "checkmark" : ""
+                    )
+                    .accessibilityAddTraits(
+                        session.selectedAudioID == option.id ? .isSelected : []
+                    )
                 }
             }
         } label: {
@@ -664,6 +672,9 @@ private struct PlayerOrnamentView: View {
         }
         .disabled(session.audioOptions.isEmpty)
         .accessibilityLabel("Audio track")
+        .accessibilityValue(
+            session.audioOptions.first { $0.id == session.selectedAudioID }?.displayName ?? "None selected"
+        )
     }
 
     private var subtitleMenu: some View {

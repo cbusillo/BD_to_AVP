@@ -255,6 +255,78 @@ final class PlaybackPresentationTests: XCTestCase {
         )
     }
 
+    func testAudioSelectionUsesCurrentOptionBeforeDeterministicFallback() {
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.resolve(currentIndex: 1, optionCount: 3),
+            PlaybackAudioSelectionResolution(selectedIndex: 1, requiresExplicitSelection: false)
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.resolve(currentIndex: nil, optionCount: 3),
+            PlaybackAudioSelectionResolution(selectedIndex: 0, requiresExplicitSelection: true)
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.resolve(currentIndex: 8, optionCount: 3),
+            PlaybackAudioSelectionResolution(selectedIndex: 0, requiresExplicitSelection: true)
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.resolve(currentIndex: nil, optionCount: 0),
+            PlaybackAudioSelectionResolution(selectedIndex: nil, requiresExplicitSelection: false)
+        )
+    }
+
+    func testAudioLabelsLeaveUniqueNamesUnchangedAndDisambiguateCollisions() {
+        let labels = PlaybackAudioOptionLabelPolicy.labels(for: [
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "English",
+                title: "Main Mix",
+                role: nil,
+                channelLayout: "5.1",
+                index: 0
+            ),
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "English",
+                title: "Commentary",
+                role: "Commentary",
+                channelLayout: "2.0",
+                index: 1
+            ),
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "French",
+                title: nil,
+                role: nil,
+                channelLayout: nil,
+                index: 2
+            ),
+        ])
+
+        XCTAssertEqual(labels, [
+            "English — Main Mix, 5.1",
+            "English — Commentary, 2.0",
+            "French",
+        ])
+    }
+
+    func testAudioLabelsUseStableTrackIndexesWhenMetadataStillCollides() {
+        let labels = PlaybackAudioOptionLabelPolicy.labels(for: [
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "English",
+                title: "Mix",
+                role: nil,
+                channelLayout: nil,
+                index: 0
+            ),
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "English",
+                title: "Mix",
+                role: nil,
+                channelLayout: nil,
+                index: 1
+            ),
+        ])
+
+        XCTAssertEqual(labels, ["English — Mix — Track 1", "English — Mix — Track 2"])
+    }
+
     func testPackedStereoStatusUsesQualificationCopyOnlyForBuiltInChecks() {
         let builtInItem = MediaItem(
             id: BuiltInStereoChecks.sideBySideID,

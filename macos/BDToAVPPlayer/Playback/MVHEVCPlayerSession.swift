@@ -497,7 +497,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             return
         }
         playerItem.select(selection, in: audioGroup)
-        selectedAudioID = id
+        refreshSelectedMediaOptionIDs()
     }
 
     func selectSubtitle(id: String) {
@@ -812,22 +812,56 @@ final class MVHEVCPlayerSession: ObservableObject {
         let (audioGroup, subtitleGroup) = try await (loadedAudioGroup, loadedSubtitleGroup)
 
         var audioSelections: [String: AVMediaSelectionOption] = [:]
-        let audioOptions: [PlaybackMediaOption]
+        let audioOptionIDs: [PlaybackMediaOption]
         if let audioGroup {
-            audioOptions = audioGroup.options.enumerated().map { index, option in
+            audioOptionIDs = audioGroup.options.enumerated().map { index, option in
                 let id = "audio-\(index)"
                 audioSelections[id] = option
                 return PlaybackMediaOption(id: id, displayName: option.displayName)
             }
         } else {
-            audioOptions = []
+            audioOptionIDs = []
         }
-        let selectedAudioID = audioOptions.first(where: { option in
-            guard let audioGroup, let selection = audioSelections[option.id] else {
-                return false
+        let labeledAudioOptions: [PlaybackMediaOption]
+        let selectedAudioID: String
+        if let audioGroup {
+            let currentAudioSelection = item.currentMediaSelection.selectedMediaOption(in: audioGroup)
+            let currentAudioIndex = currentAudioSelection.flatMap { selection in
+                audioGroup.options.firstIndex { $0 === selection }
             }
-            return item.currentMediaSelection.selectedMediaOption(in: audioGroup) === selection
-        })?.id ?? audioOptions.first?.id ?? ""
+            let resolution = PlaybackAudioSelectionPolicy.resolve(
+                currentIndex: currentAudioIndex,
+                optionCount: audioGroup.options.count
+            )
+            if resolution.requiresExplicitSelection,
+               let selectedIndex = resolution.selectedIndex
+            {
+                item.select(audioGroup.options[selectedIndex], in: audioGroup)
+            }
+
+            let labelMetadata = audioGroup.options.enumerated().map { index, option in
+                PlaybackAudioOptionLabelMetadata(
+                    baseName: option.displayName,
+                    title: Self.audioOptionMetadataValue(option, matching: ["title", "name"]),
+                    role: Self.audioOptionRole(for: option),
+                    channelLayout: Self.audioOptionMetadataValue(option, matching: ["channel", "layout"]),
+                    index: index
+                )
+            }
+            let displayNames = PlaybackAudioOptionLabelPolicy.labels(for: labelMetadata)
+            labeledAudioOptions = audioOptionIDs.enumerated().map { index, option in
+                PlaybackMediaOption(id: option.id, displayName: displayNames[index])
+            }
+            selectedAudioID = Self.audioSelectionID(
+                in: item,
+                group: audioGroup,
+                options: labeledAudioOptions,
+                selections: audioSelections
+            )
+        } else {
+            labeledAudioOptions = []
+            selectedAudioID = ""
+        }
 
         var subtitleSelections: [String: AVMediaSelectionOption] = [:]
         let subtitleOptions: [PlaybackMediaOption]
@@ -853,7 +887,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         return PreparedMediaSelections(
             audioGroup: audioGroup,
             subtitleGroup: subtitleGroup,
-            audioOptions: audioOptions,
+            audioOptions: labeledAudioOptions,
             subtitleOptions: subtitleOptions,
             selectedAudioID: selectedAudioID,
             selectedSubtitleID: selectedSubtitleID,
@@ -875,12 +909,12 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     private func refreshSelectedMediaOptionIDs() {
         if let audioGroup {
-            selectedAudioID = audioOptions.first(where: { option in
-                guard let selection = audioSelectionByID[option.id] else {
-                    return false
-                }
-                return playerItem?.currentMediaSelection.selectedMediaOption(in: audioGroup) === selection
-            })?.id ?? audioOptions.first?.id ?? ""
+            selectedAudioID = Self.audioSelectionID(
+                in: playerItem,
+                group: audioGroup,
+                options: audioOptions,
+                selections: audioSelectionByID
+            )
         }
 
         if let subtitleGroup {
@@ -902,14 +936,25 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
         return MediaSelectionRestorationState(
             audioPropertyList: audioPropertyList,
+            audioID: selectedAudioID.isEmpty ? nil : selectedAudioID,
             subtitlePropertyList: subtitlePropertyList
         )
     }
 
     private func restoreMediaSelections(_ restoration: MediaSelectionRestorationState, on item: AVPlayerItem) {
+        var restoredAudio = false
         if let audioGroup,
            let propertyList = restoration.audioPropertyList,
            let selection = audioGroup.mediaSelectionOption(withPropertyList: propertyList)
+        {
+            item.select(selection, in: audioGroup)
+            restoredAudio = true
+        }
+
+        if !restoredAudio,
+           let audioGroup,
+           let audioID = restoration.audioID,
+           let selection = audioSelectionByID[audioID]
         {
             item.select(selection, in: audioGroup)
         }
@@ -923,6 +968,61 @@ final class MVHEVCPlayerSession: ObservableObject {
                 item.select(nil, in: subtitleGroup)
             }
         }
+    }
+
+    private static func audioSelectionID(
+        in item: AVPlayerItem?,
+        group: AVMediaSelectionGroup,
+        options: [PlaybackMediaOption],
+        selections: [String: AVMediaSelectionOption]
+    ) -> String {
+        guard let selectedOption = item?.currentMediaSelection.selectedMediaOption(in: group) else {
+            return ""
+        }
+        return options.first { option in
+            selections[option.id] === selectedOption
+        }?.id ?? ""
+    }
+
+    private static func audioOptionRole(for option: AVMediaSelectionOption) -> String? {
+        if option.hasMediaCharacteristic(.describesVideoForAccessibility) {
+            return "Audio Description"
+        }
+        if option.hasMediaCharacteristic(.isAuxiliaryContent) {
+            return "Commentary"
+        }
+        if option.hasMediaCharacteristic(.dubbedTranslation) {
+            return "Dubbed"
+        }
+        if option.hasMediaCharacteristic(.voiceOverTranslation) {
+            return "Voice-over"
+        }
+        if option.hasMediaCharacteristic(.isOriginalContent) {
+            return "Original"
+        }
+        return nil
+    }
+
+    private static func audioOptionMetadataValue(
+        _ option: AVMediaSelectionOption,
+        matching terms: [String]
+    ) -> String? {
+        guard let metadata = option.commonMetadata.first(where: { metadata in
+            let searchableText = [
+                metadata.identifier?.rawValue,
+                String(describing: metadata.key)
+            ]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+            return terms.contains { searchableText.contains($0) }
+        }),
+        let value = metadata.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !value.isEmpty
+        else {
+            return nil
+        }
+        return value
     }
 
     private func finishCurrentSession(persistResume shouldPersistResume: Bool) {
@@ -1233,5 +1333,6 @@ private struct PlaybackItemRestorationState {
 
 private struct MediaSelectionRestorationState {
     let audioPropertyList: Any?
+    let audioID: String?
     let subtitlePropertyList: Any?
 }

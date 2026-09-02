@@ -197,6 +197,100 @@ struct PlaybackEyeOrderPresentation: Equatable {
     }
 }
 
+struct PlaybackAudioOptionLabelMetadata: Equatable {
+    let baseName: String
+    let title: String?
+    let role: String?
+    let channelLayout: String?
+    let index: Int
+}
+
+enum PlaybackAudioOptionLabelPolicy {
+    static func labels(for options: [PlaybackAudioOptionLabelMetadata]) -> [String] {
+        let baseNames = options.map { baseName(for: $0.baseName) }
+        let groups = Dictionary(grouping: options.indices) { optionIndex in
+            normalized(baseNames[optionIndex])
+        }
+        var labels = baseNames
+
+        for optionIndices in groups.values where optionIndices.count > 1 {
+            for optionIndex in optionIndices {
+                let detail = detail(for: options[optionIndex], baseName: baseNames[optionIndex])
+                labels[optionIndex] = detail.map {
+                    "\(baseNames[optionIndex]) — \($0)"
+                } ?? "\(baseNames[optionIndex]) — Track \(options[optionIndex].index + 1)"
+            }
+
+            let labelsByNormalizedValue = Dictionary(grouping: optionIndices) { optionIndex in
+                normalized(labels[optionIndex])
+            }
+            for duplicateIndices in labelsByNormalizedValue.values where duplicateIndices.count > 1 {
+                for optionIndex in duplicateIndices {
+                    labels[optionIndex] = "\(labels[optionIndex]) — Track \(options[optionIndex].index + 1)"
+                }
+            }
+        }
+
+        return labels
+    }
+
+    private static func baseName(for value: String) -> String {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedValue.isEmpty ? "Audio" : trimmedValue
+    }
+
+    private static func detail(
+        for option: PlaybackAudioOptionLabelMetadata,
+        baseName: String
+    ) -> String? {
+        var details: [String] = []
+        for value in [option.title, option.role, option.channelLayout].compactMap({ $0 }) {
+            let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedValue.isEmpty,
+                  normalized(trimmedValue) != normalized(baseName),
+                  !details.contains(where: { normalized($0) == normalized(trimmedValue) })
+            else {
+                continue
+            }
+            details.append(trimmedValue)
+        }
+        return details.isEmpty ? nil : details.joined(separator: ", ")
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .lowercased()
+    }
+}
+
+struct PlaybackAudioSelectionResolution: Equatable {
+    let selectedIndex: Int?
+    let requiresExplicitSelection: Bool
+}
+
+enum PlaybackAudioSelectionPolicy {
+    static func resolve(currentIndex: Int?, optionCount: Int) -> PlaybackAudioSelectionResolution {
+        guard optionCount > 0 else {
+            return PlaybackAudioSelectionResolution(
+                selectedIndex: nil,
+                requiresExplicitSelection: false
+            )
+        }
+        if let currentIndex, (0..<optionCount).contains(currentIndex) {
+            return PlaybackAudioSelectionResolution(
+                selectedIndex: currentIndex,
+                requiresExplicitSelection: false
+            )
+        }
+        return PlaybackAudioSelectionResolution(
+            selectedIndex: 0,
+            requiresExplicitSelection: true
+        )
+    }
+}
+
 enum PackedStereoStatusPresentation {
     static func message(
         mediaItem: MediaItem?,
