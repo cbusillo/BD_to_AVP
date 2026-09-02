@@ -5,6 +5,187 @@ import XCTest
 @testable import BDToAVPPlayer
 
 final class PlaybackQualificationRecorderTests: XCTestCase {
+    func testNativeControlPolicyRecordsOnlyActiveUserPause() {
+        XCTAssertTrue(
+            PlaybackQualificationNativeControlPolicy.shouldRecordPause(
+                previousStatus: .playing,
+                currentStatus: .paused,
+                shouldPlay: true,
+                isChangingEyeOrder: false,
+                hasCurrentItem: true,
+                playerTime: 120,
+                duration: 600
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.shouldRecordPause(
+                previousStatus: .playing,
+                currentStatus: .paused,
+                shouldPlay: false,
+                isChangingEyeOrder: false,
+                hasCurrentItem: true,
+                playerTime: 120,
+                duration: 600
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.shouldRecordPause(
+                previousStatus: .playing,
+                currentStatus: .paused,
+                shouldPlay: true,
+                isChangingEyeOrder: true,
+                hasCurrentItem: true,
+                playerTime: 120,
+                duration: 600
+            )
+        )
+        XCTAssertTrue(
+            PlaybackQualificationNativeControlPolicy.shouldRecordPause(
+                previousStatus: .playing,
+                currentStatus: .paused,
+                shouldPlay: true,
+                isChangingEyeOrder: false,
+                hasCurrentItem: true,
+                playerTime: 7_190,
+                duration: 7_200
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.shouldRecordPause(
+                previousStatus: .playing,
+                currentStatus: .paused,
+                shouldPlay: true,
+                isChangingEyeOrder: false,
+                hasCurrentItem: true,
+                playerTime: 7_199,
+                duration: 7_200
+            )
+        )
+    }
+
+    func testNativeControlPolicyExcludesProgrammaticAndUnestablishedSeeks() {
+        XCTAssertTrue(
+            PlaybackQualificationNativeControlPolicy.shouldRecordSeek(
+                isSceneActive: true,
+                isChangingEyeOrder: false,
+                hasEstablishedPlayback: true,
+                playerTime: 120
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.shouldRecordSeek(
+                isSceneActive: true,
+                isChangingEyeOrder: false,
+                hasEstablishedPlayback: false,
+                playerTime: 120
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.shouldRecordSeek(
+                isSceneActive: false,
+                isChangingEyeOrder: false,
+                hasEstablishedPlayback: true,
+                playerTime: 120
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.shouldRecordSeek(
+                isSceneActive: true,
+                isChangingEyeOrder: true,
+                hasEstablishedPlayback: true,
+                playerTime: 120
+            )
+        )
+
+        let matchingSuppression = PlaybackQualificationProgrammaticSeek(
+            id: UUID(),
+            targetTime: 120,
+            isInFlight: false,
+            expiresAtUptime: 105
+        )
+        let overlappingSuppression = PlaybackQualificationProgrammaticSeek(
+            id: UUID(),
+            targetTime: 240,
+            isInFlight: true,
+            expiresAtUptime: 160
+        )
+        XCTAssertEqual(
+            PlaybackQualificationNativeControlPolicy.programmaticSeekSuppressionIndex(
+                playerTime: 120.5,
+                currentUptime: 100,
+                suppressions: [overlappingSuppression, matchingSuppression]
+            ),
+            1
+        )
+        XCTAssertEqual(
+            PlaybackQualificationNativeControlPolicy.programmaticSeekSuppressionIndex(
+                playerTime: 360,
+                currentUptime: 100,
+                suppressions: [matchingSuppression, overlappingSuppression]
+            ),
+            1
+        )
+        XCTAssertNil(
+            PlaybackQualificationNativeControlPolicy.programmaticSeekSuppressionIndex(
+                playerTime: 120,
+                currentUptime: 200,
+                suppressions: [matchingSuppression, overlappingSuppression]
+            )
+        )
+        XCTAssertTrue(
+            PlaybackQualificationNativeControlPolicy.isDuplicateNativeSeek(
+                playerTime: 120.5,
+                currentUptime: 100.5,
+                previousPlayerTime: 120,
+                previousUptime: 100
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.isDuplicateNativeSeek(
+                playerTime: 110,
+                currentUptime: 102,
+                previousPlayerTime: 120,
+                previousUptime: 100
+            )
+        )
+        XCTAssertTrue(
+            PlaybackQualificationNativeControlPolicy.shouldSuppressSeekAfterNativeResume(
+                playerTime: 120,
+                nativePausePlayerTime: nil,
+                nativePausePending: false,
+                currentUptime: 100.25,
+                suppressionUntilUptime: 100.5
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.shouldSuppressSeekAfterNativeResume(
+                playerTime: 120,
+                nativePausePlayerTime: nil,
+                nativePausePending: false,
+                currentUptime: 101,
+                suppressionUntilUptime: 100.5
+            )
+        )
+        XCTAssertTrue(
+            PlaybackQualificationNativeControlPolicy.shouldSuppressSeekAfterNativeResume(
+                playerTime: 120.5,
+                nativePausePlayerTime: 120,
+                nativePausePending: true,
+                currentUptime: 101,
+                suppressionUntilUptime: 100.5
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.shouldSuppressSeekAfterNativeResume(
+                playerTime: 105,
+                nativePausePlayerTime: 120,
+                nativePausePending: true,
+                currentUptime: 101,
+                suppressionUntilUptime: 100.5
+            )
+        )
+    }
+
     func testSafeIdentifierSanitizesUnsafeCharactersAndRejectsEmptyValues() {
         XCTAssertEqual(
             PlaybackQualificationRecorder.safeIdentifier("run id/with spaces"),
