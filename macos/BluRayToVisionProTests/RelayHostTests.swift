@@ -245,7 +245,10 @@ final class RelayHostTests: XCTestCase {
         )
         let host = try RelayHost(
             pairingContext: context,
-            configuration: RelayHostConfiguration(fixtureDirectory: root, retainedSegmentLimit: retainedSegmentLimit),
+            configuration: try RelayHostConfiguration(
+                fixtureDirectory: root,
+                retainedSegmentLimit: retainedSegmentLimit
+            ),
             now: { clock.now() }
         )
         return Fixture(

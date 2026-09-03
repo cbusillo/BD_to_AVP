@@ -26,7 +26,7 @@ final class RelayNetworkServer: @unchecked Sendable {
         guard let advertisement = await host.advertisedBonjourService() else {
             throw RelayNetworkServerError.unavailablePairingContext
         }
-        guard advertisement.serviceType == RelayHostConfiguration.bonjourServiceType,
+        guard advertisement.serviceType == RelayWireContract.bonjourServiceType,
               advertisement.txtRecord.count <= 255
         else {
             throw RelayNetworkServerError.invalidBonjourMetadata
@@ -55,18 +55,14 @@ final class RelayNetworkServer: @unchecked Sendable {
         return server
     }
 
-    func stopForAppQuit() {
+    func stopForAppQuit() async {
         listener.cancel()
-        Task {
-            await host.stopForAppQuit()
-        }
+        await host.stopForAppQuit()
     }
 
-    func cancel() {
+    func cancel() async {
         listener.cancel()
-        Task {
-            await host.cancel()
-        }
+        await host.cancel()
     }
 
     private func accept(_ connection: NWConnection) {

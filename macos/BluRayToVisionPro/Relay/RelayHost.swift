@@ -37,9 +37,8 @@ enum RelayHostError: Error, Equatable, Sendable {
 }
 
 struct RelayHostConfiguration: Sendable, Equatable {
-    static let bonjourServiceType = "_bdtoavp-relay._tcp"
-
     let fixtureDirectory: URL
+    let initializationResourceIdentifier: String
     let playlistTargetDuration: TimeInterval
     let retainedSegmentLimit: Int
     let maximumMediaBytes: Int
@@ -48,18 +47,20 @@ struct RelayHostConfiguration: Sendable, Equatable {
 
     init(
         fixtureDirectory: URL,
+        initializationResourceIdentifier: String = "init.mp4",
         playlistTargetDuration: TimeInterval = 6,
         retainedSegmentLimit: Int = 12,
         maximumMediaBytes: Int = 64 * 1_024 * 1_024,
         requestLimits: RelayHTTPParsingLimits = .default,
-        requestValidationPolicy: RelayRequestValidationPolicy = try! RelayRequestValidationPolicy()
-    ) {
+        requestValidationPolicy: RelayRequestValidationPolicy? = nil
+    ) throws {
         self.fixtureDirectory = fixtureDirectory
+        self.initializationResourceIdentifier = initializationResourceIdentifier
         self.playlistTargetDuration = playlistTargetDuration
         self.retainedSegmentLimit = retainedSegmentLimit
         self.maximumMediaBytes = min(max(maximumMediaBytes, 1), 512 * 1_024 * 1_024)
         self.requestLimits = requestLimits
-        self.requestValidationPolicy = requestValidationPolicy
+        self.requestValidationPolicy = try requestValidationPolicy ?? RelayRequestValidationPolicy()
     }
 }
 
@@ -68,37 +69,15 @@ struct RelayBonjourAdvertisement: Sendable, Equatable {
     let txtRecord: Data
 
     init(sessionID: RelaySessionIdentifier) {
-        serviceType = RelayHostConfiguration.bonjourServiceType
-        txtRecord = Data("v=1;sid=\(sessionID.rawValue.prefix(8))".utf8)
+        serviceType = RelayWireContract.bonjourServiceType
+        txtRecord = NetService.data(fromTXTRecord: [
+            "sid": Data(sessionID.rawValue.utf8),
+            "v": Data(String(RelayWireContract.protocolVersion).utf8),
+        ])
     }
 }
 
-private struct RelayChallengeResponse: Codable, Sendable {
-    let challenge: RelaySessionChallenge
-}
-
-private struct RelayPairingResponse: Codable, Sendable {
-    let acceptance: RelayPairingAcceptance
-}
-
-private struct RelayPlaylistSnapshot: Codable, Sendable {
-    let earliestPlayableTimeMilliseconds: Int64
-    let totalDurationMilliseconds: Int64
-    let isFinalized: Bool
-    let segments: [RelayPlaylistSegment]
-}
-
 actor RelayHost {
-    private static let challengePath = "/relay/v1/challenge"
-    private static let pairingPath = "/relay/v1/pairing"
-    private static let playlistPath = "/relay/v1/playlist.m3u8"
-    private static let playlistSnapshotPath = "/relay/v1/playlist.json"
-    private static let finishPath = "/relay/v1/control/finish"
-    private static let cancelPath = "/relay/v1/control/cancel"
-    private static let mediaPathPrefix = "/relay/v1/media/"
-    private static let authenticationHeader = "x-bdtoavp-relay-auth"
-    private static let mediaCapabilityHeader = "x-bdtoavp-relay-media-capability"
-
     private let configuration: RelayHostConfiguration
     private let fixtureRoot: URL
     private let replayStore: RelayReplayNonceStore
@@ -112,7 +91,7 @@ actor RelayHost {
     init(
         pairingContext: RelayServerPairingContext,
         configuration: RelayHostConfiguration,
-        replayStore: RelayReplayNonceStore = try! RelayReplayNonceStore(),
+        replayStore: RelayReplayNonceStore? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) throws {
         let normalizedRoot = configuration.fixtureDirectory.standardizedFileURL.resolvingSymlinksInPath()
@@ -122,7 +101,11 @@ actor RelayHost {
         }
         fixtureRoot = normalizedRoot
         self.configuration = configuration
-        self.replayStore = replayStore
+        if let replayStore {
+            self.replayStore = replayStore
+        } else {
+            self.replayStore = try RelayReplayNonceStore()
+        }
         self.now = now
         self.pairingContext = pairingContext
         playlist = try RelayEventPlaylist(
@@ -156,6 +139,13 @@ actor RelayHost {
 
     func currentLifecycle() -> RelayHostLifecycle {
         lifecycle
+    }
+
+    func pairingCode() -> RelayPairingCode? {
+        guard lifecycle == .pairing else {
+            return nil
+        }
+        return pairingContext?.pairingCode
     }
 
     func needsMoreRequestBytes(_ requestData: Data) -> Bool {
@@ -225,17 +215,17 @@ actor RelayHost {
     private func route(_ request: RelayHTTPRequest) async throws -> RelayHTTPResponse {
         try expireIfNeeded()
         switch request.requestTarget {
-        case Self.challengePath:
+        case RelayWireContract.challengePath:
             return try await challengeResponse(for: request)
-        case Self.pairingPath:
+        case RelayWireContract.pairingPath:
             return try await pairingResponse(for: request)
-        case Self.playlistPath:
+        case RelayWireContract.playlistPath:
             try await authenticate(request)
             return .text(renderPlaylist(), contentType: "application/vnd.apple.mpegurl")
-        case Self.playlistSnapshotPath:
+        case RelayWireContract.playlistSnapshotPath:
             try await authenticate(request)
-            return .json(snapshot())
-        case Self.finishPath:
+            return .json(try snapshot())
+        case RelayWireContract.finishPath:
             try await authenticate(request)
             guard request.method == "POST", request.body.isEmpty else {
                 return .empty(statusCode: 405)
@@ -243,7 +233,7 @@ actor RelayHost {
             playlist.finalize()
             lifecycle = .finished
             return .empty(statusCode: 204)
-        case Self.cancelPath:
+        case RelayWireContract.cancelPath:
             try await authenticate(request)
             guard request.method == "POST", request.body.isEmpty else {
                 return .empty(statusCode: 405)
@@ -251,7 +241,7 @@ actor RelayHost {
             cleanUp(reason: .cancelled)
             return .empty(statusCode: 204)
         default:
-            guard request.requestTarget.hasPrefix(Self.mediaPathPrefix) else {
+            guard request.requestTarget.hasPrefix(RelayWireContract.mediaPathPrefix) else {
                 return .empty(statusCode: 404)
             }
             try await authenticate(request)
@@ -269,7 +259,7 @@ actor RelayHost {
         guard lifecycle == .pairing, let pairingContext else {
             throw RelayHostError.unavailable
         }
-        return .json(RelayChallengeResponse(challenge: pairingContext.challenge))
+        return .json(RelayChallengeEnvelope(challenge: pairingContext.challenge))
     }
 
     private func pairingResponse(for request: RelayHTTPRequest) async throws -> RelayHTTPResponse {
@@ -289,12 +279,12 @@ actor RelayHost {
         establishedSession = result.session
         self.pairingContext = nil
         lifecycle = .paired
-        return .json(RelayPairingResponse(acceptance: result.acceptance), statusCode: 201)
+        return .json(RelayPairingEnvelope(acceptance: result.acceptance), statusCode: 201)
     }
 
     private func authenticate(_ request: RelayHTTPRequest) async throws {
         try ensurePairedSession()
-        guard let encodedAuthentication = request.header(named: Self.authenticationHeader),
+        guard let encodedAuthentication = request.header(named: RelayWireContract.authenticationHeader),
               let authenticationData = Data(base64Encoded: encodedAuthentication)
         else {
             throw RelaySessionError.invalidRequest
@@ -321,12 +311,12 @@ actor RelayHost {
 
     private func serveMedia(for request: RelayHTTPRequest) throws -> RelayHTTPResponse {
         guard let establishedSession,
-              let capability = request.header(named: Self.mediaCapabilityHeader),
+              let capability = request.header(named: RelayWireContract.mediaCapabilityHeader),
               establishedSession.mediaCapability.matches(capability)
         else {
             return .empty(statusCode: 403)
         }
-        let resourceIdentifier = String(request.requestTarget.dropFirst(Self.mediaPathPrefix.count))
+        let resourceIdentifier = String(request.requestTarget.dropFirst(RelayWireContract.mediaPathPrefix.count))
         let fileURL = try resourceURL(for: resourceIdentifier)
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         guard let fileSize = attributes[.size] as? NSNumber else {
@@ -413,10 +403,11 @@ actor RelayHost {
             "#EXT-X-PLAYLIST-TYPE:EVENT",
             "#EXT-X-TARGETDURATION:\(targetDurationSeconds)",
             "#EXT-X-MEDIA-SEQUENCE:\(mediaSequence)",
+            "#EXT-X-MAP:URI=\"\(RelayWireContract.mediaPathPrefix)\(configuration.initializationResourceIdentifier)\"",
         ]
         for segment in playlist.segments {
             lines.append(String(format: "#EXTINF:%.3f,", segment.duration))
-            lines.append("/relay/v1/media/\(segment.resourceIdentifier)")
+            lines.append("\(RelayWireContract.mediaPathPrefix)\(segment.resourceIdentifier)")
         }
         if playlist.hasEndList {
             lines.append("#EXT-X-ENDLIST")
@@ -424,8 +415,8 @@ actor RelayHost {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    private func snapshot() -> RelayPlaylistSnapshot {
-        RelayPlaylistSnapshot(
+    private func snapshot() throws -> RelayPlaylistSnapshot {
+        try RelayPlaylistSnapshot(
             earliestPlayableTimeMilliseconds: playlist.earliestPlayableTimeMilliseconds,
             totalDurationMilliseconds: playlist.nextStartTimeMilliseconds,
             isFinalized: playlist.isFinalized,

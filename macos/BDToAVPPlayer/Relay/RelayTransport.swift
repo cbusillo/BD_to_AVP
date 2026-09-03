@@ -13,25 +13,6 @@ enum RelayTransportError: Error, Equatable {
     case unexpectedStatusCode(Int)
 }
 
-enum RelayWireContract {
-    static let challengePath = "/relay/v1/challenge"
-    static let pairingPath = "/relay/v1/pairing"
-    static let playlistPath = "/relay/v1/playlist.m3u8"
-    static let playlistSnapshotPath = "/relay/v1/playlist.json"
-    static let mediaPathPrefix = "/relay/v1/media/"
-    static let authenticationHeader = "x-bdtoavp-relay-auth"
-    static let mediaCapabilityHeader = "x-bdtoavp-relay-media-capability"
-    static let jsonContentType = "application/json"
-}
-
-struct RelayChallengeEnvelope: Decodable, Sendable {
-    let challenge: RelaySessionChallenge
-}
-
-struct RelayPairingEnvelope: Decodable, Sendable {
-    let acceptance: RelayPairingAcceptance
-}
-
 struct URLSessionRelayTransport: RelayTransport {
     private let session: URLSession
 
