@@ -64,7 +64,7 @@ final class RelayRemotePlaybackSourceTests: XCTestCase {
 
     func testRefreshingRetainedWindowUsesAuthenticatedSnapshotRoute() async throws {
         let fixedNow = now
-        let session = try await makePairedClientSession(now: fixedNow)
+        let sessions = try await makePairedSessions(now: fixedNow)
         let transport = FakeRelayTransport()
         await transport.setHandler { request in
             let snapshot = try RelayPlaylistSnapshot(
@@ -80,9 +80,17 @@ final class RelayRemotePlaybackSourceTests: XCTestCase {
                     ),
                 ]
             )
-            return (try JSONEncoder().encode(snapshot), makeHTTPResponse(request))
+            let body = try JSONEncoder().encode(snapshot)
+            return (
+                body,
+                try makeAuthenticatedHTTPResponse(
+                    request,
+                    body: body,
+                    serverSession: sessions.server
+                )
+            )
         }
-        var source = try RelayRemotePlaybackSource(session: session, serverBaseURL: baseURL)
+        var source = try RelayRemotePlaybackSource(session: sessions.client, serverBaseURL: baseURL)
 
         try await source.refreshRetainedWindow(
             transport: transport,

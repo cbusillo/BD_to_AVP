@@ -12,6 +12,13 @@ protocol RelayRequestSigning: Sendable {
         timestamp: Date,
         nonce: String
     ) throws -> RelayAuthenticatedRequest
+    func verifyRelayResponse(
+        _ response: RelayAuthenticatedResponse,
+        requestNonce: String,
+        statusCode: Int,
+        body: Data,
+        now: Date
+    ) throws
 }
 
 extension RelayEstablishedSession: RelayRequestSigning {
@@ -30,6 +37,27 @@ extension RelayEstablishedSession: RelayRequestSigning {
             body: body
         )
     }
+
+    func verifyRelayResponse(
+        _ response: RelayAuthenticatedResponse,
+        requestNonce: String,
+        statusCode: Int,
+        body: Data,
+        now: Date
+    ) throws {
+        try verifyResponse(
+            response,
+            requestNonce: requestNonce,
+            actualStatusCode: statusCode,
+            body: body,
+            now: now
+        )
+    }
+}
+
+struct RelayPreparedRequest: Sendable {
+    let request: URLRequest
+    let authentication: RelayAuthenticatedRequest
 }
 
 enum RelayAuthenticatedRequestFactory {
@@ -39,7 +67,7 @@ enum RelayAuthenticatedRequestFactory {
         signer: any RelayRequestSigning,
         clock: @escaping @Sendable () -> Date,
         nonce: @escaping @Sendable () -> String
-    ) throws -> URLRequest {
+    ) throws -> RelayPreparedRequest {
         guard signer.expirationDate > clock() else {
             throw RelayTransportError.sessionExpired
         }
@@ -59,7 +87,7 @@ enum RelayAuthenticatedRequestFactory {
             forHTTPHeaderField: RelayWireContract.authenticationHeader
         )
         request.setValue(signer.mediaCapability.value, forHTTPHeaderField: RelayWireContract.mediaCapabilityHeader)
-        return request
+        return RelayPreparedRequest(request: request, authentication: signed)
     }
 
     static func makeResourceRequest(
@@ -68,7 +96,7 @@ enum RelayAuthenticatedRequestFactory {
         signer: any RelayRequestSigning,
         clock: @escaping @Sendable () -> Date,
         nonce: @escaping @Sendable () -> String
-    ) throws -> URLRequest {
+    ) throws -> RelayPreparedRequest {
         guard let resolved = RelayHLSResourceLoader.resolveURL(customURL, serverBaseURL: baseURL) else {
             throw RelayTransportError.invalidRelayURL
         }
@@ -78,6 +106,38 @@ enum RelayAuthenticatedRequestFactory {
             signer: signer,
             clock: clock,
             nonce: nonce
+        )
+    }
+}
+
+enum RelayAuthenticatedResponseVerifier {
+    static func verify(
+        data: Data,
+        response: HTTPURLResponse,
+        request: RelayPreparedRequest,
+        signer: any RelayRequestSigning,
+        now: Date
+    ) throws {
+        guard let encodedAuthentication = response.value(
+            forHTTPHeaderField: RelayWireContract.responseAuthenticationHeader
+        ), encodedAuthentication.utf8.count <= RelayWireContract.maximumAuthenticationHeaderBytes,
+        let authenticationData = Data(base64Encoded: encodedAuthentication),
+        authenticationData.count <= RelayWireContract.maximumAuthenticationHeaderBytes
+        else {
+            throw RelaySessionError.invalidResponse
+        }
+        let authentication: RelayAuthenticatedResponse
+        do {
+            authentication = try JSONDecoder().decode(RelayAuthenticatedResponse.self, from: authenticationData)
+        } catch {
+            throw RelaySessionError.invalidResponse
+        }
+        try signer.verifyRelayResponse(
+            authentication,
+            requestNonce: request.authentication.nonce,
+            statusCode: response.statusCode,
+            body: data,
+            now: now
         )
     }
 }
@@ -117,7 +177,14 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                     clock: clock,
                     nonce: nonce
                 )
-                let result = try await transport.data(for: request)
+                let result = try await transport.data(for: request.request)
+                try RelayAuthenticatedResponseVerifier.verify(
+                    data: result.0,
+                    response: result.1,
+                    request: request,
+                    signer: signer,
+                    now: clock()
+                )
                 switch result.1.statusCode {
                 case 200:
                     return result
@@ -180,7 +247,7 @@ final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @un
         let task = Task { [weak self, key] in
             guard let self else { return }
             await self.fulfil(loadingRequest)
-            self.lock.withLock { self.activeTasks.removeValue(forKey: key) }
+            _ = self.lock.withLock { self.activeTasks.removeValue(forKey: key) }
         }
         lock.withLock { self.activeTasks[key] = task }
         return true

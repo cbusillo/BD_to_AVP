@@ -54,6 +54,67 @@ func makeHTTPResponse(_ request: URLRequest, statusCode: Int = 200, contentType:
     )!
 }
 
+func makeAuthenticatedHTTPResponse(
+    _ request: URLRequest,
+    body: Data,
+    serverSession: RelayEstablishedSession,
+    statusCode: Int = 200,
+    contentType: String = "application/json",
+    authenticatedRequestNonce: String? = nil,
+    authenticatedStatusCode: Int? = nil,
+    authenticatedBody: Data? = nil
+) throws -> HTTPURLResponse {
+    let requestNonce: String
+    if let authenticatedRequestNonce {
+        requestNonce = authenticatedRequestNonce
+    } else {
+        let encodedRequest = try XCTUnwrap(
+            request.value(forHTTPHeaderField: RelayWireContract.authenticationHeader)
+        )
+        let requestData = try XCTUnwrap(Data(base64Encoded: encodedRequest))
+        requestNonce = try JSONDecoder().decode(RelayAuthenticatedRequest.self, from: requestData).nonce
+    }
+    let authentication = try serverSession.authenticateResponse(
+        requestNonce: requestNonce,
+        statusCode: authenticatedStatusCode ?? statusCode,
+        body: authenticatedBody ?? body
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return HTTPURLResponse(
+        url: request.url!,
+        statusCode: statusCode,
+        httpVersion: "HTTP/1.1",
+        headerFields: [
+            "content-type": contentType,
+            RelayWireContract.responseAuthenticationHeader: try encoder.encode(authentication).base64EncodedString(),
+        ]
+    )!
+}
+
+actor RelayTestServerSessionStore {
+    private var session: RelayEstablishedSession?
+
+    func set(_ session: RelayEstablishedSession) {
+        self.session = session
+    }
+
+    func response(
+        for request: URLRequest,
+        body: Data,
+        statusCode: Int = 200,
+        contentType: String = "application/json"
+    ) throws -> HTTPURLResponse {
+        try makeAuthenticatedHTTPResponse(
+            request,
+            body: body,
+            serverSession: XCTUnwrap(session),
+            statusCode: statusCode,
+            contentType: contentType
+        )
+    }
+}
+
 private struct ChallengeEnvelope: Encodable { let challenge: RelaySessionChallenge }
 private struct PairingEnvelope: Encodable { let acceptance: RelayPairingAcceptance }
 
@@ -207,17 +268,20 @@ final class RelaySessionCoordinatorTests: XCTestCase {
         let browser = FakeRelayBrowser()
         let transport = FakeRelayTransport()
         let server = try RelayServerPairingContext(pairingCode: pairingCode, now: now)
-        await transport.setHandler { [server, now] request in
+        let serverSessionStore = RelayTestServerSessionStore()
+        await transport.setHandler { [server, serverSessionStore, now] request in
             switch request.url?.path {
             case RelayWireContract.challengePath:
                 return (try JSONEncoder().encode(ChallengeEnvelope(challenge: server.challenge)), makeHTTPResponse(request))
             case RelayWireContract.pairingPath:
                 let accepted = try await server.accept(try JSONDecoder().decode(RelayPairingRequest.self, from: request.httpBody!), now: now)
+                await serverSessionStore.set(accepted.session)
                 return (try JSONEncoder().encode(PairingEnvelope(acceptance: accepted.acceptance)), makeHTTPResponse(request, statusCode: 201))
             case RelayWireContract.playlistSnapshotPath:
                 XCTAssertNotNil(request.value(forHTTPHeaderField: RelayWireContract.authenticationHeader))
                 XCTAssertNotNil(request.value(forHTTPHeaderField: RelayWireContract.mediaCapabilityHeader))
-                return (Data("{}".utf8), makeHTTPResponse(request))
+                let body = Data("{}".utf8)
+                return (body, try await serverSessionStore.response(for: request, body: body))
             default:
                 throw URLError(.badURL)
             }

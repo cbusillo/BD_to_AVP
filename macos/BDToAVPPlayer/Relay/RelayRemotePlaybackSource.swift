@@ -97,7 +97,14 @@ struct RelayRemotePlaybackSource {
             clock: clock,
             nonce: nonce
         )
-        let (data, response) = try await transport.data(for: request)
+        let (data, response) = try await transport.data(for: request.request)
+        try RelayAuthenticatedResponseVerifier.verify(
+            data: data,
+            response: response,
+            request: request,
+            signer: session,
+            now: clock()
+        )
         switch response.statusCode {
         case 200:
             try updateRetainedWindow(with: data)

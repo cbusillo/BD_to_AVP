@@ -264,15 +264,23 @@ final class RelaySessionCoordinator: ObservableObject {
         guard let session, let baseURL = connectedServerBaseURL else {
             throw RelayTransportError.unpaired
         }
-        var request = try RelayAuthenticatedRequestFactory.makeRequest(
+        let preparedRequest = try RelayAuthenticatedRequestFactory.makeRequest(
             baseURL: baseURL,
             path: RelayWireContract.playlistSnapshotPath,
             signer: session,
             clock: clock,
             nonce: nonce
         )
+        var request = preparedRequest.request
         request.setValue(session.mediaCapability.value, forHTTPHeaderField: RelayWireContract.mediaCapabilityHeader)
-        let (_, response) = try await transport.data(for: request)
+        let (data, response) = try await transport.data(for: request)
+        try RelayAuthenticatedResponseVerifier.verify(
+            data: data,
+            response: response,
+            request: RelayPreparedRequest(request: request, authentication: preparedRequest.authentication),
+            signer: session,
+            now: clock()
+        )
         guard response.statusCode == 200 else {
             try handleSessionStatus(response.statusCode)
             throw RelayTransportError.unexpectedStatusCode(response.statusCode)

@@ -2,12 +2,16 @@ import Foundation
 import XCTest
 @testable import BDToAVPPlayer
 
-func makePairedClientSession(now: Date) async throws -> RelayEstablishedSession {
+func makePairedSessions(now: Date) async throws -> (client: RelayEstablishedSession, server: RelayEstablishedSession) {
     let code = RelayPairingCode.random()
     let server = try RelayServerPairingContext(pairingCode: code, now: now)
     let attempt = try RelayClientPairingAttempt(challenge: server.challenge, pairingCode: code, now: now)
     let result = try await server.accept(attempt.request, now: now)
-    return try attempt.complete(with: result.acceptance, now: now)
+    return (try attempt.complete(with: result.acceptance, now: now), result.session)
+}
+
+func makePairedClientSession(now: Date) async throws -> RelayEstablishedSession {
+    try await makePairedSessions(now: now).client
 }
 
 final class RelayHLSResourceLoaderTests: XCTestCase {
@@ -40,12 +44,22 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
 
     func testEachTransientRetryUsesFreshSignedHostHeaders() async throws {
         let fixedNow = now
-        let session = try await makePairedClientSession(now: fixedNow)
+        let sessions = try await makePairedSessions(now: fixedNow)
+        let session = sessions.client
         let transport = FakeRelayTransport()
         await transport.setHandler { request in
             let requests = await transport.allRequests()
             if requests.count == 1 { throw URLError(.timedOut) }
-            return (Data("segment".utf8), makeHTTPResponse(request, contentType: "video/iso.segment"))
+            let body = Data("segment".utf8)
+            return (
+                body,
+                try makeAuthenticatedHTTPResponse(
+                    request,
+                    body: body,
+                    serverSession: sessions.server,
+                    contentType: "video/iso.segment"
+                )
+            )
         }
         let nonceSequence = TestNonceSequence()
         let client = RelayAuthenticatedResourceClient(
@@ -75,10 +89,21 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
 
     func testExpiredAndUnpairedResourceResponsesAreTyped() async throws {
         let fixedNow = now
-        let session = try await makePairedClientSession(now: fixedNow)
+        let sessions = try await makePairedSessions(now: fixedNow)
+        let session = sessions.client
         let resourceURL = URL(string: "bdtoavprelay://relay.local:7431/relay/v1/media/init.mp4")!
         let expiredTransport = FakeRelayTransport()
-        await expiredTransport.setHandler { request in (Data(), makeHTTPResponse(request, statusCode: 410)) }
+        await expiredTransport.setHandler { request in
+            (
+                Data(),
+                try makeAuthenticatedHTTPResponse(
+                    request,
+                    body: Data(),
+                    serverSession: sessions.server,
+                    statusCode: 410
+                )
+            )
+        }
         let expiredClient = RelayAuthenticatedResourceClient(signer: session, transport: expiredTransport, serverBaseURL: baseURL, clock: { fixedNow })
         do {
             _ = try await expiredClient.load(resourceURL)
@@ -88,13 +113,110 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
         }
 
         let unpairedTransport = FakeRelayTransport()
-        await unpairedTransport.setHandler { request in (Data(), makeHTTPResponse(request, statusCode: 503)) }
+        await unpairedTransport.setHandler { request in
+            (
+                Data(),
+                try makeAuthenticatedHTTPResponse(
+                    request,
+                    body: Data(),
+                    serverSession: sessions.server,
+                    statusCode: 503
+                )
+            )
+        }
         let unpairedClient = RelayAuthenticatedResourceClient(signer: session, transport: unpairedTransport, serverBaseURL: baseURL, clock: { fixedNow })
         do {
             _ = try await unpairedClient.load(resourceURL)
             XCTFail("Expected unpaired host")
         } catch {
             XCTAssertEqual(error as? RelayTransportError, .unpaired)
+        }
+    }
+
+    func testResourceClientRejectsTamperedResponseBindingsBeforeAcceptingData() async throws {
+        let fixedNow = now
+        let sessions = try await makePairedSessions(now: fixedNow)
+        let resourceURL = URL(string: "bdtoavprelay://relay.local:7431/relay/v1/media/init.mp4")!
+
+        let tamperedBodyTransport = FakeRelayTransport()
+        await tamperedBodyTransport.setHandler { request in
+            let authenticatedBody = Data("authentic".utf8)
+            let deliveredBody = Data("tampered".utf8)
+            return (
+                deliveredBody,
+                try makeAuthenticatedHTTPResponse(
+                    request,
+                    body: deliveredBody,
+                    serverSession: sessions.server,
+                    authenticatedBody: authenticatedBody
+                )
+            )
+        }
+        let tamperedBodyClient = RelayAuthenticatedResourceClient(
+            signer: sessions.client,
+            transport: tamperedBodyTransport,
+            serverBaseURL: baseURL,
+            clock: { fixedNow },
+            maximumTransientRetries: 0
+        )
+        do {
+            _ = try await tamperedBodyClient.load(resourceURL)
+            XCTFail("Expected tampered body rejection")
+        } catch {
+            XCTAssertEqual(error as? RelaySessionError, .responseBodyMismatch)
+        }
+
+        let statusMismatchTransport = FakeRelayTransport()
+        await statusMismatchTransport.setHandler { request in
+            (
+                Data(),
+                try makeAuthenticatedHTTPResponse(
+                    request,
+                    body: Data(),
+                    serverSession: sessions.server,
+                    statusCode: 503,
+                    authenticatedStatusCode: 200
+                )
+            )
+        }
+        let statusMismatchClient = RelayAuthenticatedResourceClient(
+            signer: sessions.client,
+            transport: statusMismatchTransport,
+            serverBaseURL: baseURL,
+            clock: { fixedNow },
+            maximumTransientRetries: 0
+        )
+        do {
+            _ = try await statusMismatchClient.load(resourceURL)
+            XCTFail("Expected status mismatch rejection")
+        } catch {
+            XCTAssertEqual(error as? RelaySessionError, .invalidResponse)
+        }
+
+        let nonceMismatchTransport = FakeRelayTransport()
+        await nonceMismatchTransport.setHandler { request in
+            (
+                Data(),
+                try makeAuthenticatedHTTPResponse(
+                    request,
+                    body: Data(),
+                    serverSession: sessions.server,
+                    authenticatedRequestNonce: "wrong-response-nonce"
+                )
+            )
+        }
+        let nonceMismatchClient = RelayAuthenticatedResourceClient(
+            signer: sessions.client,
+            transport: nonceMismatchTransport,
+            serverBaseURL: baseURL,
+            clock: { fixedNow },
+            maximumTransientRetries: 0
+        )
+        do {
+            _ = try await nonceMismatchClient.load(resourceURL)
+            XCTFail("Expected request nonce mismatch rejection")
+        } catch {
+            XCTAssertEqual(error as? RelaySessionError, .invalidResponse)
         }
     }
 }

@@ -101,11 +101,17 @@ final class RelaySessionCoreTests: XCTestCase {
             nonce: "codable-nonce-0001",
             body: Data()
         )
+        let authenticatedResponse = try result.session.authenticateResponse(
+            requestNonce: authenticatedRequest.nonce,
+            statusCode: 200,
+            body: Data("response".utf8)
+        )
 
         XCTAssertEqual(try roundTrip(server.challenge), server.challenge)
         XCTAssertEqual(try roundTrip(client.request), client.request)
         XCTAssertEqual(try roundTrip(result.acceptance), result.acceptance)
         XCTAssertEqual(try roundTrip(authenticatedRequest), authenticatedRequest)
+        XCTAssertEqual(try roundTrip(authenticatedResponse), authenticatedResponse)
     }
 
     func testMalformedCodablePayloadsAreRejected() async throws {
@@ -179,11 +185,40 @@ final class RelaySessionCoreTests: XCTestCase {
         }
     }
 
+    func testRogueServerWithoutPairingCodeCannotForgeAcceptance() throws {
+        let server = try makeServer()
+        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
+        let transcript = RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
+        let rogueMaterial = try RelayCrypto.derivedKeyMaterial(
+            sessionID: sessionID,
+            pairingCode: wrongPairingCode,
+            ownPrivateKeyData: Data(repeating: 0x11, count: 32),
+            peerPublicKeyData: client.request.clientPublicKey,
+            transcript: transcript
+        )
+        let expiration = try XCTUnwrap(RelayTime.unixMilliseconds(for: now.addingTimeInterval(7_200)))
+        let forgedAcceptance = try RelayPairingAcceptance(
+            sessionID: sessionID,
+            expiresAtUnixMilliseconds: expiration,
+            serverProof: RelayCrypto.acceptanceProof(
+                keyMaterial: rogueMaterial,
+                challenge: server.challenge,
+                request: client.request,
+                sessionExpirationUnixMilliseconds: expiration
+            )
+        )
+
+        XCTAssertThrowsError(try client.complete(with: forgedAcceptance, now: now)) { error in
+            XCTAssertEqual(error as? RelaySessionError, .acceptanceProofMismatch)
+        }
+    }
+
     func testClientRejectsAuthenticatedSessionLifetimeAboveMaximum() async throws {
         let server = try makeServer()
         let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
         let keyMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: sessionID,
+            pairingCode: pairingCode,
             ownPrivateKeyData: Data(repeating: 0x11, count: 32),
             peerPublicKeyData: client.request.clientPublicKey,
             transcript: RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
@@ -270,6 +305,7 @@ final class RelaySessionCoreTests: XCTestCase {
         let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
         let keyMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: sessionID,
+            pairingCode: pairingCode,
             ownPrivateKeyData: Data(repeating: 0x11, count: 32),
             peerPublicKeyData: client.request.clientPublicKey,
             transcript: RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
@@ -742,12 +778,14 @@ final class RelaySessionCoreTests: XCTestCase {
         let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
         let serverMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: sessionID,
+            pairingCode: pairingCode,
             ownPrivateKeyData: Data(repeating: 0x11, count: 32),
             peerPublicKeyData: client.request.clientPublicKey,
             transcript: RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
         )
         let clientMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: sessionID,
+            pairingCode: pairingCode,
             ownPrivateKeyData: Data(repeating: 0x33, count: 32),
             peerPublicKeyData: server.challenge.serverPublicKey,
             transcript: RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
@@ -756,15 +794,126 @@ final class RelaySessionCoreTests: XCTestCase {
         XCTAssertEqual(serverMaterial.sessionIdentity, clientMaterial.sessionIdentity)
         XCTAssertEqual(serverMaterial.clientToServerRequestKey, clientMaterial.clientToServerRequestKey)
         XCTAssertEqual(serverMaterial.serverToClientRequestKey, clientMaterial.serverToClientRequestKey)
+        XCTAssertEqual(serverMaterial.serverToClientResponseKey, clientMaterial.serverToClientResponseKey)
         XCTAssertEqual(serverMaterial.mediaCapability, clientMaterial.mediaCapability)
         XCTAssertEqual(serverMaterial.acceptanceProofKey, clientMaterial.acceptanceProofKey)
         XCTAssertEqual(Set([
             serverMaterial.sessionIdentity,
             serverMaterial.clientToServerRequestKey,
             serverMaterial.serverToClientRequestKey,
+            serverMaterial.serverToClientResponseKey,
             serverMaterial.mediaCapability,
             serverMaterial.acceptanceProofKey,
-        ]).count, 5)
+        ]).count, 6)
+    }
+
+    func testAuthenticatedResponseBindsNonceStatusAndBody() async throws {
+        let sessions = try await pairedSessions()
+        let body = Data("authenticated response".utf8)
+        let response = try sessions.server.authenticateResponse(
+            requestNonce: "response-nonce-0001",
+            statusCode: 200,
+            body: body
+        )
+
+        try sessions.client.verifyResponse(
+            response,
+            requestNonce: "response-nonce-0001",
+            actualStatusCode: 200,
+            body: body,
+            now: now
+        )
+        XCTAssertThrowsError(try sessions.client.verifyResponse(
+            response,
+            requestNonce: "response-nonce-0002",
+            actualStatusCode: 200,
+            body: body,
+            now: now
+        )) { error in
+            XCTAssertEqual(error as? RelaySessionError, .invalidResponse)
+        }
+        XCTAssertThrowsError(try sessions.client.verifyResponse(
+            response,
+            requestNonce: "response-nonce-0001",
+            actualStatusCode: 206,
+            body: body,
+            now: now
+        )) { error in
+            XCTAssertEqual(error as? RelaySessionError, .invalidResponse)
+        }
+        XCTAssertThrowsError(try sessions.client.verifyResponse(
+            response,
+            requestNonce: "response-nonce-0001",
+            actualStatusCode: 200,
+            body: Data("tampered response".utf8),
+            now: now
+        )) { error in
+            XCTAssertEqual(error as? RelaySessionError, .responseBodyMismatch)
+        }
+    }
+
+    func testAuthenticatedResponseRejectsTamperedReflectedAndWrongSessionProofs() async throws {
+        let sessions = try await pairedSessions()
+        let otherSessions = try await pairedSessions(
+            sessionID: try RelaySessionIdentifier(rawValue: "11111111-2222-4333-8444-555555555555")
+        )
+        let body = Data("response".utf8)
+        let valid = try sessions.server.authenticateResponse(
+            requestNonce: "response-proof-0001",
+            statusCode: 200,
+            body: body
+        )
+        var tamperedSignature = valid.signature
+        tamperedSignature[0] ^= 0x80
+        let tampered = try RelayAuthenticatedResponse(
+            sessionID: valid.sessionID,
+            signerRole: valid.signerRole,
+            requestNonce: valid.requestNonce,
+            statusCode: valid.statusCode,
+            bodySHA256: valid.bodySHA256,
+            signature: tamperedSignature
+        )
+        let reflectedRequest = try sessions.server.signRequest(
+            method: "GET",
+            requestTarget: "/relay/v1/playlist.json",
+            timestamp: now,
+            nonce: valid.requestNonce,
+            body: Data()
+        )
+        let reflected = try RelayAuthenticatedResponse(
+            sessionID: valid.sessionID,
+            signerRole: .server,
+            requestNonce: valid.requestNonce,
+            statusCode: valid.statusCode,
+            bodySHA256: valid.bodySHA256,
+            signature: reflectedRequest.signature
+        )
+        let wrongSession = try otherSessions.server.authenticateResponse(
+            requestNonce: valid.requestNonce,
+            statusCode: valid.statusCode,
+            body: body
+        )
+
+        for rejected in [tampered, reflected] {
+            XCTAssertThrowsError(try sessions.client.verifyResponse(
+                rejected,
+                requestNonce: valid.requestNonce,
+                actualStatusCode: valid.statusCode,
+                body: body,
+                now: now
+            )) { error in
+                XCTAssertEqual(error as? RelaySessionError, .responseSignatureMismatch)
+            }
+        }
+        XCTAssertThrowsError(try sessions.client.verifyResponse(
+            wrongSession,
+            requestNonce: valid.requestNonce,
+            actualStatusCode: valid.statusCode,
+            body: body,
+            now: now
+        )) { error in
+            XCTAssertEqual(error as? RelaySessionError, .invalidResponse)
+        }
     }
 
     func testMediaCapabilityMatchingAndDescriptionsDoNotExposeSecret() async throws {
@@ -794,6 +943,11 @@ final class RelaySessionCoreTests: XCTestCase {
             nonce: "golden-nonce-0001",
             body: Data("golden-body".utf8)
         )
+        let response = try result.session.authenticateResponse(
+            requestNonce: request.nonce,
+            statusCode: 200,
+            body: Data("golden-response".utf8)
+        )
 
         let pairingDigest = RelayCrypto.sha256(
             RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
@@ -801,12 +955,17 @@ final class RelaySessionCoreTests: XCTestCase {
         let requestDigest = RelayCrypto.sha256(
             RelayCanonical.authenticatedRequestTranscript(request)
         ).hexadecimalString
+        let responseDigest = RelayCrypto.sha256(
+            RelayCanonical.authenticatedResponseTranscript(response)
+        ).hexadecimalString
 
         XCTAssertEqual(pairingDigest, "1730a92dbe43af656779d816a09b2eb130a6f517d7266c0975396f685e03600e")
         XCTAssertEqual(requestDigest, "0a5824bf58e41acc26fc4c76a39266354920408fea426503ae5f53716986592b")
-        XCTAssertEqual(request.signature.hexadecimalString, "9d274aefccb8e01e884f3c1980115c1dfa5c2df10efae30b7c1aa03014966dd0")
-        XCTAssertEqual(clientSession.sessionIdentity.value, "1Rb96W3e81TCMrp92nqQNiFqPh1jE7jVmAkKstGZ8Bs")
-        XCTAssertEqual(clientSession.mediaCapability.value, "uEzFy9r92oCMBRcGUkBw7v3SxHihPDgtirlaTJw-Bks")
+        XCTAssertEqual(responseDigest, "dadedddef62021aca21dd5d86ba64bbedd1dd12532131d05ff2204e63a75a408")
+        XCTAssertEqual(response.signature.hexadecimalString, "095be40192a0616a6333b78ad59ac3179aa20d93597d24673e47bf8032babaab")
+        XCTAssertEqual(request.signature.hexadecimalString, "470ab8d171b5afcd2ab8372390fdfd258fcbf2ffc71a47796691cfceea37f2bb")
+        XCTAssertEqual(clientSession.sessionIdentity.value, "hdGy_ajRZ7WKKrlEF5_LC0GbWzn53JaS6SrOK3l3W1E")
+        XCTAssertEqual(clientSession.mediaCapability.value, "uGgRcGEt-s8-KLC2K2FJNfk7LP39wXcB68KJnRESnZA")
     }
 
     func testPlaylistGrowthUsesFixedTargetDuration() throws {

@@ -56,6 +56,78 @@ final class RelayHostTests: XCTestCase {
         )
         XCTAssertEqual(first.statusCode, 200)
         XCTAssertEqual(replay.statusCode, 409)
+        try verifyResponse(first, for: replayable, using: client)
+    }
+
+    func testPairedHTTPResponsesAuthenticatePlaylistSnapshotBinaryMediaAndControls() async throws {
+        let fixture = try makeFixture()
+        defer { removeFixture(fixture) }
+        let mediaBody = Data([0x00, 0xFF, 0x10, 0x80, 0x42])
+        try mediaBody.write(to: fixture.root.appendingPathComponent("segment.m4s"))
+        let client = try await pair(fixture)
+
+        let playlistRequest = try authenticatedRequest(
+            session: client,
+            method: "GET",
+            target: RelayWireContract.playlistPath,
+            nonce: "response-playlist-01"
+        )
+        let playlistResponse = await fixture.connection.exchange(
+            request(method: "GET", target: RelayWireContract.playlistPath, headers: playlistRequest.headers)
+        )
+        try verifyResponse(playlistResponse, for: playlistRequest, using: client)
+
+        let snapshotRequest = try authenticatedRequest(
+            session: client,
+            method: "GET",
+            target: RelayWireContract.playlistSnapshotPath,
+            nonce: "response-snapshot-01"
+        )
+        let snapshotResponse = await fixture.connection.exchange(
+            request(method: "GET", target: RelayWireContract.playlistSnapshotPath, headers: snapshotRequest.headers)
+        )
+        try verifyResponse(snapshotResponse, for: snapshotRequest, using: client)
+
+        let mediaRequest = try authenticatedRequest(
+            session: client,
+            method: "GET",
+            target: "\(RelayWireContract.mediaPathPrefix)segment.m4s",
+            nonce: "response-media-00001",
+            mediaCapability: client.mediaCapability.value
+        )
+        let mediaResponse = await fixture.connection.exchange(
+            request(
+                method: "GET",
+                target: "\(RelayWireContract.mediaPathPrefix)segment.m4s",
+                headers: mediaRequest.headers
+            )
+        )
+        XCTAssertEqual(mediaResponse.body, mediaBody)
+        try verifyResponse(mediaResponse, for: mediaRequest, using: client)
+
+        let finishRequest = try authenticatedRequest(
+            session: client,
+            method: "POST",
+            target: RelayWireContract.finishPath,
+            nonce: "response-finish-0001"
+        )
+        let finishResponse = await fixture.connection.exchange(
+            request(method: "POST", target: RelayWireContract.finishPath, headers: finishRequest.headers)
+        )
+        XCTAssertEqual(finishResponse.statusCode, 204)
+        try verifyResponse(finishResponse, for: finishRequest, using: client)
+
+        let cancelRequest = try authenticatedRequest(
+            session: client,
+            method: "POST",
+            target: RelayWireContract.cancelPath,
+            nonce: "response-cancel-0001"
+        )
+        let cancelResponse = await fixture.connection.exchange(
+            request(method: "POST", target: RelayWireContract.cancelPath, headers: cancelRequest.headers)
+        )
+        XCTAssertEqual(cancelResponse.statusCode, 204)
+        try verifyResponse(cancelResponse, for: cancelRequest, using: client)
     }
 
     func testMediaRequiresCapabilityAndPreventsTraversalAndSymlinkEscape() async throws {
@@ -81,6 +153,7 @@ final class RelayHostTests: XCTestCase {
             request(method: "GET", target: "/relay/v1/media/safe/segment.m4s", headers: noCapability.headers)
         )
         XCTAssertEqual(denied.statusCode, 403)
+        try verifyResponse(denied, for: noCapability, using: client)
 
         let traversal = try authenticatedRequest(
             session: client,
@@ -93,6 +166,7 @@ final class RelayHostTests: XCTestCase {
             request(method: "GET", target: "/relay/v1/media/../escape.m4s", headers: traversal.headers)
         )
         XCTAssertEqual(traversalResponse.statusCode, 400)
+        try verifyResponse(traversalResponse, for: traversal, using: client)
 
         let symlink = try authenticatedRequest(
             session: client,
@@ -105,6 +179,7 @@ final class RelayHostTests: XCTestCase {
             request(method: "GET", target: "/relay/v1/media/safe/escaped.m4s", headers: symlink.headers)
         )
         XCTAssertEqual(symlinkResponse.statusCode, 404)
+        try verifyResponse(symlinkResponse, for: symlink, using: client)
 
         let valid = try authenticatedRequest(
             session: client,
@@ -118,6 +193,7 @@ final class RelayHostTests: XCTestCase {
         )
         XCTAssertEqual(served.statusCode, 200)
         XCTAssertEqual(served.body, Data("media fixture".utf8))
+        try verifyResponse(served, for: valid, using: client)
     }
 
     func testParserEnforcesHeaderAndBodyLimitsBeforeRoutes() async throws {
@@ -250,7 +326,7 @@ final class RelayHostTests: XCTestCase {
         let values = NetService.dictionary(fromTXTRecord: advertisement.txtRecord)
 
         XCTAssertEqual(advertisement.serviceType, RelayWireContract.bonjourServiceType)
-        XCTAssertEqual(values["v"].map { String(decoding: $0, as: UTF8.self) }, "1")
+        XCTAssertEqual(values["v"].map { String(decoding: $0, as: UTF8.self) }, "2")
         XCTAssertEqual(values["sid"].map { String(decoding: $0, as: UTF8.self) }, String(sessionID.rawValue.prefix(8)))
     }
 
@@ -359,7 +435,25 @@ final class RelayHostTests: XCTestCase {
         if let mediaCapability {
             headers["x-bdtoavp-relay-media-capability"] = mediaCapability
         }
-        return AuthenticatedRequest(headers: headers)
+        return AuthenticatedRequest(headers: headers, authentication: authentication)
+    }
+
+    private func verifyResponse(
+        _ response: RelayHTTPResponse,
+        for request: AuthenticatedRequest,
+        using client: RelayEstablishedSession
+    ) throws {
+        let encoded = try XCTUnwrap(response.headers[RelayWireContract.responseAuthenticationHeader])
+        XCTAssertLessThanOrEqual(encoded.utf8.count, RelayWireContract.maximumAuthenticationHeaderBytes)
+        let authenticationData = try XCTUnwrap(Data(base64Encoded: encoded))
+        let authentication = try JSONDecoder().decode(RelayAuthenticatedResponse.self, from: authenticationData)
+        try client.verifyResponse(
+            authentication,
+            requestNonce: request.authentication.nonce,
+            actualStatusCode: response.statusCode,
+            body: response.body,
+            now: initialDate
+        )
     }
 
     private func request(method: String, target: String, headers: [String: String] = [:], body: Data = Data()) -> Data {
@@ -391,6 +485,7 @@ private struct PairingEnvelope: Decodable {
 
 private struct AuthenticatedRequest {
     let headers: [String: String]
+    let authentication: RelayAuthenticatedRequest
 }
 
 private struct Fixture {

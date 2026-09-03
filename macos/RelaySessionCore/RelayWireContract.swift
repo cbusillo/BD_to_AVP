@@ -1,7 +1,7 @@
 import Foundation
 
 enum RelayWireContract {
-    static let protocolVersion = 1
+    static let protocolVersion = 2
     static let bonjourServiceType = "_bdtoavp-relay._tcp"
 
     static let challengePath = "/relay/v1/challenge"
@@ -13,8 +13,10 @@ enum RelayWireContract {
     static let mediaPathPrefix = "/relay/v1/media/"
 
     static let authenticationHeader = "x-bdtoavp-relay-auth"
+    static let responseAuthenticationHeader = "x-bdtoavp-relay-response-auth"
     static let mediaCapabilityHeader = "x-bdtoavp-relay-media-capability"
     static let jsonContentType = "application/json"
+    static let maximumAuthenticationHeaderBytes = 1_024
 }
 
 struct RelayChallengeEnvelope: Codable, Sendable {

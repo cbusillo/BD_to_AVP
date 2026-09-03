@@ -78,6 +78,11 @@ struct RelayBonjourAdvertisement: Sendable, Equatable {
 }
 
 actor RelayHost {
+    private struct AuthenticatedExchange: Sendable {
+        let request: RelayAuthenticatedRequest
+        let session: RelayEstablishedSession
+    }
+
     private static let challengePath = RelayWireContract.challengePath
     private static let pairingPath = RelayWireContract.pairingPath
     private static let playlistPath = RelayWireContract.playlistPath
@@ -256,35 +261,40 @@ actor RelayHost {
         case Self.pairingPath:
             return try await pairingResponse(for: request)
         case Self.playlistPath:
-            try await authenticate(request)
-            return .text(renderPlaylist(), contentType: "application/vnd.apple.mpegurl")
+            return try await authenticatedResponse(for: request) { _ in
+                .text(renderPlaylist(), contentType: "application/vnd.apple.mpegurl")
+            }
         case Self.playlistSnapshotPath:
-            try await authenticate(request)
-            return .json(try snapshot())
+            return try await authenticatedResponse(for: request) { _ in
+                .json(try snapshot())
+            }
         case Self.finishPath:
-            try await authenticate(request)
-            guard request.method == "POST", request.body.isEmpty else {
-                return .empty(statusCode: 405)
+            return try await authenticatedResponse(for: request) { _ in
+                guard request.method == "POST", request.body.isEmpty else {
+                    return .empty(statusCode: 405)
+                }
+                playlist.finalize()
+                lifecycle = .finished
+                return .empty(statusCode: 204)
             }
-            playlist.finalize()
-            lifecycle = .finished
-            return .empty(statusCode: 204)
         case Self.cancelPath:
-            try await authenticate(request)
-            guard request.method == "POST", request.body.isEmpty else {
-                return .empty(statusCode: 405)
+            return try await authenticatedResponse(for: request) { _ in
+                guard request.method == "POST", request.body.isEmpty else {
+                    return .empty(statusCode: 405)
+                }
+                cleanUp(reason: .cancelled)
+                return .empty(statusCode: 204)
             }
-            cleanUp(reason: .cancelled)
-            return .empty(statusCode: 204)
         default:
             guard request.requestTarget.hasPrefix(Self.mediaPathPrefix) else {
                 return .empty(statusCode: 404)
             }
-            try await authenticate(request)
-            guard request.method == "GET" else {
-                return .empty(statusCode: 405)
+            return try await authenticatedResponse(for: request) { session in
+                guard request.method == "GET" else {
+                    return .empty(statusCode: 405)
+                }
+                return try serveMedia(for: request, session: session)
             }
-            return try serveMedia(for: request)
         }
     }
 
@@ -318,10 +328,12 @@ actor RelayHost {
         return .json(RelayPairingEnvelope(acceptance: result.acceptance), statusCode: 201)
     }
 
-    private func authenticate(_ request: RelayHTTPRequest) async throws {
+    private func authenticate(_ request: RelayHTTPRequest) async throws -> AuthenticatedExchange {
         try ensurePairedSession()
         guard let encodedAuthentication = request.header(named: Self.authenticationHeader),
-              let authenticationData = Data(base64Encoded: encodedAuthentication)
+              encodedAuthentication.utf8.count <= RelayWireContract.maximumAuthenticationHeaderBytes,
+              let authenticationData = Data(base64Encoded: encodedAuthentication),
+              authenticationData.count <= RelayWireContract.maximumAuthenticationHeaderBytes
         else {
             throw RelaySessionError.invalidRequest
         }
@@ -343,12 +355,53 @@ actor RelayHost {
             policy: configuration.requestValidationPolicy,
             replayStore: replayStore
         )
+        return AuthenticatedExchange(request: authentication, session: establishedSession)
     }
 
-    private func serveMedia(for request: RelayHTTPRequest) throws -> RelayHTTPResponse {
-        guard let establishedSession,
-              let capability = request.header(named: Self.mediaCapabilityHeader),
-              establishedSession.mediaCapability.matches(capability)
+    private func authenticatedResponse(
+        for request: RelayHTTPRequest,
+        makeResponse: (RelayEstablishedSession) throws -> RelayHTTPResponse
+    ) async throws -> RelayHTTPResponse {
+        let exchange = try await authenticate(request)
+        let response: RelayHTTPResponse
+        do {
+            response = try makeResponse(exchange.session)
+        } catch let error as RelayHostError {
+            response = self.response(for: error)
+        } catch let error as RelaySessionError {
+            response = self.response(for: error)
+        } catch {
+            response = .empty(statusCode: 500)
+        }
+        return try authenticate(response, for: exchange)
+    }
+
+    private func authenticate(
+        _ response: RelayHTTPResponse,
+        for exchange: AuthenticatedExchange
+    ) throws -> RelayHTTPResponse {
+        let authentication = try exchange.session.authenticateResponse(
+            requestNonce: exchange.request.nonce,
+            statusCode: response.statusCode,
+            body: response.body
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let encoded = try encoder.encode(authentication).base64EncodedString()
+        guard encoded.utf8.count <= RelayWireContract.maximumAuthenticationHeaderBytes else {
+            throw RelaySessionError.invalidResponse
+        }
+        var headers = response.headers
+        headers[RelayWireContract.responseAuthenticationHeader] = encoded
+        return RelayHTTPResponse(statusCode: response.statusCode, headers: headers, body: response.body)
+    }
+
+    private func serveMedia(
+        for request: RelayHTTPRequest,
+        session: RelayEstablishedSession
+    ) throws -> RelayHTTPResponse {
+        guard let capability = request.header(named: Self.mediaCapabilityHeader),
+              session.mediaCapability.matches(capability)
         else {
             return .empty(statusCode: 403)
         }

@@ -20,6 +20,9 @@ public enum RelaySessionError: Error, Equatable, Sendable {
     case requestTimestampTooFarInFuture
     case replayDetected
     case replayCapacityExceeded
+    case invalidResponse
+    case responseBodyMismatch
+    case responseSignatureMismatch
     case invalidValidationPolicy
 }
 
@@ -379,6 +382,59 @@ public struct RelayAuthenticatedRequest: Codable, Equatable, Sendable {
     }
 }
 
+public struct RelayAuthenticatedResponse: Codable, Equatable, Sendable {
+    public let sessionID: RelaySessionIdentifier
+    public let signerRole: RelaySessionRole
+    public let requestNonce: String
+    public let statusCode: Int
+    public let bodySHA256: Data
+    public let signature: Data
+
+    public init(
+        sessionID: RelaySessionIdentifier,
+        signerRole: RelaySessionRole,
+        requestNonce: String,
+        statusCode: Int,
+        bodySHA256: Data,
+        signature: Data
+    ) throws {
+        guard RelayCanonical.isValidNonce(requestNonce), RelayCanonical.isValidHTTPStatusCode(statusCode) else {
+            throw RelaySessionError.invalidResponse
+        }
+        guard bodySHA256.count == RelayCrypto.sha256Length, signature.count == RelayCrypto.sha256Length else {
+            throw RelaySessionError.invalidProof
+        }
+
+        self.sessionID = sessionID
+        self.signerRole = signerRole
+        self.requestNonce = requestNonce
+        self.statusCode = statusCode
+        self.bodySHA256 = bodySHA256
+        self.signature = signature
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID
+        case signerRole
+        case requestNonce
+        case statusCode
+        case bodySHA256
+        case signature
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            sessionID: container.decode(RelaySessionIdentifier.self, forKey: .sessionID),
+            signerRole: container.decode(RelaySessionRole.self, forKey: .signerRole),
+            requestNonce: container.decode(String.self, forKey: .requestNonce),
+            statusCode: container.decode(Int.self, forKey: .statusCode),
+            bodySHA256: container.decode(Data.self, forKey: .bodySHA256),
+            signature: container.decode(Data.self, forKey: .signature)
+        )
+    }
+}
+
 public struct RelayRequestValidationPolicy: Sendable, Equatable {
     public let maximumAgeMilliseconds: Int64
     public let allowedFutureSkewMilliseconds: Int64
@@ -572,6 +628,7 @@ public actor RelayServerPairingContext {
         do {
             keyMaterial = try RelayCrypto.derivedKeyMaterial(
                 sessionID: challenge.sessionID,
+                pairingCode: pairingCode,
                 ownPrivateKeyData: serverPrivateKeyData,
                 peerPublicKeyData: request.clientPublicKey,
                 transcript: RelayCanonical.pairingTranscript(challenge: challenge, request: request)
@@ -662,6 +719,7 @@ public struct RelayClientPairingAttempt: Sendable, CustomStringConvertible, Cust
         self.request = request
         pendingKeyMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: challenge.sessionID,
+            pairingCode: pairingCode,
             ownPrivateKeyData: clientPrivateKeyData,
             peerPublicKeyData: challenge.serverPublicKey,
             transcript: RelayCanonical.pairingTranscript(challenge: challenge, request: request)
@@ -729,6 +787,7 @@ public struct RelayEstablishedSession: Sendable, CustomStringConvertible, Custom
 
     private let requestSigningKey: Data
     private let peerRequestVerificationKey: Data
+    private let serverResponseAuthenticationKey: Data
 
     fileprivate init(
         sessionID: RelaySessionIdentifier,
@@ -741,6 +800,7 @@ public struct RelayEstablishedSession: Sendable, CustomStringConvertible, Custom
         self.expiresAtUnixMilliseconds = expiresAtUnixMilliseconds
         sessionIdentity = RelaySessionIdentity(value: RelayCrypto.base64URLEncoded(keyMaterial.sessionIdentity))
         mediaCapability = RelayMediaCapability(value: RelayCrypto.base64URLEncoded(keyMaterial.mediaCapability))
+        serverResponseAuthenticationKey = keyMaterial.serverToClientResponseKey
         switch role {
         case .client:
             requestSigningKey = keyMaterial.clientToServerRequestKey
@@ -895,12 +955,78 @@ public struct RelayEstablishedSession: Sendable, CustomStringConvertible, Custom
             replayStore: replayStore
         )
     }
+
+    public func authenticateResponse(
+        requestNonce: String,
+        statusCode: Int,
+        body: Data
+    ) throws -> RelayAuthenticatedResponse {
+        guard role == .server else {
+            throw RelaySessionError.invalidResponse
+        }
+        let bodySHA256 = RelayCrypto.sha256(body)
+        let unsignedResponse = try RelayAuthenticatedResponse(
+            sessionID: sessionID,
+            signerRole: .server,
+            requestNonce: requestNonce,
+            statusCode: statusCode,
+            bodySHA256: bodySHA256,
+            signature: Data(repeating: 0, count: RelayCrypto.sha256Length)
+        )
+        let signature = RelayCrypto.hmac(
+            keyMaterial: serverResponseAuthenticationKey,
+            message: RelayCanonical.authenticatedResponseTranscript(unsignedResponse)
+        )
+        return try RelayAuthenticatedResponse(
+            sessionID: sessionID,
+            signerRole: .server,
+            requestNonce: requestNonce,
+            statusCode: statusCode,
+            bodySHA256: bodySHA256,
+            signature: signature
+        )
+    }
+
+    public func verifyResponse(
+        _ response: RelayAuthenticatedResponse,
+        requestNonce: String,
+        actualStatusCode: Int,
+        body: Data,
+        now: Date
+    ) throws {
+        guard role == .client,
+              response.sessionID == sessionID,
+              response.signerRole == .server,
+              RelayCanonical.isValidNonce(requestNonce),
+              RelayCrypto.constantTimeEqual(Data(response.requestNonce.utf8), Data(requestNonce.utf8)),
+              response.statusCode == actualStatusCode
+        else {
+            throw RelaySessionError.invalidResponse
+        }
+        guard let nowUnixMilliseconds = RelayTime.unixMilliseconds(for: now) else {
+            throw RelaySessionError.invalidTimestamp
+        }
+        guard nowUnixMilliseconds <= expiresAtUnixMilliseconds else {
+            throw RelaySessionError.requestExpired
+        }
+        guard RelayCrypto.constantTimeEqual(RelayCrypto.sha256(body), response.bodySHA256) else {
+            throw RelaySessionError.responseBodyMismatch
+        }
+        let expectedSignature = RelayCrypto.hmac(
+            keyMaterial: serverResponseAuthenticationKey,
+            message: RelayCanonical.authenticatedResponseTranscript(response)
+        )
+        guard RelayCrypto.constantTimeEqual(expectedSignature, response.signature) else {
+            throw RelaySessionError.responseSignatureMismatch
+        }
+    }
 }
 
 struct RelaySessionKeyMaterial: Sendable {
     let sessionIdentity: Data
     let clientToServerRequestKey: Data
     let serverToClientRequestKey: Data
+    let serverToClientResponseKey: Data
     let mediaCapability: Data
     let acceptanceProofKey: Data
 }
@@ -921,12 +1047,7 @@ enum RelayCrypto {
         clientPublicKey: Data,
         clientNonce: Data
     ) -> Data {
-        let pairingKey = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: Data(pairingCode.rawValue.utf8)),
-            salt: Data("bd-to-avp.relay.pairing-code.salt.v2".utf8),
-            info: Data("bd-to-avp.relay.pairing-code.key.v2".utf8),
-            outputByteCount: sha256Length
-        )
+        let pairingKey = pairingKey(for: pairingCode)
         return Data(HMAC<SHA256>.authenticationCode(
             for: RelayCanonical.pairingProofTranscript(
                 challenge: challenge,
@@ -939,6 +1060,7 @@ enum RelayCrypto {
 
     static func derivedKeyMaterial(
         sessionID: RelaySessionIdentifier,
+        pairingCode: RelayPairingCode,
         ownPrivateKeyData: Data,
         peerPublicKeyData: Data,
         transcript: Data
@@ -958,10 +1080,22 @@ enum RelayCrypto {
         } catch {
             throw RelaySessionError.invalidPublicKey
         }
+        let pairingTranscriptSHA256 = sha256(transcript)
+        let scheduleTranscript = RelayCanonical.sessionKeyScheduleTranscript(
+            sessionID: sessionID,
+            pairingTranscriptSHA256: pairingTranscriptSHA256
+        )
+        let codeBoundSalt = Data(HMAC<SHA256>.authenticationCode(
+            for: scheduleTranscript,
+            using: pairingKey(for: pairingCode)
+        ))
         let masterKey = sharedSecret.hkdfDerivedSymmetricKey(
             using: SHA256.self,
-            salt: sha256(transcript),
-            sharedInfo: Data("bd-to-avp.relay.session-master.v2".utf8),
+            salt: codeBoundSalt,
+            sharedInfo: RelayCanonical.sessionMasterTranscript(
+                sessionID: sessionID,
+                pairingTranscriptSHA256: pairingTranscriptSHA256
+            ),
             outputByteCount: sha256Length
         ).withUnsafeBytes { Data($0) }
 
@@ -969,6 +1103,7 @@ enum RelayCrypto {
             sessionIdentity: derivedValue(masterKey: masterKey, label: "session-identity", sessionID: sessionID),
             clientToServerRequestKey: derivedValue(masterKey: masterKey, label: "request-client-to-server", sessionID: sessionID),
             serverToClientRequestKey: derivedValue(masterKey: masterKey, label: "request-server-to-client", sessionID: sessionID),
+            serverToClientResponseKey: derivedValue(masterKey: masterKey, label: "response-server-to-client", sessionID: sessionID),
             mediaCapability: derivedValue(masterKey: masterKey, label: "media-capability", sessionID: sessionID),
             acceptanceProofKey: derivedValue(masterKey: masterKey, label: "acceptance-proof", sessionID: sessionID)
         )
@@ -1016,6 +1151,15 @@ enum RelayCrypto {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func pairingKey(for pairingCode: RelayPairingCode) -> SymmetricKey {
+        HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: Data(pairingCode.rawValue.utf8)),
+            salt: Data("bd-to-avp.relay.pairing-code.salt.v2".utf8),
+            info: Data("bd-to-avp.relay.pairing-code.key.v2".utf8),
+            outputByteCount: sha256Length
+        )
     }
 
     private static func derivedValue(
@@ -1083,6 +1227,45 @@ enum RelayCanonical {
         )
     }
 
+    static func authenticatedResponseTranscript(_ response: RelayAuthenticatedResponse) -> Data {
+        transcript(
+            domain: "bd-to-avp.relay.authenticated-response.v1",
+            fields: [
+                ("sessionID", Data(response.sessionID.rawValue.utf8)),
+                ("signerRole", Data(response.signerRole.rawValue.utf8)),
+                ("requestNonce", Data(response.requestNonce.utf8)),
+                ("statusCode", integerData(Int64(response.statusCode))),
+                ("bodySHA256", response.bodySHA256),
+            ]
+        )
+    }
+
+    static func sessionKeyScheduleTranscript(
+        sessionID: RelaySessionIdentifier,
+        pairingTranscriptSHA256: Data
+    ) -> Data {
+        transcript(
+            domain: "bd-to-avp.relay.session-key-schedule.v3",
+            fields: [
+                ("sessionID", Data(sessionID.rawValue.utf8)),
+                ("pairingTranscriptSHA256", pairingTranscriptSHA256),
+            ]
+        )
+    }
+
+    static func sessionMasterTranscript(
+        sessionID: RelaySessionIdentifier,
+        pairingTranscriptSHA256: Data
+    ) -> Data {
+        transcript(
+            domain: "bd-to-avp.relay.session-master.v3",
+            fields: [
+                ("sessionID", Data(sessionID.rawValue.utf8)),
+                ("pairingTranscriptSHA256", pairingTranscriptSHA256),
+            ]
+        )
+    }
+
     static func keyDerivationTranscript(label: String, sessionID: RelaySessionIdentifier) -> Data {
         transcript(
             domain: "bd-to-avp.relay.key-derivation.v2",
@@ -1127,6 +1310,10 @@ enum RelayCanonical {
                     || byte == Character("-").asciiValue
                     || byte == Character("_").asciiValue
             }
+    }
+
+    static func isValidHTTPStatusCode(_ value: Int) -> Bool {
+        (100 ... 599).contains(value)
     }
 
     private static func challengeTranscript(_ challenge: RelaySessionChallenge) -> Data {
