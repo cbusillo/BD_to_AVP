@@ -42,6 +42,7 @@ struct BluRayToVisionProApp: App {
     @StateObject private var resolutionMemoryStore: ResolutionMemoryStore
     @StateObject private var durableQueueStore: ConversionQueueStore
     @StateObject private var queueNotificationCoordinator: PersistentQueueNotificationCoordinator
+    @StateObject private var relayHostController: RelayHostSessionController
 
     private let capabilities = AppCapabilities.current
     private let workCoordinator: AppWorkCoordinator
@@ -62,6 +63,7 @@ struct BluRayToVisionProApp: App {
         )
         let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
         let settings = AppSettings()
+        let relayHostController = RelayHostSessionController()
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         let diagnosticConfiguration = DiagnosticServiceConfiguration.configured()
         let diagnosticUploader = diagnosticConfiguration.map {
@@ -89,10 +91,12 @@ struct BluRayToVisionProApp: App {
             settings: settings,
             delivery: UserNotificationsQueueNotificationDelivery()
         ))
+        _relayHostController = StateObject(wrappedValue: relayHostController)
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
         suppressDefaultLaunch = AppDelegate.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments)
         appDelegate.observabilityEventStore = observabilityEventStore
+        appDelegate.relayHostController = relayHostController
     }
 
     var body: some Scene {
@@ -104,6 +108,7 @@ struct BluRayToVisionProApp: App {
                 settings: settings,
                 profileStore: profileStore,
                 resolutionMemoryStore: resolutionMemoryStore,
+                relayHostController: relayHostController,
                 capabilities: capabilities
             )
                 .environmentObject(queueNotificationCoordinator)

@@ -1,9 +1,9 @@
 # visionOS Player
 
 `BDToAVPPlayer` is the standalone visionOS 26 application for browsing and
-playing finalized 3D movies on Apple Vision Pro. It is separate from the macOS
-converter and from `SpatialPlaybackProbe`, which remains the qualification-only
-validator.
+playing finalized 3D movies or an explicitly paired live relay on Apple Vision
+Pro. It is separate from the macOS converter and from `SpatialPlaybackProbe`,
+which remains the qualification-only validator.
 
 ## Product Scope
 
@@ -25,6 +25,39 @@ validator.
   app's Application Support directory. Library media records omit source
   filesystem URLs, but bookmark blobs necessarily encode the source location so
   the app can regain security-scoped access.
+- The Live Relay panel discovers Macs through Bonjour, fetches a short-lived
+  challenge, accepts the single-use code shown by the Mac app, and starts an
+  authenticated MV-HEVC EVENT-HLS asset without requiring a hostname or cloud
+  service.
+
+## Live Relay
+
+Relay sessions are source-agnostic: the wire contract carries session,
+playlist, media, and playback state without MakeMKV-, SSIF-, AACS-, BD+-, or
+encryption-specific fields. Pairing derives directional request keys and a
+separate media capability. Every protected request binds the actual HTTP method,
+raw request target, body, timestamp, and fresh nonce; replayed, expired,
+reflected, unpaired, and capability-free requests fail closed.
+
+The player rewrites the playlist, initialization map, and media segment URLs to
+an app-owned resource-loader scheme so AVFoundation cannot bypass authenticated
+loading. A previously paired client can reconnect while the session remains
+unexpired. Wrong codes preserve the current challenge until the Mac exhausts
+its bounded attempt budget, while the text field clears the submitted code
+before the network attempt completes.
+
+The current local-network transport provides authenticated integrity and replay
+protection, not confidentiality: HTTP media bodies and the short-lived media
+capability are visible to an on-path LAN observer. This is an explicit limit of
+the synthetic/decrypted relay slice. Any adapter carrying content whose threat
+model requires confidentiality must add a separately reviewed encrypted
+transport without weakening the existing request authentication.
+
+The authenticated playlist snapshot supplies the retained window. The player
+refreshes that window during playback, moves the scrubber floor forward when
+history is evicted, and explains when a requested seek is before retained
+history or ahead of produced media. Session expiry and unpaired responses stop
+remote playback and require a fresh pairing.
 
 ## Source Access
 
@@ -137,9 +170,10 @@ leave stale bundle-path references. During a check, AVKit exposes Eye Order as a
 native playback action labeled Normal or Reversed.
 
 Files-provider sources may be backed by SMB or other network storage, but the app
-does not implement direct `smb://` transport, automatic mid-stream reconnection,
-offline pinning, provider-specific progress percentages, MVC, relay playback, or
-live conversion in this slice.
+does not implement direct `smb://` transport, offline pinning,
+provider-specific progress percentages, raw MVC playback, or source-side live
+conversion. Live Relay is limited to the authenticated EVENT-HLS contract; disc
+reading and just-in-time source production remain separate Mac-side work.
 
 ## Build And Test
 

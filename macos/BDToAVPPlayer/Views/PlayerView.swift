@@ -437,16 +437,23 @@ private struct PlayerOrnamentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if let notice = session.relaySeekNotice {
+                Label(notice, systemImage: "clock.arrow.circlepath")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             VStack(spacing: 8) {
                 Slider(
                     value: Binding(
-                        get: { scrubState.value ?? session.currentTime },
+                        get: { max(session.earliestSeekTime, scrubState.value ?? session.currentTime) },
                         set: {
                             scrubState.update(requestedTime: $0, duration: session.duration)
                             onInteraction()
                         }
                     ),
-                    in: 0 ... max(1, session.duration),
+                    in: session.earliestSeekTime ... max(session.earliestSeekTime + 1, session.duration),
                     onEditingChanged: handleScrubbing
                 )
                 .disabled(!session.canSeek)
@@ -454,7 +461,7 @@ private struct PlayerOrnamentView: View {
                 .accessibilityValue(displayedTimeSummary)
 
                 HStack {
-                    Text(PlaybackTimeFormatter.string(for: scrubState.value ?? session.currentTime))
+                    Text(PlaybackTimeFormatter.string(for: max(session.earliestSeekTime, scrubState.value ?? session.currentTime)))
                     Spacer()
                     Text(PlaybackTimeFormatter.string(for: session.duration))
                 }
@@ -644,14 +651,14 @@ private struct PlayerOrnamentView: View {
     private func handleScrubbing(_ isEditing: Bool) {
         onScrubbingChanged(isEditing)
         if isEditing {
-            scrubState.begin(currentTime: session.currentTime)
+            scrubState.begin(currentTime: max(session.earliestSeekTime, session.currentTime))
         } else if let scrubbedTime = scrubState.finish() {
             session.seek(to: scrubbedTime)
         }
     }
 
     private var displayedTimeSummary: String {
-        let displayedTime = scrubState.value ?? session.currentTime
+        let displayedTime = max(session.earliestSeekTime, scrubState.value ?? session.currentTime)
         return "\(PlaybackTimeFormatter.string(for: displayedTime)) / \(PlaybackTimeFormatter.string(for: session.duration))"
     }
 

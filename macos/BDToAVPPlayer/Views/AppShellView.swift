@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct AppShellView: View {
     @ObservedObject var model: PlayerAppModel
     @ObservedObject var playerSession: MVHEVCPlayerSession
+    @ObservedObject var relayCoordinator: RelaySessionCoordinator
     let resumeStore: ResumeStore
 
     @Environment(\.scenePhase) private var scenePhase
@@ -26,11 +27,28 @@ struct AppShellView: View {
                             Label("On My Vision Pro", systemImage: "visionpro")
                                 .font(.headline)
                         }
+                        Section("Live Relay") {
+                            Button {
+                                relayCoordinator.startDiscovery()
+                            } label: {
+                                Label("Connect to Mac", systemImage: "dot.radiowaves.left.and.right")
+                            }
+                            .disabled(!canStartRelayDiscovery)
+                        }
                     }
                     .listStyle(.sidebar)
                     .navigationTitle("Library")
                 } detail: {
-                    LibraryView(model: model)
+                    VStack(spacing: 0) {
+                        if relayCoordinator.state != .idle {
+                            RelayConnectionView(
+                                coordinator: relayCoordinator,
+                                playRelay: startRelayPlayback
+                            )
+                            Divider()
+                        }
+                        LibraryView(model: model)
+                    }
                 }
             }
         }
@@ -107,6 +125,10 @@ struct AppShellView: View {
     }
 
     private func retryPlayback() {
+        if playerSession.isRelayPlayback {
+            startRelayPlayback()
+            return
+        }
         guard let item = playerSession.mediaItem else {
             return
         }
@@ -117,6 +139,25 @@ struct AppShellView: View {
         preparationTask?.cancel()
         preparationTask = nil
         model.clearPlaybackRequest()
+    }
+
+    private func startRelayPlayback() {
+        guard let configuration = relayCoordinator.remotePlaybackConfiguration() else {
+            return
+        }
+        preparationTask?.cancel()
+        preparationTask = Task {
+            await playerSession.prepareRelayPlayback(configuration)
+        }
+    }
+
+    private var canStartRelayDiscovery: Bool {
+        switch relayCoordinator.state {
+        case .idle, .sessionExpired, .failed:
+            true
+        case .discovery, .pairing, .connected, .reconnecting, .networkUnavailable:
+            false
+        }
     }
 
     private var errorPresented: Binding<Bool> {

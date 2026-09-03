@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "29b33a25f718a34de0e5684afab913390e105ff2",
+    "sha": "4116a482314b7b4417f7fe1f79bea2c4f79bc5fb",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -437,27 +437,27 @@
   },
   "summary": {
     "bundle_file_counts": {
-      "BDToAVPPlayerTests": 9,
-      "BluRayToVisionProTests": 39,
+      "BDToAVPPlayerTests": 14,
+      "BluRayToVisionProTests": 43,
       "BluRayToVisionProUITests": 1,
       "SpatialPlaybackProbeTests": 1,
       "SpatialPlaybackProbeUITests": 1,
-      "python-unittest-discovery": 107,
+      "python-unittest-discovery": 108,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2703,
+    "ci_test_case_count": 2797,
     "classification_counts": {
-      "accepted-cost": 54,
-      "valuable": 175
+      "accepted-cost": 55,
+      "valuable": 184
     },
     "language_file_counts": {
-      "Python": 107,
-      "Swift": 51,
+      "Python": 108,
+      "Swift": 60,
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2736,
-    "test_file_count": 159,
+    "test_case_count": 2830,
+    "test_file_count": 169,
     "unmapped_test_file_count": 0
   },
   "support_fixtures": [
@@ -1436,6 +1436,134 @@
       "classification_evidence_ids": [
         "ci-visionos-player-build"
       ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/RelayBonjourBrowserTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with pinned Xcode 26.5 and conditionally executes it on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/RelayBonjourBrowserTests.swift",
+      "special_requirements": [
+        "network access",
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 1,
+          "signal": "network_access"
+        }
+      ],
+      "test_case_count": 2
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/RelayHLSResourceLoaderTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with pinned Xcode 26.5 and conditionally executes it on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/RelayHLSResourceLoaderTests.swift",
+      "special_requirements": [
+        "network access",
+        "real-media or SSIF/ISO fixture may be required",
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 6,
+          "signal": "network_access"
+        }
+      ],
+      "test_case_count": 7
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/RelayPairingEntryModelTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with pinned Xcode 26.5 and conditionally executes it on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/RelayPairingEntryModelTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [],
+      "test_case_count": 2
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/RelayRemotePlaybackSourceTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with pinned Xcode 26.5 and conditionally executes it on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/RelayRemotePlaybackSourceTests.swift",
+      "special_requirements": [
+        "network access",
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 2,
+          "signal": "network_access"
+        }
+      ],
+      "test_case_count": 3
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
+      "classification_rationale": "macos/BDToAVPPlayerTests/RelaySessionCoordinatorTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with pinned Xcode 26.5 and conditionally executes it on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
+      "lane_ids": [
+        "ci.visionos.bd_to_avp_player"
+      ],
+      "language": "Swift",
+      "path": "macos/BDToAVPPlayerTests/RelaySessionCoordinatorTests.swift",
+      "special_requirements": [
+        "network access",
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 1,
+          "signal": "filesystem_access"
+        },
+        {
+          "occurrences": 1,
+          "signal": "polling_or_waiting"
+        },
+        {
+          "occurrences": 2,
+          "signal": "network_access"
+        }
+      ],
+      "test_case_count": 7
+    },
+    {
+      "bundle": "BDToAVPPlayerTests",
+      "classification": "valuable",
+      "classification_cohort": "visionos-player-unit-tests",
+      "classification_evidence_ids": [
+        "ci-visionos-player-build"
+      ],
       "classification_rationale": "macos/BDToAVPPlayerTests/ResumeStoreTests.swift protects maintained BDToAVPPlayer visionOS behavior; CI compiles its unit-test bundle with pinned Xcode 26.5 and conditionally executes it on a temporary Apple Vision Pro simulator when the required runtime and device type are available.",
       "lane_ids": [
         "ci.visionos.bd_to_avp_player"
@@ -2060,6 +2188,102 @@
       "special_requirements": [],
       "static_brittleness_signals": [],
       "test_case_count": 2
+    },
+    {
+      "bundle": "BluRayToVisionProTests",
+      "classification": "valuable",
+      "classification_cohort": "swift-app-unit-direct-contracts",
+      "classification_evidence_ids": [
+        "ci-macos-app-unit"
+      ],
+      "classification_rationale": "macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence.",
+      "lane_ids": [
+        "ci.macos.blu_ray_unit"
+      ],
+      "language": "Swift",
+      "path": "macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift",
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 10,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 8
+    },
+    {
+      "bundle": "BluRayToVisionProTests",
+      "classification": "valuable",
+      "classification_cohort": "swift-app-unit-direct-contracts",
+      "classification_evidence_ids": [
+        "ci-macos-app-unit"
+      ],
+      "classification_rationale": "macos/BluRayToVisionProTests/RelayHostTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence.",
+      "lane_ids": [
+        "ci.macos.blu_ray_unit"
+      ],
+      "language": "Swift",
+      "path": "macos/BluRayToVisionProTests/RelayHostTests.swift",
+      "special_requirements": [
+        "real-media or SSIF/ISO fixture may be required"
+      ],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 13,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 14
+    },
+    {
+      "bundle": "BluRayToVisionProTests",
+      "classification": "valuable",
+      "classification_cohort": "swift-app-unit-direct-contracts",
+      "classification_evidence_ids": [
+        "ci-macos-app-unit"
+      ],
+      "classification_rationale": "macos/BluRayToVisionProTests/RelayNetworkServerTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence.",
+      "lane_ids": [
+        "ci.macos.blu_ray_unit"
+      ],
+      "language": "Swift",
+      "path": "macos/BluRayToVisionProTests/RelayNetworkServerTests.swift",
+      "special_requirements": [],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 4,
+          "signal": "filesystem_access"
+        },
+        {
+          "occurrences": 5,
+          "signal": "polling_or_waiting"
+        }
+      ],
+      "test_case_count": 5
+    },
+    {
+      "bundle": "BluRayToVisionProTests",
+      "classification": "valuable",
+      "classification_cohort": "swift-app-unit-direct-contracts",
+      "classification_evidence_ids": [
+        "ci-macos-app-unit"
+      ],
+      "classification_rationale": "macos/BluRayToVisionProTests/RelaySessionCoreTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence.",
+      "lane_ids": [
+        "ci.macos.blu_ray_unit"
+      ],
+      "language": "Swift",
+      "path": "macos/BluRayToVisionProTests/RelaySessionCoreTests.swift",
+      "special_requirements": [],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 1,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 39
     },
     {
       "bundle": "BluRayToVisionProTests",
@@ -3008,6 +3232,29 @@
         }
       ],
       "test_case_count": 6
+    },
+    {
+      "bundle": "python-unittest-discovery",
+      "classification": "accepted-cost",
+      "classification_cohort": "python-media-hardware-and-quality-qualification",
+      "classification_evidence_ids": [
+        "ci-python-discovery",
+        "media-hardware-contract"
+      ],
+      "classification_rationale": "tests/test_event_hls_mv_hevc_fixture.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence.",
+      "lane_ids": [
+        "ci.python.unittest"
+      ],
+      "language": "Python",
+      "path": "tests/test_event_hls_mv_hevc_fixture.py",
+      "special_requirements": [],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 9,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 7
     },
     {
       "bundle": "python-unittest-discovery",

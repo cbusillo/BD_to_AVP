@@ -1,7 +1,7 @@
 # macOS UI Acceptance
 
 This record covers the SwiftUI/AppKit acceptance pass for issues #178,
-#191, and #201. The application deploys to Apple Silicon macOS 26 or later and
+#191, #201, and the source-agnostic relay host in #712. The application deploys to Apple Silicon macOS 26 or later and
 was reviewed on the macOS 27 development host with the Xcode 27 SDK on
 2026-07-15. The release workflow separately verifies the signed package on a
 macOS 26 runner; these screenshots validate layout and platform behavior on the
@@ -30,6 +30,18 @@ baseline for `0.3.0` and later.
 | Accessibility semantics | Pass | The Settings accessibility tree exposes named profile controls and navigation tabs. Audio and subtitle language pickers have distinct labels, search prompts, and hints. Preview decoration is hidden from assistive technology, the status row has one meaningful label, and the player has an explicit label and hint. |
 | Window sizing | Pass | The main window was reviewed at its 1120×820 default size and at the configured 1080-point minimum width. The full title, both workspaces, and primary actions remain visible; the source workspace scrolls vertically when multi-title details exceed the available height. |
 | Long-running status | Pass | Conversion and preview heartbeats now expose elapsed time while remaining indeterminate when no trustworthy progress denominator exists. |
+| Live relay host | Pass | The toolbar opens a dedicated EVENT-HLS relay sheet. The user chooses a bounded fixture folder, sees lifecycle and segment state plus a single-use pairing code, and can stop or cancel deterministically. Both app plists declare the Bonjour service and local-network purpose. |
+
+## Relay Validation
+
+On September 3, 2026, the generated 6-second fixture produced three bounded
+fMP4 segments with a 4K MV-HEVC video track and synchronized AAC audio. macOS
+AVPlayer reached ready-to-play in under one second, then completed pause,
+resume, and an exact backward seek. The visionOS simulator build exposed the
+Live Relay source alongside the existing local library; its detail panel expands
+only after discovery begins, so existing movie actions remain unobscured.
+Stereoscopic routing and headset interaction remain physical-device
+gates.
 
 ## Screenshots
 
