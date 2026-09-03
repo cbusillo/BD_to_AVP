@@ -28,6 +28,7 @@ targets:
     platform: macOS
     sources:
       - path: BluRayToVisionPro
+      - path: RelaySessionCore
       - path: ../bd_to_avp/resources/app_icon.icns
         buildPhase: resources
       - path: ../bd_to_avp/resources/iso639_languages.json
@@ -158,6 +159,7 @@ targets:
       visionOS: "26.0"
     sources:
       - path: BDToAVPPlayer
+      - path: RelaySessionCore
     dependencies:
       - sdk: AVFoundation.framework
       - sdk: AVKit.framework

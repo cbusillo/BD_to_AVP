@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "d56793a881417d6a7919ca63c307e5fa2db8e396",
+    "sha": "97f36cb452a8d3f5c7cace038fa8495c1298f7d4",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -438,26 +438,26 @@
   "summary": {
     "bundle_file_counts": {
       "BDToAVPPlayerTests": 9,
-      "BluRayToVisionProTests": 39,
+      "BluRayToVisionProTests": 40,
       "BluRayToVisionProUITests": 1,
       "SpatialPlaybackProbeTests": 1,
       "SpatialPlaybackProbeUITests": 1,
       "python-unittest-discovery": 107,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2687,
+    "ci_test_case_count": 2722,
     "classification_counts": {
       "accepted-cost": 54,
-      "valuable": 175
+      "valuable": 176
     },
     "language_file_counts": {
       "Python": 107,
-      "Swift": 51,
+      "Swift": 52,
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2717,
-    "test_file_count": 159,
+    "test_case_count": 2752,
+    "test_file_count": 160,
     "unmapped_test_file_count": 0
   },
   "support_fixtures": [
@@ -2060,6 +2060,23 @@
       "special_requirements": [],
       "static_brittleness_signals": [],
       "test_case_count": 2
+    },
+    {
+      "bundle": "BluRayToVisionProTests",
+      "classification": "valuable",
+      "classification_cohort": "swift-app-unit-direct-contracts",
+      "classification_evidence_ids": [
+        "ci-macos-app-unit"
+      ],
+      "classification_rationale": "macos/BluRayToVisionProTests/RelaySessionCoreTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence.",
+      "lane_ids": [
+        "ci.macos.blu_ray_unit"
+      ],
+      "language": "Swift",
+      "path": "macos/BluRayToVisionProTests/RelaySessionCoreTests.swift",
+      "special_requirements": [],
+      "static_brittleness_signals": [],
+      "test_case_count": 35
     },
     {
       "bundle": "BluRayToVisionProTests",
