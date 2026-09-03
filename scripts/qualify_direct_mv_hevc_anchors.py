@@ -79,6 +79,7 @@ CAPABILITY_KEYS = frozenset(
         "metalfx_spatial_scaling_supported",
         "pixel_transfer_2x_mv_hevc_supported",
         "schema_version",
+        "segmented_hls_mv_hevc_encode_supported",
         "stereo_mv_hevc_encode_supported",
     }
 )

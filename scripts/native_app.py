@@ -658,6 +658,7 @@ def validate_mv_hevc_capability_probe(
         "metalfx_2x_mv_hevc_supported",
         "metalfx_spatial_scaling_supported",
         "pixel_transfer_2x_mv_hevc_supported",
+        "segmented_hls_mv_hevc_encode_supported",
     }
     if (
         not isinstance(payload, dict)
@@ -677,9 +678,11 @@ def validate_mv_hevc_capability_probe(
     metalfx_supported = payload.get("metalfx_2x_mv_hevc_supported", False)
     metalfx_device_supported = payload.get("metalfx_spatial_scaling_supported", False)
     pixel_transfer_supported = payload.get("pixel_transfer_2x_mv_hevc_supported", False)
+    segmented_hls_supported = payload.get("segmented_hls_mv_hevc_encode_supported", False)
     contract_is_consistent = not (
         (metalfx_supported and (not supported or not metalfx_device_supported))
         or (pixel_transfer_supported and not supported)
+        or (segmented_hls_supported and not supported)
     )
     expected_returncode = 0 if supported else 2
     if contract_is_consistent and completed.returncode == expected_returncode:
