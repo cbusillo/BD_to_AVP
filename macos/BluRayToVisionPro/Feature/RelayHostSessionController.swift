@@ -160,13 +160,22 @@ final class RelayHostSessionController: ObservableObject {
         case .cancelled:
             formattedPairingCode = nil
             lifecycle = .cancelled
+            clearTerminalSession()
         case .expired:
             formattedPairingCode = nil
             lifecycle = .failed("The pairing session expired. Start a new relay to continue.")
+            clearTerminalSession()
         case .stopped:
             formattedPairingCode = nil
             lifecycle = .stopped
+            clearTerminalSession()
         }
+    }
+
+    private func clearTerminalSession() {
+        lifecycleMonitoringTask?.cancel()
+        lifecycleMonitoringTask = nil
+        session = nil
     }
 }
 

@@ -138,6 +138,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
+    @Published private(set) var relaySeekNotice: String?
     @Published private(set) var audioOptions: [PlaybackMediaOption] = []
     @Published private(set) var subtitleOptions: [PlaybackMediaOption] = []
     @Published private(set) var selectedAudioID = ""
@@ -149,6 +150,8 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     private var resourceLease: SecurityScopedResourceLease?
     private var remotePlaybackSource: RelayRemotePlaybackSource?
+    private var relayTransport: (any RelayTransport)?
+    private var relayWindowRefreshTask: Task<Void, Never>?
     private var resumeStore: ResumeStore?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlStatusObservation: NSKeyValueObservation?
@@ -237,7 +240,18 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     var canSeek: Bool {
-        canControlPlayback && duration.isFinite && duration > 0
+        guard canControlPlayback else {
+            return false
+        }
+        if let remotePlaybackSource {
+            return remotePlaybackSource.retainedSeekPolicy.latestAvailableTime
+                > remotePlaybackSource.retainedSeekPolicy.earliestPlayableTime
+        }
+        return duration.isFinite && duration > 0
+    }
+
+    var earliestSeekTime: TimeInterval {
+        remotePlaybackSource?.retainedSeekPolicy.earliestPlayableTime ?? 0
     }
 
     var supportsEyeSwap: Bool {
@@ -265,6 +279,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         state = .loading
         failureMessage = nil
         failurePresentation = nil
+        relaySeekNotice = nil
         preparationPhase = .openingSource
         currentTime = 0
         duration = 0
@@ -403,6 +418,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         state = .loading
         failureMessage = nil
         failurePresentation = nil
+        relaySeekNotice = nil
         preparationPhase = .preparingMedia
         currentTime = 0
         duration = 0
@@ -419,6 +435,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                 session: configuration.session,
                 serverBaseURL: configuration.serverBaseURL
             )
+            try await source.refreshRetainedWindow(transport: configuration.transport)
             let (asset, _) = source.makeAssetAndLoader(transport: configuration.transport)
             let item = AVPlayerItem(asset: asset)
             let preparedSelections = try await prepareMediaSelections(for: asset, item: item)
@@ -428,11 +445,13 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
 
             remotePlaybackSource = source
+            relayTransport = configuration.transport
             playerItem = item
             packedStereoSource = nil
             configureMediaSelections(preparedSelections)
             observe(item, generation: generation)
             player.replaceCurrentItem(with: item)
+            startRelayWindowRefresh(generation: generation)
         } catch is CancellationError {
             if generation == preparationGeneration {
                 pendingResume.clear()
@@ -506,7 +525,28 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
 
         let generation = preparationGeneration
-        let targetTime = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
+        let adjustedRequestedTime: TimeInterval
+        if origin == .user, let remotePlaybackSource {
+            switch remotePlaybackSource.retainedSeekPolicy.validateSeek(to: requestedTime) {
+            case .playable:
+                relaySeekNotice = nil
+                adjustedRequestedTime = requestedTime
+            case let .beforeRetainedHistory(earliestPlayableTime):
+                relaySeekNotice = "That part of the live relay is no longer retained. Continuing at \(PlaybackTimeFormatter.string(for: earliestPlayableTime))."
+                adjustedRequestedTime = earliestPlayableTime
+            case let .notYetAvailable(latestAvailableTime):
+                relaySeekNotice = "The live relay is available through \(PlaybackTimeFormatter.string(for: latestAvailableTime))."
+                adjustedRequestedTime = max(earliestSeekTime, latestAvailableTime - 0.001)
+            case let .ended(finalDuration):
+                relaySeekNotice = nil
+                adjustedRequestedTime = min(requestedTime, finalDuration)
+            case .invalidTime:
+                return
+            }
+        } else {
+            adjustedRequestedTime = requestedTime
+        }
+        let targetTime = PlaybackSeekPolicy.clampedTime(adjustedRequestedTime, duration: duration)
         if origin == .user {
             guard canSeek else {
                 return
@@ -1146,6 +1186,10 @@ final class MVHEVCPlayerSession: ObservableObject {
         resourceLease = nil
         remotePlaybackSource?.cancelLoader()
         remotePlaybackSource = nil
+        relayTransport = nil
+        relayWindowRefreshTask?.cancel()
+        relayWindowRefreshTask = nil
+        relaySeekNotice = nil
         audioGroup = nil
         subtitleGroup = nil
         audioSelectionByID = [:]
@@ -1359,6 +1403,38 @@ final class MVHEVCPlayerSession: ObservableObject {
         qualificationNativeResumeSeekSuppressionUntilUptime = 0
     }
 #endif
+
+    private func startRelayWindowRefresh(generation: Int) {
+        relayWindowRefreshTask?.cancel()
+        relayWindowRefreshTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self, generation == self.preparationGeneration else {
+                    return
+                }
+                await self.refreshRelayWindow(generation: generation)
+            }
+        }
+    }
+
+    private func refreshRelayWindow(generation: Int) async {
+        guard var source = remotePlaybackSource, let relayTransport else {
+            return
+        }
+        do {
+            try await source.refreshRetainedWindow(transport: relayTransport)
+            guard generation == preparationGeneration else {
+                return
+            }
+            remotePlaybackSource = source
+            duration = max(duration, source.retainedSeekPolicy.latestAvailableTime)
+        } catch RelayTransportError.sessionExpired, RelayTransportError.unpaired {
+            guard generation == preparationGeneration else {
+                return
+            }
+            presentFailure(.relayPreparationFailed("The relay session ended. Pair with the Mac again to continue."))
+        } catch {}
+    }
 
     private static func sourceFailurePresentation(for error: Error) -> PlaybackFailurePresentation {
         guard let bookmarkError = error as? BookmarkStoreError else {

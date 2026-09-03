@@ -9,17 +9,19 @@ enum RelayRetainedSeekDecision: Equatable {
     case invalidTime
 }
 
-struct RelayPlaylistWindow: Decodable, Equatable, Sendable {
-    let earliestPlayableTimeMilliseconds: Int64
-    let totalDurationMilliseconds: Int64
-    let isFinalized: Bool
-}
-
 struct RelayRetainedSeekPolicy: Equatable, Sendable {
-    private(set) var window: RelayPlaylistWindow?
+    private(set) var window: RelayPlaylistSnapshot?
 
-    mutating func update(with snapshot: RelayPlaylistWindow) {
+    mutating func update(with snapshot: RelayPlaylistSnapshot) {
         window = snapshot
+    }
+
+    var earliestPlayableTime: TimeInterval {
+        TimeInterval(window?.earliestPlayableTimeMilliseconds ?? 0) / 1_000
+    }
+
+    var latestAvailableTime: TimeInterval {
+        TimeInterval(window?.totalDurationMilliseconds ?? 0) / 1_000
     }
 
     func validateSeek(to time: TimeInterval) -> RelayRetainedSeekDecision {
@@ -76,7 +78,32 @@ struct RelayRemotePlaybackSource {
     }
 
     mutating func updateRetainedWindow(with data: Data) throws {
-        retainedSeekPolicy.update(with: try JSONDecoder().decode(RelayPlaylistWindow.self, from: data))
+        retainedSeekPolicy.update(with: try JSONDecoder().decode(RelayPlaylistSnapshot.self, from: data))
+    }
+
+    mutating func refreshRetainedWindow(
+        transport: any RelayTransport,
+        clock: @escaping @Sendable () -> Date = { Date() },
+        nonce: @escaping @Sendable () -> String = { UUID().uuidString }
+    ) async throws {
+        let request = try RelayAuthenticatedRequestFactory.makeRequest(
+            baseURL: serverBaseURL,
+            path: RelayWireContract.playlistSnapshotPath,
+            signer: session,
+            clock: clock,
+            nonce: nonce
+        )
+        let (data, response) = try await transport.data(for: request)
+        switch response.statusCode {
+        case 200:
+            try updateRetainedWindow(with: data)
+        case 410:
+            throw RelayTransportError.sessionExpired
+        case 503:
+            throw RelayTransportError.unpaired
+        default:
+            throw RelayTransportError.unexpectedStatusCode(response.statusCode)
+        }
     }
 
     func resolveSegmentURL(for segment: RelayPlaylistSegment) -> URL {

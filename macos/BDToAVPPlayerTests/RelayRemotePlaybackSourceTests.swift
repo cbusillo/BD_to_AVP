@@ -13,7 +13,15 @@ final class RelayRemotePlaybackSourceTests: XCTestCase {
         {
           "earliestPlayableTimeMilliseconds": 60000,
           "totalDurationMilliseconds": 120000,
-          "isFinalized": false
+          "isFinalized": false,
+          "segments": [
+            {
+              "sequenceNumber": 30,
+              "startTimeMilliseconds": 60000,
+              "durationMilliseconds": 60000,
+              "resourceIdentifier": "segment-030.m4s"
+            }
+          ]
         }
         """.utf8))
 
@@ -25,7 +33,15 @@ final class RelayRemotePlaybackSourceTests: XCTestCase {
         {
           "earliestPlayableTimeMilliseconds": 60000,
           "totalDurationMilliseconds": 120000,
-          "isFinalized": true
+          "isFinalized": true,
+          "segments": [
+            {
+              "sequenceNumber": 30,
+              "startTimeMilliseconds": 60000,
+              "durationMilliseconds": 60000,
+              "resourceIdentifier": "segment-030.m4s"
+            }
+          ]
         }
         """.utf8))
         XCTAssertEqual(source.retainedSeekPolicy.validateSeek(to: 120), RelayRetainedSeekDecision.ended(finalDuration: 120))
@@ -43,5 +59,41 @@ final class RelayRemotePlaybackSourceTests: XCTestCase {
         )
         source.cancelLoader()
         source.cancelLoader()
+    }
+
+    func testRefreshingRetainedWindowUsesAuthenticatedSnapshotRoute() async throws {
+        let fixedNow = now
+        let session = try await makePairedClientSession(now: fixedNow)
+        let transport = FakeRelayTransport()
+        await transport.setHandler { request in
+            let snapshot = try RelayPlaylistSnapshot(
+                earliestPlayableTimeMilliseconds: 2_000,
+                totalDurationMilliseconds: 4_000,
+                isFinalized: false,
+                segments: [
+                    try RelayPlaylistSegment(
+                        sequenceNumber: 1,
+                        startTimeMilliseconds: 2_000,
+                        durationMilliseconds: 2_000,
+                        resourceIdentifier: "segment-001.m4s"
+                    ),
+                ]
+            )
+            return (try JSONEncoder().encode(snapshot), makeHTTPResponse(request))
+        }
+        var source = try RelayRemotePlaybackSource(session: session, serverBaseURL: baseURL)
+
+        try await source.refreshRetainedWindow(
+            transport: transport,
+            clock: { fixedNow },
+            nonce: { "snapshot-refresh-0001" }
+        )
+
+        XCTAssertEqual(source.retainedSeekPolicy.earliestPlayableTime, 2)
+        XCTAssertEqual(source.retainedSeekPolicy.latestAvailableTime, 4)
+        let requests = await transport.allRequests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.url?.path, RelayWireContract.playlistSnapshotPath)
+        XCTAssertNotNil(request.value(forHTTPHeaderField: RelayWireContract.authenticationHeader))
     }
 }

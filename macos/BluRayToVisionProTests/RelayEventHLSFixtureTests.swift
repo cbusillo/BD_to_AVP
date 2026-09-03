@@ -19,7 +19,7 @@ final class RelayEventHLSFixtureTests: XCTestCase {
     func testRejectsPlaylistWithMissingSegment() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
-        try "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nmissing.m4s\n".write(
+        try "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-TARGETDURATION:4\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4,\nmissing.m4s\n".write(
             to: fixture.appendingPathComponent("media.m3u8"),
             atomically: true,
             encoding: .utf8
@@ -27,6 +27,30 @@ final class RelayEventHLSFixtureTests: XCTestCase {
 
         XCTAssertThrowsError(try RelayEventHLSFixture.load(directory: fixture)) { error in
             XCTAssertEqual(error as? RelayEventHLSFixtureError, .missingSegment("missing.m4s"))
+        }
+    }
+
+    func testRejectsVODOrMismatchedInitializationMap() throws {
+        let vodFixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: vodFixture) }
+        let playlistURL = vodFixture.appendingPathComponent("media.m3u8")
+        let eventPlaylist = try String(contentsOf: playlistURL, encoding: .utf8)
+        try eventPlaylist
+            .replacingOccurrences(of: "#EXT-X-PLAYLIST-TYPE:EVENT", with: "#EXT-X-PLAYLIST-TYPE:VOD")
+            .write(to: playlistURL, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try RelayEventHLSFixture.load(directory: vodFixture)) { error in
+            XCTAssertEqual(error as? RelayEventHLSFixtureError, .invalidPlaylist)
+        }
+
+        let mapFixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: mapFixture) }
+        let mapPlaylistURL = mapFixture.appendingPathComponent("media.m3u8")
+        let validPlaylist = try String(contentsOf: mapPlaylistURL, encoding: .utf8)
+        try validPlaylist
+            .replacingOccurrences(of: "#EXT-X-MAP:URI=\"init.mp4\"", with: "#EXT-X-MAP:URI=\"other.mp4\"")
+            .write(to: mapPlaylistURL, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try RelayEventHLSFixture.load(directory: mapFixture)) { error in
+            XCTAssertEqual(error as? RelayEventHLSFixtureError, .invalidPlaylist)
         }
     }
 

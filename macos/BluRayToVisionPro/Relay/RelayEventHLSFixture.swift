@@ -9,6 +9,9 @@ enum RelayEventHLSFixtureError: Error, Equatable, Sendable {
 }
 
 struct RelayEventHLSFixture: Equatable, Sendable {
+    private static let maximumPlaylistBytes = 1_024 * 1_024
+    private static let maximumSegmentCount = 1_000
+
     struct Segment: Equatable, Sendable {
         let resourceIdentifier: String
         let duration: TimeInterval
@@ -28,13 +31,23 @@ struct RelayEventHLSFixture: Equatable, Sendable {
             throw RelayEventHLSFixtureError.invalidDirectory
         }
 
-        try requireRegularFile(initializationResourceIdentifier, in: root, missing: .missingInitializationSegment)
         let playlistURL = root.appendingPathComponent("media.m3u8", isDirectory: false)
-        guard FileManager.default.fileExists(atPath: playlistURL.path) else {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: playlistURL.path),
+              let playlistSize = attributes[.size] as? NSNumber
+        else {
             throw RelayEventHLSFixtureError.missingPlaylist
         }
-        let playlist = try String(contentsOf: playlistURL, encoding: .utf8)
-        let parsed = try parse(playlist)
+        guard playlistSize.intValue <= maximumPlaylistBytes,
+              let playlist = String(data: try Data(contentsOf: playlistURL), encoding: .utf8)
+        else {
+            throw RelayEventHLSFixtureError.invalidPlaylist
+        }
+        let parsed = try parse(playlist, initializationResourceIdentifier: initializationResourceIdentifier)
+        try requireRegularFile(
+            parsed.initializationResourceIdentifier,
+            in: root,
+            missing: .missingInitializationSegment
+        )
         for segment in parsed.segments {
             try requireRegularFile(
                 segment.resourceIdentifier,
@@ -43,15 +56,16 @@ struct RelayEventHLSFixture: Equatable, Sendable {
             )
         }
         return RelayEventHLSFixture(
-            initializationResourceIdentifier: initializationResourceIdentifier,
+            initializationResourceIdentifier: parsed.initializationResourceIdentifier,
             targetDuration: parsed.targetDuration,
             segments: parsed.segments
         )
     }
 
     private static func parse(
-        _ source: String
-    ) throws -> (targetDuration: TimeInterval, segments: [Segment]) {
+        _ source: String,
+        initializationResourceIdentifier: String
+    ) throws -> (initializationResourceIdentifier: String, targetDuration: TimeInterval, segments: [Segment]) {
         let lines = source
             .split(whereSeparator: \.isNewline)
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -59,16 +73,44 @@ struct RelayEventHLSFixture: Equatable, Sendable {
             throw RelayEventHLSFixtureError.invalidPlaylist
         }
 
+        var isEventPlaylist = false
+        var parsedInitializationResourceIdentifier: String?
         var targetDuration: TimeInterval?
         var pendingDuration: TimeInterval?
         var segments: [Segment] = []
         for line in lines.dropFirst() where !line.isEmpty {
-            if line.hasPrefix("#EXT-X-TARGETDURATION:") {
-                let rawValue = line.dropFirst("#EXT-X-TARGETDURATION:".count)
-                guard targetDuration == nil, let value = TimeInterval(rawValue), value.isFinite, value > 0 else {
+            if line == "#EXT-X-PLAYLIST-TYPE:EVENT" {
+                guard !isEventPlaylist else {
                     throw RelayEventHLSFixtureError.invalidPlaylist
                 }
-                targetDuration = value
+                isEventPlaylist = true
+                continue
+            }
+            if line.hasPrefix("#EXT-X-PLAYLIST-TYPE:") {
+                throw RelayEventHLSFixtureError.invalidPlaylist
+            }
+            if line.hasPrefix("#EXT-X-MAP:") {
+                let prefix = "#EXT-X-MAP:URI=\""
+                guard parsedInitializationResourceIdentifier == nil,
+                      line.hasPrefix(prefix), line.hasSuffix("\"")
+                else {
+                    throw RelayEventHLSFixtureError.invalidPlaylist
+                }
+                let identifier = String(line.dropFirst(prefix.count).dropLast())
+                guard identifier == initializationResourceIdentifier,
+                      isSafeResourceIdentifier(identifier)
+                else {
+                    throw RelayEventHLSFixtureError.invalidPlaylist
+                }
+                parsedInitializationResourceIdentifier = identifier
+                continue
+            }
+            if line.hasPrefix("#EXT-X-TARGETDURATION:") {
+                let rawValue = line.dropFirst("#EXT-X-TARGETDURATION:".count)
+                guard targetDuration == nil, let value = Int(rawValue), value > 0 else {
+                    throw RelayEventHLSFixtureError.invalidPlaylist
+                }
+                targetDuration = TimeInterval(value)
                 continue
             }
             if line.hasPrefix("#EXTINF:") {
@@ -89,17 +131,22 @@ struct RelayEventHLSFixture: Equatable, Sendable {
             guard let duration = pendingDuration, isSafeResourceIdentifier(line) else {
                 throw RelayEventHLSFixtureError.invalidPlaylist
             }
+            guard segments.count < maximumSegmentCount else {
+                throw RelayEventHLSFixtureError.invalidPlaylist
+            }
             segments.append(Segment(resourceIdentifier: line, duration: duration))
             pendingDuration = nil
         }
         guard pendingDuration == nil,
+              isEventPlaylist,
+              let parsedInitializationResourceIdentifier,
               let targetDuration,
               !segments.isEmpty,
               segments.allSatisfy({ $0.duration <= targetDuration })
         else {
             throw RelayEventHLSFixtureError.invalidPlaylist
         }
-        return (targetDuration, segments)
+        return (parsedInitializationResourceIdentifier, targetDuration, segments)
     }
 
     private static func requireRegularFile(
@@ -113,9 +160,10 @@ struct RelayEventHLSFixture: Equatable, Sendable {
         let candidate = root.appendingPathComponent(resourceIdentifier, isDirectory: false)
             .standardizedFileURL
             .resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
         guard candidate.path.hasPrefix(root.path + "/"),
-              FileManager.default.fileExists(atPath: candidate.path),
-              !candidate.hasDirectoryPath
+              FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue
         else {
             throw missing
         }
