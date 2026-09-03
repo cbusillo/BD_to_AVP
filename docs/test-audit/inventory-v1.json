@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "75b0eddb5d544c508b88cddd0bfb14edd633c904",
+    "sha": "dd85810d04b5b9c6dbb75bca9f9bd0517cb960b6",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -445,7 +445,7 @@
       "python-unittest-discovery": 108,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2779,
+    "ci_test_case_count": 2781,
     "classification_counts": {
       "accepted-cost": 55,
       "valuable": 183
@@ -456,7 +456,7 @@
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2812,
+    "test_case_count": 2814,
     "test_file_count": 168,
     "unmapped_test_file_count": 0
   },
@@ -2202,7 +2202,9 @@
       ],
       "language": "Swift",
       "path": "macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift",
-      "special_requirements": [],
+      "special_requirements": [
+        "visionOS simulator or physical Apple Vision Pro, depending on evidence"
+      ],
       "static_brittleness_signals": [
         {
           "occurrences": 9,
@@ -2233,7 +2235,7 @@
           "signal": "filesystem_access"
         }
       ],
-      "test_case_count": 9
+      "test_case_count": 11
     },
     {
       "bundle": "BluRayToVisionProTests",
