@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     weak var workCoordinator: AppWorkCoordinator?
     var observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
+    weak var relayHostController: RelayHostSessionController?
     private weak var managedWindow: NSWindow?
     private var originalWindowDelegate: NSWindowDelegate?
     private var allowManagedWindowClose = false
@@ -111,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if allowManagedWindowClose || !(workCoordinator?.hasActiveWorker ?? false) {
+        if allowManagedWindowClose || (!(workCoordinator?.hasActiveWorker ?? false) && !(relayHostController?.isSessionActive ?? false)) {
             return originalWindowDelegate?.windowShouldClose?(sender) ?? true
         }
         if isStoppingForWindowClose {
@@ -119,13 +120,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         }
 
         let alert = stopAlert(action: "close this window", buttonTitle: "Stop and Close")
-        guard alert.runModal() == .alertFirstButtonReturn, let workCoordinator else {
+        guard alert.runModal() == .alertFirstButtonReturn else {
             return false
         }
 
         isStoppingForWindowClose = true
         Task {
-            await workCoordinator.stopForQuit()
+            await workCoordinator?.stopForQuit()
+            await relayHostController?.stopForAppQuit()
             allowManagedWindowClose = true
             sender.performClose(nil)
         }
@@ -143,9 +145,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         if isStoppingForTermination {
             return .terminateLater
         }
-        guard let workCoordinator, workCoordinator.hasActiveWorker else {
+        guard let workCoordinator, workCoordinator.hasActiveWorker || relayHostController?.isSessionActive == true else {
             isStoppingForTermination = true
             Task {
+                await relayHostController?.stopForAppQuit()
                 await flushObservabilityStoreWithDeadline()
                 sender.reply(toApplicationShouldTerminate: true)
             }
@@ -161,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         isStoppingForTermination = true
         Task {
             await workCoordinator.stopForQuit()
+            await relayHostController?.stopForAppQuit()
             await flushObservabilityStoreWithDeadline()
             sender.reply(toApplicationShouldTerminate: true)
         }

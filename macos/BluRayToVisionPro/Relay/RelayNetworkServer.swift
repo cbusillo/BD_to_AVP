@@ -65,6 +65,11 @@ final class RelayNetworkServer: @unchecked Sendable {
         await host.cancel()
     }
 
+    func stop() async {
+        listener.cancel()
+        await host.stop()
+    }
+
     private func accept(_ connection: NWConnection) {
         let peer = RelayNetworkPeerClassifier.classify(connection.endpoint)
         guard peer == .localNetwork else {
