@@ -696,10 +696,18 @@ private final class HLSOutputDirectory {
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: false)
     }
 
-    func complete() throws {
+    func complete() {
         if let backupURL {
-            try fileManager.removeItem(at: backupURL)
-            self.backupURL = nil
+            do {
+                try fileManager.removeItem(at: backupURL)
+                self.backupURL = nil
+            } catch {
+                emitStatus([
+                    "event": "encoder.cleanup_warning",
+                    "message": "Encoded output is complete, but the previous HLS backup could not be removed.",
+                    "schema_version": 1,
+                ])
+            }
         }
     }
 
@@ -729,6 +737,7 @@ private struct HLSSegment {
 private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @unchecked Sendable {
     private let directoryURL: URL
     private let preferredSegmentDurationSeconds: Double
+    private let targetDurationSeconds: Int
     private let lock = NSLock()
     private var initializationWritten = false
     private var finalized = false
@@ -738,6 +747,7 @@ private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @uncheck
     init(directoryURL: URL, preferredSegmentDurationSeconds: Double) {
         self.directoryURL = directoryURL
         self.preferredSegmentDurationSeconds = preferredSegmentDurationSeconds
+        targetDurationSeconds = max(1, Int(ceil(preferredSegmentDurationSeconds + 1)))
     }
 
     func assetWriter(
@@ -748,7 +758,11 @@ private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @uncheck
     ) {
         lock.lock()
         defer { lock.unlock() }
-        guard failure == nil, !finalized else {
+        guard failure == nil else {
+            return
+        }
+        guard !finalized else {
+            failure = EncoderFailure.writer("AVAssetWriter emitted an HLS segment after playlist finalization.")
             return
         }
         do {
@@ -766,7 +780,13 @@ private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @uncheck
                 }
                 let filename = String(format: "segment-%05d.m4s", segments.count + 1)
                 try atomicallyWrite(segmentData, to: directoryURL.appendingPathComponent(filename))
-                segments.append(HLSSegment(filename: filename, durationSeconds: duration(from: segmentReport)))
+                let segmentDurationSeconds = duration(from: segmentReport)
+                guard segmentDurationSeconds <= Double(targetDurationSeconds) else {
+                    throw EncoderFailure.writer(
+                        "AVAssetWriter emitted an HLS segment longer than the fixed target duration."
+                    )
+                }
+                segments.append(HLSSegment(filename: filename, durationSeconds: segmentDurationSeconds))
                 try writePlaylist(endList: false)
             @unknown default:
                 throw EncoderFailure.writer("AVAssetWriter emitted an unknown HLS segment type.")
@@ -813,11 +833,10 @@ private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @uncheck
     }
 
     private func writePlaylist(endList: Bool) throws {
-        let maximumDuration = segments.map(\.durationSeconds).max() ?? preferredSegmentDurationSeconds
         var lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:7",
-            "#EXT-X-TARGETDURATION:\(max(1, Int(ceil(maximumDuration))))",
+            "#EXT-X-TARGETDURATION:\(targetDurationSeconds)",
             "#EXT-X-PLAYLIST-TYPE:\(endList ? "VOD" : "EVENT")",
             "#EXT-X-INDEPENDENT-SEGMENTS",
             "#EXT-X-MAP:URI=\"init.mp4\"",
@@ -991,8 +1010,8 @@ private func encode(
         if let hlsOutputDelegate, let hlsOutputDirectory {
             try hlsOutputDelegate.throwIfFailed()
             let hlsSegmentCount = try hlsOutputDelegate.finalizePlaylist()
-            try hlsOutputDirectory.complete()
             completed = true
+            hlsOutputDirectory.complete()
             return (header, frameCount, upscaler?.metrics, hlsSegmentCount)
         }
         guard let partialURL, let outputURL = options.outputURL else {

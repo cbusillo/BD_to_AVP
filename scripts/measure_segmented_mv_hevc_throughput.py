@@ -12,9 +12,12 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
+from contextlib import suppress
 from pathlib import Path
+from typing import BinaryIO
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -168,6 +171,27 @@ def communicate(process: subprocess.Popen[bytes], timeout: int, label: str) -> t
         raise ThroughputProbeFailure(f"{label} exceeded the {timeout}-second timeout") from error
 
 
+def kill_and_reap(*processes: subprocess.Popen[bytes]) -> None:
+    for process in processes:
+        if process.poll() is None:
+            process.kill()
+    for process in processes:
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=30)
+
+
+def wait_for_process(process: subprocess.Popen[bytes], timeout: int, label: str) -> None:
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise ThroughputProbeFailure(f"{label} exceeded the {timeout}-second timeout") from error
+
+
+def captured_stderr(handle: BinaryIO) -> bytes:
+    handle.seek(0)
+    return handle.read()
+
+
 def run_y4m_probe(args: argparse.Namespace, encoder: Path) -> dict[str, object]:
     assert args.y4m is not None
     with args.y4m.open("rb") as handle:
@@ -206,39 +230,56 @@ def run_rainforest_probe(args: argparse.Namespace, encoder: Path) -> dict[str, o
     edge264 = command_path(args.edge264, "edge264")
     ffmpeg = command_path(args.ffmpeg, "FFmpeg")
     pair_bound = args.rainforest_pair_bound or args.max_frames + 16
-    stream_process = subprocess.Popen(
-        [str(ssif_probe), "stream-mvc", str(source_path), str(args.rainforest_playlist), str(pair_bound)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert stream_process.stdout is not None
-    edge_process = subprocess.Popen(
-        [str(edge264), "-", "-Osk"],
-        stdin=stream_process.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    stream_process.stdout.close()
-    assert edge_process.stdout is not None
-    normalizer_process = subprocess.Popen(
-        bounded_normalizer_command(ffmpeg, args),
-        stdin=edge_process.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    edge_process.stdout.close()
-    assert normalizer_process.stdout is not None
-    encoder_process = subprocess.Popen(
-        encoder_command(args, encoder),
-        stdin=normalizer_process.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    normalizer_process.stdout.close()
-    encoder_stdout, encoder_stderr = communicate(encoder_process, args.timeout, "MV-HEVC encoder")
-    _, normalizer_stderr = communicate(normalizer_process, args.timeout, "FFmpeg normalizer")
-    _, edge_stderr = communicate(edge_process, args.timeout, "edge264")
-    _, stream_stderr = communicate(stream_process, args.timeout, "ssif_probe")
+    with (
+        tempfile.TemporaryFile() as stream_stderr_handle,
+        tempfile.TemporaryFile() as edge_stderr_handle,
+        tempfile.TemporaryFile() as normalizer_stderr_handle,
+    ):
+        processes: list[subprocess.Popen[bytes]] = []
+        try:
+            stream_process = subprocess.Popen(
+                [str(ssif_probe), "stream-mvc", str(source_path), str(args.rainforest_playlist), str(pair_bound)],
+                stdout=subprocess.PIPE,
+                stderr=stream_stderr_handle,
+            )
+            processes.append(stream_process)
+            assert stream_process.stdout is not None
+            edge_process = subprocess.Popen(
+                [str(edge264), "-", "-Osk"],
+                stdin=stream_process.stdout,
+                stdout=subprocess.PIPE,
+                stderr=edge_stderr_handle,
+            )
+            processes.append(edge_process)
+            stream_process.stdout.close()
+            assert edge_process.stdout is not None
+            normalizer_process = subprocess.Popen(
+                bounded_normalizer_command(ffmpeg, args),
+                stdin=edge_process.stdout,
+                stdout=subprocess.PIPE,
+                stderr=normalizer_stderr_handle,
+            )
+            processes.append(normalizer_process)
+            edge_process.stdout.close()
+            assert normalizer_process.stdout is not None
+            encoder_process = subprocess.Popen(
+                encoder_command(args, encoder),
+                stdin=normalizer_process.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            processes.append(encoder_process)
+            normalizer_process.stdout.close()
+            encoder_stdout, encoder_stderr = communicate(encoder_process, args.timeout, "MV-HEVC encoder")
+            wait_for_process(normalizer_process, args.timeout, "FFmpeg normalizer")
+            wait_for_process(edge_process, args.timeout, "edge264")
+            wait_for_process(stream_process, args.timeout, "ssif_probe")
+        except BaseException:
+            kill_and_reap(*processes)
+            raise
+        normalizer_stderr = captured_stderr(normalizer_stderr_handle)
+        edge_stderr = captured_stderr(edge_stderr_handle)
+        stream_stderr = captured_stderr(stream_stderr_handle)
     if encoder_process.returncode != 0:
         raise ThroughputProbeFailure(encoder_stderr.decode(errors="replace").strip() or "MV-HEVC encoder failed")
     if normalizer_process.returncode != 0:
@@ -306,18 +347,26 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--output-directory", type=Path, required=True, help="New HLS output directory.")
     result.add_argument("--encoder", type=Path, default=DEFAULT_ENCODER, help="Segmented MV-HEVC encoder executable.")
-    result.add_argument("--max-frames", type=positive_int, default=240, help="Exact frame count to encode (default: 240).")
+    result.add_argument(
+        "--max-frames", type=positive_int, default=240, help="Exact frame count to encode (default: 240)."
+    )
     result.add_argument("--segment-duration", type=positive_float, default=2.0, help="HLS segment duration in seconds.")
     result.add_argument("--bitrate-mbps", type=positive_float, default=20.0, help="MV-HEVC average bitrate in Mbps.")
     result.add_argument("--timeout", type=positive_int, default=300, help="Per-process timeout in seconds.")
-    result.add_argument("--ssif-probe", type=Path, default=DEFAULT_SSIF_PROBE, help="ssif_probe executable for --rainforest.")
+    result.add_argument(
+        "--ssif-probe", type=Path, default=DEFAULT_SSIF_PROBE, help="ssif_probe executable for --rainforest."
+    )
     result.add_argument("--edge264", type=Path, default=DEFAULT_EDGE264, help="edge264 executable for --rainforest.")
     result.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg executable for --rainforest.")
     result.add_argument("--rainforest-playlist", type=positive_int, default=1005, help="Rainforest playlist number.")
-    result.add_argument("--rainforest-pair-bound", type=positive_int, help="MVC pair bound; defaults to max frames plus 16.")
+    result.add_argument(
+        "--rainforest-pair-bound", type=positive_int, help="MVC pair bound; defaults to max frames plus 16."
+    )
     result.add_argument("--rainforest-eye-width", type=positive_int, default=1920, help="Rainforest eye width.")
     result.add_argument("--rainforest-eye-height", type=positive_int, default=1080, help="Rainforest eye height.")
-    result.add_argument("--rainforest-frame-rate", default="24000/1001", help="Rainforest frame rate numerator/denominator.")
+    result.add_argument(
+        "--rainforest-frame-rate", default="24000/1001", help="Rainforest frame rate numerator/denominator."
+    )
     return result
 
 

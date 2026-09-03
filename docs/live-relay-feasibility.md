@@ -13,6 +13,9 @@ MV-HEVC encoder:
 - The delegate atomically publishes `init.mp4`, numbered `segment-*.m4s` media
   segments, and `media.m3u8`. The active playlist is HLS `EVENT`; after a
   successful writer completion it is rewritten as `VOD` with `#EXT-X-ENDLIST`.
+- `#EXT-X-TARGETDURATION` is latched before the first playlist publication and
+  cannot change while clients reload the EVENT playlist. A segment exceeding
+  that fixed target fails the encode instead of silently changing the contract.
 
 The Apple HLS profile is the selected format rather than a separately branded
 CMAF profile because the AVFoundation SDK explicitly documents this profile as
@@ -88,20 +91,23 @@ hardware-gated synthetic segmented-output coverage. The HLS capability probe
 uses the same stereo output settings and segmented writer configuration before
 the runtime test is attempted.
 
-On September 3, 2026, the bounded Rainforest path encoded 240 frames (10.01
-seconds) on an Apple M4 Max in 3.9783 seconds, for a `2.5162x` realtime ratio at
-20 Mbps. The resulting five-segment HLS representation was accepted as a ready
-`AVPlayerItem` with a 10.01-second duration. Packaged FFprobe identified HEVC
-view IDs `0,1`, view positions `1,2`, multilayer disposition, and stereo side
-data with the left eye primary.
+On September 3, 2026, the bounded Rainforest path processed 240 frames (10.01
+seconds) end to end on an Apple M4 Max in 3.8897 seconds, for a `2.5735x`
+realtime ratio at 20 Mbps. The resulting five-segment HLS representation was
+accepted as a ready `AVPlayerItem` with a 10.01-second duration. That headless
+probe did not decode or render a visible frame (`video_tracks=0`, current time
+`0.0`), so it is readiness evidence rather than physical playback evidence.
+Packaged FFprobe provides the stronger format proof: HEVC view IDs `0,1`, view
+positions `1,2`, multilayer disposition, and stereo side data with the left eye
+primary.
 
 Evidence is stored outside the repository:
 
-- `/Volumes/Docker-External/BD_to_AVP_artifacts/issue-716/rainforest-240-20260903.json`
-  (`bdf4be297f628d8a04c48388c439ff9daae69e14b50d18008cf8954c7a74ccd1`)
-- `/Volumes/Docker-External/BD_to_AVP_artifacts/issue-716/rainforest-240-20260903.ffprobe.json`
-  (`7bd2e50765802dcc8250cb68d2989057c5ef8d229e231dd8efec1aa664c4360e`)
-- `/Volumes/Docker-External/BD_to_AVP_artifacts/issue-716/rainforest-240-20260903.avplayer.txt`
+- `/Volumes/Docker-External/BD_to_AVP_artifacts/issue-716/rainforest-240-fixed-20260903.json`
+  (`ea6300b7cda1dde49b3b8b6af7c863a215991828b2e002c543727059ccc0c59a`)
+- `/Volumes/Docker-External/BD_to_AVP_artifacts/issue-716/rainforest-240-fixed-20260903.ffprobe.json`
+  (`7017ad9dbbd0dcc740113cb61121adb4c0e7a05489f90321283c0e521320fedd`)
+- `/Volumes/Docker-External/BD_to_AVP_artifacts/issue-716/rainforest-240-fixed-20260903.avplayer.txt`
   (`18e7081c0bc9f55ac1abaefd61349378bce94a9a71f63e676ed2603424c1d1b3`)
 
 This proves the bounded format and throughput gate on the named reference Mac;
