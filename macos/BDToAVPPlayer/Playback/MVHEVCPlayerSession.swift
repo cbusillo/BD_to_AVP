@@ -1001,7 +1001,6 @@ final class MVHEVCPlayerSession: ObservableObject {
             defaultIndex: defaultIndex,
             playableIndices: playableIndices
         ), audioGroup.options.indices.contains(selectionIndex) else {
-            selectedAudioID = ""
             return
         }
         item.select(audioGroup.options[selectionIndex], in: audioGroup)

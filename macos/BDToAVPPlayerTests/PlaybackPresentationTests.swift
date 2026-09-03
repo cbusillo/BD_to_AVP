@@ -333,6 +333,14 @@ final class PlaybackPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: 2,
+                defaultIndex: 1,
+                playableIndices: [0, 1]
+            ),
+            1
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.preferredIndex(
                 currentIndex: nil,
                 defaultIndex: 1,
                 playableIndices: [0, 1]

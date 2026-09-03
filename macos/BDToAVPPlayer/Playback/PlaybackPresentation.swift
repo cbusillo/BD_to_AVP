@@ -258,7 +258,7 @@ enum PlaybackAudioSelectionPolicy {
         defaultIndex: Int?,
         playableIndices: [Int]
     ) -> Int? {
-        if let currentIndex {
+        if let currentIndex, playableIndices.contains(currentIndex) {
             return currentIndex
         }
         if let defaultIndex, playableIndices.contains(defaultIndex) {
