@@ -144,6 +144,8 @@
         "macos/BluRayToVisionProTests/PersistentQueueWorkspaceRenderTests.swift",
         "macos/BluRayToVisionProTests/ProfileStoreTests.swift",
         "macos/BluRayToVisionProTests/QueueResolutionTests.swift",
+        "macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift",
+        "macos/BluRayToVisionProTests/RelayHostTests.swift",
         "macos/BluRayToVisionProTests/RelaySessionCoreTests.swift",
         "macos/BluRayToVisionProTests/ResolutionMemoryStoreTests.swift",
         "macos/BluRayToVisionProTests/RouteResolutionTests.swift",
@@ -206,6 +208,11 @@
         "macos/BDToAVPPlayerTests/MediaThumbnailTests.swift",
         "macos/BDToAVPPlayerTests/PlaybackPresentationTests.swift",
         "macos/BDToAVPPlayerTests/PlayerAppModelTests.swift",
+        "macos/BDToAVPPlayerTests/RelayBonjourBrowserTests.swift",
+        "macos/BDToAVPPlayerTests/RelayHLSResourceLoaderTests.swift",
+        "macos/BDToAVPPlayerTests/RelayPairingEntryModelTests.swift",
+        "macos/BDToAVPPlayerTests/RelayRemotePlaybackSourceTests.swift",
+        "macos/BDToAVPPlayerTests/RelaySessionCoordinatorTests.swift",
         "macos/BDToAVPPlayerTests/ResumeStoreTests.swift"
       ]
     },
@@ -278,6 +285,7 @@
         "tests/test_direct_mv_hevc_metalfx_mapping_confirmation.py",
         "tests/test_direct_mv_hevc_quality_sweep.py",
         "tests/test_direct_mv_hevc_route_integration.py",
+        "tests/test_event_hls_mv_hevc_fixture.py",
         "tests/test_file_upscale_quality_mapping_selection.py",
         "tests/test_file_upscale_quality_repeatability_calibration.py",
         "tests/test_file_upscale_quality_sweep.py",

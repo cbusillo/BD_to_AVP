@@ -9,11 +9,11 @@ refresh or check instead of receiving an implicit default.
 
 ## Current Disposition
 
-- **226 total rows:** 156 test files and 70 support fixtures.
-- **172 `valuable`:** direct product, release/security, workflow, protocol,
+- **234 total rows:** 164 test files and 70 support fixtures.
+- **179 `valuable`:** direct product, release/security, workflow, protocol,
   visionOS player, and structured-fixture contracts with no concrete evidence
   of redundancy.
-- **54 `accepted-cost`:** conversion/worker coordination, media and codec
+- **55 `accepted-cost`:** conversion/worker coordination, media and codec
   qualification, clean-machine UI, and visionOS/device evidence. Their setup
   requirements are intentional costs, not removal signals.
 - **0 `replace`, `consolidate`, or `remove`:** no behavioral counterexample,
