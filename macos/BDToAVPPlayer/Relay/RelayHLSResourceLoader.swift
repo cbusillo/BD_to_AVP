@@ -236,11 +236,11 @@ final class RelayActiveTaskRegistration: @unchecked Sendable {
     }
 
     func cancel() {
-        let task = lock.withLock { () -> Task<Void, Never>? in
+        let installedTask = lock.withLock { () -> Task<Void, Never>? in
             isCancelled = true
-            return task
+            return self.task
         }
-        task?.cancel()
+        installedTask?.cancel()
     }
 }
 
