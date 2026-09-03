@@ -79,11 +79,12 @@ final class RelayHostSessionController: ObservableObject {
         lifecycle = .starting
         let pairingCode = RelayPairingCode.random()
         do {
+            let fixture = try RelayEventHLSFixture.load(directory: directory)
             let session = try await startSession(directory, pairingCode)
             self.session = session
             fixtureDirectory = directory
             formattedPairingCode = pairingCode.formattedValue
-            segmentCount = try RelayEventHLSFixture.load(directory: directory).segments.count
+            segmentCount = fixture.segments.count
             lifecycle = .advertising
             monitorLifecycle()
         } catch {

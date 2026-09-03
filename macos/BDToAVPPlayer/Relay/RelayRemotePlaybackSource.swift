@@ -25,9 +25,13 @@ struct RelayRetainedSeekPolicy: Equatable, Sendable {
     }
 
     func validateSeek(to time: TimeInterval) -> RelayRetainedSeekDecision {
-        guard time.isFinite, time >= 0 else { return .invalidTime }
+        guard let milliseconds = RelayTime.milliseconds(
+            from: time,
+            maximum: RelayPlaylistLimits.maximumTimelineDurationMilliseconds
+        ) else {
+            return .invalidTime
+        }
         guard let window else { return .notYetAvailable(latestAvailableTime: 0) }
-        let milliseconds = Int64(time * 1_000)
         if milliseconds < window.earliestPlayableTimeMilliseconds {
             return .beforeRetainedHistory(
                 earliestPlayableTime: TimeInterval(window.earliestPlayableTimeMilliseconds) / 1_000

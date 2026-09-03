@@ -51,7 +51,7 @@ final class RelaySessionCoreTests: XCTestCase {
         await assertRelayError(.pairingProofMismatch) {
             _ = try await server.accept(wrongClient.request, now: self.now)
         }
-        await assertRelayError(.pairingProofMismatch) {
+        await assertRelayError(.pairingAttemptsExhausted) {
             _ = try await server.accept(wrongClient.request, now: self.now)
         }
         let remainingAttempts = await server.remainingFailedAttempts()

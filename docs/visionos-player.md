@@ -46,6 +46,13 @@ unexpired. Wrong codes preserve the current challenge until the Mac exhausts
 its bounded attempt budget, while the text field clears the submitted code
 before the network attempt completes.
 
+The current local-network transport provides authenticated integrity and replay
+protection, not confidentiality: HTTP media bodies and the short-lived media
+capability are visible to an on-path LAN observer. This is an explicit limit of
+the synthetic/decrypted relay slice. Any adapter carrying content whose threat
+model requires confidentiality must add a separately reviewed encrypted
+transport without weakening the existing request authentication.
+
 The authenticated playlist snapshot supplies the retained window. The player
 refreshes that window during playback, moves the scrubber floor forward when
 history is evicted, and explains when a requested seek is before retained

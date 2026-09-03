@@ -28,6 +28,7 @@ final class RelayRemotePlaybackSourceTests: XCTestCase {
         XCTAssertEqual(source.retainedSeekPolicy.validateSeek(to: 30), RelayRetainedSeekDecision.beforeRetainedHistory(earliestPlayableTime: 60))
         XCTAssertEqual(source.retainedSeekPolicy.validateSeek(to: 90), RelayRetainedSeekDecision.playable)
         XCTAssertEqual(source.retainedSeekPolicy.validateSeek(to: 121), RelayRetainedSeekDecision.notYetAvailable(latestAvailableTime: 120))
+        XCTAssertEqual(source.retainedSeekPolicy.validateSeek(to: .greatestFiniteMagnitude), .invalidTime)
 
         try source.updateRetainedWindow(with: Data("""
         {

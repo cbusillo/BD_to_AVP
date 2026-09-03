@@ -8,9 +8,19 @@ enum RelayNetworkServerError: Error, Equatable, Sendable {
 }
 
 final class RelayNetworkServer: @unchecked Sendable {
+    private static let maximumConcurrentConnections = 16
+    private static let requestTimeout: TimeInterval = 10
+
+    private struct ActiveConnection {
+        let connection: NWConnection
+        let timeout: DispatchWorkItem
+    }
+
     private let host: RelayHost
     private let listener: NWListener
     private let queue: DispatchQueue
+    private var activeConnections: [ObjectIdentifier: ActiveConnection] = [:]
+    private var lifecycleMonitor: Task<Void, Never>?
 
     private init(host: RelayHost, listener: NWListener, queue: DispatchQueue) {
         self.host = host
@@ -52,30 +62,39 @@ final class RelayNetworkServer: @unchecked Sendable {
             server?.handleNetworkLoss()
         }
         listener.start(queue: queue)
+        server.startLifecycleMonitor()
         return server
     }
 
     func stopForAppQuit() async {
-        listener.cancel()
+        await cancelNetworkResources()
         await host.stopForAppQuit()
     }
 
     func cancel() async {
-        listener.cancel()
+        await cancelNetworkResources()
         await host.cancel()
     }
 
     func stop() async {
-        listener.cancel()
+        await cancelNetworkResources()
         await host.stop()
     }
 
     private func accept(_ connection: NWConnection) {
         let peer = RelayNetworkPeerClassifier.classify(connection.endpoint)
-        guard peer == .localNetwork else {
+        guard peer == .localNetwork,
+              activeConnections.count < Self.maximumConcurrentConnections
+        else {
             connection.cancel()
             return
         }
+        let identifier = ObjectIdentifier(connection)
+        let timeout = DispatchWorkItem { [weak self, connection] in
+            self?.finishConnection(connection)
+        }
+        activeConnections[identifier] = ActiveConnection(connection: connection, timeout: timeout)
+        queue.asyncAfter(deadline: .now() + Self.requestTimeout, execute: timeout)
         connection.start(queue: queue)
         receiveRequest(on: connection, accumulated: Data(), peer: peer)
     }
@@ -87,7 +106,7 @@ final class RelayNetworkServer: @unchecked Sendable {
                 return
             }
             guard error == nil else {
-                connection.cancel()
+                self.finishConnection(connection)
                 return
             }
             let nextData = accumulated + (content ?? Data())
@@ -97,17 +116,72 @@ final class RelayNetworkServer: @unchecked Sendable {
                     return
                 }
                 let response = await self.host.handle(nextData, peer: peer)
-                connection.send(content: response.serialized(), completion: .contentProcessed { _ in
-                    connection.cancel()
+                connection.send(content: response.serialized(), completion: .contentProcessed { [weak self] _ in
+                    self?.finishConnection(connection)
                 })
             }
         }
     }
 
     private func handleNetworkLoss() {
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             await host.networkLost()
+            await cancelNetworkResources()
         }
+    }
+
+    private func startLifecycleMonitor() {
+        lifecycleMonitor?.cancel()
+        lifecycleMonitor = Task { [weak self, host] in
+            while !Task.isCancelled {
+                let lifecycle = await host.currentLifecycle()
+                switch lifecycle {
+                case .cancelled, .expired, .stopped:
+                    await self?.cancelNetworkResources()
+                    return
+                case .pairing, .paired, .finished:
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    private func cancelNetworkResources() async {
+        lifecycleMonitor?.cancel()
+        lifecycleMonitor = nil
+        listener.cancel()
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                if let self {
+                    let connections = Array(activeConnections.values)
+                    activeConnections.removeAll()
+                    for activeConnection in connections {
+                        activeConnection.timeout.cancel()
+                        activeConnection.connection.cancel()
+                    }
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    private func finishConnection(_ connection: NWConnection) {
+        queue.async { [weak self] in
+            guard let self else {
+                connection.cancel()
+                return
+            }
+            let identifier = ObjectIdentifier(connection)
+            activeConnections.removeValue(forKey: identifier)?.timeout.cancel()
+            connection.cancel()
+        }
+    }
+
+    deinit {
+        lifecycleMonitor?.cancel()
+        listener.cancel()
     }
 }
 

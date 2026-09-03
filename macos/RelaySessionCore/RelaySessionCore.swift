@@ -562,6 +562,9 @@ public actor RelayServerPairingContext {
         )
         guard RelayCrypto.constantTimeEqual(expectedPairingProof, request.pairingProof) else {
             recordFailedAttempt()
+            if failedAttempts >= maximumFailedAttempts {
+                throw RelaySessionError.pairingAttemptsExhausted
+            }
             throw RelaySessionError.pairingProofMismatch
         }
 

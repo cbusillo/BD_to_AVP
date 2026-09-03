@@ -157,6 +157,53 @@ final class RelayHostTests: XCTestCase {
         XCTAssertEqual(lifecycle, .expired)
     }
 
+    func testLifecyclePollingExpiresQuietPairingSession() async throws {
+        let fixture = try makeFixture(challengeTTL: 1)
+        defer { removeFixture(fixture) }
+        fixture.clock.set(initialDate.addingTimeInterval(2))
+
+        let lifecycle = await fixture.host.currentLifecycle()
+
+        XCTAssertEqual(lifecycle, .expired)
+        let pairingCode = await fixture.host.pairingCode()
+        XCTAssertNil(pairingCode)
+    }
+
+    func testFinalWrongPairingAttemptExpiresHostImmediately() async throws {
+        let fixture = try makeFixture(maximumFailedAttempts: 2)
+        defer { removeFixture(fixture) }
+        let wrongCode = try RelayPairingCode("RSTU-VWXY-2345-6789")
+        let firstAttempt = try RelayClientPairingAttempt(
+            challenge: fixture.challenge,
+            pairingCode: wrongCode,
+            now: fixture.clock.now()
+        )
+        let firstResponse = await fixture.connection.exchange(
+            request(
+                method: "POST",
+                target: RelayWireContract.pairingPath,
+                body: try JSONEncoder().encode(firstAttempt.request)
+            )
+        )
+        let finalAttempt = try RelayClientPairingAttempt(
+            challenge: fixture.challenge,
+            pairingCode: wrongCode,
+            now: fixture.clock.now()
+        )
+        let finalResponse = await fixture.connection.exchange(
+            request(
+                method: "POST",
+                target: RelayWireContract.pairingPath,
+                body: try JSONEncoder().encode(finalAttempt.request)
+            )
+        )
+
+        XCTAssertEqual(firstResponse.statusCode, 401)
+        XCTAssertEqual(finalResponse.statusCode, 409)
+        let lifecycle = await fixture.host.currentLifecycle()
+        XCTAssertEqual(lifecycle, .expired)
+    }
+
     func testRetainedEventPlaylistSnapshotKeepsOnlyWindow() async throws {
         let fixture = try makeFixture(retainedSegmentLimit: 2)
         defer { removeFixture(fixture) }
@@ -239,8 +286,10 @@ final class RelayHostTests: XCTestCase {
     }
 
     private func makeFixture(
+        challengeTTL: TimeInterval = 30,
         sessionTTL: TimeInterval = 120,
-        retainedSegmentLimit: Int = 3
+        retainedSegmentLimit: Int = 3,
+        maximumFailedAttempts: Int = 5
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -251,8 +300,9 @@ final class RelayHostTests: XCTestCase {
             sessionID: sessionID,
             pairingCode: pairingCode,
             now: initialDate,
-            challengeTTL: 30,
-            sessionTTL: sessionTTL
+            challengeTTL: challengeTTL,
+            sessionTTL: sessionTTL,
+            maximumFailedAttempts: maximumFailedAttempts
         )
         let host = try RelayHost(
             pairingContext: context,

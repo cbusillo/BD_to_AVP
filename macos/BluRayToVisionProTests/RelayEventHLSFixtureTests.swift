@@ -112,6 +112,10 @@ final class RelayEventHLSFixtureTests: XCTestCase {
             XCTAssertTrue((dictionary["NSBonjourServices"] as? [String])?.contains("_bdtoavp-relay._tcp") == true)
             XCTAssertFalse((dictionary["NSLocalNetworkUsageDescription"] as? String)?.isEmpty ?? true)
         }
+        let playerInfoURL = macosRoot.appendingPathComponent("BDToAVPPlayer/Info.plist")
+        let playerDictionary = try XCTUnwrap(NSDictionary(contentsOf: playerInfoURL) as? [String: Any])
+        XCTAssertTrue((playerDictionary["NSBonjourServices"] as? [String])?.contains("_bdtoavp-relay._tcp") == true)
+        XCTAssertFalse((playerDictionary["NSLocalNetworkUsageDescription"] as? String)?.isEmpty ?? true)
     }
 
     private func makeFixture() throws -> URL {

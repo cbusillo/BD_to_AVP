@@ -148,7 +148,14 @@ actor RelayHost {
     }
 
     func currentLifecycle() -> RelayHostLifecycle {
-        lifecycle
+        _ = try? expireIfNeeded()
+        return lifecycle
+    }
+
+    func pairingCode() -> RelayPairingCode? {
+        _ = try? expireIfNeeded()
+        guard lifecycle == .pairing else { return nil }
+        return pairingContext?.pairingCode
     }
 
     func currentPlaylistSnapshot() throws -> RelayPlaylistSnapshot {
@@ -204,6 +211,9 @@ actor RelayHost {
         } catch let error as RelayHostError {
             return response(for: error)
         } catch let error as RelaySessionError {
+            if error == .pairingAttemptsExhausted {
+                cleanUpAsExpired()
+            }
             return response(for: error)
         } catch {
             return .empty(statusCode: 500)
