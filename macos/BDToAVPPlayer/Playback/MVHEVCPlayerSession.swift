@@ -148,6 +148,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     private(set) var playerItem: AVPlayerItem?
 
     private var resourceLease: SecurityScopedResourceLease?
+    private var remotePlaybackSource: RelayRemotePlaybackSource?
     private var resumeStore: ResumeStore?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlStatusObservation: NSKeyValueObservation?
@@ -241,6 +242,10 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     var supportsEyeSwap: Bool {
         packedStereoSource != nil
+    }
+
+    var isRelayPlayback: Bool {
+        remotePlaybackSource != nil
     }
 
     func prepare(
@@ -379,6 +384,64 @@ final class MVHEVCPlayerSession: ObservableObject {
             presentFailure(
                 .preparationFailed("The movie could not be prepared: \(Self.playbackFailureMessage(for: error))")
             )
+        }
+    }
+
+    func prepareRelayPlayback(_ configuration: RelayRemotePlaybackConfiguration) async {
+        preparationGeneration += 1
+        let generation = preparationGeneration
+        finishCurrentSession(persistResume: true)
+
+        let relayItem = MediaItem(
+            id: "relay:\(configuration.session.sessionID.rawValue)",
+            title: "\(configuration.serverName) Live Relay",
+            fileName: "live.m3u8",
+            format: .mvHEVC
+        )
+        mediaItem = relayItem
+        resumeStore = nil
+        state = .loading
+        failureMessage = nil
+        failurePresentation = nil
+        preparationPhase = .preparingMedia
+        currentTime = 0
+        duration = 0
+        audioOptions = []
+        subtitleOptions = []
+        selectedAudioID = ""
+        selectedSubtitleID = "off"
+        isEyeSwapped = false
+        isChangingEyeOrder = false
+        playbackIntent.requestPlayback()
+
+        do {
+            var source = try RelayRemotePlaybackSource(
+                session: configuration.session,
+                serverBaseURL: configuration.serverBaseURL
+            )
+            let (asset, _) = source.makeAssetAndLoader(transport: configuration.transport)
+            let item = AVPlayerItem(asset: asset)
+            let preparedSelections = try await prepareMediaSelections(for: asset, item: item)
+            guard generation == preparationGeneration, !Task.isCancelled else {
+                source.cancelLoader()
+                return
+            }
+
+            remotePlaybackSource = source
+            playerItem = item
+            packedStereoSource = nil
+            configureMediaSelections(preparedSelections)
+            observe(item, generation: generation)
+            player.replaceCurrentItem(with: item)
+        } catch is CancellationError {
+            if generation == preparationGeneration {
+                pendingResume.clear()
+            }
+        } catch {
+            guard generation == preparationGeneration else {
+                return
+            }
+            presentFailure(.relayPreparationFailed(Self.playbackFailureMessage(for: error)))
         }
     }
 
@@ -784,7 +847,9 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
         case .failed:
             let message = Self.playbackFailureMessage(for: item.error)
-            if BuiltInStereoChecks.contains(mediaItem) {
+            if isRelayPlayback {
+                presentFailure(.relayPreparationFailed(message))
+            } else if BuiltInStereoChecks.contains(mediaItem) {
                 presentFailure(.builtInStereoCheckUnavailable(message))
             } else {
                 presentFailure(.preparationFailed(message))
@@ -1079,6 +1144,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
         resourceLease?.close()
         resourceLease = nil
+        remotePlaybackSource?.cancelLoader()
+        remotePlaybackSource = nil
         audioGroup = nil
         subtitleGroup = nil
         audioSelectionByID = [:]

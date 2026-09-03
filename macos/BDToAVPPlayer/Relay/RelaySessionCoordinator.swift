@@ -18,6 +18,13 @@ enum RelayNetworkAvailability: Sendable {
     case unavailable
 }
 
+struct RelayRemotePlaybackConfiguration {
+    let session: RelayEstablishedSession
+    let serverBaseURL: URL
+    let serverName: String
+    let transport: any RelayTransport
+}
+
 enum RelayBackoff {
     static let maximumAttempts = 3
     static let base: TimeInterval = 0.25
@@ -33,6 +40,8 @@ enum RelayBackoff {
 final class RelaySessionCoordinator: ObservableObject {
     @Published private(set) var state: RelayCoordinatorState = .idle
     @Published private(set) var discoveredServers: [RelayDiscoveredEndpoint] = []
+    @Published private(set) var pairingErrorMessage: String?
+    @Published private(set) var connectedServer: RelayDiscoveredEndpoint?
 
     private(set) var session: RelayEstablishedSession?
     private(set) var connectedServerBaseURL: URL?
@@ -77,6 +86,7 @@ final class RelaySessionCoordinator: ObservableObject {
 
     func connect(to endpoint: RelayDiscoveredEndpoint) async {
         guard state == .discovery else { return }
+        pairingErrorMessage = nil
         do {
             let request = URLRequest(relayURL: endpoint.baseURL, path: RelayWireContract.challengePath)
             let (data, response) = try await transport.data(for: request)
@@ -91,6 +101,7 @@ final class RelaySessionCoordinator: ObservableObject {
             }
             pendingChallenge = envelope.challenge
             connectedServerBaseURL = endpoint.baseURL
+            connectedServer = endpoint
             state = .pairing(serverID: endpoint.id, expiresAt: envelope.challenge.expirationDate)
         } catch RelayTransportError.sessionExpired {
             state = .sessionExpired
@@ -104,6 +115,7 @@ final class RelaySessionCoordinator: ObservableObject {
               let challenge = pendingChallenge,
               let baseURL = connectedServerBaseURL
         else { return }
+        pairingErrorMessage = nil
         guard challenge.expirationDate > clock() else {
             clearPendingPairing()
             state = .sessionExpired
@@ -123,7 +135,17 @@ final class RelaySessionCoordinator: ObservableObject {
             request.setValue(RelayWireContract.jsonContentType, forHTTPHeaderField: "content-type")
 
             let (data, response) = try await transport.data(for: request)
-            guard response.statusCode == 201 else {
+            switch response.statusCode {
+            case 201:
+                break
+            case 401:
+                pairingErrorMessage = "That pairing code did not match. Try again."
+                return
+            case 409:
+                clearPendingPairing()
+                state = .sessionExpired
+                return
+            default:
                 try handleSessionStatus(response.statusCode)
                 throw RelayTransportError.unexpectedStatusCode(response.statusCode)
             }
@@ -131,8 +153,11 @@ final class RelaySessionCoordinator: ObservableObject {
             let established = try attempt.complete(with: envelope.acceptance, now: clock())
             session = established
             pendingChallenge = nil
+            pairingErrorMessage = nil
             state = .connected(sessionID: established.sessionID.rawValue, expiresAt: established.expirationDate)
             startPathMonitor()
+        } catch RelaySessionError.invalidPairingCode {
+            pairingErrorMessage = "Enter the 16-character code shown on your Mac."
         } catch RelayTransportError.sessionExpired {
             clearPendingPairing()
             state = .sessionExpired
@@ -160,6 +185,26 @@ final class RelaySessionCoordinator: ObservableObject {
     func disconnect() {
         cleanUp()
         state = .idle
+    }
+
+    func remotePlaybackConfiguration() -> RelayRemotePlaybackConfiguration? {
+        guard hasLiveSession,
+              let session,
+              let connectedServerBaseURL,
+              let connectedServer
+        else {
+            if self.session != nil {
+                self.session = nil
+                state = .sessionExpired
+            }
+            return nil
+        }
+        return RelayRemotePlaybackConfiguration(
+            session: session,
+            serverBaseURL: connectedServerBaseURL,
+            serverName: connectedServer.displayName,
+            transport: transport
+        )
     }
 
     private var isFailed: Bool {
@@ -256,6 +301,7 @@ final class RelaySessionCoordinator: ObservableObject {
 
     private func clearPendingPairing() {
         pendingChallenge = nil
+        pairingErrorMessage = nil
     }
 
     private func stopBrowser() {
@@ -275,6 +321,7 @@ final class RelaySessionCoordinator: ObservableObject {
         stopBrowser()
         session = nil
         connectedServerBaseURL = nil
+        connectedServer = nil
     }
 
     deinit {
