@@ -1,9 +1,9 @@
 # Test Audit Inventory v1
 
-- Baseline reference: `29b33a25f718a34de0e5684afab913390e105ff2`
-- Test files: **159**
+- Baseline reference: `94b7b2a8c04f0384385bc006c868996b45aff6f5`
+- Test files: **160**
 - Support fixtures: **70**
-- Test cases counted: **2736**
+- Test cases counted: **2771**
 - Classification source: `docs/test-audit/classifications-v1.json`
 
 ## Lanes
@@ -65,7 +65,7 @@ CODE_SIGNING_ALLOWED=NO` | `.github/workflows/ci.yml`, `macos/project.yml` |
 ## Disposition Summary
 
 - `accepted-cost`: **54** rows.
-- `valuable`: **175** rows.
+- `valuable`: **176** rows.
 - High-confidence implementation candidates are recorded in the JSON artifact.
 - Non-actionable review observations: **1**.
 - Milestone #10 disposition: Close after final review if the exact-head isolation sweep and broad gates remain green.
@@ -153,6 +153,7 @@ Exact-head evidence captured from `257fd21f38e49031b9fa96a733875702313ebd5c`:
 | `macos/BluRayToVisionProTests/PreviewViewModelTests.swift` | Swift | `BluRayToVisionProTests` | 18 | `accepted-cost` | macos/BluRayToVisionProTests/PreviewViewModelTests.swift covers a CI-executed conversion, diagnostics, preview, or worker boundary with fixtures, process coordination, or environment setup. That setup cost is accepted because no behavioral replacement or removal proof exists. | `ci-macos-app-unit`, `media-hardware-contract` | real-media or SSIF/ISO fixture may be required; repository fixture files | filesystem_access (64), polling_or_waiting (19), hardware_or_media (1) |
 | `macos/BluRayToVisionProTests/ProfileStoreTests.swift` | Swift | `BluRayToVisionProTests` | 31 | `valuable` | macos/BluRayToVisionProTests/ProfileStoreTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | repository fixture files | filesystem_access (93) |
 | `macos/BluRayToVisionProTests/QueueResolutionTests.swift` | Swift | `BluRayToVisionProTests` | 2 | `valuable` | macos/BluRayToVisionProTests/QueueResolutionTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | — |
+| `macos/BluRayToVisionProTests/RelaySessionCoreTests.swift` | Swift | `BluRayToVisionProTests` | 35 | `valuable` | macos/BluRayToVisionProTests/RelaySessionCoreTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | — |
 | `macos/BluRayToVisionProTests/ResolutionMemoryStoreTests.swift` | Swift | `BluRayToVisionProTests` | 6 | `valuable` | macos/BluRayToVisionProTests/ResolutionMemoryStoreTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | filesystem_access (8) |
 | `macos/BluRayToVisionProTests/RouteResolutionTests.swift` | Swift | `BluRayToVisionProTests` | 9 | `valuable` | macos/BluRayToVisionProTests/RouteResolutionTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | — |
 | `macos/BluRayToVisionProTests/SetupEditSessionTests.swift` | Swift | `BluRayToVisionProTests` | 9 | `valuable` | macos/BluRayToVisionProTests/SetupEditSessionTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | filesystem_access (9) |
