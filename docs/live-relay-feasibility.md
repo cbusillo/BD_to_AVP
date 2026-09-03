@@ -11,8 +11,9 @@ MV-HEVC encoder:
   `AVFileTypeProfileMPEG4AppleHLS`, a positive preferred segment interval, and
   an `AVAssetWriterDelegate`.
 - The delegate atomically publishes `init.mp4`, numbered `segment-*.m4s` media
-  segments, and `media.m3u8`. The active playlist is HLS `EVENT`; after a
-  successful writer completion it is rewritten as `VOD` with `#EXT-X-ENDLIST`.
+  segments, and `media.m3u8`. The playlist is first published when the first
+  media segment is durable, remains HLS `EVENT`, and gains `#EXT-X-ENDLIST`
+  after successful writer completion.
 - `#EXT-X-TARGETDURATION` is latched before the first playlist publication and
   cannot change while clients reload the EVENT playlist. A segment exceeding
   that fixed target fails the encode instead of silently changing the contract.

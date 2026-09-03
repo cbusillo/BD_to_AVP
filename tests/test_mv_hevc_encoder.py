@@ -111,7 +111,7 @@ class MVHEVCEncoderBuilderTests(unittest.TestCase):
         self.assertIn("writer.preferredOutputSegmentInterval", source)
         self.assertIn("AVAssetWriterDelegate", source)
         self.assertIn('#EXT-X-MAP:URI=\\"init.mp4\\"', source)
-        self.assertIn('endList ? "VOD" : "EVENT"', source)
+        self.assertIn('"#EXT-X-PLAYLIST-TYPE:EVENT"', source)
         self.assertIn("#EXT-X-ENDLIST", source)
         self.assertIn("segment-%05d.m4s", source)
 
@@ -452,7 +452,7 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         self.assertGreater(initialization_segment.stat().st_size, 0)
         playlist = playlist_path.read_text(encoding="utf-8")
         self.assertIn("#EXTM3U", playlist)
-        self.assertIn("#EXT-X-PLAYLIST-TYPE:VOD", playlist)
+        self.assertIn("#EXT-X-PLAYLIST-TYPE:EVENT", playlist)
         self.assertIn('#EXT-X-MAP:URI="init.mp4"', playlist)
         self.assertIn("#EXT-X-ENDLIST", playlist)
         target_duration = self.target_duration(playlist)
@@ -507,7 +507,7 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, stderr.decode())
         self.assertEqual(json.loads(stdout)["frame_count"], 96)
         final_playlist = (hls_directory / "media.m3u8").read_text(encoding="utf-8")
-        self.assertIn("#EXT-X-PLAYLIST-TYPE:VOD", final_playlist)
+        self.assertIn("#EXT-X-PLAYLIST-TYPE:EVENT", final_playlist)
         self.assertIn("#EXT-X-ENDLIST", final_playlist)
         self.assertEqual(self.target_duration(final_playlist), event_target_duration)
 

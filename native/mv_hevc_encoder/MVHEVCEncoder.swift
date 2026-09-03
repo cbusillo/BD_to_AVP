@@ -773,7 +773,6 @@ private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @uncheck
                 }
                 try atomicallyWrite(segmentData, to: directoryURL.appendingPathComponent("init.mp4"))
                 initializationWritten = true
-                try writePlaylist(endList: false)
             case .separable:
                 guard initializationWritten else {
                     throw EncoderFailure.writer("AVAssetWriter emitted an HLS media segment before initialization.")
@@ -837,7 +836,7 @@ private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @uncheck
             "#EXTM3U",
             "#EXT-X-VERSION:7",
             "#EXT-X-TARGETDURATION:\(targetDurationSeconds)",
-            "#EXT-X-PLAYLIST-TYPE:\(endList ? "VOD" : "EVENT")",
+            "#EXT-X-PLAYLIST-TYPE:EVENT",
             "#EXT-X-INDEPENDENT-SEGMENTS",
             "#EXT-X-MAP:URI=\"init.mp4\"",
         ]
