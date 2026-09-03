@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "09823e1f0d34777f4733e5b74297bd0d2c8828ff",
+    "sha": "35a03235f9cd249db6246318e42a5254f1693975",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -260,7 +260,7 @@
       {
         "lane_id": "operator.visionos.sustained_playback_qualification",
         "reason": "Tests require the BD_TO_AVP_QUALIFICATION compilation condition and are intentionally excluded from the ordinary CI player test lane; coverage is documented as operator/device evidence.",
-        "test_case_count": 10,
+        "test_case_count": 11,
         "test_targets": [
           "BDToAVPPlayerTests"
         ]
@@ -445,7 +445,7 @@
       "python-unittest-discovery": 107,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2687,
+    "ci_test_case_count": 2691,
     "classification_counts": {
       "accepted-cost": 54,
       "valuable": 175
@@ -456,7 +456,7 @@
       "TypeScript": 1
     },
     "support_fixture_count": 70,
-    "test_case_count": 2719,
+    "test_case_count": 2724,
     "test_file_count": 159,
     "unmapped_test_file_count": 0
   },
@@ -1365,7 +1365,7 @@
           "signal": "filesystem_access"
         }
       ],
-      "test_case_count": 36
+      "test_case_count": 40
     },
     {
       "bundle": "BDToAVPPlayerTests",
@@ -1394,7 +1394,7 @@
           "signal": "hardware_or_media"
         }
       ],
-      "test_case_count": 10
+      "test_case_count": 11
     },
     {
       "bundle": "BDToAVPPlayerTests",
