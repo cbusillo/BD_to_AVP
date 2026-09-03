@@ -67,7 +67,11 @@ struct PlayerView: View {
         }
         .onChange(of: session.isPlaying) { _, isPlaying in
             hudVisibility.reconcile(
-                isPlaying: isPlaying && !isVoiceOverEnabled && !isSwitchControlEnabled
+                isPlaying: PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                    isPlaying: isPlaying,
+                    isVoiceOverEnabled: isVoiceOverEnabled,
+                    isSwitchControlEnabled: isSwitchControlEnabled
+                )
             )
         }
         .onChange(of: session.state) { _, _ in
@@ -173,9 +177,11 @@ struct PlayerView: View {
     }
 
     private var isAutomaticHidingAllowed: Bool {
-        session.isPlaying
-            && !isVoiceOverEnabled
-            && !isSwitchControlEnabled
+        PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+            isPlaying: session.isPlaying,
+            isVoiceOverEnabled: isVoiceOverEnabled,
+            isSwitchControlEnabled: isSwitchControlEnabled
+        )
     }
 
     private var isPackedStereoMedia: Bool {
@@ -652,9 +658,16 @@ private struct PlayerOrnamentView: View {
     private var audioMenu: some View {
         Menu {
             ForEach(session.audioOptions) { option in
-                Button(option.displayName) {
+                Button {
                     onInteraction()
                     session.selectAudio(id: option.id)
+                } label: {
+                    if session.selectedAudioID == option.id {
+                        Label(option.displayName, systemImage: "checkmark")
+                            .accessibilityAddTraits(.isSelected)
+                    } else {
+                        Text(option.displayName)
+                    }
                 }
             }
         } label: {
@@ -664,6 +677,9 @@ private struct PlayerOrnamentView: View {
         }
         .disabled(session.audioOptions.isEmpty)
         .accessibilityLabel("Audio track")
+        .accessibilityValue(
+            session.audioOptions.first { $0.id == session.selectedAudioID }?.displayName ?? "None selected"
+        )
     }
 
     private var subtitleMenu: some View {

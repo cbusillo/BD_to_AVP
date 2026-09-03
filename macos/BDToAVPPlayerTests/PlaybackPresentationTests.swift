@@ -191,6 +191,30 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(PlaybackHUDVisibilityState.autoHideDelay, 3)
     }
 
+    func testHUDAutomaticHidingStaysDisabledForAssistiveTechnology() {
+        XCTAssertTrue(
+            PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                isPlaying: true,
+                isVoiceOverEnabled: false,
+                isSwitchControlEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                isPlaying: true,
+                isVoiceOverEnabled: true,
+                isSwitchControlEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                isPlaying: true,
+                isVoiceOverEnabled: false,
+                isSwitchControlEnabled: true
+            )
+        )
+    }
+
     func testHUDVisibilityHidesOnlyForTheCurrentScheduledTimer() {
         var visibility = PlaybackHUDVisibilityState()
         visibility.reconcile(isPlaying: true)
@@ -251,6 +275,91 @@ final class PlaybackPresentationTests: XCTestCase {
                 title: "Reversed",
                 systemImage: "arrow.left.arrow.right.circle.fill",
                 isSelected: true
+            )
+        )
+    }
+
+    func testAudioLabelsLeaveUniqueNamesUnchangedAndDisambiguateCollisions() {
+        let labels = PlaybackAudioOptionLabelPolicy.labels(for: [
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "English",
+                role: nil,
+                index: 0
+            ),
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "English",
+                role: "Commentary",
+                index: 1
+            ),
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "French",
+                role: nil,
+                index: 2
+            ),
+        ])
+
+        XCTAssertEqual(labels, [
+            "English — Track 1",
+            "English — Commentary — Track 2",
+            "French",
+        ])
+    }
+
+    func testAudioLabelsUseStableTrackIndexesWhenMetadataStillCollides() {
+        let labels = PlaybackAudioOptionLabelPolicy.labels(for: [
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "English",
+                role: nil,
+                index: 0
+            ),
+            PlaybackAudioOptionLabelMetadata(
+                baseName: "English",
+                role: nil,
+                index: 1
+            ),
+        ])
+
+        XCTAssertEqual(labels, ["English — Track 1", "English — Track 2"])
+    }
+
+    func testPackedAudioSelectionPrefersCurrentThenPlayableDefaultThenFirstPlayable() {
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: 2,
+                defaultIndex: 1,
+                playableIndices: [0, 1, 2]
+            ),
+            2
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: 2,
+                defaultIndex: 1,
+                playableIndices: [0, 1]
+            ),
+            1
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: nil,
+                defaultIndex: 1,
+                playableIndices: [0, 1]
+            ),
+            1
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: nil,
+                defaultIndex: 2,
+                playableIndices: [1, 3]
+            ),
+            1
+        )
+        XCTAssertNil(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: nil,
+                defaultIndex: nil,
+                playableIndices: []
             )
         )
     }

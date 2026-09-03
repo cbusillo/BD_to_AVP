@@ -125,7 +125,7 @@ class TestTestAuditInventory(unittest.TestCase):
             for finding in inventory["findings"]["not_in_ci_lanes"]
             if finding["lane_id"] == "operator.visionos.sustained_playback_qualification"
         )
-        self.assertEqual(qualification["test_case_count"], 10)
+        self.assertEqual(qualification["test_case_count"], 11)
         self.assertIn("BD_TO_AVP_QUALIFICATION", qualification["reason"])
 
     def test_parses_authoritative_ci_commands(self) -> None:

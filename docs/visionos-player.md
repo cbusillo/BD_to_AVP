@@ -92,6 +92,13 @@ use AVKit's native visibility behavior; revealing the playback controls also
 reveals actions labeled **Eye Order: Normal** or **Eye Order: Reversed** and
 **Done**.
 
+AVKit owns the packed-stereo audio menu and may present multiple same-language
+tracks with the same localized label. The app explicitly asserts the active
+packed-stereo audio option after the item becomes ready, but it does not replace
+or claim to relabel AVKit's native menu. The app-owned MV-HEVC audio menu leaves
+unique names unchanged and adds role and stable track-number details only when
+labels collide.
+
 The app saves in-progress playback positions and restores them when the same
 library item is opened again. Any non-active scene phase cancels pending
 autoplay and pauses playback, saving current progress when a player item is

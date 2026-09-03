@@ -179,6 +179,14 @@ enum PlaybackHUDVisibilityPolicy {
     static func shouldAutoHide(isPlaying: Bool, isInteracting: Bool) -> Bool {
         isPlaying && !isInteracting
     }
+
+    static func allowsAutomaticHiding(
+        isPlaying: Bool,
+        isVoiceOverEnabled: Bool,
+        isSwitchControlEnabled: Bool
+    ) -> Bool {
+        isPlaying && !isVoiceOverEnabled && !isSwitchControlEnabled
+    }
 }
 
 struct PlaybackEyeOrderPresentation: Equatable {
@@ -194,6 +202,69 @@ struct PlaybackEyeOrderPresentation: Equatable {
                 : "arrow.left.arrow.right",
             isSelected: isEyeSwapped
         )
+    }
+}
+
+struct PlaybackAudioOptionLabelMetadata: Equatable {
+    let baseName: String
+    let role: String?
+    let index: Int
+}
+
+enum PlaybackAudioOptionLabelPolicy {
+    static func labels(for options: [PlaybackAudioOptionLabelMetadata]) -> [String] {
+        let baseNames = options.map { baseName(for: $0.baseName) }
+        let groups = Dictionary(grouping: options.indices) { optionIndex in
+            normalized(baseNames[optionIndex])
+        }
+        var labels = baseNames
+
+        for optionIndices in groups.values where optionIndices.count > 1 {
+            for optionIndex in optionIndices {
+                let option = options[optionIndex]
+                let role = option.role?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let roleDetail = role.flatMap { value in
+                    value.isEmpty || normalized(value) == normalized(baseNames[optionIndex]) ? nil : value
+                }
+                labels[optionIndex] = [
+                    baseNames[optionIndex],
+                    roleDetail,
+                    "Track \(option.index + 1)",
+                ]
+                .compactMap { $0 }
+                .joined(separator: " — ")
+            }
+        }
+
+        return labels
+    }
+
+    private static func baseName(for value: String) -> String {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedValue.isEmpty ? "Audio" : trimmedValue
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .lowercased()
+    }
+}
+
+enum PlaybackAudioSelectionPolicy {
+    static func preferredIndex(
+        currentIndex: Int?,
+        defaultIndex: Int?,
+        playableIndices: [Int]
+    ) -> Int? {
+        if let currentIndex, playableIndices.contains(currentIndex) {
+            return currentIndex
+        }
+        if let defaultIndex, playableIndices.contains(defaultIndex) {
+            return defaultIndex
+        }
+        return playableIndices.first
     }
 }
 
