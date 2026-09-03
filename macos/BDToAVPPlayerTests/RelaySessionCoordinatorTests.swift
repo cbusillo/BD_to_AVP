@@ -114,6 +114,70 @@ final class RelaySessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(paths, [RelayWireContract.challengePath, RelayWireContract.pairingPath])
     }
 
+    func testWrongPairingCodeKeepsUnexpiredChallengeRetryable() async throws {
+        let browser = FakeRelayBrowser()
+        let transport = FakeRelayTransport()
+        let server = try RelayServerPairingContext(pairingCode: pairingCode, now: now)
+        await transport.setHandler { [server, now] request in
+            switch request.url?.path {
+            case RelayWireContract.challengePath:
+                return (try JSONEncoder().encode(ChallengeEnvelope(challenge: server.challenge)), makeHTTPResponse(request))
+            case RelayWireContract.pairingPath:
+                let requestBody = try JSONDecoder().decode(RelayPairingRequest.self, from: request.httpBody!)
+                do {
+                    let accepted = try await server.accept(requestBody, now: now)
+                    return (try JSONEncoder().encode(PairingEnvelope(acceptance: accepted.acceptance)), makeHTTPResponse(request, statusCode: 201))
+                } catch RelaySessionError.pairingProofMismatch {
+                    return (Data(), makeHTTPResponse(request, statusCode: 401))
+                }
+            default:
+                throw URLError(.badURL)
+            }
+        }
+        let coordinator = makeCoordinator(browser: browser, transport: transport, now: { self.now })
+        coordinator.startDiscovery()
+        await coordinator.connect(to: makeTestEndpoint())
+        await coordinator.submitPairingCode("2345-6789-ABCD-EFGK")
+
+        XCTAssertEqual(coordinator.state, .pairing(serverID: "Vision-Pro", expiresAt: server.challenge.expirationDate))
+        XCTAssertEqual(coordinator.pairingErrorMessage, "That pairing code did not match. Try again.")
+
+        await coordinator.submitPairingCode(pairingCode.formattedValue)
+
+        guard case .connected = coordinator.state else {
+            return XCTFail("Expected retry with the existing challenge to pair, got \(coordinator.state)")
+        }
+        XCTAssertNil(coordinator.pairingErrorMessage)
+        let requestPaths = await transport.allRequests().compactMap(\.url?.path)
+        XCTAssertEqual(
+            requestPaths,
+            [RelayWireContract.challengePath, RelayWireContract.pairingPath, RelayWireContract.pairingPath]
+        )
+    }
+
+    func testPairingConflictEndsTheCurrentChallenge() async {
+        let browser = FakeRelayBrowser()
+        let transport = FakeRelayTransport()
+        let server = try! RelayServerPairingContext(pairingCode: pairingCode, now: now)
+        await transport.setHandler { request in
+            switch request.url?.path {
+            case RelayWireContract.challengePath:
+                return (try! JSONEncoder().encode(ChallengeEnvelope(challenge: server.challenge)), makeHTTPResponse(request))
+            case RelayWireContract.pairingPath:
+                return (Data(), makeHTTPResponse(request, statusCode: 409))
+            default:
+                throw URLError(.badURL)
+            }
+        }
+        let coordinator = makeCoordinator(browser: browser, transport: transport, now: { self.now })
+        coordinator.startDiscovery()
+        await coordinator.connect(to: makeTestEndpoint())
+        await coordinator.submitPairingCode(pairingCode.formattedValue)
+
+        XCTAssertEqual(coordinator.state, .sessionExpired)
+        XCTAssertNil(coordinator.pairingErrorMessage)
+    }
+
     func testExpiredChallengeAndUnpairedHostAreMappedWithoutRetainingSession() async throws {
         let browser = FakeRelayBrowser()
         let expiredTransport = FakeRelayTransport()

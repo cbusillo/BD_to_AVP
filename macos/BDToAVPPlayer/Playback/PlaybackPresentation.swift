@@ -357,6 +357,15 @@ struct PlaybackFailurePresentation: Equatable {
         )
     }
 
+    static func relayPreparationFailed(_ message: String) -> PlaybackFailurePresentation {
+        PlaybackFailurePresentation(
+            title: "Relay Playback Unavailable",
+            message: message,
+            canRetry: true,
+            canLocate: false
+        )
+    }
+
     static func builtInStereoCheckUnavailable(_ message: String) -> PlaybackFailurePresentation {
         PlaybackFailurePresentation(
             title: "Stereo Check Unavailable",
