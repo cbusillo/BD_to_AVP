@@ -3,6 +3,7 @@ import Foundation
 import CoreMedia
 import CoreVideo
 import Darwin
+import UniformTypeIdentifiers
 import VideoToolbox
 
 private let videoLayerIDs = [0, 1]
@@ -27,7 +28,9 @@ private enum EncoderFailure: Error, CustomStringConvertible {
 }
 
 private struct EncoderOptions {
-    let outputURL: URL
+    let outputURL: URL?
+    let hlsDirectoryURL: URL?
+    let hlsSegmentDurationSeconds: Double?
     let bitrateMbps: Double
     let quality: Double?
     let fieldOfViewDegrees: Double
@@ -38,8 +41,13 @@ private struct EncoderOptions {
     let swapEyes: Bool
     let overwrite: Bool
 
+    var isHLSOutput: Bool { hlsDirectoryURL != nil }
+
     static func parse(arguments: [String]) throws -> EncoderOptions {
         var outputPath: String?
+        var hlsDirectoryPath: String?
+        var hlsSegmentDurationSeconds = 6.0
+        var hlsSegmentDurationWasSpecified = false
         var bitrateMbps = 8.0
         var bitrateWasSpecified = false
         var quality: Double?
@@ -57,6 +65,11 @@ private struct EncoderOptions {
             switch argument {
             case "--output":
                 outputPath = try value(after: argument, arguments: arguments, index: &index)
+            case "--hls-directory":
+                hlsDirectoryPath = try value(after: argument, arguments: arguments, index: &index)
+            case "--segment-duration":
+                hlsSegmentDurationSeconds = try doubleValue(after: argument, arguments: arguments, index: &index)
+                hlsSegmentDurationWasSpecified = true
             case "--bitrate-mbps":
                 bitrateMbps = try doubleValue(after: argument, arguments: arguments, index: &index)
                 bitrateWasSpecified = true
@@ -91,8 +104,20 @@ private struct EncoderOptions {
             index += 1
         }
 
-        guard let outputPath, !outputPath.isEmpty else {
-            throw EncoderFailure.invalidArguments("--output is required.")
+        guard (outputPath != nil) != (hlsDirectoryPath != nil) else {
+            throw EncoderFailure.invalidArguments("Specify exactly one of --output or --hls-directory.")
+        }
+        if let outputPath, outputPath.isEmpty {
+            throw EncoderFailure.invalidArguments("--output requires a non-empty path.")
+        }
+        if let hlsDirectoryPath, hlsDirectoryPath.isEmpty {
+            throw EncoderFailure.invalidArguments("--hls-directory requires a non-empty path.")
+        }
+        if hlsSegmentDurationWasSpecified, hlsDirectoryPath == nil {
+            throw EncoderFailure.invalidArguments("--segment-duration requires --hls-directory.")
+        }
+        if hlsDirectoryPath != nil, (!hlsSegmentDurationSeconds.isFinite || hlsSegmentDurationSeconds <= 0) {
+            throw EncoderFailure.invalidArguments("--segment-duration must be a positive number of seconds.")
         }
         guard bitrateMbps.isFinite, bitrateMbps > 0, bitrateMbps <= 500 else {
             throw EncoderFailure.invalidArguments("--bitrate-mbps must be greater than 0 and at most 500.")
@@ -119,7 +144,9 @@ private struct EncoderOptions {
         }
 
         return EncoderOptions(
-            outputURL: URL(fileURLWithPath: outputPath).standardizedFileURL,
+            outputURL: outputPath.map { URL(fileURLWithPath: $0).standardizedFileURL },
+            hlsDirectoryURL: hlsDirectoryPath.map { URL(fileURLWithPath: $0).standardizedFileURL },
+            hlsSegmentDurationSeconds: hlsDirectoryPath == nil ? nil : hlsSegmentDurationSeconds,
             bitrateMbps: bitrateMbps,
             quality: quality,
             fieldOfViewDegrees: fieldOfViewDegrees,
@@ -171,11 +198,13 @@ private struct EncoderOptions {
     private static func printUsage() {
         print(
             """
-            Usage: mv-hevc-encoder --output FILE [options]
+            Usage: mv-hevc-encoder (--output FILE | --hls-directory DIR) [options]
 
-            Reads progressive, 8-bit 4:2:0 side-by-side Y4M from standard input and writes MV-HEVC MOV.
+            Reads progressive, 8-bit 4:2:0 side-by-side Y4M from standard input and writes MV-HEVC MOV or HLS/CMAF segments.
 
-              --output FILE                  Required output MOV path.
+              --output FILE                  MOV output path; exclusive with --hls-directory.
+              --hls-directory DIR            HLS output directory; exclusive with --output.
+              --segment-duration SECONDS     Positive HLS segment duration (default: 6).
               --bitrate-mbps VALUE           Final MV-HEVC average bitrate (default: 8).
               --quality VALUE                Compression quality from 0 through 1; exclusive with bitrate.
               --fov DEGREES                   Horizontal field of view (default: 90).
@@ -433,7 +462,8 @@ private func makeOutputSettings(options: EncoderOptions, header: Y4MHeader) thro
 }
 
 private func isStereoMVHEVCOutputConfigurationSupported(
-    upscaleMode: FrameUpscaleMode? = nil
+    upscaleMode: FrameUpscaleMode? = nil,
+    hlsOutput: Bool = false
 ) throws -> Bool {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         return false
@@ -452,6 +482,8 @@ private func isStereoMVHEVCOutputConfigurationSupported(
         defer { try? FileManager.default.removeItem(at: probeURL) }
         let options = EncoderOptions(
             outputURL: probeURL,
+            hlsDirectoryURL: nil,
+            hlsSegmentDurationSeconds: nil,
             bitrateMbps: 8.0,
             quality: quality,
             fieldOfViewDegrees: 90.0,
@@ -463,7 +495,13 @@ private func isStereoMVHEVCOutputConfigurationSupported(
             overwrite: true
         )
         let outputSettings = try makeOutputSettings(options: options, header: header)
-        let writer = try AVAssetWriter(outputURL: probeURL, fileType: .mov)
+        let delegate = hlsOutput ? DiscardingSegmentDelegate() : nil
+        let writer: AVAssetWriter
+        if let delegate {
+            writer = makeHLSAssetWriter(segmentDurationSeconds: 6.0, delegate: delegate)
+        } else {
+            writer = try AVAssetWriter(outputURL: probeURL, fileType: .mov)
+        }
         if !writer.canApply(outputSettings: outputSettings, forMediaType: .video) {
             return false
         }
@@ -616,10 +654,201 @@ private func emitStatus(_ values: [String: Any]) {
     try? FileHandle.standardError.write(contentsOf: data)
 }
 
+private func atomicallyWrite(_ data: Data, to url: URL) throws {
+    try data.write(to: url, options: .atomic)
+}
+
+private func atomicallyRename(_ sourceURL: URL, to destinationURL: URL) throws {
+    let renameStatus = sourceURL.path.withCString { sourcePath in
+        destinationURL.path.withCString { destinationPath in
+            Darwin.rename(sourcePath, destinationPath)
+        }
+    }
+    guard renameStatus == 0 else {
+        throw EncoderFailure.writer("Failed to atomically finalize the MV-HEVC output.")
+    }
+}
+
+private final class HLSOutputDirectory {
+    let directoryURL: URL
+    private let fileManager = FileManager.default
+    private var backupURL: URL?
+
+    init(directoryURL: URL, overwrite: Bool) throws {
+        self.directoryURL = directoryURL
+        let parentURL = directoryURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parentURL, withIntermediateDirectories: true)
+
+        var isDirectory = ObjCBool(false)
+        if fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else {
+                throw EncoderFailure.invalidArguments("HLS output path exists and is not a directory.")
+            }
+            guard overwrite else {
+                throw EncoderFailure.invalidArguments("Output already exists; pass --overwrite to replace it.")
+            }
+            let backupURL = parentURL.appendingPathComponent(
+                ".\(directoryURL.lastPathComponent).previous-\(UUID().uuidString)"
+            )
+            try atomicallyRename(directoryURL, to: backupURL)
+            self.backupURL = backupURL
+        }
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: false)
+    }
+
+    func complete() throws {
+        if let backupURL {
+            try fileManager.removeItem(at: backupURL)
+            self.backupURL = nil
+        }
+    }
+
+    func discard() {
+        try? fileManager.removeItem(at: directoryURL)
+        if let backupURL {
+            try? atomicallyRename(backupURL, to: directoryURL)
+            self.backupURL = nil
+        }
+    }
+}
+
+private final class DiscardingSegmentDelegate: NSObject, AVAssetWriterDelegate, @unchecked Sendable {
+    func assetWriter(
+        _: AVAssetWriter,
+        didOutputSegmentData _: Data,
+        segmentType _: AVAssetSegmentType,
+        segmentReport _: AVAssetSegmentReport?
+    ) {}
+}
+
+private struct HLSSegment {
+    let filename: String
+    let durationSeconds: Double
+}
+
+private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @unchecked Sendable {
+    private let directoryURL: URL
+    private let preferredSegmentDurationSeconds: Double
+    private let lock = NSLock()
+    private var initializationWritten = false
+    private var finalized = false
+    private var segments: [HLSSegment] = []
+    private var failure: Error?
+
+    init(directoryURL: URL, preferredSegmentDurationSeconds: Double) {
+        self.directoryURL = directoryURL
+        self.preferredSegmentDurationSeconds = preferredSegmentDurationSeconds
+    }
+
+    func assetWriter(
+        _: AVAssetWriter,
+        didOutputSegmentData segmentData: Data,
+        segmentType: AVAssetSegmentType,
+        segmentReport: AVAssetSegmentReport?
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard failure == nil, !finalized else {
+            return
+        }
+        do {
+            switch segmentType {
+            case .initialization:
+                guard !initializationWritten else {
+                    throw EncoderFailure.writer("AVAssetWriter emitted more than one HLS initialization segment.")
+                }
+                try atomicallyWrite(segmentData, to: directoryURL.appendingPathComponent("init.mp4"))
+                initializationWritten = true
+                try writePlaylist(endList: false)
+            case .separable:
+                guard initializationWritten else {
+                    throw EncoderFailure.writer("AVAssetWriter emitted an HLS media segment before initialization.")
+                }
+                let filename = String(format: "segment-%05d.m4s", segments.count + 1)
+                try atomicallyWrite(segmentData, to: directoryURL.appendingPathComponent(filename))
+                segments.append(HLSSegment(filename: filename, durationSeconds: duration(from: segmentReport)))
+                try writePlaylist(endList: false)
+            @unknown default:
+                throw EncoderFailure.writer("AVAssetWriter emitted an unknown HLS segment type.")
+            }
+        } catch {
+            failure = error
+        }
+    }
+
+    func throwIfFailed() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let failure {
+            throw failure
+        }
+    }
+
+    func finalizePlaylist() throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        if let failure {
+            throw failure
+        }
+        guard initializationWritten else {
+            throw EncoderFailure.writer("AVAssetWriter did not emit an HLS initialization segment.")
+        }
+        guard !segments.isEmpty else {
+            throw EncoderFailure.writer("AVAssetWriter did not emit an HLS media segment.")
+        }
+        try writePlaylist(endList: true)
+        finalized = true
+        return segments.count
+    }
+
+    private func duration(from report: AVAssetSegmentReport?) -> Double {
+        guard let videoTrackReport = report?.trackReports.first(where: { $0.mediaType == .video }) else {
+            return preferredSegmentDurationSeconds
+        }
+        let durationSeconds = CMTimeGetSeconds(videoTrackReport.duration)
+        guard durationSeconds.isFinite, durationSeconds > 0 else {
+            return preferredSegmentDurationSeconds
+        }
+        return durationSeconds
+    }
+
+    private func writePlaylist(endList: Bool) throws {
+        let maximumDuration = segments.map(\.durationSeconds).max() ?? preferredSegmentDurationSeconds
+        var lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:7",
+            "#EXT-X-TARGETDURATION:\(max(1, Int(ceil(maximumDuration))))",
+            "#EXT-X-PLAYLIST-TYPE:\(endList ? "VOD" : "EVENT")",
+            "#EXT-X-INDEPENDENT-SEGMENTS",
+            "#EXT-X-MAP:URI=\"init.mp4\"",
+        ]
+        for segment in segments {
+            lines.append("#EXTINF:\(String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), segment.durationSeconds)),")
+            lines.append(segment.filename)
+        }
+        if endList {
+            lines.append("#EXT-X-ENDLIST")
+        }
+        try atomicallyWrite(Data((lines.joined(separator: "\n") + "\n").utf8), to: directoryURL.appendingPathComponent("media.m3u8"))
+    }
+}
+
+private func makeHLSAssetWriter(
+    segmentDurationSeconds: Double,
+    delegate: AVAssetWriterDelegate
+) -> AVAssetWriter {
+    let writer = AVAssetWriter(contentType: .mpeg4Movie)
+    writer.outputFileTypeProfile = .mpeg4AppleHLS
+    writer.preferredOutputSegmentInterval = CMTime(seconds: segmentDurationSeconds, preferredTimescale: 600)
+    writer.initialSegmentStartTime = .zero
+    writer.delegate = delegate
+    return writer
+}
+
 private func encode(
     options: EncoderOptions,
     cancellationFlag: CancellationFlag
-) async throws -> (Y4MHeader, Int, FrameUpscaleMetrics?) {
+) async throws -> (Y4MHeader, Int, FrameUpscaleMetrics?, Int?) {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         throw EncoderFailure.unsupported("This Mac does not report stereo MV-HEVC encode support.")
     }
@@ -627,33 +856,43 @@ private func encode(
         throw EncoderFailure.cancelled
     }
 
-    let fileManager = FileManager.default
-    let outputExists = fileManager.fileExists(atPath: options.outputURL.path)
-    if outputExists {
-        guard options.overwrite else {
-            throw EncoderFailure.invalidArguments("Output already exists; pass --overwrite to replace it.")
-        }
-    }
-    try fileManager.createDirectory(
-        at: options.outputURL.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-
-    let partialURL = options.outputURL.deletingLastPathComponent().appendingPathComponent(
-        ".\(options.outputURL.lastPathComponent).partial-\(UUID().uuidString)"
-    )
-    var completed = false
-    defer {
-        if !completed {
-            try? fileManager.removeItem(at: partialURL)
-        }
-    }
-
     let input = BufferedStandardInput()
     guard let headerLine = try input.readLine() else {
         throw EncoderFailure.invalidInput("Y4M input is empty.")
     }
     let header = try Y4MHeader.parse(headerLine)
+    let fileManager = FileManager.default
+    let hlsOutputDirectory = try options.hlsDirectoryURL.map {
+        try HLSOutputDirectory(directoryURL: $0, overwrite: options.overwrite)
+    }
+    let partialURL: URL?
+    if let outputURL = options.outputURL {
+        let outputExists = fileManager.fileExists(atPath: outputURL.path)
+        if outputExists {
+            guard options.overwrite else {
+                throw EncoderFailure.invalidArguments("Output already exists; pass --overwrite to replace it.")
+            }
+        }
+        try fileManager.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        partialURL = outputURL.deletingLastPathComponent().appendingPathComponent(
+            ".\(outputURL.lastPathComponent).partial-\(UUID().uuidString)"
+        )
+    } else {
+        partialURL = nil
+    }
+    var completed = false
+    defer {
+        if !completed {
+            if let partialURL {
+                try? fileManager.removeItem(at: partialURL)
+            }
+            hlsOutputDirectory?.discard()
+        }
+    }
+
     let sourcePool = try options.upscaleMode.map { _ in
         try SourcePixelBufferPool(width: header.eyeWidth, height: header.frameHeight)
     }
@@ -661,7 +900,20 @@ private func encode(
         try StereoFrameUpscaler(mode: $0, inputWidth: header.eyeWidth, inputHeight: header.frameHeight)
     }
     let outputSettings = try makeOutputSettings(options: options, header: header)
-    let writer = try AVAssetWriter(outputURL: partialURL, fileType: .mov)
+    let hlsOutputDelegate = options.hlsDirectoryURL.map {
+        HLSOutputDelegate(
+            directoryURL: $0,
+            preferredSegmentDurationSeconds: options.hlsSegmentDurationSeconds!
+        )
+    }
+    let writer: AVAssetWriter
+    if let hlsOutputDelegate, let hlsSegmentDurationSeconds = options.hlsSegmentDurationSeconds {
+        writer = makeHLSAssetWriter(segmentDurationSeconds: hlsSegmentDurationSeconds, delegate: hlsOutputDelegate)
+    } else if let partialURL {
+        writer = try AVAssetWriter(outputURL: partialURL, fileType: .mov)
+    } else {
+        throw EncoderFailure.writer("No output writer was configured.")
+    }
     guard writer.canApply(outputSettings: outputSettings, forMediaType: .video) else {
         throw EncoderFailure.unsupported("The MV-HEVC output settings are not supported on this Mac.")
     }
@@ -704,6 +956,9 @@ private func encode(
                 if cancellationFlag.isRequested || Task.isCancelled {
                     throw EncoderFailure.cancelled
                 }
+                if let hlsOutputDelegate {
+                    try hlsOutputDelegate.throwIfFailed()
+                }
                 if writer.status == .failed {
                     throw writerFailure(writer, fallback: "MV-HEVC writer failed while waiting for input capacity.")
                 }
@@ -733,19 +988,22 @@ private func encode(
         guard writer.status == .completed else {
             throw writerFailure(writer, fallback: "MV-HEVC writer did not complete successfully.")
         }
-        if !options.overwrite, fileManager.fileExists(atPath: options.outputURL.path) {
+        if let hlsOutputDelegate, let hlsOutputDirectory {
+            try hlsOutputDelegate.throwIfFailed()
+            let hlsSegmentCount = try hlsOutputDelegate.finalizePlaylist()
+            try hlsOutputDirectory.complete()
+            completed = true
+            return (header, frameCount, upscaler?.metrics, hlsSegmentCount)
+        }
+        guard let partialURL, let outputURL = options.outputURL else {
+            throw EncoderFailure.writer("MOV output writer was not configured.")
+        }
+        if !options.overwrite, fileManager.fileExists(atPath: outputURL.path) {
             throw EncoderFailure.writer("Output appeared while encoding; refusing to replace it without --overwrite.")
         }
-        let renameStatus = partialURL.path.withCString { sourcePath in
-            options.outputURL.path.withCString { destinationPath in
-                Darwin.rename(sourcePath, destinationPath)
-            }
-        }
-        guard renameStatus == 0 else {
-            throw EncoderFailure.writer("Failed to atomically finalize the MV-HEVC output.")
-        }
+        try atomicallyRename(partialURL, to: outputURL)
         completed = true
-        return (header, frameCount, upscaler?.metrics)
+        return (header, frameCount, upscaler?.metrics, nil)
     } catch {
         writer.cancelWriting()
         throw error
@@ -765,6 +1023,7 @@ private struct MVHEVCEncoder {
                 let pixelTransferUpscaleSupported = try isStereoMVHEVCOutputConfigurationSupported(
                     upscaleMode: .pixelTransfer
                 )
+                let hlsSupported = try isStereoMVHEVCOutputConfigurationSupported(hlsOutput: true)
                 let metalFXDeviceSupported = metalFXSpatialScalingSupported()
                 let metalFXWriterSupported = try isStereoMVHEVCOutputConfigurationSupported(
                     upscaleMode: .metalFX
@@ -775,6 +1034,7 @@ private struct MVHEVCEncoder {
                         "metalfx_2x_mv_hevc_supported": metalFXUpscaleSupported,
                         "schema_version": 1,
                         "stereo_mv_hevc_encode_supported": supported,
+                        "segmented_hls_mv_hevc_encode_supported": hlsSupported,
                         "metalfx_spatial_scaling_supported": metalFXDeviceSupported,
                         "pixel_transfer_2x_mv_hevc_supported": pixelTransferUpscaleSupported,
                     ],
@@ -787,7 +1047,7 @@ private struct MVHEVCEncoder {
                 return
             }
             let options = try EncoderOptions.parse(arguments: arguments)
-            let (header, frameCount, upscaleMetrics) = try await encode(
+            let (header, frameCount, upscaleMetrics, hlsSegmentCount) = try await encode(
                 options: options,
                 cancellationFlag: cancellationFlag
             )
@@ -799,6 +1059,7 @@ private struct MVHEVCEncoder {
                 "frame_rate_denominator": header.frameRateDenominator,
                 "frame_rate_numerator": header.frameRateNumerator,
                 "has_camera_baseline": options.baselineMillimeters != nil,
+                "output_mode": options.isHLSOutput ? "hls" : "mov",
                 "schema_version": 1,
                 "swapped_eyes": options.swapEyes,
             ]
@@ -826,6 +1087,10 @@ private struct MVHEVCEncoder {
             } else {
                 summary["bitrate_mbps"] = options.bitrateMbps
                 summary["rate_control"] = "average_bitrate"
+            }
+            if let hlsSegmentCount, let hlsSegmentDurationSeconds = options.hlsSegmentDurationSeconds {
+                summary["hls_segment_count"] = hlsSegmentCount
+                summary["hls_segment_duration_seconds"] = hlsSegmentDurationSeconds
             }
             let data = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])
             print(String(decoding: data, as: UTF8.self))

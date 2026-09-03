@@ -99,6 +99,33 @@ class MVHEVCEncoderBuilderTests(unittest.TestCase):
         self.assertIn("writer.canApply(outputSettings: outputSettings, forMediaType: .video)", probe_source)
         self.assertIn("let supported = try isStereoMVHEVCOutputConfigurationSupported()", source)
 
+    def test_segmented_hls_source_contract_uses_asset_writer_segmentation(self) -> None:
+        source = build_mv_hevc_encoder_macos.SOURCE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("--hls-directory", source)
+        self.assertIn("--segment-duration", source)
+        self.assertIn("Specify exactly one of --output or --hls-directory.", source)
+        self.assertIn("AVAssetWriter(contentType: .mpeg4Movie)", source)
+        self.assertIn("writer.outputFileTypeProfile = .mpeg4AppleHLS", source)
+        self.assertIn("writer.preferredOutputSegmentInterval", source)
+        self.assertIn("AVAssetWriterDelegate", source)
+        self.assertIn("#EXT-X-MAP:URI=\\\"init.mp4\\\"", source)
+        self.assertIn('endList ? "VOD" : "EVENT"', source)
+        self.assertIn("#EXT-X-ENDLIST", source)
+        self.assertIn("segment-%05d.m4s", source)
+
+    def test_segmented_throughput_probe_contract_is_bounded_and_machine_readable(self) -> None:
+        source = (REPOSITORY_ROOT / "scripts/measure_segmented_mv_hevc_throughput.py").read_text(encoding="utf-8")
+
+        self.assertIn('RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"', source)
+        self.assertIn('source.add_argument("--y4m"', source)
+        self.assertIn('source.add_argument(\n        "--rainforest"', source)
+        self.assertIn('result.add_argument("--max-frames"', source)
+        self.assertIn('"hardware_fingerprint_sha256"', source)
+        self.assertIn('"storage_fingerprint_sha256"', source)
+        self.assertIn('"tool_hashes"', source)
+        self.assertIn('"realtime_ratio"', source)
+
     def test_box_requirements_distinguish_candidate_from_current_baseline(self) -> None:
         self.assertIn("proj", qualify_direct_mv_hevc.DIRECT_REQUIRED_BOX_TYPES)
         self.assertNotIn("proj", qualify_direct_mv_hevc.CURRENT_REQUIRED_BOX_TYPES)
@@ -172,6 +199,7 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
             cls.metalfx_supported = bool(probe_payload.get("metalfx_spatial_scaling_supported"))
             cls.metalfx_upscale_supported = bool(probe_payload.get("metalfx_2x_mv_hevc_supported"))
             cls.pixel_transfer_upscale_supported = bool(probe_payload.get("pixel_transfer_2x_mv_hevc_supported"))
+            cls.segmented_hls_supported = bool(probe_payload.get("segmented_hls_mv_hevc_encode_supported"))
         except BaseException:
             cls.temporary_directory.cleanup()
             raise
@@ -185,6 +213,13 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         path.unlink(missing_ok=True)
         for partial in path.parent.glob(f".{path.name}.partial-*"):
             partial.unlink()
+        return path
+
+    def hls_directory(self, name: str) -> Path:
+        path = Path(self.temporary_directory.name) / name
+        shutil.rmtree(path, ignore_errors=True)
+        for partial in path.parent.glob(f".{path.name}.partial-*"):
+            shutil.rmtree(partial, ignore_errors=True)
         return path
 
     def run_encoder(
@@ -209,6 +244,31 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
             command.extend(["--upscale-mode", upscale_mode])
         if overwrite:
             command.append("--overwrite")
+        return subprocess.run(
+            command,
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+
+    def run_hls_encoder(
+        self,
+        directory: Path,
+        input_bytes: bytes,
+        *,
+        segment_duration: float = 0.5,
+        expected_frames: int | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        command = [
+            str(self.encoder),
+            "--hls-directory",
+            str(directory),
+            "--segment-duration",
+            str(segment_duration),
+        ]
+        if expected_frames is not None:
+            command.extend(["--expected-frames", str(expected_frames)])
         return subprocess.run(
             command,
             input=input_bytes,
@@ -285,9 +345,102 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
                 "metalfx_spatial_scaling_supported": self.metalfx_supported,
                 "pixel_transfer_2x_mv_hevc_supported": self.pixel_transfer_upscale_supported,
                 "schema_version": 1,
+                "segmented_hls_mv_hevc_encode_supported": self.segmented_hls_supported,
                 "stereo_mv_hevc_encode_supported": True,
             },
         )
+
+    def test_help_documents_mutually_exclusive_segmented_output(self) -> None:
+        completed = subprocess.run(
+            [str(self.encoder), "--help"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        self.assertIn(b"--hls-directory DIR", completed.stdout)
+        self.assertIn(b"--segment-duration SECONDS", completed.stdout)
+        self.assertIn(b"exclusive with --hls-directory", completed.stdout)
+
+    def test_rejects_multiple_output_modes_before_creating_output(self) -> None:
+        output_path = self.output_path("exclusive.mov")
+        hls_directory = self.hls_directory("exclusive-hls")
+
+        completed = subprocess.run(
+            [
+                str(self.encoder),
+                "--output",
+                str(output_path),
+                "--hls-directory",
+                str(hls_directory),
+            ],
+            input=y4m_header(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(b"exactly one", completed.stderr)
+        self.assertFalse(output_path.exists())
+        self.assertFalse(hls_directory.exists())
+
+    def test_rejects_non_positive_hls_segment_duration_before_creating_output(self) -> None:
+        hls_directory = self.hls_directory("invalid-segment-duration")
+
+        completed = self.run_hls_encoder(hls_directory, y4m_header(), segment_duration=0)
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(b"positive number of seconds", completed.stderr)
+        self.assertFalse(hls_directory.exists())
+
+    def test_hls_output_writes_cmaf_segments_and_final_vod_playlist(self) -> None:
+        if not self.segmented_hls_supported:
+            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
+        hls_directory = self.hls_directory("segmented-hls")
+        input_bytes = y4m_header() + b"".join(y4m_frame(index) for index in range(48))
+
+        completed = self.run_hls_encoder(
+            hls_directory,
+            input_bytes,
+            segment_duration=0.5,
+            expected_frames=48,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        summary = json.loads(completed.stdout)
+        self.assertEqual(summary["output_mode"], "hls")
+        self.assertEqual(summary["frame_count"], 48)
+        self.assertGreater(summary["hls_segment_count"], 0)
+        initialization_segment = hls_directory / "init.mp4"
+        playlist_path = hls_directory / "media.m3u8"
+        self.assertGreater(initialization_segment.stat().st_size, 0)
+        playlist = playlist_path.read_text(encoding="utf-8")
+        self.assertIn("#EXTM3U", playlist)
+        self.assertIn("#EXT-X-PLAYLIST-TYPE:VOD", playlist)
+        self.assertIn("#EXT-X-MAP:URI=\"init.mp4\"", playlist)
+        self.assertIn("#EXT-X-ENDLIST", playlist)
+        segment_names = sorted(path.name for path in hls_directory.glob("segment-*.m4s"))
+        self.assertEqual(len(segment_names), summary["hls_segment_count"])
+        for segment_name in segment_names:
+            self.assertIn(segment_name, playlist)
+            self.assertGreater((hls_directory / segment_name).stat().st_size, 0)
+
+    def test_hls_failure_removes_partial_directory(self) -> None:
+        if not self.segmented_hls_supported:
+            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
+        hls_directory = self.hls_directory("truncated-hls")
+
+        completed = self.run_hls_encoder(
+            hls_directory,
+            y4m_header() + b"FRAME\ntruncated",
+            expected_frames=1,
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(b"incomplete frame", completed.stderr)
+        self.assertFalse(hls_directory.exists())
 
     def test_rejects_unknown_upscale_mode(self) -> None:
         output_path = self.output_path("invalid-upscale.mov")
