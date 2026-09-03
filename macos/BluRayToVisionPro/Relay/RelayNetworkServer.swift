@@ -8,30 +8,34 @@ enum RelayNetworkServerError: Error, Equatable, Sendable {
 }
 
 final class RelayNetworkServer: @unchecked Sendable {
-    private static let maximumConcurrentConnections = 16
     private static let requestTimeout: TimeInterval = 10
 
-    private struct ActiveConnection {
-        let connection: NWConnection
-        let timeout: DispatchWorkItem
-    }
-
     private let host: RelayHost
-    private let listener: NWListener
     private let queue: DispatchQueue
-    private var activeConnections: [ObjectIdentifier: ActiveConnection] = [:]
-    private var lifecycleMonitor: Task<Void, Never>?
+    private let resources: RelayNetworkServerResources
+    private let lifecyclePollInterval: Duration
 
-    private init(host: RelayHost, listener: NWListener, queue: DispatchQueue) {
+    private init(
+        host: RelayHost,
+        listener: NWListener,
+        queue: DispatchQueue,
+        lifecyclePollInterval: Duration
+    ) {
         self.host = host
-        self.listener = listener
         self.queue = queue
+        resources = RelayNetworkServerResources(
+            queue: queue,
+            listenerCancellation: { listener.cancel() },
+            requestTimeout: Self.requestTimeout
+        )
+        self.lifecyclePollInterval = lifecyclePollInterval
     }
 
     static func start(
         host: RelayHost,
         serviceName: String = Host.current().localizedName ?? "BD to AVP",
-        queue: DispatchQueue = DispatchQueue(label: "com.shinycomputers.bd-to-avp.relay", qos: .userInitiated)
+        queue: DispatchQueue = DispatchQueue(label: "com.shinycomputers.bd-to-avp.relay", qos: .userInitiated),
+        lifecyclePollInterval: Duration = .milliseconds(250)
     ) async throws -> RelayNetworkServer {
         guard let advertisement = await host.advertisedBonjourService() else {
             throw RelayNetworkServerError.unavailablePairingContext
@@ -51,7 +55,12 @@ final class RelayNetworkServer: @unchecked Sendable {
             domain: nil,
             txtRecord: advertisement.txtRecord
         )
-        let server = RelayNetworkServer(host: host, listener: listener, queue: queue)
+        let server = RelayNetworkServer(
+            host: host,
+            listener: listener,
+            queue: queue,
+            lifecyclePollInterval: lifecyclePollInterval
+        )
         listener.newConnectionHandler = { [weak server] connection in
             server?.accept(connection)
         }
@@ -62,7 +71,7 @@ final class RelayNetworkServer: @unchecked Sendable {
             server?.handleNetworkLoss()
         }
         listener.start(queue: queue)
-        server.startLifecycleMonitor()
+        await server.startLifecycleMonitor()
         return server
     }
 
@@ -83,41 +92,43 @@ final class RelayNetworkServer: @unchecked Sendable {
 
     private func accept(_ connection: NWConnection) {
         let peer = RelayNetworkPeerClassifier.classify(connection.endpoint)
-        guard peer == .localNetwork,
-              activeConnections.count < Self.maximumConcurrentConnections
-        else {
-            connection.cancel()
-            return
+        Task { [weak self] in
+            guard let self,
+                  peer == .localNetwork,
+                  let identifier = await resources.register(cancellation: connection.cancel)
+            else {
+                connection.cancel()
+                return
+            }
+            connection.start(queue: queue)
+            receiveRequest(on: connection, identifier: identifier, accumulated: Data(), peer: peer)
         }
-        let identifier = ObjectIdentifier(connection)
-        let timeout = DispatchWorkItem { [weak self, connection] in
-            self?.finishConnection(connection)
-        }
-        activeConnections[identifier] = ActiveConnection(connection: connection, timeout: timeout)
-        queue.asyncAfter(deadline: .now() + Self.requestTimeout, execute: timeout)
-        connection.start(queue: queue)
-        receiveRequest(on: connection, accumulated: Data(), peer: peer)
     }
 
-    private func receiveRequest(on connection: NWConnection, accumulated: Data, peer: RelayHostPeer) {
+    private func receiveRequest(
+        on connection: NWConnection,
+        identifier: UUID,
+        accumulated: Data,
+        peer: RelayHostPeer
+    ) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1_024) { [weak self] content, _, _, error in
             guard let self else {
                 connection.cancel()
                 return
             }
             guard error == nil else {
-                self.finishConnection(connection)
+                self.resources.finish(identifier)
                 return
             }
             let nextData = accumulated + (content ?? Data())
             Task {
                 if await self.host.needsMoreRequestBytes(nextData) {
-                    self.receiveRequest(on: connection, accumulated: nextData, peer: peer)
+                    self.receiveRequest(on: connection, identifier: identifier, accumulated: nextData, peer: peer)
                     return
                 }
                 let response = await self.host.handle(nextData, peer: peer)
                 connection.send(content: response.serialized(), completion: .contentProcessed { [weak self] _ in
-                    self?.finishConnection(connection)
+                    self?.resources.finish(identifier)
                 })
             }
         }
@@ -125,15 +136,18 @@ final class RelayNetworkServer: @unchecked Sendable {
 
     private func handleNetworkLoss() {
         Task { [weak self] in
-            guard let self else { return }
-            await host.networkLost()
-            await cancelNetworkResources()
+            await self?.networkLost()
         }
     }
 
-    private func startLifecycleMonitor() {
-        lifecycleMonitor?.cancel()
-        lifecycleMonitor = Task { [weak self, host] in
+    func networkLost() async {
+        await host.networkLost()
+        await cancelNetworkResources()
+    }
+
+    private func startLifecycleMonitor() async {
+        let lifecyclePollInterval = lifecyclePollInterval
+        let monitor = Task { [weak self, host] in
             while !Task.isCancelled {
                 let lifecycle = await host.currentLifecycle()
                 switch lifecycle {
@@ -143,45 +157,158 @@ final class RelayNetworkServer: @unchecked Sendable {
                 case .pairing, .paired, .finished:
                     break
                 }
-                try? await Task.sleep(for: .milliseconds(250))
+                try? await Task.sleep(for: lifecyclePollInterval)
+            }
+        }
+        await resources.setLifecycleMonitor(monitor)
+    }
+
+    private func cancelNetworkResources() async {
+        await resources.cancelNetworkResources()
+    }
+
+    func networkResourcesAreCancelled() async -> Bool {
+        await resources.isCancelled()
+    }
+
+    deinit {
+        resources.cancelNetworkResourcesSynchronously()
+    }
+}
+
+final class RelayNetworkServerResources: @unchecked Sendable {
+    private static let maximumConcurrentConnections = 16
+
+    private struct ActiveConnection {
+        let cancellation: @Sendable () -> Void
+        let timeout: DispatchWorkItem
+    }
+
+    private let queue: DispatchQueue
+    private let queueKey = DispatchSpecificKey<Void>()
+    private let listenerCancellation: @Sendable () -> Void
+    private let requestTimeout: TimeInterval
+    private var activeConnections: [UUID: ActiveConnection] = [:]
+    private var lifecycleMonitor: Task<Void, Never>?
+    private var cancelled = false
+
+    init(
+        queue: DispatchQueue,
+        listenerCancellation: @escaping @Sendable () -> Void,
+        requestTimeout: TimeInterval = 10
+    ) {
+        self.queue = queue
+        self.listenerCancellation = listenerCancellation
+        self.requestTimeout = requestTimeout
+        queue.setSpecific(key: queueKey, value: ())
+    }
+
+    func register(cancellation: @escaping @Sendable () -> Void) async -> UUID? {
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self,
+                      !cancelled,
+                      activeConnections.count < Self.maximumConcurrentConnections
+                else {
+                    cancellation()
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let identifier = UUID()
+                let timeout = DispatchWorkItem { [weak self] in
+                    self?.finishOnQueue(identifier)
+                }
+                activeConnections[identifier] = ActiveConnection(cancellation: cancellation, timeout: timeout)
+                queue.asyncAfter(deadline: .now() + requestTimeout, execute: timeout)
+                continuation.resume(returning: identifier)
             }
         }
     }
 
-    private func cancelNetworkResources() async {
-        lifecycleMonitor?.cancel()
-        lifecycleMonitor = nil
-        listener.cancel()
+    func finish(_ identifier: UUID) {
+        queue.async { [weak self] in
+            self?.finishOnQueue(identifier)
+        }
+    }
+
+    func setLifecycleMonitor(_ monitor: Task<Void, Never>) async {
+        await performOnQueue {
+            guard !self.cancelled else {
+                monitor.cancel()
+                return
+            }
+            self.lifecycleMonitor?.cancel()
+            self.lifecycleMonitor = monitor
+        }
+    }
+
+    func cancelNetworkResources() async {
+        await performOnQueue {
+            self.cancelNetworkResourcesOnQueue()
+        }
+    }
+
+    func cancelNetworkResourcesSynchronously() {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            cancelNetworkResourcesOnQueue()
+        } else {
+            queue.sync {
+                cancelNetworkResourcesOnQueue()
+            }
+        }
+    }
+
+    func activeConnectionCount() async -> Int {
         await withCheckedContinuation { continuation in
             queue.async { [weak self] in
-                if let self {
-                    let connections = Array(activeConnections.values)
-                    activeConnections.removeAll()
-                    for activeConnection in connections {
-                        activeConnection.timeout.cancel()
-                        activeConnection.connection.cancel()
-                    }
-                }
+                continuation.resume(returning: self?.activeConnections.count ?? 0)
+            }
+        }
+    }
+
+    func isCancelled() async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                continuation.resume(returning: self?.cancelled ?? true)
+            }
+        }
+    }
+
+    private func performOnQueue(_ operation: @escaping @Sendable () -> Void) async {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            operation()
+            return
+        }
+        await withCheckedContinuation { continuation in
+            queue.async {
+                operation()
                 continuation.resume()
             }
         }
     }
 
-    private func finishConnection(_ connection: NWConnection) {
-        queue.async { [weak self] in
-            guard let self else {
-                connection.cancel()
-                return
-            }
-            let identifier = ObjectIdentifier(connection)
-            activeConnections.removeValue(forKey: identifier)?.timeout.cancel()
-            connection.cancel()
+    private func finishOnQueue(_ identifier: UUID) {
+        guard let activeConnection = activeConnections.removeValue(forKey: identifier) else {
+            return
         }
+        activeConnection.timeout.cancel()
+        activeConnection.cancellation()
     }
 
-    deinit {
+    private func cancelNetworkResourcesOnQueue() {
+        guard !cancelled else {
+            return
+        }
+        cancelled = true
         lifecycleMonitor?.cancel()
-        listener.cancel()
+        lifecycleMonitor = nil
+        listenerCancellation()
+        let connections = activeConnections.values
+        activeConnections.removeAll()
+        for activeConnection in connections {
+            activeConnection.timeout.cancel()
+            activeConnection.cancellation()
+        }
     }
 }
 
