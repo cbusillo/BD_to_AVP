@@ -117,6 +117,19 @@ SHA-256 exactly:
 9ada30b0ef6e4b21c73bcb6cc92f66fee0c2b2e197c82423870536cfe6ab7103
 ```
 
+The September 3, 2026 current-`main` re-verification reproduced that exact file
+digest with the release-packaged FFmpeg 8.1.2 in `255.0411` seconds. System
+FFmpeg 9.0.1 produced different framemd5 comment/header bytes but identical
+frame rows; the version-independent 15,000-frame-row SHA-256 is
+`bb1b50c160fbf563321a7c225aa1e35e2d8bc1a9b1d8ffc45d8ccc4a15916484`.
+Environment-gated integration tests compare frame rows so FFmpeg provenance
+headers cannot masquerade as decoded-picture drift.
+
+The re-verification record is stored outside the repository at
+`/Volumes/Docker-External/BD_to_AVP_artifacts/issue-209/reverify-20260903/qualification-record.json`
+with SHA-256
+`393846627385132222d38ad5d70202a0dcb252f596b6d7effdb82236c37f700a`.
+
 That run read `17,930,748` M2TS packets, emitted `15,002` matched PES pairs
 before downstream closure, and peaked at `16,646,144` bytes of unmatched buffered
 data.
