@@ -87,6 +87,8 @@ final class BDToAVPPlayerUITests: XCTestCase {
             XCTFail(app.debugDescription)
             return
         }
+        XCTAssertFalse(app.buttons["player-play-pause"].exists)
+        XCTAssertFalse(app.buttons["player-show-controls"].exists)
 
         sleep(5)
 

@@ -179,6 +179,14 @@ enum PlaybackHUDVisibilityPolicy {
     static func shouldAutoHide(isPlaying: Bool, isInteracting: Bool) -> Bool {
         isPlaying && !isInteracting
     }
+
+    static func allowsAutomaticHiding(
+        isPlaying: Bool,
+        isVoiceOverEnabled: Bool,
+        isSwitchControlEnabled: Bool
+    ) -> Bool {
+        isPlaying && !isVoiceOverEnabled && !isSwitchControlEnabled
+    }
 }
 
 struct PlaybackEyeOrderPresentation: Equatable {

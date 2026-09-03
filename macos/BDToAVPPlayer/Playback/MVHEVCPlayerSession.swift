@@ -17,6 +17,8 @@ struct PlaybackQualificationProgrammaticSeek: Equatable {
 }
 
 enum PlaybackQualificationNativeControlPolicy {
+    static let naturalCompletionTolerance: TimeInterval = 2
+
     static func shouldRecordPause(
         previousStatus: AVPlayer.TimeControlStatus?,
         currentStatus: AVPlayer.TimeControlStatus,
@@ -34,10 +36,17 @@ enum PlaybackQualificationNativeControlPolicy {
         else {
             return false
         }
-        guard duration.isFinite, duration > 0, playerTime.isFinite else {
-            return true
+        return !isNaturalCompletionTimeJump(playerTime: playerTime, duration: duration)
+    }
+
+    static func isNaturalCompletionTimeJump(
+        playerTime: TimeInterval,
+        duration: TimeInterval
+    ) -> Bool {
+        guard playerTime.isFinite, duration.isFinite, duration > 0 else {
+            return false
         }
-        return duration - playerTime > 2
+        return abs(duration - playerTime) <= naturalCompletionTolerance
     }
 
     static func shouldRecordSeek(
@@ -1185,6 +1194,12 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
         let playerTime = player.currentTime().seconds
         let currentUptime = ProcessInfo.processInfo.systemUptime
+        if PlaybackQualificationNativeControlPolicy.isNaturalCompletionTimeJump(
+            playerTime: playerTime,
+            duration: duration
+        ) {
+            return
+        }
         qualificationProgrammaticSeeks.removeAll {
             $0.expiresAtUptime < currentUptime
         }

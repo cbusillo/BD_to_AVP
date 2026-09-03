@@ -191,6 +191,30 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(PlaybackHUDVisibilityState.autoHideDelay, 3)
     }
 
+    func testHUDAutomaticHidingStaysDisabledForAssistiveTechnology() {
+        XCTAssertTrue(
+            PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                isPlaying: true,
+                isVoiceOverEnabled: false,
+                isSwitchControlEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                isPlaying: true,
+                isVoiceOverEnabled: true,
+                isSwitchControlEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                isPlaying: true,
+                isVoiceOverEnabled: false,
+                isSwitchControlEnabled: true
+            )
+        )
+    }
+
     func testHUDVisibilityHidesOnlyForTheCurrentScheduledTimer() {
         var visibility = PlaybackHUDVisibilityState()
         visibility.reconcile(isPlaying: true)

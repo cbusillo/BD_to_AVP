@@ -67,7 +67,11 @@ struct PlayerView: View {
         }
         .onChange(of: session.isPlaying) { _, isPlaying in
             hudVisibility.reconcile(
-                isPlaying: isPlaying && !isVoiceOverEnabled && !isSwitchControlEnabled
+                isPlaying: PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                    isPlaying: isPlaying,
+                    isVoiceOverEnabled: isVoiceOverEnabled,
+                    isSwitchControlEnabled: isSwitchControlEnabled
+                )
             )
         }
         .onChange(of: session.state) { _, _ in
@@ -173,9 +177,11 @@ struct PlayerView: View {
     }
 
     private var isAutomaticHidingAllowed: Bool {
-        session.isPlaying
-            && !isVoiceOverEnabled
-            && !isSwitchControlEnabled
+        PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+            isPlaying: session.isPlaying,
+            isVoiceOverEnabled: isVoiceOverEnabled,
+            isSwitchControlEnabled: isSwitchControlEnabled
+        )
     }
 
     private var isPackedStereoMedia: Bool {
@@ -656,13 +662,12 @@ private struct PlayerOrnamentView: View {
                     onInteraction()
                     session.selectAudio(id: option.id)
                 } label: {
-                    Label(
-                        option.displayName,
-                        systemImage: session.selectedAudioID == option.id ? "checkmark" : ""
-                    )
-                    .accessibilityAddTraits(
-                        session.selectedAudioID == option.id ? .isSelected : []
-                    )
+                    if session.selectedAudioID == option.id {
+                        Label(option.displayName, systemImage: "checkmark")
+                            .accessibilityAddTraits(.isSelected)
+                    } else {
+                        Text(option.displayName)
+                    }
                 }
             }
         } label: {

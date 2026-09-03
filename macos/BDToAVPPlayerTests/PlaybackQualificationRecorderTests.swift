@@ -186,6 +186,33 @@ final class PlaybackQualificationRecorderTests: XCTestCase {
         )
     }
 
+    func testNativeControlPolicyExcludesNaturalCompletionTimeJump() {
+        XCTAssertTrue(
+            PlaybackQualificationNativeControlPolicy.isNaturalCompletionTimeJump(
+                playerTime: 7_199,
+                duration: 7_200
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.isNaturalCompletionTimeJump(
+                playerTime: 7_190,
+                duration: 7_200
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.isNaturalCompletionTimeJump(
+                playerTime: 120,
+                duration: .nan
+            )
+        )
+        XCTAssertFalse(
+            PlaybackQualificationNativeControlPolicy.isNaturalCompletionTimeJump(
+                playerTime: 120,
+                duration: 0
+            )
+        )
+    }
+
     func testSafeIdentifierSanitizesUnsafeCharactersAndRejectsEmptyValues() {
         XCTAssertEqual(
             PlaybackQualificationRecorder.safeIdentifier("run id/with spaces"),
