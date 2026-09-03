@@ -292,7 +292,7 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
                 if "#EXT-X-PLAYLIST-TYPE:EVENT" in playlist and "segment-" in playlist:
                     return playlist
             time.sleep(0.02)
-        self.fail("encoder did not publish an EVENT playlist within ten seconds")
+        raise AssertionError("encoder did not publish an EVENT playlist within ten seconds")
 
     @staticmethod
     def target_duration(playlist: str) -> int:
