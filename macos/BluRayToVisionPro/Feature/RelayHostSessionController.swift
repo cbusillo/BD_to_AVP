@@ -21,18 +21,24 @@ final class RelayHostSessionController: ObservableObject {
         case failed(String)
     }
 
-    typealias SessionStarter = @MainActor (URL, RelayPairingCode) async throws -> any RelayHostSessionControlling
+    typealias FixtureLoader = @MainActor (URL) throws -> RelayEventHLSFixture
+    typealias SessionStarter = @MainActor (URL, RelayEventHLSFixture, RelayPairingCode) async throws -> any RelayHostSessionControlling
 
     @Published private(set) var lifecycle: Lifecycle = .idle
     @Published private(set) var fixtureDirectory: URL?
     @Published private(set) var formattedPairingCode: String?
     @Published private(set) var segmentCount = 0
 
+    private let loadFixture: FixtureLoader
     private let startSession: SessionStarter
     private var session: (any RelayHostSessionControlling)?
     private var lifecycleMonitoringTask: Task<Void, Never>?
 
-    init(startSession: @escaping SessionStarter = RelayHostSession.start) {
+    init(
+        loadFixture: @escaping FixtureLoader = { try RelayEventHLSFixture.load(directory: $0) },
+        startSession: @escaping SessionStarter = RelayHostSession.start
+    ) {
+        self.loadFixture = loadFixture
         self.startSession = startSession
     }
 
@@ -79,8 +85,8 @@ final class RelayHostSessionController: ObservableObject {
         lifecycle = .starting
         let pairingCode = RelayPairingCode.random()
         do {
-            let fixture = try RelayEventHLSFixture.load(directory: directory)
-            let session = try await startSession(directory, pairingCode)
+            let fixture = try loadFixture(directory)
+            let session = try await startSession(directory, fixture, pairingCode)
             self.session = session
             fixtureDirectory = directory
             formattedPairingCode = pairingCode.formattedValue
@@ -190,13 +196,16 @@ private final class RelayHostSession: RelayHostSessionControlling {
         self.server = server
     }
 
-    static func start(directory: URL, pairingCode: RelayPairingCode) async throws -> any RelayHostSessionControlling {
-        _ = try RelayEventHLSFixture.load(directory: directory)
+    static func start(
+        directory: URL,
+        fixture: RelayEventHLSFixture,
+        pairingCode: RelayPairingCode
+    ) async throws -> any RelayHostSessionControlling {
         let host = try RelayHost.start(
             configuration: try RelayHostConfiguration(fixtureDirectory: directory),
+            fixture: fixture,
             pairingCode: pairingCode
         )
-        try await host.ingestEventHLSFixture()
         let server = try await RelayNetworkServer.start(host: host)
         return RelayHostSession(host: host, server: server)
     }

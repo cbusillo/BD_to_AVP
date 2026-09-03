@@ -97,6 +97,8 @@ actor RelayHost {
     private let fixtureRoot: URL
     private let replayStore: RelayReplayNonceStore
     private let now: @Sendable () -> Date
+    private let initializationResourceIdentifier: String
+    private let allowedMediaResourceIdentifiers: Set<String>
 
     private var pairingContext: RelayServerPairingContext?
     private var establishedSession: RelayEstablishedSession?
@@ -106,6 +108,7 @@ actor RelayHost {
     init(
         pairingContext: RelayServerPairingContext,
         configuration: RelayHostConfiguration,
+        fixture: RelayEventHLSFixture,
         replayStore: RelayReplayNonceStore? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) throws {
@@ -123,14 +126,23 @@ actor RelayHost {
         }
         self.now = now
         self.pairingContext = pairingContext
-        playlist = try RelayEventPlaylist(
-            targetDuration: configuration.playlistTargetDuration,
+        initializationResourceIdentifier = fixture.initializationResourceIdentifier
+        allowedMediaResourceIdentifiers = Set(
+            [fixture.initializationResourceIdentifier] + fixture.segments.map(\.resourceIdentifier)
+        )
+        var ingestedPlaylist = try RelayEventPlaylist(
+            targetDuration: fixture.targetDuration,
             retainedSegmentLimit: configuration.retainedSegmentLimit
         )
+        for segment in fixture.segments {
+            _ = try ingestedPlaylist.append(resourceIdentifier: segment.resourceIdentifier, duration: segment.duration)
+        }
+        playlist = ingestedPlaylist
     }
 
     static func start(
         configuration: RelayHostConfiguration,
+        fixture: RelayEventHLSFixture,
         pairingCode: RelayPairingCode = .random(),
         now: @escaping @Sendable () -> Date = { Date() },
         challengeTTL: TimeInterval = 120,
@@ -142,7 +154,7 @@ actor RelayHost {
             challengeTTL: challengeTTL,
             sessionTTL: sessionTTL
         )
-        return try RelayHost(pairingContext: pairingContext, configuration: configuration, now: now)
+        return try RelayHost(pairingContext: pairingContext, configuration: configuration, fixture: fixture, now: now)
     }
 
     func advertisedBonjourService() -> RelayBonjourAdvertisement? {
@@ -165,25 +177,6 @@ actor RelayHost {
 
     func currentPlaylistSnapshot() throws -> RelayPlaylistSnapshot {
         try snapshot()
-    }
-
-    func ingestEventHLSFixture() throws {
-        guard lifecycle == .pairing else {
-            throw RelayHostError.unavailable
-        }
-        let fixture = try RelayEventHLSFixture.load(
-            directory: fixtureRoot,
-            initializationResourceIdentifier: configuration.initializationResourceIdentifier
-        )
-        var ingestedPlaylist = try RelayEventPlaylist(
-            targetDuration: fixture.targetDuration,
-            retainedSegmentLimit: configuration.retainedSegmentLimit
-        )
-        for segment in fixture.segments {
-            _ = try resourceURL(for: segment.resourceIdentifier)
-            _ = try ingestedPlaylist.append(resourceIdentifier: segment.resourceIdentifier, duration: segment.duration)
-        }
-        playlist = ingestedPlaylist
     }
 
     func needsMoreRequestBytes(_ requestData: Data) -> Bool {
@@ -411,7 +404,9 @@ actor RelayHost {
         guard let fileSize = attributes[.size] as? NSNumber else {
             throw RelayHostError.resourceNotFound
         }
-        guard fileSize.intValue <= configuration.maximumMediaBytes else {
+        guard fileSize.int64Value >= 0,
+              fileSize.int64Value <= Int64(configuration.maximumMediaBytes)
+        else {
             throw RelayHostError.resourceTooLarge
         }
         let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
@@ -433,6 +428,9 @@ actor RelayHost {
         }
         var isDirectory: ObjCBool = false
         guard !FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory) || !isDirectory.boolValue else {
+            throw RelayHostError.resourceNotFound
+        }
+        guard allowedMediaResourceIdentifiers.contains(identifier) else {
             throw RelayHostError.resourceNotFound
         }
         return candidate
@@ -492,7 +490,7 @@ actor RelayHost {
             "#EXT-X-PLAYLIST-TYPE:EVENT",
             "#EXT-X-TARGETDURATION:\(targetDurationSeconds)",
             "#EXT-X-MEDIA-SEQUENCE:\(mediaSequence)",
-            "#EXT-X-MAP:URI=\"\(RelayWireContract.mediaPathPrefix)\(configuration.initializationResourceIdentifier)\"",
+            "#EXT-X-MAP:URI=\"\(RelayWireContract.mediaPathPrefix)\(initializationResourceIdentifier)\"",
         ]
         for segment in playlist.segments {
             lines.append(String(format: "#EXTINF:%.3f,", segment.duration))

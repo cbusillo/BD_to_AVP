@@ -133,9 +133,6 @@ final class RelayHostTests: XCTestCase {
     func testMediaRequiresCapabilityAndPreventsTraversalAndSymlinkEscape() async throws {
         let fixture = try makeFixture()
         defer { removeFixture(fixture) }
-        let mediaDirectory = fixture.root.appendingPathComponent("safe")
-        try FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
-        try Data("media fixture".utf8).write(to: mediaDirectory.appendingPathComponent("segment.m4s"))
         try Data("not exposed".utf8).write(to: fixture.root.deletingLastPathComponent().appendingPathComponent("escape.m4s"))
         try FileManager.default.createSymbolicLink(
             at: fixture.root.appendingPathComponent("safe/escaped.m4s"),
@@ -194,6 +191,31 @@ final class RelayHostTests: XCTestCase {
         XCTAssertEqual(served.statusCode, 200)
         XCTAssertEqual(served.body, Data("media fixture".utf8))
         try verifyResponse(served, for: valid, using: client)
+    }
+
+    func testMediaServingRejectsUnlistedRegularFixtureFile() async throws {
+        let fixture = try makeFixture()
+        defer { removeFixture(fixture) }
+        try Data("not in playlist".utf8).write(to: fixture.root.appendingPathComponent("unlisted.m4s"))
+        let client = try await pair(fixture)
+
+        let signedRequest = try authenticatedRequest(
+            session: client,
+            method: "GET",
+            target: "\(RelayWireContract.mediaPathPrefix)unlisted.m4s",
+            nonce: "unlisted-media-0001",
+            mediaCapability: client.mediaCapability.value
+        )
+        let response = await fixture.connection.exchange(
+            request(
+                method: "GET",
+                target: "\(RelayWireContract.mediaPathPrefix)unlisted.m4s",
+                headers: signedRequest.headers
+            )
+        )
+
+        XCTAssertEqual(response.statusCode, 404)
+        try verifyResponse(response, for: signedRequest, using: client)
     }
 
     func testParserEnforcesHeaderAndBodyLimitsBeforeRoutes() async throws {
@@ -284,10 +306,6 @@ final class RelayHostTests: XCTestCase {
         let fixture = try makeFixture(retainedSegmentLimit: 2)
         defer { removeFixture(fixture) }
         let client = try await pair(fixture)
-        for name in ["first.m4s", "second.m4s", "third.m4s"] {
-            try Data(name.utf8).write(to: fixture.root.appendingPathComponent(name))
-            _ = try await fixture.host.appendSegment(resourceIdentifier: name, duration: 2)
-        }
 
         let signedSnapshot = try authenticatedRequest(
             session: client,
@@ -300,8 +318,8 @@ final class RelayHostTests: XCTestCase {
         )
         XCTAssertEqual(snapshotResponse.statusCode, 200)
         let snapshot = try JSONDecoder().decode(RelayPlaylistSnapshot.self, from: snapshotResponse.body)
-        XCTAssertEqual(snapshot.earliestPlayableTimeMilliseconds, 2_000)
-        XCTAssertEqual(snapshot.totalDurationMilliseconds, 6_000)
+        XCTAssertEqual(snapshot.earliestPlayableTimeMilliseconds, 6_000)
+        XCTAssertEqual(snapshot.totalDurationMilliseconds, 10_000)
         XCTAssertEqual(snapshot.segments.map(\.resourceIdentifier), ["second.m4s", "third.m4s"])
 
         let signedPlaylist = try authenticatedRequest(
@@ -315,7 +333,7 @@ final class RelayHostTests: XCTestCase {
         )
         let playlist = String(decoding: playlistResponse.body, as: UTF8.self)
         XCTAssertTrue(playlist.contains("#EXT-X-PLAYLIST-TYPE:EVENT"))
-        XCTAssertTrue(playlist.contains("#EXT-X-MEDIA-SEQUENCE:1"))
+        XCTAssertTrue(playlist.contains("#EXT-X-MEDIA-SEQUENCE:3"))
         XCTAssertTrue(playlist.contains("#EXT-X-MAP:URI=\"/relay/v1/media/init.mp4\""))
         XCTAssertFalse(playlist.contains("first.m4s"))
     }
@@ -369,6 +387,32 @@ final class RelayHostTests: XCTestCase {
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let mediaDirectory = root.appendingPathComponent("safe", isDirectory: true)
+        try FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
+        try Data("init".utf8).write(to: root.appendingPathComponent("init.mp4"))
+        try Data("segment".utf8).write(to: root.appendingPathComponent("segment.m4s"))
+        try Data("media fixture".utf8).write(to: mediaDirectory.appendingPathComponent("segment.m4s"))
+        for name in ["first.m4s", "second.m4s", "third.m4s"] {
+            try Data(name.utf8).write(to: root.appendingPathComponent(name))
+        }
+        try """
+        #EXTM3U
+        #EXT-X-VERSION:7
+        #EXT-X-PLAYLIST-TYPE:EVENT
+        #EXT-X-TARGETDURATION:2
+        #EXT-X-MAP:URI="init.mp4"
+        #EXTINF:2,
+        segment.m4s
+        #EXTINF:2,
+        safe/segment.m4s
+        #EXTINF:2,
+        first.m4s
+        #EXTINF:2,
+        second.m4s
+        #EXTINF:2,
+        third.m4s
+        """.write(to: root.appendingPathComponent("media.m3u8"), atomically: true, encoding: .utf8)
+        let eventFixture = try RelayEventHLSFixture.load(directory: root)
         let pairingCode = try RelayPairingCode("2345-6789-ABCD-EFGH")
         let sessionID = try RelaySessionIdentifier(rawValue: "A9B8C7D6-E5F4-4321-ABCD-1234567890AB")
         let clock = RelayTestClock(initialDate)
@@ -386,6 +430,7 @@ final class RelayHostTests: XCTestCase {
                 fixtureDirectory: root,
                 retainedSegmentLimit: retainedSegmentLimit
             ),
+            fixture: eventFixture,
             now: { clock.now() }
         )
         return Fixture(

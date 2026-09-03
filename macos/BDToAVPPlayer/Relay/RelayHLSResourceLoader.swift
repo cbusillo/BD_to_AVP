@@ -215,12 +215,95 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
     }
 }
 
+enum RelayResourceLoadingError: Error, Equatable, Sendable {
+    case invalidDataRequest
+    case requestedRangeNotSatisfiable
+}
+
+final class RelayActiveTaskRegistration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Never>?
+    private var isCancelled = false
+
+    func install(_ task: Task<Void, Never>) {
+        let shouldCancel = lock.withLock { () -> Bool in
+            self.task = task
+            return isCancelled
+        }
+        if shouldCancel {
+            task.cancel()
+        }
+    }
+
+    func cancel() {
+        let task = lock.withLock { () -> Task<Void, Never>? in
+            isCancelled = true
+            return task
+        }
+        task?.cancel()
+    }
+}
+
+final class RelayActiveTaskRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeTasks: [ObjectIdentifier: RelayActiveTaskRegistration] = [:]
+
+    func register(_ key: ObjectIdentifier) -> RelayActiveTaskRegistration {
+        let registration = RelayActiveTaskRegistration()
+        let replacedRegistration = lock.withLock {
+            activeTasks.updateValue(registration, forKey: key)
+        }
+        replacedRegistration?.cancel()
+        return registration
+    }
+
+    func install(
+        _ task: Task<Void, Never>,
+        for key: ObjectIdentifier,
+        registration: RelayActiveTaskRegistration
+    ) {
+        let remainsActive = lock.withLock {
+            activeTasks[key] === registration
+        }
+        if remainsActive {
+            registration.install(task)
+        } else {
+            task.cancel()
+        }
+    }
+
+    func complete(_ key: ObjectIdentifier, registration: RelayActiveTaskRegistration) {
+        lock.withLock {
+            guard activeTasks[key] === registration else { return }
+            activeTasks.removeValue(forKey: key)
+        }
+    }
+
+    func cancel(_ key: ObjectIdentifier) {
+        let registration = lock.withLock {
+            activeTasks.removeValue(forKey: key)
+        }
+        registration?.cancel()
+    }
+
+    func cancelAll() {
+        let registrations = lock.withLock { () -> [RelayActiveTaskRegistration] in
+            defer { activeTasks.removeAll() }
+            return Array(activeTasks.values)
+        }
+        registrations.forEach { $0.cancel() }
+    }
+
+    var activeTaskCount: Int {
+        lock.withLock { activeTasks.count }
+    }
+}
+
 final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
     static let customScheme = "bdtoavprelay"
 
     private let resourceClient: RelayAuthenticatedResourceClient
-    private let lock = NSLock()
-    private var activeTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private let activeTasks = RelayActiveTaskRegistry()
 
     init(
         signer: any RelayRequestSigning,
@@ -244,12 +327,13 @@ final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @un
     ) -> Bool {
         guard let url = loadingRequest.request.url, url.scheme == Self.customScheme else { return false }
         let key = ObjectIdentifier(loadingRequest)
-        let task = Task { [weak self, key] in
+        let registration = activeTasks.register(key)
+        let task = Task { [weak self, key, registration] in
             guard let self else { return }
+            defer { self.activeTasks.complete(key, registration: registration) }
             await self.fulfil(loadingRequest)
-            _ = self.lock.withLock { self.activeTasks.removeValue(forKey: key) }
         }
-        lock.withLock { self.activeTasks[key] = task }
+        activeTasks.install(task, for: key, registration: registration)
         return true
     }
 
@@ -257,15 +341,11 @@ final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @un
         _ resourceLoader: AVAssetResourceLoader,
         didCancel loadingRequest: AVAssetResourceLoadingRequest
     ) {
-        lock.withLock { activeTasks.removeValue(forKey: ObjectIdentifier(loadingRequest)) }?.cancel()
+        activeTasks.cancel(ObjectIdentifier(loadingRequest))
     }
 
     func cancelAllRequests() {
-        let tasks = lock.withLock { () -> [Task<Void, Never>] in
-            defer { activeTasks.removeAll() }
-            return Array(activeTasks.values)
-        }
-        tasks.forEach { $0.cancel() }
+        activeTasks.cancelAll()
     }
 
     static func resolveURL(_ customURL: URL, serverBaseURL: URL) -> URL? {
@@ -327,6 +407,36 @@ final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @un
         }
     }
 
+    static func requestedData(
+        from data: Data,
+        requestedOffset: Int64,
+        currentOffset: Int64,
+        requestedLength: Int
+    ) throws -> Data {
+        guard let totalLength = Int64(exactly: data.count),
+              requestedOffset >= 0,
+              currentOffset >= requestedOffset,
+              currentOffset <= totalLength,
+              requestedLength >= 0,
+              let requestedLength64 = Int64(exactly: requestedLength)
+        else {
+            throw RelayResourceLoadingError.invalidDataRequest
+        }
+
+        let consumedLength = currentOffset - requestedOffset
+        guard consumedLength <= requestedLength64 else {
+            throw RelayResourceLoadingError.requestedRangeNotSatisfiable
+        }
+        let remainingLength = requestedLength64 - consumedLength
+        guard remainingLength <= totalLength - currentOffset,
+              let lowerBound = Int(exactly: currentOffset),
+              let upperBound = Int(exactly: currentOffset + remainingLength)
+        else {
+            throw RelayResourceLoadingError.requestedRangeNotSatisfiable
+        }
+        return data.subdata(in: lowerBound ..< upperBound)
+    }
+
     private func fulfil(_ loadingRequest: AVAssetResourceLoadingRequest) async {
         guard let url = loadingRequest.request.url else {
             loadingRequest.finishLoading(with: URLError(.badURL))
@@ -335,10 +445,24 @@ final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @un
         do {
             let (data, response) = try await resourceClient.load(url)
             guard !Task.isCancelled else { return }
-            loadingRequest.dataRequest?.respond(with: data)
-            loadingRequest.contentInformationRequest?.contentType = response.value(forHTTPHeaderField: "content-type")
-            loadingRequest.contentInformationRequest?.contentLength = Int64(data.count)
-            loadingRequest.contentInformationRequest?.isByteRangeAccessSupported = false
+            guard let contentLength = Int64(exactly: data.count) else {
+                throw RelayResourceLoadingError.invalidDataRequest
+            }
+            if let contentInformationRequest = loadingRequest.contentInformationRequest {
+                contentInformationRequest.contentType = response.value(forHTTPHeaderField: "content-type")
+                contentInformationRequest.contentLength = contentLength
+                contentInformationRequest.isByteRangeAccessSupported = false
+            }
+            if let dataRequest = loadingRequest.dataRequest {
+                let requestedData = try Self.requestedData(
+                    from: data,
+                    requestedOffset: dataRequest.requestedOffset,
+                    currentOffset: dataRequest.currentOffset,
+                    requestedLength: dataRequest.requestedLength
+                )
+                guard !Task.isCancelled else { return }
+                dataRequest.respond(with: requestedData)
+            }
             loadingRequest.finishLoading()
         } catch {
             guard !Task.isCancelled else { return }

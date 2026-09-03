@@ -42,6 +42,56 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
         ))
     }
 
+    func testRequestedDataHonorsCurrentOffsetAndRemainingRequestedLength() throws {
+        let data = Data("0123456789".utf8)
+
+        let result = try RelayHLSResourceLoader.requestedData(
+            from: data,
+            requestedOffset: 2,
+            currentOffset: 4,
+            requestedLength: 5
+        )
+
+        XCTAssertEqual(result, Data("456".utf8))
+    }
+
+    func testRequestedDataRejectsUnsatisfiableAndInvalidRanges() {
+        let data = Data("0123456789".utf8)
+
+        XCTAssertThrowsError(
+            try RelayHLSResourceLoader.requestedData(
+                from: data,
+                requestedOffset: 8,
+                currentOffset: 8,
+                requestedLength: 3
+            )
+        ) {
+            XCTAssertEqual($0 as? RelayResourceLoadingError, .requestedRangeNotSatisfiable)
+        }
+        XCTAssertThrowsError(
+            try RelayHLSResourceLoader.requestedData(
+                from: data,
+                requestedOffset: 4,
+                currentOffset: 3,
+                requestedLength: 1
+            )
+        ) {
+            XCTAssertEqual($0 as? RelayResourceLoadingError, .invalidDataRequest)
+        }
+    }
+
+    func testActiveTaskRegistryDoesNotLeakWhenCompletionWinsRegistrationRace() {
+        let registry = RelayActiveTaskRegistry()
+        let request = NSObject()
+        let key = ObjectIdentifier(request)
+        let registration = registry.register(key)
+
+        registry.complete(key, registration: registration)
+        registry.install(Task {}, for: key, registration: registration)
+
+        XCTAssertEqual(registry.activeTaskCount, 0)
+    }
+
     func testEachTransientRetryUsesFreshSignedHostHeaders() async throws {
         let fixedNow = now
         let sessions = try await makePairedSessions(now: fixedNow)

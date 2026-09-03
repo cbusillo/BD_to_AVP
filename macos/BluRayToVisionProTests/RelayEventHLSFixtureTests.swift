@@ -58,9 +58,9 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let host = try RelayHost.start(
-            configuration: try RelayHostConfiguration(fixtureDirectory: fixture, retainedSegmentLimit: 1)
+            configuration: try RelayHostConfiguration(fixtureDirectory: fixture, retainedSegmentLimit: 1),
+            fixture: try RelayEventHLSFixture.load(directory: fixture)
         )
-        try await host.ingestEventHLSFixture()
 
         let snapshot = try await host.currentPlaylistSnapshot()
 
@@ -74,7 +74,7 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let session = RecordingRelaySession()
-        let controller = RelayHostSessionController { _, _ in session }
+        let controller = RelayHostSessionController(startSession: { _, _, _ in session })
 
         await controller.start(directory: fixture)
         XCTAssertEqual(controller.lifecycle, .advertising)
@@ -92,7 +92,7 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let session = RecordingRelaySession()
-        let controller = RelayHostSessionController { _, _ in session }
+        let controller = RelayHostSessionController(startSession: { _, _, _ in session })
 
         await controller.start(directory: fixture)
         await controller.stop()
@@ -100,6 +100,32 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         XCTAssertEqual(controller.lifecycle, .stopped)
         XCTAssertFalse(controller.isSessionActive)
         XCTAssertEqual(session.stopCount, 1)
+    }
+
+    func testControllerLoadsFixtureOnceAndPassesTheSameFixtureToItsSession() async throws {
+        let directory = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try RelayEventHLSFixture.load(directory: directory)
+        let session = RecordingRelaySession()
+        var loadCount = 0
+        var receivedFixture: RelayEventHLSFixture?
+        let controller = RelayHostSessionController(
+            loadFixture: { _ in
+                loadCount += 1
+                return fixture
+            },
+            startSession: { receivedDirectory, received, _ in
+                XCTAssertEqual(receivedDirectory, directory)
+                receivedFixture = received
+                return session
+            }
+        )
+
+        await controller.start(directory: directory)
+
+        XCTAssertEqual(loadCount, 1)
+        XCTAssertEqual(receivedFixture, fixture)
+        XCTAssertEqual(controller.segmentCount, fixture.segments.count)
     }
 
     func testBothAppInfoPlistsDeclareRelayBonjourAndLocalNetworkUsage() throws {

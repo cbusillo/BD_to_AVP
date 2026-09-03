@@ -136,6 +136,17 @@ final class RelayNetworkServerTests: XCTestCase {
     ) throws -> RelayNetworkServerHostFixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("init".utf8).write(to: directory.appendingPathComponent("init.mp4"))
+        try Data("segment".utf8).write(to: directory.appendingPathComponent("segment.m4s"))
+        try """
+        #EXTM3U
+        #EXT-X-VERSION:7
+        #EXT-X-PLAYLIST-TYPE:EVENT
+        #EXT-X-TARGETDURATION:2
+        #EXT-X-MAP:URI="init.mp4"
+        #EXTINF:2,
+        segment.m4s
+        """.write(to: directory.appendingPathComponent("media.m3u8"), atomically: true, encoding: .utf8)
         let pairingContext = try RelayServerPairingContext(
             pairingCode: try RelayPairingCode("2345-6789-ABCD-EFGH"),
             now: now(),
@@ -144,6 +155,7 @@ final class RelayNetworkServerTests: XCTestCase {
         let host = try RelayHost(
             pairingContext: pairingContext,
             configuration: try RelayHostConfiguration(fixtureDirectory: directory),
+            fixture: try RelayEventHLSFixture.load(directory: directory),
             now: now
         )
         return RelayNetworkServerHostFixture(host: host, directory: directory)
