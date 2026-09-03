@@ -176,7 +176,7 @@ final class RelayHostTests: XCTestCase {
             request(method: "GET", target: "/relay/v1/playlist.json", headers: signedSnapshot.headers)
         )
         XCTAssertEqual(snapshotResponse.statusCode, 200)
-        let snapshot = try JSONDecoder().decode(PlaylistSnapshot.self, from: snapshotResponse.body)
+        let snapshot = try JSONDecoder().decode(RelayPlaylistSnapshot.self, from: snapshotResponse.body)
         XCTAssertEqual(snapshot.earliestPlayableTimeMilliseconds, 2_000)
         XCTAssertEqual(snapshot.totalDurationMilliseconds, 6_000)
         XCTAssertEqual(snapshot.segments.map(\.resourceIdentifier), ["second.m4s", "third.m4s"])
@@ -193,7 +193,18 @@ final class RelayHostTests: XCTestCase {
         let playlist = String(decoding: playlistResponse.body, as: UTF8.self)
         XCTAssertTrue(playlist.contains("#EXT-X-PLAYLIST-TYPE:EVENT"))
         XCTAssertTrue(playlist.contains("#EXT-X-MEDIA-SEQUENCE:1"))
+        XCTAssertTrue(playlist.contains("#EXT-X-MAP:URI=\"/relay/v1/media/init.mp4\""))
         XCTAssertFalse(playlist.contains("first.m4s"))
+    }
+
+    func testBonjourAdvertisementUsesDNSServiceDiscoveryTXTEncoding() throws {
+        let sessionID = try RelaySessionIdentifier(rawValue: "A9B8C7D6-E5F4-4321-ABCD-1234567890AB")
+        let advertisement = RelayBonjourAdvertisement(sessionID: sessionID)
+        let values = NetService.dictionary(fromTXTRecord: advertisement.txtRecord)
+
+        XCTAssertEqual(advertisement.serviceType, RelayWireContract.bonjourServiceType)
+        XCTAssertEqual(values["v"].map { String(decoding: $0, as: UTF8.self) }, "1")
+        XCTAssertEqual(values["sid"].map { String(decoding: $0, as: UTF8.self) }, sessionID.rawValue)
     }
 
     func testCleanupIsIdempotentForCancelNetworkLossAndAppQuit() async throws {
@@ -326,13 +337,6 @@ private struct ChallengeEnvelope: Decodable {
 
 private struct PairingEnvelope: Decodable {
     let acceptance: RelayPairingAcceptance
-}
-
-private struct PlaylistSnapshot: Decodable {
-    let earliestPlayableTimeMilliseconds: Int64
-    let totalDurationMilliseconds: Int64
-    let isFinalized: Bool
-    let segments: [RelayPlaylistSegment]
 }
 
 private struct AuthenticatedRequest {

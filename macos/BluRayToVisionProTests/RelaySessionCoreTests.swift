@@ -925,6 +925,57 @@ final class RelaySessionCoreTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(RelayEventPlaylist.self, from: Data(tooManySegments.utf8)))
     }
 
+    func testPlaylistSnapshotRejectsHostileOrInconsistentWindows() throws {
+        let negativeTimeline = """
+        {
+          "earliestPlayableTimeMilliseconds": -1,
+          "totalDurationMilliseconds": 0,
+          "isFinalized": false,
+          "segments": []
+        }
+        """
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            RelayPlaylistSnapshot.self,
+            from: Data(negativeTimeline.utf8)
+        ))
+
+        let discontinuousWindow = """
+        {
+          "earliestPlayableTimeMilliseconds": 0,
+          "totalDurationMilliseconds": 3000,
+          "isFinalized": false,
+          "segments": [
+            {"sequenceNumber": 7, "startTimeMilliseconds": 0, "durationMilliseconds": 1000, "resourceIdentifier": "a.m4s"},
+            {"sequenceNumber": 9, "startTimeMilliseconds": 2000, "durationMilliseconds": 1000, "resourceIdentifier": "b.m4s"}
+          ]
+        }
+        """
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            RelayPlaylistSnapshot.self,
+            from: Data(discontinuousWindow.utf8)
+        ))
+
+        let repeatedSegment = """
+        {"sequenceNumber": 0, "startTimeMilliseconds": 0, "durationMilliseconds": 1, "resourceIdentifier": "a.m4s"}
+        """
+        let repeatedSegments = Array(
+            repeating: repeatedSegment,
+            count: RelayPlaylistLimits.maximumRetainedSegmentLimit + 1
+        ).joined(separator: ",")
+        let oversizedWindow = """
+        {
+          "earliestPlayableTimeMilliseconds": 0,
+          "totalDurationMilliseconds": 1,
+          "isFinalized": false,
+          "segments": [\(repeatedSegments)]
+        }
+        """
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            RelayPlaylistSnapshot.self,
+            from: Data(oversizedWindow.utf8)
+        ))
+    }
+
     func testPlaylistDecodeAtTimelineBoundaryCannotAppendPastLimit() throws {
         let start = RelayPlaylistLimits.maximumTimelineDurationMilliseconds - 1_000
         let payload = """
