@@ -163,7 +163,7 @@ class EventHlsFixtureTests(unittest.TestCase):
                     {"codec_type": "audio", "codec_name": "aac", "duration": "4"},
                 ]
             }
-            boxes = '\n'.join(f'Type="{box}"' for box in ("hvcC", "lhvC", "eyes", "vexu"))
+            boxes = "\n".join(f'Type="{box}"' for box in ("hvcC", "lhvC", "eyes", "vexu"))
 
             def fake_run(command, **_kwargs):
                 if "ffprobe" in str(command[0]):
