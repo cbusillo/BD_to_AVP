@@ -40,11 +40,13 @@ struct AppShellView: View {
                     .navigationTitle("Library")
                 } detail: {
                     VStack(spacing: 0) {
-                        RelayConnectionView(
-                            coordinator: relayCoordinator,
-                            playRelay: startRelayPlayback
-                        )
-                        Divider()
+                        if relayCoordinator.state != .idle {
+                            RelayConnectionView(
+                                coordinator: relayCoordinator,
+                                playRelay: startRelayPlayback
+                            )
+                            Divider()
+                        }
                         LibraryView(model: model)
                     }
                 }

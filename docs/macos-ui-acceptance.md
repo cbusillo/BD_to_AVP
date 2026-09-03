@@ -38,8 +38,9 @@ On September 3, 2026, the generated 6-second fixture produced three bounded
 fMP4 segments with a 4K MV-HEVC video track and synchronized AAC audio. macOS
 AVPlayer reached ready-to-play in under one second, then completed pause,
 resume, and an exact backward seek. The visionOS simulator build exposed the
-Live Relay panel alongside the existing local library without obscuring either
-source path. Stereoscopic routing and headset interaction remain physical-device
+Live Relay source alongside the existing local library; its detail panel expands
+only after discovery begins, so existing movie actions remain unobscured.
+Stereoscopic routing and headset interaction remain physical-device
 gates.
 
 ## Screenshots
