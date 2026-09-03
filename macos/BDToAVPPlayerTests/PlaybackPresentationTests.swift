@@ -279,53 +279,28 @@ final class PlaybackPresentationTests: XCTestCase {
         )
     }
 
-    func testAudioSelectionUsesCurrentOptionBeforeDeterministicFallback() {
-        XCTAssertEqual(
-            PlaybackAudioSelectionPolicy.resolve(currentIndex: 1, optionCount: 3),
-            PlaybackAudioSelectionResolution(selectedIndex: 1, requiresExplicitSelection: false)
-        )
-        XCTAssertEqual(
-            PlaybackAudioSelectionPolicy.resolve(currentIndex: nil, optionCount: 3),
-            PlaybackAudioSelectionResolution(selectedIndex: 0, requiresExplicitSelection: true)
-        )
-        XCTAssertEqual(
-            PlaybackAudioSelectionPolicy.resolve(currentIndex: 8, optionCount: 3),
-            PlaybackAudioSelectionResolution(selectedIndex: 0, requiresExplicitSelection: true)
-        )
-        XCTAssertEqual(
-            PlaybackAudioSelectionPolicy.resolve(currentIndex: nil, optionCount: 0),
-            PlaybackAudioSelectionResolution(selectedIndex: nil, requiresExplicitSelection: false)
-        )
-    }
-
     func testAudioLabelsLeaveUniqueNamesUnchangedAndDisambiguateCollisions() {
         let labels = PlaybackAudioOptionLabelPolicy.labels(for: [
             PlaybackAudioOptionLabelMetadata(
                 baseName: "English",
-                title: "Main Mix",
                 role: nil,
-                channelLayout: "5.1",
                 index: 0
             ),
             PlaybackAudioOptionLabelMetadata(
                 baseName: "English",
-                title: "Commentary",
                 role: "Commentary",
-                channelLayout: "2.0",
                 index: 1
             ),
             PlaybackAudioOptionLabelMetadata(
                 baseName: "French",
-                title: nil,
                 role: nil,
-                channelLayout: nil,
                 index: 2
             ),
         ])
 
         XCTAssertEqual(labels, [
-            "English — Main Mix, 5.1",
-            "English — Commentary, 2.0",
+            "English — Track 1",
+            "English — Commentary — Track 2",
             "French",
         ])
     }
@@ -334,21 +309,51 @@ final class PlaybackPresentationTests: XCTestCase {
         let labels = PlaybackAudioOptionLabelPolicy.labels(for: [
             PlaybackAudioOptionLabelMetadata(
                 baseName: "English",
-                title: "Mix",
                 role: nil,
-                channelLayout: nil,
                 index: 0
             ),
             PlaybackAudioOptionLabelMetadata(
                 baseName: "English",
-                title: "Mix",
                 role: nil,
-                channelLayout: nil,
                 index: 1
             ),
         ])
 
-        XCTAssertEqual(labels, ["English — Mix — Track 1", "English — Mix — Track 2"])
+        XCTAssertEqual(labels, ["English — Track 1", "English — Track 2"])
+    }
+
+    func testPackedAudioSelectionPrefersCurrentThenPlayableDefaultThenFirstPlayable() {
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: 2,
+                defaultIndex: 1,
+                playableIndices: [0, 1, 2]
+            ),
+            2
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: nil,
+                defaultIndex: 1,
+                playableIndices: [0, 1]
+            ),
+            1
+        )
+        XCTAssertEqual(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: nil,
+                defaultIndex: 2,
+                playableIndices: [1, 3]
+            ),
+            1
+        )
+        XCTAssertNil(
+            PlaybackAudioSelectionPolicy.preferredIndex(
+                currentIndex: nil,
+                defaultIndex: nil,
+                playableIndices: []
+            )
+        )
     }
 
     func testPackedStereoStatusUsesQualificationCopyOnlyForBuiltInChecks() {

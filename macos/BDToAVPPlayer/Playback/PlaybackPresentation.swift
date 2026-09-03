@@ -207,9 +207,7 @@ struct PlaybackEyeOrderPresentation: Equatable {
 
 struct PlaybackAudioOptionLabelMetadata: Equatable {
     let baseName: String
-    let title: String?
     let role: String?
-    let channelLayout: String?
     let index: Int
 }
 
@@ -223,19 +221,18 @@ enum PlaybackAudioOptionLabelPolicy {
 
         for optionIndices in groups.values where optionIndices.count > 1 {
             for optionIndex in optionIndices {
-                let detail = detail(for: options[optionIndex], baseName: baseNames[optionIndex])
-                labels[optionIndex] = detail.map {
-                    "\(baseNames[optionIndex]) — \($0)"
-                } ?? "\(baseNames[optionIndex]) — Track \(options[optionIndex].index + 1)"
-            }
-
-            let labelsByNormalizedValue = Dictionary(grouping: optionIndices) { optionIndex in
-                normalized(labels[optionIndex])
-            }
-            for duplicateIndices in labelsByNormalizedValue.values where duplicateIndices.count > 1 {
-                for optionIndex in duplicateIndices {
-                    labels[optionIndex] = "\(labels[optionIndex]) — Track \(options[optionIndex].index + 1)"
+                let option = options[optionIndex]
+                let role = option.role?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let roleDetail = role.flatMap { value in
+                    value.isEmpty || normalized(value) == normalized(baseNames[optionIndex]) ? nil : value
                 }
+                labels[optionIndex] = [
+                    baseNames[optionIndex],
+                    roleDetail,
+                    "Track \(option.index + 1)",
+                ]
+                .compactMap { $0 }
+                .joined(separator: " — ")
             }
         }
 
@@ -247,24 +244,6 @@ enum PlaybackAudioOptionLabelPolicy {
         return trimmedValue.isEmpty ? "Audio" : trimmedValue
     }
 
-    private static func detail(
-        for option: PlaybackAudioOptionLabelMetadata,
-        baseName: String
-    ) -> String? {
-        var details: [String] = []
-        for value in [option.title, option.role, option.channelLayout].compactMap({ $0 }) {
-            let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedValue.isEmpty,
-                  normalized(trimmedValue) != normalized(baseName),
-                  !details.contains(where: { normalized($0) == normalized(trimmedValue) })
-            else {
-                continue
-            }
-            details.append(trimmedValue)
-        }
-        return details.isEmpty ? nil : details.joined(separator: ", ")
-    }
-
     private static func normalized(_ value: String) -> String {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -273,29 +252,19 @@ enum PlaybackAudioOptionLabelPolicy {
     }
 }
 
-struct PlaybackAudioSelectionResolution: Equatable {
-    let selectedIndex: Int?
-    let requiresExplicitSelection: Bool
-}
-
 enum PlaybackAudioSelectionPolicy {
-    static func resolve(currentIndex: Int?, optionCount: Int) -> PlaybackAudioSelectionResolution {
-        guard optionCount > 0 else {
-            return PlaybackAudioSelectionResolution(
-                selectedIndex: nil,
-                requiresExplicitSelection: false
-            )
+    static func preferredIndex(
+        currentIndex: Int?,
+        defaultIndex: Int?,
+        playableIndices: [Int]
+    ) -> Int? {
+        if let currentIndex {
+            return currentIndex
         }
-        if let currentIndex, (0..<optionCount).contains(currentIndex) {
-            return PlaybackAudioSelectionResolution(
-                selectedIndex: currentIndex,
-                requiresExplicitSelection: false
-            )
+        if let defaultIndex, playableIndices.contains(defaultIndex) {
+            return defaultIndex
         }
-        return PlaybackAudioSelectionResolution(
-            selectedIndex: 0,
-            requiresExplicitSelection: true
-        )
+        return playableIndices.first
     }
 }
 

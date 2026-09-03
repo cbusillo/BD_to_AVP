@@ -770,6 +770,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                 }
                 return
             }
+            assertInitialPackedStereoAudioSelection(on: item)
             refreshSelectedMediaOptionIDs()
             if let resumeTime = pendingResume.consume() {
                 seek(to: resumeTime, origin: .resumeRestoration) { [weak self] _ in
@@ -834,26 +835,10 @@ final class MVHEVCPlayerSession: ObservableObject {
         let labeledAudioOptions: [PlaybackMediaOption]
         let selectedAudioID: String
         if let audioGroup {
-            let currentAudioSelection = item.currentMediaSelection.selectedMediaOption(in: audioGroup)
-            let currentAudioIndex = currentAudioSelection.flatMap { selection in
-                audioGroup.options.firstIndex { $0 === selection }
-            }
-            let resolution = PlaybackAudioSelectionPolicy.resolve(
-                currentIndex: currentAudioIndex,
-                optionCount: audioGroup.options.count
-            )
-            if resolution.requiresExplicitSelection,
-               let selectedIndex = resolution.selectedIndex
-            {
-                item.select(audioGroup.options[selectedIndex], in: audioGroup)
-            }
-
             let labelMetadata = audioGroup.options.enumerated().map { index, option in
                 PlaybackAudioOptionLabelMetadata(
                     baseName: option.displayName,
-                    title: Self.audioOptionMetadataValue(option, matching: ["title", "name"]),
                     role: Self.audioOptionRole(for: option),
-                    channelLayout: Self.audioOptionMetadataValue(option, matching: ["channel", "layout"]),
                     index: index
                 )
             }
@@ -864,8 +849,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             selectedAudioID = Self.audioSelectionID(
                 in: item,
                 group: audioGroup,
-                options: labeledAudioOptions,
-                selections: audioSelections
+                options: labeledAudioOptions
             )
         } else {
             labeledAudioOptions = []
@@ -921,8 +905,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             selectedAudioID = Self.audioSelectionID(
                 in: playerItem,
                 group: audioGroup,
-                options: audioOptions,
-                selections: audioSelectionByID
+                options: audioOptions
             )
         }
 
@@ -982,15 +965,61 @@ final class MVHEVCPlayerSession: ObservableObject {
     private static func audioSelectionID(
         in item: AVPlayerItem?,
         group: AVMediaSelectionGroup,
-        options: [PlaybackMediaOption],
-        selections: [String: AVMediaSelectionOption]
+        options: [PlaybackMediaOption]
     ) -> String {
         guard let selectedOption = item?.currentMediaSelection.selectedMediaOption(in: group) else {
             return ""
         }
-        return options.first { option in
-            selections[option.id] === selectedOption
-        }?.id ?? ""
+        guard let selectedIndex = group.options.firstIndex(where: {
+            mediaSelectionOptionsMatch($0, selectedOption)
+        }), options.indices.contains(selectedIndex) else {
+            return ""
+        }
+        return options[selectedIndex].id
+    }
+
+    private func assertInitialPackedStereoAudioSelection(on item: AVPlayerItem) {
+        guard mediaItem?.format == .sideBySide || mediaItem?.format == .overUnder,
+              let audioGroup
+        else {
+            return
+        }
+
+        let currentSelection = item.currentMediaSelection.selectedMediaOption(in: audioGroup)
+        let playableOptions = AVMediaSelectionGroup.playableMediaSelectionOptions(from: audioGroup.options)
+        let currentIndex = currentSelection.flatMap { selectedOption in
+            audioGroup.options.firstIndex { Self.mediaSelectionOptionsMatch($0, selectedOption) }
+        }
+        let defaultIndex = audioGroup.defaultOption.flatMap { defaultOption in
+            audioGroup.options.firstIndex { Self.mediaSelectionOptionsMatch($0, defaultOption) }
+        }
+        let playableIndices = playableOptions.compactMap { playableOption in
+            audioGroup.options.firstIndex { Self.mediaSelectionOptionsMatch($0, playableOption) }
+        }
+        guard let selectionIndex = PlaybackAudioSelectionPolicy.preferredIndex(
+            currentIndex: currentIndex,
+            defaultIndex: defaultIndex,
+            playableIndices: playableIndices
+        ), audioGroup.options.indices.contains(selectionIndex) else {
+            selectedAudioID = ""
+            return
+        }
+        item.select(audioGroup.options[selectionIndex], in: audioGroup)
+    }
+
+    private static func mediaSelectionOptionsMatch(
+        _ first: AVMediaSelectionOption,
+        _ second: AVMediaSelectionOption
+    ) -> Bool {
+        if first === second {
+            return true
+        }
+        guard let firstPropertyList = first.propertyList() as? NSObject,
+              let secondPropertyList = second.propertyList() as? NSObject
+        else {
+            return false
+        }
+        return firstPropertyList.isEqual(secondPropertyList)
     }
 
     private static func audioOptionRole(for option: AVMediaSelectionOption) -> String? {
@@ -1010,28 +1039,6 @@ final class MVHEVCPlayerSession: ObservableObject {
             return "Original"
         }
         return nil
-    }
-
-    private static func audioOptionMetadataValue(
-        _ option: AVMediaSelectionOption,
-        matching terms: [String]
-    ) -> String? {
-        guard let metadata = option.commonMetadata.first(where: { metadata in
-            let searchableText = [
-                metadata.identifier?.rawValue,
-                String(describing: metadata.key)
-            ]
-            .compactMap { $0 }
-            .joined(separator: " ")
-            .lowercased()
-            return terms.contains { searchableText.contains($0) }
-        }),
-        let value = metadata.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-        !value.isEmpty
-        else {
-            return nil
-        }
-        return value
     }
 
     private func finishCurrentSession(persistResume shouldPersistResume: Bool) {
