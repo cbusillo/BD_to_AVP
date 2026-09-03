@@ -7,7 +7,7 @@ encoder="${2:-$repo_root/build/mv-hevc-encoder/mv-hevc-encoder}"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
-for command_name in ffmpeg ffprobe python3 uv; do
+for command_name in ffmpeg ffprobe uv; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		printf 'Required command is unavailable: %s\n' "$command_name" >&2
 		exit 1
@@ -69,13 +69,13 @@ EOF
 	-add "$work_dir/subtitles.srt#1:hdlr=sbtl:lang=eng:group=2:name=English Subtitles:tx3g" \
 	"$work_dir/finalized.mov"
 
-python3 "$repo_root/scripts/add_spatial_video_metadata.py" \
+uv run python "$repo_root/scripts/add_spatial_video_metadata.py" \
 	"$work_dir/finalized.mov" \
 	"$output_path" \
 	--baseline-mm 64 \
 	--disparity-adjustment 0
 
-python3 "$repo_root/scripts/verify_apple_media.py" "$output_path"
+uv run python "$repo_root/scripts/verify_apple_media.py" "$output_path"
 "$mp4box" -diso "$output_path" -std >"$work_dir/boxes.xml"
 for box_type in hvcC lhvC vexu eyes proj hfov; do
 	if ! grep -q "Type=\"${box_type}\"" "$work_dir/boxes.xml"; then
@@ -89,7 +89,7 @@ done
 ffprobe -v error \
 	-show_entries format=duration:stream=index,codec_name,codec_type,width,height:stream_tags=language \
 	-of json "$output_path" >"$work_dir/final-probe.json"
-python3 - "$work_dir/final-probe.json" <<'PY'
+uv run python - "$work_dir/final-probe.json" <<'PY'
 import json
 import sys
 
