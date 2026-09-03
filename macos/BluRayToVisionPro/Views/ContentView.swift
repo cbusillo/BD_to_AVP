@@ -8,6 +8,7 @@ struct ContentView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
+    @ObservedObject var relayHostController: RelayHostSessionController
     let capabilities: AppCapabilities
 
     @State private var selectedProfileID: String
@@ -30,6 +31,7 @@ struct ContentView: View {
     @State private var isRefreshingDiscs = false
     @State private var isShowingOffPeakSchedule = false
     @State private var isEditingOffPeakSchedule = false
+    @State private var isShowingRelayHost = false
     @State private var offPeakScheduleStartAt: Date
     @State private var offPeakScheduleEndAt: Date
     @State private var offPeakScheduleEditorError: String?
@@ -44,6 +46,7 @@ struct ContentView: View {
         settings: AppSettings,
         profileStore: ProfileStore,
         resolutionMemoryStore: ResolutionMemoryStore,
+        relayHostController: RelayHostSessionController,
         capabilities: AppCapabilities
     ) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
@@ -52,6 +55,7 @@ struct ContentView: View {
         _settings = ObservedObject(wrappedValue: settings)
         _profileStore = ObservedObject(wrappedValue: profileStore)
         _resolutionMemoryStore = ObservedObject(wrappedValue: resolutionMemoryStore)
+        _relayHostController = ObservedObject(wrappedValue: relayHostController)
         self.capabilities = capabilities
 
         let profile = profileStore.profile(withID: settings.selectedProfileID)
@@ -140,6 +144,9 @@ struct ContentView: View {
         .accessibilityIdentifier("main-window-content")
         .focusedSceneValue(\.persistentQueueCommandActions, persistentQueueCommandActions)
         .toolbar { toolbarContent }
+        .sheet(isPresented: $isShowingRelayHost) {
+            RelayHostSheet(controller: relayHostController)
+        }
         .animation(.easeInOut(duration: 0.18), value: isShowingActivity)
         .dropDestination(for: URL.self, action: acceptDrop) { targeted in
             isDropTargeted = targeted
@@ -530,6 +537,15 @@ struct ContentView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             sourceMenu
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Button {
+                isShowingRelayHost = true
+            } label: {
+                Label("Relay Fixture", systemImage: "dot.radiowaves.left.and.right")
+            }
+            .help("Share an EVENT-HLS fixture with Vision Pro")
         }
 
         ToolbarItem(placement: .automatic) {

@@ -78,6 +78,16 @@ struct RelayBonjourAdvertisement: Sendable, Equatable {
 }
 
 actor RelayHost {
+    private static let challengePath = RelayWireContract.challengePath
+    private static let pairingPath = RelayWireContract.pairingPath
+    private static let playlistPath = RelayWireContract.playlistPath
+    private static let playlistSnapshotPath = RelayWireContract.playlistSnapshotPath
+    private static let finishPath = RelayWireContract.finishPath
+    private static let cancelPath = RelayWireContract.cancelPath
+    private static let mediaPathPrefix = RelayWireContract.mediaPathPrefix
+    private static let authenticationHeader = RelayWireContract.authenticationHeader
+    private static let mediaCapabilityHeader = RelayWireContract.mediaCapabilityHeader
+
     private let configuration: RelayHostConfiguration
     private let fixtureRoot: URL
     private let replayStore: RelayReplayNonceStore
@@ -141,11 +151,27 @@ actor RelayHost {
         lifecycle
     }
 
-    func pairingCode() -> RelayPairingCode? {
+    func currentPlaylistSnapshot() throws -> RelayPlaylistSnapshot {
+        try snapshot()
+    }
+
+    func ingestEventHLSFixture() throws {
         guard lifecycle == .pairing else {
-            return nil
+            throw RelayHostError.unavailable
         }
-        return pairingContext?.pairingCode
+        let fixture = try RelayEventHLSFixture.load(
+            directory: fixtureRoot,
+            initializationResourceIdentifier: configuration.initializationResourceIdentifier
+        )
+        var ingestedPlaylist = try RelayEventPlaylist(
+            targetDuration: fixture.targetDuration,
+            retainedSegmentLimit: configuration.retainedSegmentLimit
+        )
+        for segment in fixture.segments {
+            _ = try resourceURL(for: segment.resourceIdentifier)
+            _ = try ingestedPlaylist.append(resourceIdentifier: segment.resourceIdentifier, duration: segment.duration)
+        }
+        playlist = ingestedPlaylist
     }
 
     func needsMoreRequestBytes(_ requestData: Data) -> Bool {
@@ -215,17 +241,17 @@ actor RelayHost {
     private func route(_ request: RelayHTTPRequest) async throws -> RelayHTTPResponse {
         try expireIfNeeded()
         switch request.requestTarget {
-        case RelayWireContract.challengePath:
+        case Self.challengePath:
             return try await challengeResponse(for: request)
-        case RelayWireContract.pairingPath:
+        case Self.pairingPath:
             return try await pairingResponse(for: request)
-        case RelayWireContract.playlistPath:
+        case Self.playlistPath:
             try await authenticate(request)
             return .text(renderPlaylist(), contentType: "application/vnd.apple.mpegurl")
-        case RelayWireContract.playlistSnapshotPath:
+        case Self.playlistSnapshotPath:
             try await authenticate(request)
             return .json(try snapshot())
-        case RelayWireContract.finishPath:
+        case Self.finishPath:
             try await authenticate(request)
             guard request.method == "POST", request.body.isEmpty else {
                 return .empty(statusCode: 405)
@@ -233,7 +259,7 @@ actor RelayHost {
             playlist.finalize()
             lifecycle = .finished
             return .empty(statusCode: 204)
-        case RelayWireContract.cancelPath:
+        case Self.cancelPath:
             try await authenticate(request)
             guard request.method == "POST", request.body.isEmpty else {
                 return .empty(statusCode: 405)
@@ -241,7 +267,7 @@ actor RelayHost {
             cleanUp(reason: .cancelled)
             return .empty(statusCode: 204)
         default:
-            guard request.requestTarget.hasPrefix(RelayWireContract.mediaPathPrefix) else {
+            guard request.requestTarget.hasPrefix(Self.mediaPathPrefix) else {
                 return .empty(statusCode: 404)
             }
             try await authenticate(request)
@@ -284,7 +310,7 @@ actor RelayHost {
 
     private func authenticate(_ request: RelayHTTPRequest) async throws {
         try ensurePairedSession()
-        guard let encodedAuthentication = request.header(named: RelayWireContract.authenticationHeader),
+        guard let encodedAuthentication = request.header(named: Self.authenticationHeader),
               let authenticationData = Data(base64Encoded: encodedAuthentication)
         else {
             throw RelaySessionError.invalidRequest
@@ -311,12 +337,12 @@ actor RelayHost {
 
     private func serveMedia(for request: RelayHTTPRequest) throws -> RelayHTTPResponse {
         guard let establishedSession,
-              let capability = request.header(named: RelayWireContract.mediaCapabilityHeader),
+              let capability = request.header(named: Self.mediaCapabilityHeader),
               establishedSession.mediaCapability.matches(capability)
         else {
             return .empty(statusCode: 403)
         }
-        let resourceIdentifier = String(request.requestTarget.dropFirst(RelayWireContract.mediaPathPrefix.count))
+        let resourceIdentifier = String(request.requestTarget.dropFirst(Self.mediaPathPrefix.count))
         let fileURL = try resourceURL(for: resourceIdentifier)
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         guard let fileSize = attributes[.size] as? NSNumber else {

@@ -34,6 +34,12 @@
 	<string>bd_to_avp.worker</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_bdtoavp-relay._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>3D Blu-ray to Vision Pro uses your local network to discover and securely relay a selected playback fixture to your Vision Pro.</string>
 	<key>SUAllowsAutomaticUpdates</key>
 	<false/>
 	<key>SUFeedURL</key>
