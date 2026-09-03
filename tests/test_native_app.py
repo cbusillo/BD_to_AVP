@@ -1515,6 +1515,7 @@ Load command 3
                     '{"metalfx_2x_mv_hevc_supported":true,'
                     '"metalfx_spatial_scaling_supported":true,'
                     '"pixel_transfer_2x_mv_hevc_supported":true,'
+                    '"segmented_hls_mv_hevc_encode_supported":true,'
                     '"schema_version":1,"stereo_mv_hevc_encode_supported":true}\n'
                 ),
                 stderr="",
@@ -1563,6 +1564,23 @@ Load command 3
                 '{"metalfx_2x_mv_hevc_supported":true,'
                 '"metalfx_spatial_scaling_supported":false,'
                 '"schema_version":1,"stereo_mv_hevc_encode_supported":true}\n'
+            ),
+            stderr="",
+        )
+        with (
+            patch("scripts.native_app.smoke_environment", return_value={}),
+            patch("scripts.native_app.subprocess.run", return_value=completed),
+            self.assertRaisesRegex(RuntimeError, "capability probe failed"),
+        ):
+            smoke_packaged_mv_hevc_encoder(Path("/tmp") / NATIVE_APP_NAME)
+
+    def test_mv_hevc_encoder_smoke_rejects_hls_support_without_stereo_support(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=2,
+            stdout=(
+                '{"schema_version":1,"segmented_hls_mv_hevc_encode_supported":true,'
+                '"stereo_mv_hevc_encode_supported":false}\n'
             ),
             stderr="",
         )

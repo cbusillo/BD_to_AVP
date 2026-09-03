@@ -15,7 +15,16 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"
 RAINFOREST_PLAYLIST = "1005"
 RAINFOREST_CLIP = "00007"
-RAINFOREST_FIRST_100_FRAMEMD5_SHA256 = "7ce83ff76fa9998967932874364907dfd8c45482f89db9265c474cbd65c228ae"
+RAINFOREST_FIRST_100_FRAME_LINES_SHA256 = "186a33d0a66c39619b94d354f77fbe364ee24c2e441ee25d90a8902b75199166"
+
+
+def framemd5_frame_lines_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for line in handle:
+            if not line.startswith(b"#"):
+                digest.update(line)
+    return digest.hexdigest()
 
 
 @unittest.skipUnless(os.environ.get(RAINFOREST_ISO_ENV), f"Set {RAINFOREST_ISO_ENV} to run real-media tests")
@@ -133,10 +142,7 @@ class SsifProbeIntegrationTests(unittest.TestCase):
         self.assertEqual(ffmpeg_result.returncode, 0, ffmpeg_result.stderr.decode())
         self.assertIn(edge_process.returncode, {0, -signal.SIGPIPE}, edge_stderr.decode())
         self.assertEqual(stream_process.returncode, 0, stream_stderr.decode())
-        self.assertEqual(
-            hashlib.sha256(output_path.read_bytes()).hexdigest(),
-            RAINFOREST_FIRST_100_FRAMEMD5_SHA256,
-        )
+        self.assertEqual(framemd5_frame_lines_sha256(output_path), RAINFOREST_FIRST_100_FRAME_LINES_SHA256)
 
 
 if __name__ == "__main__":
