@@ -55,24 +55,43 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
         XCTAssertEqual(result, Data("456".utf8))
     }
 
-    func testRequestedDataRejectsUnsatisfiableAndInvalidRanges() {
+    func testRequestedDataClampsAtResourceEndAndRejectsInvalidRanges() throws {
         let data = Data("0123456789".utf8)
 
-        XCTAssertThrowsError(
+        XCTAssertEqual(
             try RelayHLSResourceLoader.requestedData(
                 from: data,
                 requestedOffset: 8,
                 currentOffset: 8,
                 requestedLength: 3
-            )
-        ) {
-            XCTAssertEqual($0 as? RelayResourceLoadingError, .requestedRangeNotSatisfiable)
-        }
+            ),
+            Data("89".utf8)
+        )
+        XCTAssertEqual(
+            try RelayHLSResourceLoader.requestedData(
+                from: data,
+                requestedOffset: 3,
+                currentOffset: 5,
+                requestedLength: 1,
+                requestsAllDataToEndOfResource: true
+            ),
+            Data("56789".utf8)
+        )
         XCTAssertThrowsError(
             try RelayHLSResourceLoader.requestedData(
                 from: data,
                 requestedOffset: 4,
                 currentOffset: 3,
+                requestedLength: 1
+            )
+        ) {
+            XCTAssertEqual($0 as? RelayResourceLoadingError, .invalidDataRequest)
+        }
+        XCTAssertThrowsError(
+            try RelayHLSResourceLoader.requestedData(
+                from: data,
+                requestedOffset: 11,
+                currentOffset: 11,
                 requestedLength: 1
             )
         ) {

@@ -218,6 +218,33 @@ final class RelayHostTests: XCTestCase {
         try verifyResponse(response, for: signedRequest, using: client)
     }
 
+    func testAppendedSegmentBecomesAnAllowedMediaResource() async throws {
+        let fixture = try makeFixture()
+        defer { removeFixture(fixture) }
+        try Data("live segment".utf8).write(to: fixture.root.appendingPathComponent("live.m4s"))
+        let client = try await pair(fixture)
+        _ = try await fixture.host.appendSegment(resourceIdentifier: "live.m4s", duration: 2)
+        let signedRequest = try authenticatedRequest(
+            session: client,
+            method: "GET",
+            target: "\(RelayWireContract.mediaPathPrefix)live.m4s",
+            nonce: "appended-media-0001",
+            mediaCapability: client.mediaCapability.value
+        )
+
+        let response = await fixture.connection.exchange(
+            request(
+                method: "GET",
+                target: "\(RelayWireContract.mediaPathPrefix)live.m4s",
+                headers: signedRequest.headers
+            )
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, Data("live segment".utf8))
+        try verifyResponse(response, for: signedRequest, using: client)
+    }
+
     func testParserEnforcesHeaderAndBodyLimitsBeforeRoutes() async throws {
         let fixture = try makeFixture()
         defer { removeFixture(fixture) }

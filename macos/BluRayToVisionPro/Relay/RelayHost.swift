@@ -98,7 +98,7 @@ actor RelayHost {
     private let replayStore: RelayReplayNonceStore
     private let now: @Sendable () -> Date
     private let initializationResourceIdentifier: String
-    private let allowedMediaResourceIdentifiers: Set<String>
+    private var allowedMediaResourceIdentifiers: Set<String>
 
     private var pairingContext: RelayServerPairingContext?
     private var establishedSession: RelayEstablishedSession?
@@ -220,8 +220,10 @@ actor RelayHost {
 
     func appendSegment(resourceIdentifier: String, duration: TimeInterval) throws -> RelayPlaylistSegment {
         try ensurePairedSession()
-        _ = try resourceURL(for: resourceIdentifier)
-        return try playlist.append(resourceIdentifier: resourceIdentifier, duration: duration)
+        _ = try resourceURL(for: resourceIdentifier, requireAllowlisted: false)
+        let segment = try playlist.append(resourceIdentifier: resourceIdentifier, duration: duration)
+        allowedMediaResourceIdentifiers.insert(resourceIdentifier)
+        return segment
     }
 
     func finalizePlaylist() throws {
@@ -416,7 +418,7 @@ actor RelayHost {
         return RelayHTTPResponse(statusCode: 200, headers: ["content-type": contentType(for: fileURL)], body: data)
     }
 
-    private func resourceURL(for identifier: String) throws -> URL {
+    private func resourceURL(for identifier: String, requireAllowlisted: Bool = true) throws -> URL {
         guard isSafeResourceIdentifier(identifier) else {
             throw RelayHostError.invalidResourceIdentifier
         }
@@ -430,7 +432,7 @@ actor RelayHost {
         guard !FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory) || !isDirectory.boolValue else {
             throw RelayHostError.resourceNotFound
         }
-        guard allowedMediaResourceIdentifiers.contains(identifier) else {
+        guard !requireAllowlisted || allowedMediaResourceIdentifiers.contains(identifier) else {
             throw RelayHostError.resourceNotFound
         }
         return candidate

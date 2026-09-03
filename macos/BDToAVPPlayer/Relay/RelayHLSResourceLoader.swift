@@ -411,7 +411,8 @@ final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @un
         from data: Data,
         requestedOffset: Int64,
         currentOffset: Int64,
-        requestedLength: Int
+        requestedLength: Int,
+        requestsAllDataToEndOfResource: Bool = false
     ) throws -> Data {
         guard let totalLength = Int64(exactly: data.count),
               requestedOffset >= 0,
@@ -424,13 +425,16 @@ final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @un
         }
 
         let consumedLength = currentOffset - requestedOffset
-        guard consumedLength <= requestedLength64 else {
+        guard requestsAllDataToEndOfResource || consumedLength <= requestedLength64 else {
             throw RelayResourceLoadingError.requestedRangeNotSatisfiable
         }
-        let remainingLength = requestedLength64 - consumedLength
-        guard remainingLength <= totalLength - currentOffset,
+        let availableLength = totalLength - currentOffset
+        let responseLength = requestsAllDataToEndOfResource
+            ? availableLength
+            : min(requestedLength64 - consumedLength, availableLength)
+        guard responseLength >= 0,
               let lowerBound = Int(exactly: currentOffset),
-              let upperBound = Int(exactly: currentOffset + remainingLength)
+              let upperBound = Int(exactly: currentOffset + responseLength)
         else {
             throw RelayResourceLoadingError.requestedRangeNotSatisfiable
         }
@@ -458,7 +462,8 @@ final class RelayHLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @un
                     from: data,
                     requestedOffset: dataRequest.requestedOffset,
                     currentOffset: dataRequest.currentOffset,
-                    requestedLength: dataRequest.requestedLength
+                    requestedLength: dataRequest.requestedLength,
+                    requestsAllDataToEndOfResource: dataRequest.requestsAllDataToEndOfResource
                 )
                 guard !Task.isCancelled else { return }
                 dataRequest.respond(with: requestedData)
