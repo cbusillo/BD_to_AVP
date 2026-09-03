@@ -204,7 +204,7 @@ final class RelayHostTests: XCTestCase {
 
         XCTAssertEqual(advertisement.serviceType, RelayWireContract.bonjourServiceType)
         XCTAssertEqual(values["v"].map { String(decoding: $0, as: UTF8.self) }, "1")
-        XCTAssertEqual(values["sid"].map { String(decoding: $0, as: UTF8.self) }, sessionID.rawValue)
+        XCTAssertEqual(values["sid"].map { String(decoding: $0, as: UTF8.self) }, String(sessionID.rawValue.prefix(8)))
     }
 
     func testCleanupIsIdempotentForCancelNetworkLossAndAppQuit() async throws {

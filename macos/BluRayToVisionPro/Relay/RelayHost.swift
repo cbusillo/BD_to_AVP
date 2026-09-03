@@ -71,7 +71,7 @@ struct RelayBonjourAdvertisement: Sendable, Equatable {
     init(sessionID: RelaySessionIdentifier) {
         serviceType = RelayWireContract.bonjourServiceType
         txtRecord = NetService.data(fromTXTRecord: [
-            "sid": Data(sessionID.rawValue.utf8),
+            "sid": Data(sessionID.rawValue.prefix(8).utf8),
             "v": Data(String(RelayWireContract.protocolVersion).utf8),
         ])
     }
