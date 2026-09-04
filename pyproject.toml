@@ -66,6 +66,7 @@ default-groups = "all"
 packages = ["bd_to_avp"]
 artifacts = [
     "bd_to_avp/bin/**",
+    "bd_to_avp/lib/**",
     "bd_to_avp/resources/**",
 ]
 

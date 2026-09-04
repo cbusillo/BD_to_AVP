@@ -2,142 +2,101 @@ import tempfile
 import unittest
 
 from pathlib import Path
-from unittest.mock import patch
 
 from scripts import build_ssif_probe_macos
 
 
 class SsifProbeBuilderTests(unittest.TestCase):
-    def test_manifest_records_known_good_source_provenance(self) -> None:
+    def test_manifest_records_bundled_shared_library_contract(self) -> None:
         manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
 
-        self.assertEqual(manifest.schema_version, 2)
+        self.assertEqual(manifest.schema_version, 3)
         self.assertEqual(manifest.platform, "macOS arm64")
         self.assertEqual(manifest.minimum_macos, "14.0")
-        self.assertEqual(manifest.linkage, "dynamic-development-only")
-        self.assertEqual(manifest.libbluray.known_good_source.version, "1.4.1")
-        self.assertEqual(manifest.libudfread.known_good_source.version, "1.2.0")
-        self.assertIn("libbluray-1.4.1", manifest.libbluray.known_good_source.url)
-        self.assertIn("libudfread-1.2.0", manifest.libudfread.known_good_source.url)
-        self.assertEqual(manifest.libbluray.license, "LGPL-2.1-or-later")
-        self.assertEqual(manifest.libudfread.license, "LGPL-2.1-or-later")
-
-    def test_manifest_rejects_unknown_fields(self) -> None:
-        manifest = """
-schema_version = 2
-platform = "macOS arm64"
-minimum_macos = "14.0"
-linkage = "dynamic-development-only"
-unexpected = true
-
-[libbluray]
-pkg_config = "libbluray"
-license = "LGPL-2.1-or-later"
-
-[libbluray.known_good_source]
-version = "1.4.1"
-url = "https://example.com/libbluray.tar.xz"
-sha256 = "bluray"
-
-[libudfread]
-pkg_config = "libudfread"
-license = "LGPL-2.1-or-later"
-
-[libudfread.known_good_source]
-version = "1.2.0"
-url = "https://example.com/libudfread.tar.xz"
-sha256 = "udfread"
-"""
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            manifest_path = Path(temporary_directory) / "manifest.toml"
-            manifest_path.write_text(manifest)
-
-            with self.assertRaisesRegex(RuntimeError, "unexpected SSIF probe manifest fields"):
-                build_ssif_probe_macos.load_manifest(manifest_path)
-
-    @patch("scripts.build_ssif_probe_macos.pkg_config")
-    def test_build_command_uses_dynamic_pkg_config_linkage(self, pkg_config_mock) -> None:
-        pkg_config_mock.side_effect = ["-I/native/include", "-L/native/lib -lbluray"]
-        manifest = build_ssif_probe_macos.SsifProbeManifest(
-            schema_version=2,
-            platform="macOS arm64",
-            minimum_macos="14.0",
-            linkage="dynamic-development-only",
-            libbluray=build_ssif_probe_macos.NativeDependency(
-                pkg_config="libbluray",
-                license="LGPL-2.1-or-later",
-                known_good_source=build_ssif_probe_macos.SourceProvenance(
-                    version="1.4.1",
-                    url="https://example.com/libbluray.tar.xz",
-                    sha256="bluray",
-                ),
-            ),
-            libudfread=build_ssif_probe_macos.NativeDependency(
-                pkg_config="libudfread",
-                license="LGPL-2.1-or-later",
-                known_good_source=build_ssif_probe_macos.SourceProvenance(
-                    version="1.2.0",
-                    url="https://example.com/libudfread.tar.xz",
-                    sha256="udfread",
-                ),
-            ),
+        self.assertEqual(manifest.linkage, "private-shared")
+        self.assertEqual(manifest.rpath, "@loader_path/../lib")
+        self.assertEqual(manifest.libbluray.version, "1.4.1")
+        self.assertEqual(manifest.libbluray.source, "libbluray-1.4.1.tar.xz")
+        self.assertEqual(manifest.libudfread.version, "1.2.0")
+        self.assertEqual(manifest.libudfread.source, "libudfread-1.2.0.tar.xz")
+        self.assertEqual(manifest.libbluray.install_name, "@rpath/libbluray.3.dylib")
+        self.assertEqual(manifest.libudfread.install_name, "@rpath/libudfread.3.dylib")
+        self.assertEqual(manifest.filenames["probe"], "ssif_probe")
+        self.assertFalse(manifest.build_options.embed_udfread)
+        self.assertEqual(manifest.build_options.default_library, "shared")
+        self.assertEqual(manifest.build_options.bdj_jar, "disabled")
+        self.assertEqual(manifest.build_options.freetype, "disabled")
+        self.assertEqual(manifest.build_options.fontconfig, "disabled")
+        self.assertEqual(manifest.build_options.libxml2, "disabled")
+        self.assertEqual(
+            set(manifest.unsigned_checksums),
+            {
+                "bd_to_avp/bin/ssif_probe",
+                "bd_to_avp/lib/libbluray.3.dylib",
+                "bd_to_avp/lib/libudfread.3.dylib",
+            },
         )
 
-        command = build_ssif_probe_macos.build_command(
-            "clang",
-            Path("probe.c"),
-            Path("probe"),
+    def test_manifest_rejects_unknown_fields(self) -> None:
+        manifest_text = build_ssif_probe_macos.MANIFEST_PATH.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manifest_path = Path(temporary_directory) / "manifest.toml"
+            manifest_path.write_text(manifest_text + "\nunexpected = true\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "unexpected unsigned_checksums fields"):
+                build_ssif_probe_macos.load_manifest(manifest_path)
+
+    def test_meson_setup_forces_the_exact_libudfread_fallback(self) -> None:
+        manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
+        command = build_ssif_probe_macos.meson_setup_command(
+            "/toolchain/meson",
+            Path("libbluray"),
+            Path("build"),
+            Path("prefix"),
             manifest,
         )
 
+        self.assertEqual(command[:4], ["/toolchain/meson", "setup", "build", "libbluray"])
+        self.assertIn("--wrap-mode", command)
+        self.assertEqual(command[command.index("--wrap-mode") + 1], "forcefallback")
+        self.assertIn("-Ddefault_library=shared", command)
+        self.assertIn("-Dembed_udfread=false", command)
+        self.assertIn("-Denable_docs=false", command)
+        self.assertIn("-Denable_tools=false", command)
+        self.assertIn("-Denable_examples=false", command)
+        self.assertIn("-Dbdj_jar=disabled", command)
+        self.assertIn("-Dfreetype=disabled", command)
+        self.assertIn("-Dfontconfig=disabled", command)
+        self.assertIn("-Dlibxml2=disabled", command)
+
+    def test_artifact_paths_are_the_packaged_private_layout(self) -> None:
+        manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
+
         self.assertEqual(
-            command,
-            [
-                "clang",
-                "-std=c11",
-                "-O2",
-                "-Wall",
-                "-Wextra",
-                "-Werror",
-                "-mmacosx-version-min=14.0",
-                "-I/native/include",
-                "probe.c",
-                "-o",
-                "probe",
-                "-L/native/lib",
-                "-lbluray",
-            ],
+            build_ssif_probe_macos.artifact_paths(manifest),
+            {
+                "bd_to_avp/bin/ssif_probe": build_ssif_probe_macos.BIN_PATH,
+                "bd_to_avp/lib/libbluray.3.dylib": build_ssif_probe_macos.LIBRARY_DIRECTORY / "libbluray.3.dylib",
+                "bd_to_avp/lib/libudfread.3.dylib": build_ssif_probe_macos.LIBRARY_DIRECTORY / "libudfread.3.dylib",
+            },
         )
 
-    @patch("scripts.build_ssif_probe_macos.pkg_config", return_value="1.5.0")
-    def test_dependency_verification_accepts_host_version(self, pkg_config_mock) -> None:
-        dependency = build_ssif_probe_macos.NativeDependency(
-            pkg_config="libbluray",
-            license="LGPL-2.1-or-later",
-            known_good_source=build_ssif_probe_macos.SourceProvenance(
-                version="1.4.1",
-                url="https://example.com/libbluray.tar.xz",
-                sha256="bluray",
-            ),
+    def test_sanitized_build_environment_blocks_host_search_paths(self) -> None:
+        environment = build_ssif_probe_macos.build_environment(
+            Path("temporary"),
+            "/opt/homebrew/bin/meson",
+            "/opt/homebrew/bin/ninja",
         )
 
-        self.assertEqual(build_ssif_probe_macos.verify_dependency(dependency), "1.5.0")
-        pkg_config_mock.assert_called_once_with(["--modversion", "libbluray"])
-
-    @patch("scripts.build_ssif_probe_macos.pkg_config", return_value="")
-    def test_dependency_verification_rejects_missing_version(self, _pkg_config_mock) -> None:
-        dependency = build_ssif_probe_macos.NativeDependency(
-            pkg_config="libbluray",
-            license="LGPL-2.1-or-later",
-            known_good_source=build_ssif_probe_macos.SourceProvenance(
-                version="1.4.1",
-                url="https://example.com/libbluray.tar.xz",
-                sha256="bluray",
-            ),
-        )
-
-        with self.assertRaisesRegex(RuntimeError, "did not report an installed version"):
-            build_ssif_probe_macos.verify_dependency(dependency)
+        self.assertEqual(environment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
+        self.assertEqual(environment["CC"], "/usr/bin/clang")
+        self.assertEqual(environment["PKG_CONFIG"], "/usr/bin/false")
+        self.assertEqual(environment["PKG_CONFIG_PATH"], "")
+        self.assertEqual(environment["PKG_CONFIG_LIBDIR"], "")
+        self.assertEqual(environment["CFLAGS"], "")
+        self.assertEqual(environment["LDFLAGS"], "")
+        self.assertEqual(environment["CPATH"], "")
+        self.assertEqual(environment["LIBRARY_PATH"], "")
 
 
 if __name__ == "__main__":

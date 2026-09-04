@@ -1,6 +1,5 @@
 import json
 import platform
-import shutil
 import struct
 import subprocess
 import sys
@@ -48,20 +47,12 @@ class SsifProbeTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         if platform.system() != "Darwin" or platform.machine() != "arm64":
             raise unittest.SkipTest("The SSIF probe build requires macOS arm64")
-        if shutil.which("pkg-config") is None:
-            raise unittest.SkipTest("pkg-config is unavailable")
-        if subprocess.run(["pkg-config", "--exists", "libbluray"], check=False).returncode != 0:
-            raise unittest.SkipTest("libbluray is unavailable")
-        if subprocess.run(["pkg-config", "--exists", "libudfread"], check=False).returncode != 0:
-            raise unittest.SkipTest("libudfread is unavailable")
-        cls.temporary_directory = tempfile.TemporaryDirectory()
-        cls.helper_path = Path(cls.temporary_directory.name) / "ssif_probe"
+        cls.helper_path = REPOSITORY_ROOT / "bd_to_avp/bin/ssif_probe"
         build_result = subprocess.run(
             [
                 sys.executable,
                 "scripts/build_ssif_probe_macos.py",
-                "--output",
-                str(cls.helper_path),
+                "--verify-only",
             ],
             cwd=REPOSITORY_ROOT,
             check=False,
@@ -73,11 +64,6 @@ class SsifProbeTests(unittest.TestCase):
             raise RuntimeError(
                 f"SSIF probe build failed:\nstdout:\n{build_result.stdout}\nstderr:\n{build_result.stderr}"
             )
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if hasattr(cls, "temporary_directory"):
-            cls.temporary_directory.cleanup()
 
     def run_demux(self, packets: list[bytes], maximum_pairs: int | None = None) -> subprocess.CompletedProcess[bytes]:
         with tempfile.TemporaryDirectory() as temporary_directory:
