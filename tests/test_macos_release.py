@@ -182,6 +182,7 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
                 "ffprobe",
                 "fx-upscale",
                 "mv-hevc-encoder",
+                "ssif_probe",
                 "spatial-media-kit-tool",
             },
         )
