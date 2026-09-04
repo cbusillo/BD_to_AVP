@@ -5,6 +5,19 @@
     "libbluray": "@rpath/libbluray.3.dylib",
     "libudfread": "@rpath/libudfread.3.dylib"
   },
+  "library_compile_flags": [
+    "-arch",
+    "arm64",
+    "-O2",
+    "-g0",
+    "-mmacosx-version-min=14.0"
+  ],
+  "library_link_flags": [
+    "-arch",
+    "arm64",
+    "-mmacosx-version-min=14.0",
+    "-Wl,-headerpad_max_install_names"
+  ],
   "linkage": "private-shared",
   "meson_options": [
     "--prefix",
@@ -57,6 +70,13 @@
       "version": "1.2.0"
     }
   ],
+  "source_preparation": {
+    "libbluray_meson_rewrite": {
+      "from": "subproject_dir: 'contrib'",
+      "to": "subproject_dir: 'subprojects'"
+    },
+    "libudfread_subproject_directory": "libbluray-1.4.1/subprojects/libudfread"
+  },
   "system_link_allowlist": [
     "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
     "/System/Library/Frameworks/DiskArbitration.framework/Versions/A/DiskArbitration",

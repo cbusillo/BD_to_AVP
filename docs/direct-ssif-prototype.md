@@ -37,6 +37,11 @@ The default command rebuilds the probe and private dylibs from the checksum-
 pinned libbluray and libudfread source archives. `--verify-only` validates the
 committed arm64 artifacts, their source archives, notices, provenance, linkage,
 deployment target, and runtime behavior without installing Homebrew libraries.
+After an intentional source, toolchain, or build-contract update, run the
+default rebuild, inspect the resulting Mach-O files and provenance, then run
+`uv run python scripts/build_ssif_probe_macos.py --record-checksums` to update
+the committed unsigned digests. Finish with `--verify-only`; checksum changes
+without the corresponding reviewed manifest and provenance update are invalid.
 
 The committed binary is `bd_to_avp/bin/ssif_probe`; its private dylibs are in
 `bd_to_avp/lib`. The app copies this tree into

@@ -27,6 +27,8 @@ PROVENANCE_PATH = NOTICE_DIRECTORY / "build-provenance.json"
 RELINKING_NOTICE_PATH = NOTICE_DIRECTORY / "RELINKING.md"
 COMMAND_TIMEOUT_SECONDS = 300
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+LIBBLURAY_SUBPROJECT_DECLARATION = "subproject_dir: 'contrib'"
+BUNDLED_SUBPROJECT_DECLARATION = "subproject_dir: 'subprojects'"
 
 
 @dataclass(frozen=True)
@@ -236,7 +238,8 @@ def build_environment(
     ninja_path: str,
     manifest: SsifProbeManifest,
 ) -> dict[str, str]:
-    compiler_flags = f"-arch {manifest.architecture} -O2 -g0 -mmacosx-version-min={manifest.minimum_macos}"
+    compiler_flags = " ".join(library_compile_flags(manifest))
+    linker_flags = " ".join(library_link_flags(manifest))
     return {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": str(temporary_directory / "home"),
@@ -251,14 +254,40 @@ def build_environment(
         "CFLAGS": compiler_flags,
         "CPPFLAGS": "",
         "CXXFLAGS": compiler_flags,
-        "LDFLAGS": (
-            f"-arch {manifest.architecture} -mmacosx-version-min={manifest.minimum_macos} "
-            "-Wl,-headerpad_max_install_names"
-        ),
+        "LDFLAGS": linker_flags,
         "CPATH": "",
         "LIBRARY_PATH": "",
         "DYLD_LIBRARY_PATH": "",
         "DYLD_FALLBACK_LIBRARY_PATH": "",
+    }
+
+
+def library_compile_flags(manifest: SsifProbeManifest) -> tuple[str, ...]:
+    return (
+        "-arch",
+        manifest.architecture,
+        "-O2",
+        "-g0",
+        f"-mmacosx-version-min={manifest.minimum_macos}",
+    )
+
+
+def library_link_flags(manifest: SsifProbeManifest) -> tuple[str, ...]:
+    return (
+        "-arch",
+        manifest.architecture,
+        f"-mmacosx-version-min={manifest.minimum_macos}",
+        "-Wl,-headerpad_max_install_names",
+    )
+
+
+def source_preparation_record(manifest: SsifProbeManifest) -> dict[str, object]:
+    return {
+        "libudfread_subproject_directory": (f"{manifest.libbluray.source_directory}/subprojects/libudfread"),
+        "libbluray_meson_rewrite": {
+            "from": LIBBLURAY_SUBPROJECT_DECLARATION,
+            "to": BUNDLED_SUBPROJECT_DECLARATION,
+        },
     }
 
 
@@ -301,11 +330,15 @@ def prepare_libbluray_source(temporary_directory: Path, manifest: SsifProbeManif
     bluray_source = extract_source_archive(bluray_archive, sources_directory, manifest.libbluray)
     udfread_source = extract_source_archive(udfread_archive, sources_directory, manifest.libudfread)
     fallback_source = bluray_source / "subprojects/libudfread"
-    fallback_source.parent.mkdir(parents=True)
+    fallback_source.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(udfread_source, fallback_source)
     meson_build = bluray_source / "meson.build"
     original_meson = meson_build.read_text(encoding="utf-8")
-    rewritten_meson = original_meson.replace("subproject_dir: 'contrib'", "subproject_dir: 'subprojects'", 1)
+    rewritten_meson = original_meson.replace(
+        LIBBLURAY_SUBPROJECT_DECLARATION,
+        BUNDLED_SUBPROJECT_DECLARATION,
+        1,
+    )
     if rewritten_meson == original_meson:
         raise RuntimeError("libbluray Meson project did not declare the expected subproject directory")
     meson_build.write_text(rewritten_meson, encoding="utf-8")
@@ -438,6 +471,7 @@ def verify_artifacts(
     *,
     verify_checksums: bool,
     require_provenance: bool = True,
+    run_runtime_probe: bool = True,
     artifact_root: Path = ARTIFACT_ROOT,
 ) -> dict[str, str]:
     artifacts = artifact_paths(manifest, artifact_root)
@@ -490,7 +524,8 @@ def verify_artifacts(
         for relative_path, checksum in actual_checksums.items():
             if checksum != manifest.unsigned_checksums[relative_path]:
                 raise RuntimeError(f"unsigned checksum does not match for {relative_path}")
-    verify_runtime(probe_path)
+    if run_runtime_probe:
+        verify_runtime(probe_path)
     if require_provenance:
         verify_provenance(notice_directory(artifact_root) / "build-provenance.json", manifest)
     return actual_checksums
@@ -528,6 +563,9 @@ def verify_provenance(path: Path, manifest: SsifProbeManifest) -> None:
         or data.get("meson_version") != manifest.meson_version
         or data.get("ninja_version") != manifest.ninja_version
         or data.get("probe_compile_flags") != list(manifest.probe_compile_flags)
+        or data.get("library_compile_flags") != list(library_compile_flags(manifest))
+        or data.get("library_link_flags") != list(library_link_flags(manifest))
+        or data.get("source_preparation") != source_preparation_record(manifest)
         or data.get("unsigned_checksums") != manifest.unsigned_checksums
     ):
         raise RuntimeError("SSIF probe build provenance does not match the manifest")
@@ -544,7 +582,10 @@ def write_provenance(manifest: SsifProbeManifest, checksums: dict[str, str]) -> 
         "meson_version": manifest.meson_version,
         "ninja_version": manifest.ninja_version,
         "probe_compile_flags": list(manifest.probe_compile_flags),
+        "library_compile_flags": list(library_compile_flags(manifest)),
+        "library_link_flags": list(library_link_flags(manifest)),
         "meson_options": meson_setup_command("meson", Path("libbluray"), Path("build"), Path("prefix"), manifest)[4:],
+        "source_preparation": source_preparation_record(manifest),
         "source_archives": [
             {
                 "version": dependency.version,

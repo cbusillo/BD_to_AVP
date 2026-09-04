@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 
@@ -43,12 +44,34 @@ class SsifProbeBuilderTests(unittest.TestCase):
 
     def test_manifest_rejects_unknown_fields(self) -> None:
         manifest_text = build_ssif_probe_macos.MANIFEST_PATH.read_text(encoding="utf-8")
+        manifest_text = manifest_text.replace(
+            "\n[build_options]",
+            "\nunexpected = true\n\n[build_options]",
+            1,
+        )
         with tempfile.TemporaryDirectory() as temporary_directory:
             manifest_path = Path(temporary_directory) / "manifest.toml"
-            manifest_path.write_text(manifest_text + "\nunexpected = true\n", encoding="utf-8")
+            manifest_path.write_text(manifest_text, encoding="utf-8")
 
-            with self.assertRaisesRegex(RuntimeError, "unexpected unsigned_checksums fields"):
+            with self.assertRaisesRegex(RuntimeError, "unexpected SSIF probe manifest fields"):
                 build_ssif_probe_macos.load_manifest(manifest_path)
+
+    def test_provenance_records_library_flags_and_source_preparation(self) -> None:
+        manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
+        provenance = json.loads(build_ssif_probe_macos.PROVENANCE_PATH.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            provenance["library_compile_flags"],
+            list(build_ssif_probe_macos.library_compile_flags(manifest)),
+        )
+        self.assertEqual(
+            provenance["library_link_flags"],
+            list(build_ssif_probe_macos.library_link_flags(manifest)),
+        )
+        self.assertEqual(
+            provenance["source_preparation"],
+            build_ssif_probe_macos.source_preparation_record(manifest),
+        )
 
     def test_meson_setup_forces_the_exact_libudfread_fallback(self) -> None:
         manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)

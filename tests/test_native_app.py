@@ -625,10 +625,14 @@ Load command 3
                     patch("scripts.native_app.verify_exact_minimum_system_version"),
                     patch("scripts.native_app.verify_native_binary_paths"),
                     patch("scripts.native_app.verify_package_paths"),
-                    patch("scripts.native_app.verify_ssif_artifacts", side_effect=RuntimeError(failure)),
+                    patch(
+                        "scripts.native_app.verify_ssif_artifacts",
+                        side_effect=RuntimeError(failure),
+                    ) as verify_ssif,
                 ):
                     with self.assertRaisesRegex(RuntimeError, failure):
                         verify_layout(app_path)
+                    self.assertFalse(verify_ssif.call_args.kwargs["run_runtime_probe"])
 
     def test_ssif_probe_smoke_uses_packaged_binary_and_clean_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

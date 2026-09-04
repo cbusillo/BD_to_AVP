@@ -119,6 +119,7 @@ class MVHEVCEncoderBuilderTests(unittest.TestCase):
         source = (REPOSITORY_ROOT / "scripts/measure_segmented_mv_hevc_throughput.py").read_text(encoding="utf-8")
 
         self.assertIn('RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"', source)
+        self.assertIn('DEFAULT_SSIF_PROBE = REPOSITORY_ROOT / "bd_to_avp/bin/ssif_probe"', source)
         self.assertIn('"--y4m"', source)
         self.assertIn('"--rainforest"', source)
         self.assertIn('"--max-frames"', source)

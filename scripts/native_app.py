@@ -430,6 +430,7 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
     verify_ssif_artifacts(
         ssif_manifest,
         verify_checksums=False,
+        run_runtime_probe=False,
         artifact_root=ssif_artifact_root,
     )
 
