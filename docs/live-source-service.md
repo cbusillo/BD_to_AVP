@@ -99,8 +99,9 @@ atomically finalizes the last GOP and marks the manifest complete.
 
 - #713 joins this source manifest to decode, MV-HEVC segmented encoding, selected
   audio delivery, and the authenticated relay.
-- #718 owns hermetic libbluray/libudfread builds, LGPL relinking materials,
-  bundle-relative install names, signing, notarization, and package checks.
+- #718 implements the hermetic libbluray/libudfread builds, LGPL relinking
+  materials, bundle-relative install names, signed-probe smoke, and package
+  checks. It does not change MakeMKV conversion or this worker protocol.
 - #712 retains the physical Vision Pro and paired-LAN qualification gate.
 - Multi-clip, multi-angle, encrypted, and physical-disc sources remain explicit
   unsupported results for this service.

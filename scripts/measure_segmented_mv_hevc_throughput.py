@@ -23,7 +23,7 @@ from typing import BinaryIO
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"
 DEFAULT_ENCODER = REPOSITORY_ROOT / "build/mv-hevc-encoder/mv-hevc-encoder"
-DEFAULT_SSIF_PROBE = REPOSITORY_ROOT / "build/ssif-probe/ssif_probe"
+DEFAULT_SSIF_PROBE = REPOSITORY_ROOT / "bd_to_avp/bin/ssif_probe"
 DEFAULT_EDGE264 = REPOSITORY_ROOT / "bd_to_avp/bin/edge264_test"
 Y4M_INTEGER_TAG = re.compile(rb"(?:^|\s)([WH])(\d+)(?=\s|$)")
 Y4M_FRAME_RATE_TAG = re.compile(rb"(?:^|\s)F(\d+):(\d+)(?=\s|$)")

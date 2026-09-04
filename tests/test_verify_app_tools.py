@@ -15,7 +15,8 @@ class VerifyAppToolsTests(unittest.TestCase):
         self.assertEqual(verify_app_tools.REQUIRED_TOOLS["MP4Box"], ["-version"])
 
     def test_core_tools_match_ci_package_smoke_scope(self) -> None:
-        self.assertEqual(set(verify_app_tools.CORE_TOOLS), {"ffmpeg", "ffprobe", "MP4Box"})
+        self.assertEqual(set(verify_app_tools.CORE_TOOLS), {"ffmpeg", "ffprobe", "MP4Box", "ssif_probe"})
+        self.assertEqual(verify_app_tools.CORE_TOOLS["ssif_probe"], ["--version"])
 
     def test_required_tools_cover_gui_runtime_dependencies(self) -> None:
         self.assertEqual(
@@ -27,6 +28,7 @@ class VerifyAppToolsTests(unittest.TestCase):
                 "fx-upscale",
                 "mv-hevc-encoder",
                 "MP4Box",
+                "ssif_probe",
                 "spatial-media-kit-tool",
             },
         )

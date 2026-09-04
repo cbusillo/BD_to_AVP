@@ -519,7 +519,7 @@ class SSIFLiveSourceService:
         self.owner = owner
         self.activity = activity
         self.process_runner = ChildProcessRunner()
-        repository_probe = Path(__file__).resolve().parents[2] / "build/ssif-probe/ssif_probe"
+        repository_probe = Path(__file__).resolve().parents[1] / "bin/ssif_probe"
         self.probe_path = probe_path or resolve_tool_path("ssif_probe", extra_paths=(repository_probe,))
 
     def run(self) -> dict[str, object]:

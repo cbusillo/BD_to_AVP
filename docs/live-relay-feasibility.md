@@ -72,8 +72,7 @@ private ISO location, and run the bounded Rainforest path. It composes
 `ssif_probe stream-mvc -> edge264_test -> FFmpeg normalizer -> encoder`.
 
 ```sh
-uv run python scripts/build_ssif_probe_macos.py \
-  --output build/ssif-probe/ssif_probe
+uv run python scripts/build_ssif_probe_macos.py
 BD_TO_AVP_RAINFOREST_ISO=/absolute/path/to/Rainforest.iso \
 uv run python scripts/measure_segmented_mv_hevc_throughput.py \
   --rainforest \

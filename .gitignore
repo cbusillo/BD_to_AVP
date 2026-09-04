@@ -44,6 +44,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+!bd_to_avp/lib/
+!bd_to_avp/lib/**
 lib64/
 parts/
 sdist/

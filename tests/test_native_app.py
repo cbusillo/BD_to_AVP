@@ -9,7 +9,7 @@ import unittest
 from contextlib import chdir
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.artifact_identity import app_tree_sha256
@@ -33,6 +33,7 @@ from scripts.native_app import (
     SUPPORT_DIAGNOSTICS_ENDPOINT_ENV,
     SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY,
     WORKER_PROTOCOL_VERSION,
+    WORKER_EXECUTABLE_NAME,
     MACOS_ROOT,
     PROJECT_PATH,
     REPO_ROOT,
@@ -50,17 +51,23 @@ from scripts.native_app import (
     sign_package,
     smoke_packaged_mv_hevc_encoder,
     smoke_packaged_native_app,
+    smoke_packaged_ssif_probe,
     smoke_packaged_worker,
+    ssif_required_paths,
     validate_smoke_events,
     verify_native_binary_paths,
     verify_native_framework_links,
     verify_mach_o_minimum_system_versions,
     verify_exact_minimum_system_version,
+    verify_layout,
     verify_package_paths,
+    verify_committed_ssif_artifacts,
     verify_product_identity,
     verify_product_source_copy,
+    verify_ssif_artifact_tree,
 )
 from scripts.verify_packaged_mv_hevc_routes import app_tree_sha256 as qualification_app_tree_sha256
+from scripts.build_ssif_probe_macos import MANIFEST_PATH as SSIF_MANIFEST_PATH, load_manifest as load_ssif_manifest
 
 yaml = importlib.import_module("yaml")
 
@@ -559,6 +566,99 @@ Load command 3
         self.assertEqual(args.sign_identity, "Developer ID Application: Example")
         self.assertEqual(args.sign_keychain, "/tmp/release.keychain-db")
 
+    def test_ssif_package_tree_rejects_missing_dylib_and_notice(self) -> None:
+        manifest = load_ssif_manifest(SSIF_MANIFEST_PATH)
+        for missing_name in ("libbluray.3.dylib", "RELINKING.md"):
+            with self.subTest(missing_name=missing_name), tempfile.TemporaryDirectory() as temporary_directory:
+                artifact_root = Path(temporary_directory) / "bd_to_avp"
+                paths = ssif_required_paths(artifact_root, manifest)
+                for path in paths:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"artifact")
+                missing_path = next(path for path in paths if path.name == missing_name)
+                missing_path.unlink()
+
+                with self.assertRaisesRegex(RuntimeError, "SSIF probe package artifacts are missing"):
+                    verify_ssif_artifact_tree(artifact_root, verify_checksums=False)
+
+    def test_committed_ssif_checksum_failure_is_blocking(self) -> None:
+        with patch.object(
+            importlib.import_module("scripts.native_app"),
+            "verify_ssif_artifacts",
+            side_effect=RuntimeError("unsigned checksum does not match for bd_to_avp/bin/ssif_probe"),
+        ) as verify:
+            with self.assertRaisesRegex(RuntimeError, "unsigned checksum does not match"):
+                verify_committed_ssif_artifacts()
+
+        verify.assert_called_once()
+        self.assertTrue(verify.call_args.kwargs["verify_checksums"])
+        self.assertEqual(verify.call_args.kwargs["artifact_root"], REPO_ROOT / "bd_to_avp")
+
+    def test_layout_propagates_invalid_ssif_linkage_and_rpath(self) -> None:
+        manifest = load_ssif_manifest(SSIF_MANIFEST_PATH)
+        for failure in ("links an unapproved dependency", "does not have the required private-library rpath"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary_directory:
+                app_path = Path(temporary_directory) / NATIVE_APP_NAME
+                contents = app_path / "Contents"
+                for path in (
+                    contents / "MacOS" / NATIVE_EXECUTABLE_NAME,
+                    contents / "MacOS" / WORKER_EXECUTABLE_NAME,
+                    contents / "Frameworks" / "Python.framework" / "Python",
+                    contents / "Resources" / "app" / "bd_to_avp" / "worker" / "__main__.py",
+                    contents / "Resources" / "app" / "bd_to_avp" / "resources" / "iso639_languages.json",
+                    contents / "Resources" / "app_icon.icns",
+                    contents / "Resources" / "app" / "bd_to_avp" / "bin" / "ffprobe",
+                    contents / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME,
+                ):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"artifact")
+                (contents / "Resources" / "app_packages").mkdir(parents=True)
+                for path in ssif_required_paths(contents / "Resources" / "app" / "bd_to_avp", manifest):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"artifact")
+
+                with (
+                    patch("scripts.native_app.verify_product_identity"),
+                    patch("scripts.native_app.executable_architectures", return_value={"arm64"}),
+                    patch("scripts.native_app.verify_native_framework_links"),
+                    patch("scripts.native_app.verify_mach_o_minimum_system_versions"),
+                    patch("scripts.native_app.verify_exact_minimum_system_version"),
+                    patch("scripts.native_app.verify_native_binary_paths"),
+                    patch("scripts.native_app.verify_package_paths"),
+                    patch(
+                        "scripts.native_app.verify_ssif_artifacts",
+                        side_effect=RuntimeError(failure),
+                    ) as verify_ssif,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, failure):
+                        verify_layout(app_path)
+                    self.assertFalse(verify_ssif.call_args.kwargs["run_runtime_probe"])
+
+    def test_ssif_probe_smoke_uses_packaged_binary_and_clean_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            probe_path = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ssif_probe"
+            probe_path.parent.mkdir(parents=True)
+            probe_path.write_bytes(b"probe")
+            completed = subprocess.CompletedProcess(
+                args=[str(probe_path), "--version"],
+                returncode=0,
+                stdout="ssif_probe contract 2\n",
+                stderr="",
+            )
+
+            with patch("scripts.native_app.subprocess.run", return_value=completed) as run_mock:
+                smoke_packaged_ssif_probe(app_path)
+
+        run_mock.assert_called_once_with(
+            [str(probe_path.resolve()), "--version"],
+            cwd=app_path.resolve(),
+            capture_output=True,
+            env=ANY,
+            text=True,
+            timeout=30,
+        )
+
     def test_publish_current_command_has_no_signing_options(self) -> None:
         args = parse_args(["publish-current"])
 
@@ -569,13 +669,30 @@ Load command 3
     def test_package_builds_installs_signs_and_smokes_mv_hevc_encoder(self) -> None:
         encoder_path = Path("/tmp/native-tools/mv-hevc-encoder")
         app_path = Path("/tmp") / NATIVE_APP_NAME
+        order: list[str] = []
+
+        def record(event: str, result: Path | None = None) -> Path | None:
+            order.append(event)
+            return result
+
         with (
-            patch("scripts.native_app.build_packaged_mv_hevc_encoder", return_value=encoder_path) as build_encoder,
+            patch(
+                "scripts.native_app.verify_committed_ssif_artifacts",
+                side_effect=lambda: record("verify"),
+            ) as verify_source,
+            patch(
+                "scripts.native_app.build_packaged_mv_hevc_encoder",
+                side_effect=lambda: record("build", encoder_path),
+            ) as build_encoder,
             patch("scripts.native_app.prepare_embedded_python_runtime") as prepare_runtime,
             patch("scripts.native_app.xcodebuild") as xcodebuild_mock,
             patch("scripts.native_app.assemble_package", return_value=app_path) as assemble,
-            patch("scripts.native_app.sign_package") as sign,
+            patch("scripts.native_app.sign_package", side_effect=lambda *args: record("sign")) as sign,
             patch("scripts.native_app.smoke_packaged_native_app") as smoke_native,
+            patch(
+                "scripts.native_app.smoke_packaged_ssif_probe",
+                side_effect=lambda *args: record("probe"),
+            ) as smoke_probe,
             patch("scripts.native_app.smoke_packaged_mv_hevc_encoder") as smoke_encoder,
             patch("scripts.native_app.smoke_packaged_worker") as smoke_worker,
             patch("scripts.native_app.verify_codesign") as verify,
@@ -583,16 +700,20 @@ Load command 3
         ):
             result = package("Developer ID Application: Example", "/tmp/release.keychain-db")
 
+        verify_source.assert_called_once_with()
         build_encoder.assert_called_once_with()
         prepare_runtime.assert_called_once_with()
         xcodebuild_mock.assert_called_once_with("build", NATIVE_PACKAGE_CONFIGURATION)
         assemble.assert_called_once_with(encoder_path)
         sign.assert_called_once_with(app_path, "Developer ID Application: Example", "/tmp/release.keychain-db")
         smoke_native.assert_called_once_with(app_path)
+        smoke_probe.assert_called_once_with(app_path)
         smoke_encoder.assert_called_once_with(app_path)
         smoke_worker.assert_called_once_with(app_path)
         verify.assert_called_once_with(app_path)
         self.assertEqual(result, app_path)
+        self.assertLess(order.index("verify"), order.index("build"))
+        self.assertLess(order.index("sign"), order.index("probe"))
 
     def test_publish_current_app_creates_immutable_build_and_stable_links(self) -> None:
         source_commit = "a" * 40

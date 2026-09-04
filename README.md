@@ -36,13 +36,32 @@ from the [releases page]. Open the DMG file and drag the app to your Application
 folder. Beta 3 is a prerelease rather than GitHub Latest; use only its exact
 tagged release as described below.
 
-The GUI app does not install Homebrew or modify your shell setup. Runtime tools are bundled into the app where possible.
-MakeMKV remains an external requirement for reading Blu-ray discs; install the current macOS version from the
+The GUI app does not install Homebrew or modify your shell setup. Runtime tools
+are bundled into the app where possible. MakeMKV remains an external
+requirement for reading Blu-ray discs; install the current macOS version from the
 [MakeMKV] website before converting discs.
 
 The production interface starting with the `0.3.0` release line requires Apple
 Silicon and macOS 26 or later. Stable `0.2.143` remains the last desktop build
 for macOS 14 through 25.
+
+## Direct SSIF source support
+
+The production app bundle includes the arm64 `ssif_probe` helper and its private
+`libbluray` and `libudfread` dylibs under
+`Contents/Resources/app/bd_to_avp/{bin,lib}`. It also ships the pinned LGPL
+source archives, `RELINKING.md`, copyright notices, and build provenance under
+`Contents/Resources/app/bd_to_avp/resources/notices/ssif-probe`. The package
+pipeline verifies the committed unsigned checksums before packaging, validates
+the copied signed tree's linkage and `@loader_path/../lib` rpath, and runs
+`ssif_probe --version` after signing.
+
+The shipped sources support relinking those LGPL-2.1-or-later libraries. Keep
+the replacement libraries ABI-compatible, preserve the private install names,
+rebuild for arm64 and macOS 14 or later, and retain the included source and
+notice materials with any redistributed app. Issue #718's package boundary is
+implemented; MakeMKV conversion and the existing worker protocol remain
+unchanged.
 
 ### Beta 3 manual bootstrap
 

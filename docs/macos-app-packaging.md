@@ -23,6 +23,10 @@ startup and worker smokes.
     │   └── Python.framework
     └── Resources/
         ├── app/                bd_to_avp source and bundled tools
+        │   └── bd_to_avp/
+        │       ├── bin/ssif_probe
+        │       ├── lib/*.dylib
+        │       └── resources/notices/ssif-probe/
         └── app_packages/       lock-derived Python dependencies
 ```
 
@@ -49,6 +53,11 @@ signature, launches the packaged app through `--startup-smoke`, and runs a real
 `inspect_source` request through the embedded worker. The worker smoke also
 requires canonical schema-v1 FFprobe observability in the protocol stream, so a
 package cannot pass while silently falling back to a legacy child-process path.
+Before expensive packaging, the pipeline verifies the committed SSIF probe,
+private dylibs, source archives, notices, provenance, and unsigned checksums.
+After copying the tree into the app, layout verification repeats the structural
+and linkage checks with checksums disabled so signing does not alter the
+unsigned digest contract, and the signed `ssif_probe --version` smoke must pass.
 Layout verification also checks the shipping Swift executable's direct platform
 framework links, including AVKit for the embedded preview player, so dead-linking
 cannot defer a missing superclass failure until the player is presented.
@@ -57,6 +66,13 @@ Ad-hoc packaging is the default for local validation. Developer ID packaging
 passes `--sign-identity` and `--sign-keychain`. Ad-hoc packages omit Hardened
 Runtime because they have no Team ID for dyld library validation; Developer ID
 packages retain Hardened Runtime.
+
+The SSIF bundle contains LGPL-2.1-or-later libbluray and libudfread source
+archives, copyright notices, and `RELINKING.md` beside the packaged libraries.
+They are replaceable arm64 private dylibs with bundle-relative install names;
+redistributors must preserve those materials and the relinking boundary. Issue
+718's package/release integration is implemented without changing MakeMKV
+conversion or the worker protocol.
 
 `publish-current` requires a clean Git worktree, runs the complete ad-hoc
 `package` pipeline, and publishes the validated result under

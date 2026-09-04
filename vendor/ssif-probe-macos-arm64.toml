@@ -1,22 +1,55 @@
-schema_version = 2
+schema_version = 3
 platform = "macOS arm64"
+architecture = "arm64"
 minimum_macos = "14.0"
-linkage = "dynamic-development-only"
+linkage = "private-shared"
+rpath = "@loader_path/../lib"
+meson_version = "1.12.0"
+ninja_version = "1.13.2.git.kitware.jobserver-pipe-1"
+probe_compile_flags = ["-std=c11", "-O2", "-g0", "-Wall", "-Wextra", "-Werror", "-arch", "arm64"]
+system_link_allowlist = [
+    "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+    "/System/Library/Frameworks/DiskArbitration.framework/Versions/A/DiskArbitration",
+    "/usr/lib/libSystem.B.dylib",
+]
+
+[build_options]
+default_library = "shared"
+embed_udfread = false
+enable_docs = false
+enable_tools = false
+enable_examples = false
+bdj_jar = "disabled"
+freetype = "disabled"
+fontconfig = "disabled"
+libxml2 = "disabled"
+
+[filenames]
+probe = "ssif_probe"
+libbluray = "libbluray.3.dylib"
+libudfread = "libudfread.3.dylib"
 
 [libbluray]
-pkg_config = "libbluray"
-license = "LGPL-2.1-or-later"
-
-[libbluray.known_good_source]
 version = "1.4.1"
+source = "libbluray-1.4.1.tar.xz"
 url = "https://download.videolan.org/videolan/libbluray/1.4.1/libbluray-1.4.1.tar.xz"
 sha256 = "76b5dc40097f28dca4ebb009c98ed51321b2927453f75cc72cf74acd09b9f449"
+license = "LGPL-2.1-or-later"
+source_directory = "libbluray-1.4.1"
+library_filename = "libbluray.3.dylib"
+install_name = "@rpath/libbluray.3.dylib"
 
 [libudfread]
-pkg_config = "libudfread"
-license = "LGPL-2.1-or-later"
-
-[libudfread.known_good_source]
 version = "1.2.0"
+source = "libudfread-1.2.0.tar.xz"
 url = "https://download.videolan.org/videolan/libudfread/libudfread-1.2.0.tar.xz"
 sha256 = "bb477cbd4cfbfc7787d9d05b71ee5e70430f5cfebf1297497f7e83547958050f"
+license = "LGPL-2.1-or-later"
+source_directory = "libudfread-1.2.0"
+library_filename = "libudfread.3.dylib"
+install_name = "@rpath/libudfread.3.dylib"
+
+[unsigned_checksums]
+"bd_to_avp/bin/ssif_probe" = "fbfd5253404d995ce1a7ce2499714b09968af27ad539711caab37191030034b6"
+"bd_to_avp/lib/libbluray.3.dylib" = "b9d093eb5b568dfeb6c2c1585985c9064760fbca62b6cf463b7af9dd2baff0df"
+"bd_to_avp/lib/libudfread.3.dylib" = "641c92635012dad484fea61bd0f1dddc2cbce2bdd73549a04c15a8b2374bddc8"

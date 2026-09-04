@@ -11,6 +11,8 @@ import unittest
 
 from pathlib import Path
 
+from scripts import build_ssif_probe_macos
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"
@@ -31,19 +33,22 @@ def framemd5_frame_lines_sha256(path: Path) -> str:
 
 @unittest.skipUnless(os.environ.get(RAINFOREST_ISO_ENV), f"Set {RAINFOREST_ISO_ENV} to run real-media tests")
 class SsifProbeIntegrationTests(unittest.TestCase):
+    source_path: Path
+    helper_path: Path
+    temporary_directory: tempfile.TemporaryDirectory[str]
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.source_path = Path(os.environ[RAINFOREST_ISO_ENV])
         if not cls.source_path.is_file():
             raise unittest.SkipTest(f"Rainforest ISO is unavailable: {cls.source_path}")
+        cls.helper_path = REPOSITORY_ROOT / "bd_to_avp/bin/ssif_probe"
         cls.temporary_directory = tempfile.TemporaryDirectory()
-        cls.helper_path = Path(cls.temporary_directory.name) / "ssif_probe"
         subprocess.run(
             [
                 sys.executable,
                 "scripts/build_ssif_probe_macos.py",
-                "--output",
-                str(cls.helper_path),
+                "--verify-only",
             ],
             cwd=REPOSITORY_ROOT,
             check=True,
@@ -54,8 +59,7 @@ class SsifProbeIntegrationTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        if hasattr(cls, "temporary_directory"):
-            cls.temporary_directory.cleanup()
+        cls.temporary_directory.cleanup()
 
     def test_rainforest_inspection_contract(self) -> None:
         result = subprocess.run(
@@ -68,11 +72,8 @@ class SsifProbeIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result.stderr, "")
         inspection = json.loads(result.stdout)
-        installed_libbluray_version = subprocess.check_output(
-            ["pkg-config", "--modversion", "libbluray"],
-            text=True,
-        ).strip()
-        self.assertEqual(inspection["libbluray_version"], installed_libbluray_version)
+        manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
+        self.assertEqual(inspection["libbluray_version"], manifest.libbluray.version)
         self.assertTrue(inspection["content_3d"])
         self.assertFalse(inspection["aacs_detected"])
         self.assertFalse(inspection["aacs_handled"])

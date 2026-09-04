@@ -8,8 +8,10 @@ source behavior into the worker contract documented in
 `docs/live-source-service.md`. The original slice proves the
 unencrypted ISO path and deliberately rejects any AACS or BD+ marker;
 compatibility with BDMV folders and already-decrypted images that retain those
-markers remains unproven. The prototype does not replace the production MakeMKV
-path or ship the development-linked helper as a production binary.
+markers remains unproven. The production package now ships a separately built,
+arm64 private-library version of the helper; the development-linked Homebrew
+binary remains non-distributable. The prototype does not replace the production
+MakeMKV path.
 
 The prototype proves a narrower source contract:
 
@@ -23,29 +25,35 @@ The prototype proves a narrower source contract:
 
 ## Build
 
-The development build requires Apple Silicon macOS, `pkg-config`, libbluray,
-and libudfread:
+The hermetic build requires Apple Silicon macOS and the repository's pinned uv
+toolchain:
 
 ```bash
-brew install libbluray pkgconf
 uv run python scripts/build_ssif_probe_macos.py
+uv run python scripts/build_ssif_probe_macos.py --verify-only
 ```
 
-The dynamic development build accepts the installed Homebrew libraries when the
-probe compiles, links, and passes its synthetic and real-media behavior checks.
-The manifest records checksum-pinned known-good source archives for a future
-hermetic distributable build; those source versions are provenance, not a
-requirement imposed on the host package manager.
+The default command rebuilds the probe and private dylibs from the checksum-
+pinned libbluray and libudfread source archives. `--verify-only` validates the
+committed arm64 artifacts, their source archives, notices, provenance, linkage,
+deployment target, and runtime behavior without installing Homebrew libraries.
+After an intentional source, toolchain, or build-contract update, run the
+default rebuild, inspect the resulting Mach-O files and provenance, then run
+`uv run python scripts/build_ssif_probe_macos.py --record-checksums` to update
+the committed unsigned digests. Finish with `--verify-only`; checksum changes
+without the corresponding reviewed manifest and provenance update are invalid.
 
-The binary is written to `build/ssif-probe/ssif_probe`, which is ignored and is
-not included in wheels, embedded-runtime staging, or the production macOS app.
+The committed binary is `bd_to_avp/bin/ssif_probe`; its private dylibs are in
+`bd_to_avp/lib`. The app copies this tree into
+`Contents/Resources/app/bd_to_avp`, including the source archives and LGPL
+notices in `resources/notices/ssif-probe`.
 
 ## Commands
 
 Inspect one explicit playlist:
 
 ```bash
-build/ssif-probe/ssif_probe inspect /absolute/path/to/source.iso 1005
+bd_to_avp/bin/ssif_probe inspect /absolute/path/to/source.iso 1005
 ```
 
 The JSON result reports encryption flags, 3D metadata, duration, main-feature
@@ -60,7 +68,7 @@ the helper converts them to the playlist's 90 kHz clock before comparing
 Stream a bounded number of stereo frame pairs as combined MVC Annex B:
 
 ```bash
-build/ssif-probe/ssif_probe stream-mvc /absolute/path/to/source.iso 1005 116 \
+bd_to_avp/bin/ssif_probe stream-mvc /absolute/path/to/source.iso 1005 116 \
   | bd_to_avp/bin/edge264_test - -Osk \
   | ffmpeg -f yuv4mpegpipe -i pipe:0 -frames:v 100 -f framemd5 first-100.framemd5
 ```
@@ -81,7 +89,7 @@ boundary.
 SSIF sample and exists for deterministic synthetic tests:
 
 ```bash
-build/ssif-probe/ssif_probe demux-file sample.m2ts 100
+bd_to_avp/bin/ssif_probe demux-file sample.m2ts 100
 ```
 
 ## Rainforest Evidence
@@ -163,21 +171,18 @@ Ordinary CI uses synthetic M2TS packets and does not require copyrighted media.
 
 ## Packaging And Licensing
 
-The tested development binary dynamically links Homebrew libraries and must not
-be distributed. libbluray and libudfread are LGPL-2.1-or-later; known-good
-source versions, URLs, and source-archive checksums are recorded in
-`vendor/ssif-probe-macos-arm64.toml`.
-
-A distributable implementation must build arm64 dylibs from the pinned sources,
-target the app's supported minimum macOS, place the replaceable libraries in the
-app bundle, rewrite install names to bundle-relative paths, include LGPL notices
-and source/relinking obligations, sign every Mach-O, and pass notarization and
-Gatekeeper checks. The current Homebrew dylibs target macOS 26 and are unsuitable
-for the historical production macOS 14 packaging line.
+libbluray and libudfread are LGPL-2.1-or-later. The distributable app builds
+arm64 dylibs from the pinned sources, rewrites install names to
+`@rpath/libbluray.3.dylib` and `@rpath/libudfread.3.dylib`, uses the probe's
+`@loader_path/../lib` rpath, and includes the source archives, copyright
+notices, `RELINKING.md`, and provenance. Those materials permit relinking and
+must remain with redistributed copies. The signed package verifies the copied
+tree with checksums disabled so signing does not invalidate the committed
+unsigned digests, then runs the signed probe at runtime.
 
 ## Promotion Gates
 
-Production integration remains a separate change. Completed evidence:
+Production integration is implemented by issue #718. Completed evidence:
 
 - accepted first-15,000-frame framemd5 SHA-256
   `9ada30b0ef6e4b21c73bcb6cc92f66fee0c2b2e197c82423870536cfe6ab7103`.
@@ -193,6 +198,5 @@ Remaining product and packaging gates:
 
 - deterministic multi-clip playlist timing and seek/replay behavior;
 - PGS fan-out with language/default/forced semantics;
-- bundled-library licensing, deployment-target, signing, and notarization proof;
 - end-to-end decode, MV-HEVC segmentation, audio muxing, and relay playback; and
 - unchanged MakeMKV fallback for encrypted and unsupported sources.

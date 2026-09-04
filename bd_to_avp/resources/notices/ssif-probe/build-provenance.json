@@ -1,0 +1,90 @@
+{
+  "architecture": "arm64",
+  "builder": "scripts/build_ssif_probe_macos.py",
+  "install_names": {
+    "libbluray": "@rpath/libbluray.3.dylib",
+    "libudfread": "@rpath/libudfread.3.dylib"
+  },
+  "library_compile_flags": [
+    "-arch",
+    "arm64",
+    "-O2",
+    "-g0",
+    "-mmacosx-version-min=14.0"
+  ],
+  "library_link_flags": [
+    "-arch",
+    "arm64",
+    "-mmacosx-version-min=14.0",
+    "-Wl,-headerpad_max_install_names"
+  ],
+  "linkage": "private-shared",
+  "meson_options": [
+    "--prefix",
+    "prefix",
+    "--libdir",
+    "lib",
+    "--buildtype",
+    "release",
+    "--wrap-mode",
+    "forcefallback",
+    "-Ddefault_library=shared",
+    "-Dembed_udfread=false",
+    "-Denable_docs=false",
+    "-Denable_tools=false",
+    "-Denable_examples=false",
+    "-Dbdj_jar=disabled",
+    "-Dfreetype=disabled",
+    "-Dfontconfig=disabled",
+    "-Dlibxml2=disabled"
+  ],
+  "meson_version": "1.12.0",
+  "minimum_macos": "14.0",
+  "ninja_version": "1.13.2.git.kitware.jobserver-pipe-1",
+  "platform": "macOS arm64",
+  "probe_compile_flags": [
+    "-std=c11",
+    "-O2",
+    "-g0",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-arch",
+    "arm64"
+  ],
+  "probe_rpath": "@loader_path/../lib",
+  "schema_version": 1,
+  "source_archives": [
+    {
+      "filename": "libbluray-1.4.1.tar.xz",
+      "license": "LGPL-2.1-or-later",
+      "sha256": "76b5dc40097f28dca4ebb009c98ed51321b2927453f75cc72cf74acd09b9f449",
+      "url": "https://download.videolan.org/videolan/libbluray/1.4.1/libbluray-1.4.1.tar.xz",
+      "version": "1.4.1"
+    },
+    {
+      "filename": "libudfread-1.2.0.tar.xz",
+      "license": "LGPL-2.1-or-later",
+      "sha256": "bb477cbd4cfbfc7787d9d05b71ee5e70430f5cfebf1297497f7e83547958050f",
+      "url": "https://download.videolan.org/videolan/libudfread/libudfread-1.2.0.tar.xz",
+      "version": "1.2.0"
+    }
+  ],
+  "source_preparation": {
+    "libbluray_meson_rewrite": {
+      "from": "subproject_dir: 'contrib'",
+      "to": "subproject_dir: 'subprojects'"
+    },
+    "libudfread_subproject_directory": "libbluray-1.4.1/subprojects/libudfread"
+  },
+  "system_link_allowlist": [
+    "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+    "/System/Library/Frameworks/DiskArbitration.framework/Versions/A/DiskArbitration",
+    "/usr/lib/libSystem.B.dylib"
+  ],
+  "unsigned_checksums": {
+    "bd_to_avp/bin/ssif_probe": "fbfd5253404d995ce1a7ce2499714b09968af27ad539711caab37191030034b6",
+    "bd_to_avp/lib/libbluray.3.dylib": "b9d093eb5b568dfeb6c2c1585985c9064760fbca62b6cf463b7af9dd2baff0df",
+    "bd_to_avp/lib/libudfread.3.dylib": "641c92635012dad484fea61bd0f1dddc2cbce2bdd73549a04c15a8b2374bddc8"
+  }
+}

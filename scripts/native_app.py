@@ -25,6 +25,15 @@ from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.artifact_identity import app_tree_sha256
 from scripts.build_mv_hevc_encoder_macos import build_encoder as build_mv_hevc_encoder
+from scripts.build_ssif_probe_macos import (
+    MANIFEST_PATH as SSIF_MANIFEST_PATH,
+    SsifProbeManifest,
+    artifact_paths as ssif_artifact_paths,
+    load_manifest as load_ssif_manifest,
+    notice_directory as ssif_notice_directory,
+    source_archive_path as ssif_source_archive_path,
+    verify_artifacts as verify_ssif_artifacts,
+)
 from scripts.embedded_python import RUNTIME_ROOT as EMBEDDED_PYTHON_ROOT
 from scripts.embedded_python import prepare_runtime as prepare_embedded_python
 from scripts.production_identity import (
@@ -310,6 +319,36 @@ def install_mv_hevc_encoder(app_path: Path, source_path: Path) -> Path:
     return destination
 
 
+def ssif_required_paths(artifact_root: Path, manifest: SsifProbeManifest) -> list[Path]:
+    artifacts = ssif_artifact_paths(manifest, artifact_root)
+    notices = ssif_notice_directory(artifact_root)
+    return [
+        *artifacts.values(),
+        notices / "RELINKING.md",
+        notices / "libbluray-COPYING",
+        notices / "libudfread-COPYING",
+        notices / "build-provenance.json",
+        ssif_source_archive_path(manifest.libbluray, artifact_root),
+        ssif_source_archive_path(manifest.libudfread, artifact_root),
+    ]
+
+
+def verify_ssif_artifact_tree(artifact_root: Path, *, verify_checksums: bool) -> None:
+    manifest = load_ssif_manifest(SSIF_MANIFEST_PATH)
+    missing = [path for path in ssif_required_paths(artifact_root, manifest) if not path.is_file()]
+    if missing:
+        raise RuntimeError("SSIF probe package artifacts are missing:\n" + "\n".join(str(path) for path in missing))
+    verify_ssif_artifacts(
+        manifest,
+        verify_checksums=verify_checksums,
+        artifact_root=artifact_root,
+    )
+
+
+def verify_committed_ssif_artifacts() -> None:
+    verify_ssif_artifact_tree(REPO_ROOT / "bd_to_avp", verify_checksums=True)
+
+
 def assemble_package(mv_hevc_encoder_path: Path) -> Path:
     source_app = DERIVED_DATA / "Build" / "Products" / NATIVE_PACKAGE_CONFIGURATION / NATIVE_APP_NAME
     if not source_app.is_dir():
@@ -363,6 +402,8 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
     worker_executable = app_path / "Contents" / "MacOS" / WORKER_EXECUTABLE_NAME
     ffprobe_executable = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ffprobe"
     mv_hevc_encoder = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME
+    ssif_artifact_root = app_path / "Contents" / "Resources" / "app" / "bd_to_avp"
+    ssif_manifest = load_ssif_manifest(SSIF_MANIFEST_PATH)
     required_paths = [
         native_executable,
         worker_executable,
@@ -373,6 +414,7 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
         app_path / "Contents" / "Resources" / "app_icon.icns",
         ffprobe_executable,
         mv_hevc_encoder,
+        *ssif_required_paths(ssif_artifact_root, ssif_manifest),
     ]
     missing = [path for path in required_paths if not path.exists()]
     if missing:
@@ -385,6 +427,12 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
     verify_exact_minimum_system_version(mv_hevc_encoder, "MV-HEVC encoder")
     verify_native_binary_paths(native_executable)
     verify_package_paths(app_path)
+    verify_ssif_artifacts(
+        ssif_manifest,
+        verify_checksums=False,
+        run_runtime_probe=False,
+        artifact_root=ssif_artifact_root,
+    )
 
 
 def verify_product_identity(app_path: Path, *, environment: Mapping[str, str] | None = None) -> None:
@@ -641,6 +689,24 @@ def smoke_packaged_mv_hevc_encoder(app_path: Path) -> None:
         print("Packaged MV-HEVC encoder is valid but unavailable on this build host.")
 
 
+def smoke_packaged_ssif_probe(app_path: Path) -> None:
+    app_path = app_path.resolve()
+    probe = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ssif_probe"
+    completed = subprocess.run(
+        [str(probe), "--version"],
+        cwd=app_path,
+        capture_output=True,
+        env=smoke_environment(),
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0 or completed.stdout != "ssif_probe contract 2\n" or completed.stderr:
+        raise RuntimeError(
+            "Packaged SSIF probe smoke failed.\n"
+            f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+
+
 def validate_mv_hevc_capability_probe(
     completed: subprocess.CompletedProcess[str],
     *,
@@ -815,12 +881,14 @@ def validate_smoke_events(events: list[object], job_id: str, *, expected_worker_
 
 
 def package(identity: str, keychain: str | None = None) -> Path:
+    verify_committed_ssif_artifacts()
     mv_hevc_encoder_path = build_packaged_mv_hevc_encoder()
     prepare_embedded_python_runtime()
     xcodebuild("build", NATIVE_PACKAGE_CONFIGURATION)
     app_path = assemble_package(mv_hevc_encoder_path)
     sign_package(app_path, identity, keychain)
     smoke_packaged_native_app(app_path)
+    smoke_packaged_ssif_probe(app_path)
     smoke_packaged_mv_hevc_encoder(app_path)
     smoke_packaged_worker(app_path)
     verify_codesign(app_path)
