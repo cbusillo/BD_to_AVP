@@ -12,9 +12,13 @@ class SsifProbeBuilderTests(unittest.TestCase):
 
         self.assertEqual(manifest.schema_version, 3)
         self.assertEqual(manifest.platform, "macOS arm64")
+        self.assertEqual(manifest.architecture, "arm64")
         self.assertEqual(manifest.minimum_macos, "14.0")
         self.assertEqual(manifest.linkage, "private-shared")
         self.assertEqual(manifest.rpath, "@loader_path/../lib")
+        self.assertEqual(manifest.meson_version, "1.12.0")
+        self.assertEqual(manifest.ninja_version, "1.13.2.git.kitware.jobserver-pipe-1")
+        self.assertIn("-arch", manifest.probe_compile_flags)
         self.assertEqual(manifest.libbluray.version, "1.4.1")
         self.assertEqual(manifest.libbluray.source, "libbluray-1.4.1.tar.xz")
         self.assertEqual(manifest.libudfread.version, "1.2.0")
@@ -82,10 +86,12 @@ class SsifProbeBuilderTests(unittest.TestCase):
         )
 
     def test_sanitized_build_environment_blocks_host_search_paths(self) -> None:
+        manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
         environment = build_ssif_probe_macos.build_environment(
             Path("temporary"),
             "/opt/homebrew/bin/meson",
             "/opt/homebrew/bin/ninja",
+            manifest,
         )
 
         self.assertEqual(environment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
@@ -93,8 +99,9 @@ class SsifProbeBuilderTests(unittest.TestCase):
         self.assertEqual(environment["PKG_CONFIG"], "/usr/bin/false")
         self.assertEqual(environment["PKG_CONFIG_PATH"], "")
         self.assertEqual(environment["PKG_CONFIG_LIBDIR"], "")
-        self.assertEqual(environment["CFLAGS"], "")
-        self.assertEqual(environment["LDFLAGS"], "")
+        self.assertIn("-arch arm64", environment["CFLAGS"])
+        self.assertIn("-mmacosx-version-min=14.0", environment["CFLAGS"])
+        self.assertIn("-headerpad_max_install_names", environment["LDFLAGS"])
         self.assertEqual(environment["CPATH"], "")
         self.assertEqual(environment["LIBRARY_PATH"], "")
 

@@ -54,6 +54,8 @@ dev = [
     "types-psutil>=5.9.5.20240516",
 ]
 runtime-build = [
+    "meson==1.12.0",
+    "ninja==1.13.2",
     "setuptools==84.0.0",
     "wheel==0.48.0",
 ]

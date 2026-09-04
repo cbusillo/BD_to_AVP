@@ -1,12 +1,44 @@
 {
+  "architecture": "arm64",
   "builder": "scripts/build_ssif_probe_macos.py",
   "install_names": {
     "libbluray": "@rpath/libbluray.3.dylib",
     "libudfread": "@rpath/libudfread.3.dylib"
   },
   "linkage": "private-shared",
+  "meson_options": [
+    "--prefix",
+    "prefix",
+    "--libdir",
+    "lib",
+    "--buildtype",
+    "release",
+    "--wrap-mode",
+    "forcefallback",
+    "-Ddefault_library=shared",
+    "-Dembed_udfread=false",
+    "-Denable_docs=false",
+    "-Denable_tools=false",
+    "-Denable_examples=false",
+    "-Dbdj_jar=disabled",
+    "-Dfreetype=disabled",
+    "-Dfontconfig=disabled",
+    "-Dlibxml2=disabled"
+  ],
+  "meson_version": "1.12.0",
   "minimum_macos": "14.0",
+  "ninja_version": "1.13.2.git.kitware.jobserver-pipe-1",
   "platform": "macOS arm64",
+  "probe_compile_flags": [
+    "-std=c11",
+    "-O2",
+    "-g0",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-arch",
+    "arm64"
+  ],
   "probe_rpath": "@loader_path/../lib",
   "schema_version": 1,
   "source_archives": [
@@ -32,7 +64,7 @@
   ],
   "unsigned_checksums": {
     "bd_to_avp/bin/ssif_probe": "fbfd5253404d995ce1a7ce2499714b09968af27ad539711caab37191030034b6",
-    "bd_to_avp/lib/libbluray.3.dylib": "0bda8681864a1f691d9ad373b780786e2b168122407b61e0334d9144310b96ff",
-    "bd_to_avp/lib/libudfread.3.dylib": "944ed16d2a7427e7d853b7fa025d40caff7d082b7f6f33f4f17ad1968f858281"
+    "bd_to_avp/lib/libbluray.3.dylib": "b9d093eb5b568dfeb6c2c1585985c9064760fbca62b6cf463b7af9dd2baff0df",
+    "bd_to_avp/lib/libudfread.3.dylib": "641c92635012dad484fea61bd0f1dddc2cbce2bdd73549a04c15a8b2374bddc8"
   }
 }

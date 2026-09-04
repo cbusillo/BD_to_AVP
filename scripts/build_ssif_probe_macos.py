@@ -8,6 +8,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -58,9 +59,13 @@ class BuildOptions:
 class SsifProbeManifest:
     schema_version: int
     platform: str
+    architecture: str
     minimum_macos: str
     linkage: str
     rpath: str
+    meson_version: str
+    ninja_version: str
+    probe_compile_flags: tuple[str, ...]
     system_link_allowlist: tuple[str, ...]
     build_options: BuildOptions
     libbluray: NativeDependency
@@ -151,9 +156,13 @@ def load_manifest(path: Path) -> SsifProbeManifest:
     fields = {
         "schema_version",
         "platform",
+        "architecture",
         "minimum_macos",
         "linkage",
         "rpath",
+        "meson_version",
+        "ninja_version",
+        "probe_compile_flags",
         "system_link_allowlist",
         "build_options",
         "libbluray",
@@ -168,6 +177,13 @@ def load_manifest(path: Path) -> SsifProbeManifest:
     allowlist = data["system_link_allowlist"]
     if not isinstance(allowlist, list) or not all(isinstance(item, str) and item for item in allowlist):
         raise RuntimeError("system_link_allowlist is missing or invalid")
+    probe_compile_flags = data["probe_compile_flags"]
+    if (
+        not isinstance(probe_compile_flags, list)
+        or not probe_compile_flags
+        or not all(isinstance(item, str) and item for item in probe_compile_flags)
+    ):
+        raise RuntimeError("probe_compile_flags is missing or invalid")
     filenames = require_table(data["filenames"], "filenames", {"probe", "libbluray", "libudfread"})
     checksums = require_table(
         data["unsigned_checksums"],
@@ -180,9 +196,13 @@ def load_manifest(path: Path) -> SsifProbeManifest:
     manifest = SsifProbeManifest(
         schema_version=schema_version,
         platform=require_string(data["platform"], "platform"),
+        architecture=require_string(data["architecture"], "architecture"),
         minimum_macos=require_string(data["minimum_macos"], "minimum_macos"),
         linkage=require_string(data["linkage"], "linkage"),
         rpath=require_string(data["rpath"], "rpath"),
+        meson_version=require_string(data["meson_version"], "meson_version"),
+        ninja_version=require_string(data["ninja_version"], "ninja_version"),
+        probe_compile_flags=tuple(probe_compile_flags),
         system_link_allowlist=tuple(allowlist),
         build_options=parse_build_options(data["build_options"]),
         libbluray=parse_dependency(data["libbluray"], "libbluray"),
@@ -194,6 +214,8 @@ def load_manifest(path: Path) -> SsifProbeManifest:
         raise RuntimeError(f"unsupported SSIF probe linkage: {manifest.linkage}")
     if manifest.rpath != "@loader_path/../lib":
         raise RuntimeError("SSIF probe rpath must be @loader_path/../lib")
+    if manifest.architecture != "arm64":
+        raise RuntimeError("SSIF probe architecture must be arm64")
     if manifest.build_options.default_library != "shared" or manifest.build_options.embed_udfread:
         raise RuntimeError("SSIF probe must use shared libraries and a non-embedded libudfread fallback")
     return manifest
@@ -207,22 +229,31 @@ def command_output(command: list[str]) -> str:
     return subprocess.check_output(command, text=True, timeout=COMMAND_TIMEOUT_SECONDS)
 
 
-def build_environment(temporary_directory: Path, meson_path: str, ninja_path: str) -> dict[str, str]:
+def build_environment(
+    temporary_directory: Path,
+    meson_path: str,
+    ninja_path: str,
+    manifest: SsifProbeManifest,
+) -> dict[str, str]:
+    compiler_flags = f"-arch {manifest.architecture} -O2 -g0 -mmacosx-version-min={manifest.minimum_macos}"
     return {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": str(temporary_directory / "home"),
         "TMPDIR": str(temporary_directory / "tmp"),
         "CC": "/usr/bin/clang",
-        "MACOSX_DEPLOYMENT_TARGET": "14.0",
+        "MACOSX_DEPLOYMENT_TARGET": manifest.minimum_macos,
         "MESON": meson_path,
         "NINJA": ninja_path,
         "PKG_CONFIG_PATH": "",
         "PKG_CONFIG_LIBDIR": "",
         "PKG_CONFIG": "/usr/bin/false",
-        "CFLAGS": "",
+        "CFLAGS": compiler_flags,
         "CPPFLAGS": "",
-        "CXXFLAGS": "",
-        "LDFLAGS": "",
+        "CXXFLAGS": compiler_flags,
+        "LDFLAGS": (
+            f"-arch {manifest.architecture} -mmacosx-version-min={manifest.minimum_macos} "
+            "-Wl,-headerpad_max_install_names"
+        ),
         "CPATH": "",
         "LIBRARY_PATH": "",
         "DYLD_LIBRARY_PATH": "",
@@ -230,8 +261,12 @@ def build_environment(temporary_directory: Path, meson_path: str, ninja_path: st
     }
 
 
-def source_archive_path(dependency: NativeDependency) -> Path:
-    return NOTICE_DIRECTORY / dependency.source
+def notice_directory(artifact_root: Path = ARTIFACT_ROOT) -> Path:
+    return artifact_root / "resources/notices/ssif-probe"
+
+
+def source_archive_path(dependency: NativeDependency, artifact_root: Path = ARTIFACT_ROOT) -> Path:
+    return notice_directory(artifact_root) / dependency.source
 
 
 def download_source_archive(dependency: NativeDependency) -> Path:
@@ -343,11 +378,7 @@ def compile_probe(prefix: Path, output_path: Path, manifest: SsifProbeManifest) 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
         "/usr/bin/clang",
-        "-std=c11",
-        "-O2",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
+        *manifest.probe_compile_flags,
         f"-mmacosx-version-min={manifest.minimum_macos}",
         f"-I{prefix / 'include'}",
         str(SOURCE_PATH),
@@ -361,28 +392,35 @@ def compile_probe(prefix: Path, output_path: Path, manifest: SsifProbeManifest) 
     run(command)
 
 
-def artifact_paths(manifest: SsifProbeManifest) -> dict[str, Path]:
+def artifact_paths(manifest: SsifProbeManifest, artifact_root: Path = ARTIFACT_ROOT) -> dict[str, Path]:
     return {
-        "bd_to_avp/bin/ssif_probe": BIN_PATH,
-        "bd_to_avp/lib/libbluray.3.dylib": LIBRARY_DIRECTORY / manifest.filenames["libbluray"],
-        "bd_to_avp/lib/libudfread.3.dylib": LIBRARY_DIRECTORY / manifest.filenames["libudfread"],
+        "bd_to_avp/bin/ssif_probe": artifact_root / "bin" / manifest.filenames["probe"],
+        "bd_to_avp/lib/libbluray.3.dylib": artifact_root / "lib" / manifest.filenames["libbluray"],
+        "bd_to_avp/lib/libudfread.3.dylib": artifact_root / "lib" / manifest.filenames["libudfread"],
     }
+
+
+def display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPOSITORY_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def verify_no_foreign_paths(path: Path) -> None:
     output = command_output(["/usr/bin/strings", "-a", str(path)])
     prohibited = ("/opt/homebrew", "/opt/local", "/Users/")
     if any(fragment in output for fragment in prohibited):
-        raise RuntimeError(f"{path.relative_to(REPOSITORY_ROOT)} contains a Homebrew, MacPorts, or user path")
+        raise RuntimeError(f"{display_path(path)} contains a Homebrew, MacPorts, or user path")
 
 
 def verify_macho_artifact(path: Path, expected_architecture: str, minimum_macos: str) -> None:
     architecture = command_output(["/usr/bin/lipo", "-archs", str(path)]).strip().split()
     if architecture != [expected_architecture]:
-        raise RuntimeError(f"{path.relative_to(REPOSITORY_ROOT)} is not an arm64-only Mach-O artifact")
+        raise RuntimeError(f"{display_path(path)} is not an arm64-only Mach-O artifact")
     build_version = command_output(["/usr/bin/vtool", "-show-build", str(path)])
     if f"minos {minimum_macos}" not in build_version:
-        raise RuntimeError(f"{path.relative_to(REPOSITORY_ROOT)} minimum macOS version is not {minimum_macos}")
+        raise RuntimeError(f"{display_path(path)} minimum macOS version is not {minimum_macos}")
     verify_no_foreign_paths(path)
 
 
@@ -391,14 +429,16 @@ def verify_artifacts(
     *,
     verify_checksums: bool,
     require_provenance: bool = True,
+    artifact_root: Path = ARTIFACT_ROOT,
 ) -> dict[str, str]:
-    artifacts = artifact_paths(manifest)
+    artifacts = artifact_paths(manifest, artifact_root)
+    probe_path = artifacts["bd_to_avp/bin/ssif_probe"]
     for relative_path, path in artifacts.items():
         if not path.is_file():
             raise RuntimeError(f"required SSIF probe artifact is missing: {relative_path}")
         verify_macho_artifact(path, "arm64", manifest.minimum_macos)
     expected_dependencies = {
-        BIN_PATH: {manifest.libbluray.install_name},
+        probe_path: {manifest.libbluray.install_name},
         artifacts["bd_to_avp/lib/libbluray.3.dylib"]: {manifest.libudfread.install_name},
         artifacts["bd_to_avp/lib/libudfread.3.dylib"]: set(),
     }
@@ -409,30 +449,78 @@ def verify_artifacts(
     for path, required in expected_dependencies.items():
         dependencies = set(macho_dependencies(path))
         if not required <= dependencies:
-            raise RuntimeError(f"{path.relative_to(REPOSITORY_ROOT)} is missing required private dylib dependencies")
+            raise RuntimeError(f"{display_path(path)} is missing required private dylib dependencies")
         if dependencies - allowed_dependencies:
-            raise RuntimeError(f"{path.relative_to(REPOSITORY_ROOT)} links an unapproved dependency")
-    if macho_rpaths(BIN_PATH) != [manifest.rpath]:
+            raise RuntimeError(f"{display_path(path)} links an unapproved dependency")
+    if command_output(["/usr/bin/otool", "-D", str(artifacts["bd_to_avp/lib/libbluray.3.dylib"])]).splitlines()[1:] != [
+        manifest.libbluray.install_name
+    ]:
+        raise RuntimeError("libbluray does not have the required private install name")
+    if command_output(["/usr/bin/otool", "-D", str(artifacts["bd_to_avp/lib/libudfread.3.dylib"])]).splitlines()[1:] != [
+        manifest.libudfread.install_name
+    ]:
+        raise RuntimeError("libudfread does not have the required private install name")
+    if macho_rpaths(probe_path) != [manifest.rpath]:
         raise RuntimeError("ssif_probe does not have the required private-library rpath")
     for dependency in (manifest.libbluray, manifest.libudfread):
-        archive_path = source_archive_path(dependency)
+        archive_path = source_archive_path(dependency, artifact_root)
         if not archive_path.is_file() or sha256(archive_path) != dependency.sha256:
             raise RuntimeError(f"source archive verification failed for {dependency.source}")
     required_notices = [
-        RELINKING_NOTICE_PATH,
-        NOTICE_DIRECTORY / "libbluray-COPYING",
-        NOTICE_DIRECTORY / "libudfread-COPYING",
+        notice_directory(artifact_root) / "RELINKING.md",
+        notice_directory(artifact_root) / "libbluray-COPYING",
+        notice_directory(artifact_root) / "libudfread-COPYING",
     ]
     if require_provenance:
-        required_notices.append(PROVENANCE_PATH)
-    if any(not path.is_file() for path in required_notices):
+        required_notices.append(notice_directory(artifact_root) / "build-provenance.json")
+    if any(not path.is_file() or path.stat().st_size == 0 for path in required_notices):
         raise RuntimeError("SSIF probe notices or provenance are missing")
     actual_checksums = {relative_path: sha256(path) for relative_path, path in artifacts.items()}
     if verify_checksums:
         for relative_path, checksum in actual_checksums.items():
             if checksum != manifest.unsigned_checksums[relative_path]:
                 raise RuntimeError(f"unsigned checksum does not match for {relative_path}")
+    verify_runtime(probe_path)
+    if require_provenance:
+        verify_provenance(notice_directory(artifact_root) / "build-provenance.json", manifest)
     return actual_checksums
+
+
+def verify_runtime(probe_path: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="ssif-probe-runtime-") as temporary_directory:
+        environment = {
+            "HOME": temporary_directory,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "TMPDIR": temporary_directory,
+        }
+        completed = subprocess.run(
+            [str(probe_path), "--version"],
+            cwd=temporary_directory,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    if completed.returncode != 0 or completed.stdout != "ssif_probe contract 2\n" or completed.stderr:
+        raise RuntimeError("ssif_probe could not resolve its private libraries at runtime")
+
+
+def verify_provenance(path: Path, manifest: SsifProbeManifest) -> None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("SSIF probe build provenance is invalid") from error
+    if (
+        data.get("schema_version") != 1
+        or data.get("architecture") != manifest.architecture
+        or data.get("minimum_macos") != manifest.minimum_macos
+        or data.get("meson_version") != manifest.meson_version
+        or data.get("ninja_version") != manifest.ninja_version
+        or data.get("probe_compile_flags") != list(manifest.probe_compile_flags)
+        or data.get("unsigned_checksums") != manifest.unsigned_checksums
+    ):
+        raise RuntimeError("SSIF probe build provenance does not match the manifest")
 
 
 def write_provenance(manifest: SsifProbeManifest, checksums: dict[str, str]) -> None:
@@ -440,8 +528,13 @@ def write_provenance(manifest: SsifProbeManifest, checksums: dict[str, str]) -> 
         "schema_version": 1,
         "builder": "scripts/build_ssif_probe_macos.py",
         "platform": manifest.platform,
+        "architecture": manifest.architecture,
         "minimum_macos": manifest.minimum_macos,
         "linkage": manifest.linkage,
+        "meson_version": manifest.meson_version,
+        "ninja_version": manifest.ninja_version,
+        "probe_compile_flags": list(manifest.probe_compile_flags),
+        "meson_options": meson_setup_command("meson", Path("libbluray"), Path("build"), Path("prefix"), manifest)[4:],
         "source_archives": [
             {
                 "version": dependency.version,
@@ -461,20 +554,25 @@ def write_provenance(manifest: SsifProbeManifest, checksums: dict[str, str]) -> 
 
 
 def build_ssif_probe(manifest: SsifProbeManifest) -> None:
-    meson_path = shutil.which("meson")
-    ninja_path = shutil.which("ninja")
-    if meson_path is None or ninja_path is None:
-        raise RuntimeError("Meson and Ninja are required to build the bundled SSIF probe")
+    tool_directory = Path(sys.executable).parent
+    meson_path = tool_directory / "meson"
+    ninja_path = tool_directory / "ninja"
+    if not meson_path.is_file() or not ninja_path.is_file():
+        raise RuntimeError("Pinned Meson and Ninja tools are missing; run uv sync before building")
+    if command_output([str(meson_path), "--version"]).strip() != manifest.meson_version:
+        raise RuntimeError("Meson version does not match the SSIF probe manifest")
+    if command_output([str(ninja_path), "--version"]).strip() != manifest.ninja_version:
+        raise RuntimeError("Ninja version does not match the SSIF probe manifest")
     with tempfile.TemporaryDirectory(prefix="ssif-probe-build-") as temporary_directory_name:
         temporary_directory = Path(temporary_directory_name)
-        environment = build_environment(temporary_directory, meson_path, ninja_path)
+        environment = build_environment(temporary_directory, str(meson_path), str(ninja_path), manifest)
         for directory in (Path(environment["HOME"]), Path(environment["TMPDIR"])):
             directory.mkdir()
         bluray_source, bluray_copying, udfread_copying = prepare_libbluray_source(temporary_directory, manifest)
         build_directory = temporary_directory / "build"
         prefix = temporary_directory / "prefix"
-        run(meson_setup_command(meson_path, bluray_source, build_directory, prefix, manifest), env=environment)
-        run([ninja_path, "-C", str(build_directory), "install"], env=environment)
+        run(meson_setup_command(str(meson_path), bluray_source, build_directory, prefix, manifest), env=environment)
+        run([str(ninja_path), "-C", str(build_directory), "install"], env=environment)
         bluray_path, udfread_path = rewrite_install_names(prefix, manifest)
         staged_probe = temporary_directory / manifest.filenames["probe"]
         compile_probe(prefix, staged_probe, manifest)
@@ -491,7 +589,7 @@ def build_ssif_probe(manifest: SsifProbeManifest) -> None:
 
 
 def record_checksums(manifest: SsifProbeManifest) -> dict[str, str]:
-    checksums = verify_artifacts(manifest, verify_checksums=False)
+    checksums = verify_artifacts(manifest, verify_checksums=False, require_provenance=False)
     manifest_text = MANIFEST_PATH.read_text(encoding="utf-8")
     for relative_path, checksum in checksums.items():
         expression = re.compile(rf'^("{re.escape(relative_path)}"\s*=\s*")[0-9a-f]{{64}}("\s*)$', re.MULTILINE)
