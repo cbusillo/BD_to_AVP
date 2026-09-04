@@ -8,7 +8,7 @@ final class RelayHostTests: XCTestCase {
     private let initialDate = Date(timeIntervalSince1970: 1_700_000_000)
 
     func testChallengeAndPairingUseExplicitEphemeralContext() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
 
         let challengeResponse = await fixture.connection.exchange(
@@ -16,10 +16,9 @@ final class RelayHostTests: XCTestCase {
         )
         XCTAssertEqual(challengeResponse.statusCode, 200)
         let challenge = try JSONDecoder().decode(ChallengeEnvelope.self, from: challengeResponse.body).challenge
-        XCTAssertEqual(challenge, fixture.challenge)
 
         let client = try await pair(fixture)
-        XCTAssertEqual(client.sessionID, fixture.challenge.sessionID)
+        XCTAssertEqual(client.sessionID, challenge.sessionID)
         let lifecycle = await fixture.host.currentLifecycle()
         let advertisement = await fixture.host.advertisedBonjourService()
         XCTAssertEqual(lifecycle, .paired)
@@ -27,7 +26,7 @@ final class RelayHostTests: XCTestCase {
     }
 
     func testAuthenticatedRoutesBindRawMethodAndTargetAndRejectReplay() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
         let client = try await pair(fixture)
 
@@ -60,7 +59,7 @@ final class RelayHostTests: XCTestCase {
     }
 
     func testPairedHTTPResponsesAuthenticatePlaylistSnapshotBinaryMediaAndControls() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
         let mediaBody = Data([0x00, 0xFF, 0x10, 0x80, 0x42])
         try mediaBody.write(to: fixture.root.appendingPathComponent("segment.m4s"))
@@ -131,7 +130,7 @@ final class RelayHostTests: XCTestCase {
     }
 
     func testMediaRequiresCapabilityAndPreventsTraversalAndSymlinkEscape() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
         try Data("not exposed".utf8).write(to: fixture.root.deletingLastPathComponent().appendingPathComponent("escape.m4s"))
         try FileManager.default.createSymbolicLink(
@@ -194,7 +193,7 @@ final class RelayHostTests: XCTestCase {
     }
 
     func testMediaServingRejectsUnlistedRegularFixtureFile() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
         try Data("not in playlist".utf8).write(to: fixture.root.appendingPathComponent("unlisted.m4s"))
         let client = try await pair(fixture)
@@ -219,7 +218,7 @@ final class RelayHostTests: XCTestCase {
     }
 
     func testAppendedSegmentBecomesAnAllowedMediaResource() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
         try Data("live segment".utf8).write(to: fixture.root.appendingPathComponent("live.m4s"))
         let client = try await pair(fixture)
@@ -246,7 +245,7 @@ final class RelayHostTests: XCTestCase {
     }
 
     func testParserEnforcesHeaderAndBodyLimitsBeforeRoutes() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
 
         let oversizedHeader = request(
@@ -263,7 +262,7 @@ final class RelayHostTests: XCTestCase {
     }
 
     func testSessionExpiryFinalizesAndRemovesAccess() async throws {
-        let fixture = try makeFixture(sessionTTL: 1)
+        let fixture = try await makeFixture(sessionTTL: 1)
         defer { removeFixture(fixture) }
         let client = try await pair(fixture)
         let signed = try authenticatedRequest(
@@ -282,55 +281,116 @@ final class RelayHostTests: XCTestCase {
         XCTAssertEqual(lifecycle, .expired)
     }
 
+    func testLifecyclePollingExpiresPendingCandidateAndRotatesChallenge() async throws {
+        let fixture = try await makeFixture(challengeTTL: 30, candidateTTL: 1)
+        defer { removeFixture(fixture) }
+        let pending = try await beginPairing(fixture)
+        fixture.clock.set(initialDate.addingTimeInterval(2))
+
+        let lifecycle = await fixture.host.currentLifecycle()
+        let currentCandidate = await fixture.host.currentPairingCandidate()
+        let challengeResponse = await fixture.connection.exchange(
+            request(method: "GET", target: RelayWireContract.challengePath)
+        )
+        let challenge = try JSONDecoder().decode(ChallengeEnvelope.self, from: challengeResponse.body).challenge
+
+        XCTAssertEqual(lifecycle, .pairing)
+        XCTAssertNil(currentCandidate)
+        XCTAssertNotEqual(challenge.serverNonceCommitment, pending.challenge.serverNonceCommitment)
+    }
+
     func testLifecyclePollingExpiresQuietPairingSession() async throws {
-        let fixture = try makeFixture(challengeTTL: 1)
+        let fixture = try await makeFixture(pairingSessionTTL: 1)
         defer { removeFixture(fixture) }
         fixture.clock.set(initialDate.addingTimeInterval(2))
 
         let lifecycle = await fixture.host.currentLifecycle()
+        let advertisement = await fixture.host.advertisedBonjourService()
 
         XCTAssertEqual(lifecycle, .expired)
-        let pairingCode = await fixture.host.pairingCode()
-        XCTAssertNil(pairingCode)
+        XCTAssertNil(advertisement)
     }
 
-    func testFinalWrongPairingAttemptExpiresHostImmediately() async throws {
-        let fixture = try makeFixture(maximumFailedAttempts: 2)
+    func testFinalRejectedPairingCandidateExpiresHostImmediately() async throws {
+        let fixture = try await makeFixture(maximumCandidates: 2)
         defer { removeFixture(fixture) }
-        let wrongCode = try RelayPairingCode("RSTU-VWXY-2345-6789")
-        let firstAttempt = try RelayClientPairingAttempt(
-            challenge: fixture.challenge,
-            pairingCode: wrongCode,
-            now: fixture.clock.now()
-        )
-        let firstResponse = await fixture.connection.exchange(
-            request(
-                method: "POST",
-                target: RelayWireContract.pairingPath,
-                body: try JSONEncoder().encode(firstAttempt.request)
-            )
-        )
-        let finalAttempt = try RelayClientPairingAttempt(
-            challenge: fixture.challenge,
-            pairingCode: wrongCode,
-            now: fixture.clock.now()
-        )
-        let finalResponse = await fixture.connection.exchange(
-            request(
-                method: "POST",
-                target: RelayWireContract.pairingPath,
-                body: try JSONEncoder().encode(finalAttempt.request)
-            )
+        let first = try await beginPairing(fixture)
+        try await fixture.host.rejectPairingCandidate(first.candidate.candidateID)
+        let second = try await beginPairing(fixture)
+        try await fixture.host.rejectPairingCandidate(second.candidate.candidateID)
+        let exhaustedResponse = await fixture.connection.exchange(
+            request(method: "POST", target: RelayWireContract.pairingPath, body: try JSONEncoder().encode(second.attempt.request))
         )
 
-        XCTAssertEqual(firstResponse.statusCode, 401)
-        XCTAssertEqual(finalResponse.statusCode, 409)
+        XCTAssertEqual(exhaustedResponse.statusCode, 409)
         let lifecycle = await fixture.host.currentLifecycle()
         XCTAssertEqual(lifecycle, .expired)
     }
 
+    func testConfirmationRouteRejectsNonlocalTamperedAndReplayRequests() async throws {
+        let fixture = try await makeFixture()
+        defer { removeFixture(fixture) }
+        let pending = try await beginPairing(fixture)
+        let confirmation = try pending.provisional.confirmation(decision: .codesMatch)
+        let body = try JSONEncoder().encode(confirmation)
+        let signed = try authenticatedRequest(
+            session: pending.provisional.authenticationSession,
+            method: "POST",
+            target: RelayWireContract.pairingConfirmPath,
+            nonce: "confirm-route-0001",
+            body: body
+        )
+        let encodedRequest = request(
+            method: "POST",
+            target: RelayWireContract.pairingConfirmPath,
+            headers: signed.headers,
+            body: body
+        )
+
+        let nonlocal = await fixture.host.handle(encodedRequest, peer: .nonLocal)
+        XCTAssertEqual(nonlocal.statusCode, 403)
+        let tampered = await fixture.connection.exchange(request(
+            method: "POST",
+            target: RelayWireContract.pairingConfirmPath,
+            headers: signed.headers,
+            body: Data("tampered".utf8)
+        ))
+        XCTAssertEqual(tampered.statusCode, 401)
+        let accepted = await fixture.connection.exchange(encodedRequest)
+        XCTAssertEqual(accepted.statusCode, 202)
+        try verifyResponse(accepted, for: signed, using: pending.provisional.authenticationSession)
+        let replay = await fixture.connection.exchange(encodedRequest)
+        XCTAssertEqual(replay.statusCode, 409)
+    }
+
+    func testProtectedRoutesRemainUnavailableUntilBothDevicesConfirm() async throws {
+        let fixture = try await makeFixture()
+        defer { removeFixture(fixture) }
+        let pending = try await beginPairing(fixture)
+        let playlistRequest = try authenticatedRequest(
+            session: pending.provisional.authenticationSession,
+            method: "GET",
+            target: RelayWireContract.playlistPath,
+            nonce: "provisional-media-01",
+            mediaCapability: pending.provisional.authenticationSession.mediaCapability.value
+        )
+        let beforeConfirmation = await fixture.connection.exchange(request(
+            method: "GET",
+            target: RelayWireContract.playlistPath,
+            headers: playlistRequest.headers
+        ))
+        XCTAssertEqual(beforeConfirmation.statusCode, 503)
+
+        let firstConfirmation = try await confirm(pending, fixture: fixture, nonce: "confirm-media-0001")
+        XCTAssertEqual(firstConfirmation.response.statusCode, 202)
+        try await fixture.host.approvePairingCandidate(pending.candidate.candidateID)
+        let established = try await confirm(pending, fixture: fixture, nonce: "confirm-media-0002")
+        XCTAssertEqual(established.response.statusCode, 200)
+        XCTAssertNotNil(established.session)
+    }
+
     func testRetainedEventPlaylistSnapshotKeepsOnlyWindow() async throws {
-        let fixture = try makeFixture(retainedSegmentLimit: 2)
+        let fixture = try await makeFixture(retainedSegmentLimit: 2)
         defer { removeFixture(fixture) }
         let client = try await pair(fixture)
 
@@ -371,12 +431,12 @@ final class RelayHostTests: XCTestCase {
         let values = NetService.dictionary(fromTXTRecord: advertisement.txtRecord)
 
         XCTAssertEqual(advertisement.serviceType, RelayWireContract.bonjourServiceType)
-        XCTAssertEqual(values["v"].map { String(decoding: $0, as: UTF8.self) }, "2")
+        XCTAssertEqual(values["v"].map { String(decoding: $0, as: UTF8.self) }, "3")
         XCTAssertEqual(values["sid"].map { String(decoding: $0, as: UTF8.self) }, String(sessionID.rawValue.prefix(8)))
     }
 
     func testCleanupIsIdempotentForCancelNetworkLossAndAppQuit() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
         _ = try await pair(fixture)
 
@@ -385,7 +445,7 @@ final class RelayHostTests: XCTestCase {
         let cancelledLifecycle = await fixture.host.currentLifecycle()
         XCTAssertEqual(cancelledLifecycle, .cancelled)
 
-        let secondFixture = try makeFixture()
+        let secondFixture = try await makeFixture()
         defer { removeFixture(secondFixture) }
         await secondFixture.host.networkLost()
         await secondFixture.host.stopForAppQuit()
@@ -395,7 +455,7 @@ final class RelayHostTests: XCTestCase {
     }
 
     func testRejectsLoopbackAndNonlocalInMemoryConnections() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
         let raw = request(method: "GET", target: "/relay/v1/challenge")
         let loopbackResponse = await fixture.host.handle(raw, peer: .loopback)
@@ -408,10 +468,12 @@ final class RelayHostTests: XCTestCase {
 
     private func makeFixture(
         challengeTTL: TimeInterval = 30,
+        candidateTTL: TimeInterval = 60,
+        pairingSessionTTL: TimeInterval = 600,
         sessionTTL: TimeInterval = 120,
         retainedSegmentLimit: Int = 3,
-        maximumFailedAttempts: Int = 5
-    ) throws -> Fixture {
+        maximumCandidates: Int = 3
+    ) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let mediaDirectory = root.appendingPathComponent("safe", isDirectory: true)
@@ -440,16 +502,15 @@ final class RelayHostTests: XCTestCase {
         third.m4s
         """.write(to: root.appendingPathComponent("media.m3u8"), atomically: true, encoding: .utf8)
         let eventFixture = try RelayEventHLSFixture.load(directory: root)
-        let pairingCode = try RelayPairingCode("2345-6789-ABCD-EFGH")
         let sessionID = try RelaySessionIdentifier(rawValue: "A9B8C7D6-E5F4-4321-ABCD-1234567890AB")
         let clock = RelayTestClock(initialDate)
         let context = try RelayServerPairingContext(
             sessionID: sessionID,
-            pairingCode: pairingCode,
             now: initialDate,
             challengeTTL: challengeTTL,
+            candidateTTL: candidateTTL,
             sessionTTL: sessionTTL,
-            maximumFailedAttempts: maximumFailedAttempts
+            maximumCandidates: maximumCandidates
         )
         let host = try RelayHost(
             pairingContext: context,
@@ -458,23 +519,33 @@ final class RelayHostTests: XCTestCase {
                 retainedSegmentLimit: retainedSegmentLimit
             ),
             fixture: eventFixture,
+            pairingSessionTTL: pairingSessionTTL,
             now: { clock.now() }
         )
         return Fixture(
             host: host,
             connection: RelayInMemoryConnection(host: host),
             root: root,
-            clock: clock,
-            challenge: context.challenge,
-            pairingCode: pairingCode
+            clock: clock
         )
     }
 
     private func pair(_ fixture: Fixture) async throws -> RelayEstablishedSession {
+        let pending = try await beginPairing(fixture)
+        try await fixture.host.approvePairingCandidate(pending.candidate.candidateID)
+        let established = try await confirm(pending, fixture: fixture, nonce: "pairing-confirm-0001")
+        return try XCTUnwrap(established.session)
+    }
+
+    private func beginPairing(_ fixture: Fixture) async throws -> PendingPairing {
+        let challengeResponse = await fixture.connection.exchange(
+            request(method: "GET", target: RelayWireContract.challengePath)
+        )
+        XCTAssertEqual(challengeResponse.statusCode, 200)
+        let challenge = try JSONDecoder().decode(ChallengeEnvelope.self, from: challengeResponse.body).challenge
         let privateKey = Curve25519.KeyAgreement.PrivateKey().rawRepresentation
         let attempt = try RelayClientPairingAttempt(
-            challenge: fixture.challenge,
-            pairingCode: fixture.pairingCode,
+            challenge: challenge,
             clientPrivateKeyData: privateKey,
             clientNonce: Data(repeating: 7, count: 32),
             now: fixture.clock.now()
@@ -482,8 +553,41 @@ final class RelayHostTests: XCTestCase {
         let body = try JSONEncoder().encode(attempt.request)
         let response = await fixture.connection.exchange(request(method: "POST", target: "/relay/v1/pairing", body: body))
         XCTAssertEqual(response.statusCode, 201)
-        let acceptance = try JSONDecoder().decode(PairingEnvelope.self, from: response.body).acceptance
-        return try attempt.complete(with: acceptance, now: fixture.clock.now())
+        let candidate = try JSONDecoder().decode(RelayPairingCandidateEnvelope.self, from: response.body).candidate
+        return PendingPairing(
+            challenge: challenge,
+            attempt: attempt,
+            candidate: candidate,
+            provisional: try attempt.complete(with: candidate, now: fixture.clock.now())
+        )
+    }
+
+    private func confirm(
+        _ pending: PendingPairing,
+        fixture: Fixture,
+        nonce: String
+    ) async throws -> ConfirmationExchange {
+        let confirmation = try pending.provisional.confirmation(decision: .codesMatch)
+        let body = try JSONEncoder().encode(confirmation)
+        let signed = try authenticatedRequest(
+            session: pending.provisional.authenticationSession,
+            method: "POST",
+            target: RelayWireContract.pairingConfirmPath,
+            nonce: nonce,
+            body: body
+        )
+        let response = await fixture.connection.exchange(request(
+            method: "POST",
+            target: RelayWireContract.pairingConfirmPath,
+            headers: signed.headers,
+            body: body
+        ))
+        try verifyResponse(response, for: signed, using: pending.provisional.authenticationSession)
+        let result = try JSONDecoder().decode(RelayPairingConfirmationEnvelope.self, from: response.body).confirmation
+        let session = try result.acceptance.map {
+            try pending.provisional.complete(with: $0, now: fixture.clock.now())
+        }
+        return ConfirmationExchange(response: response, session: session)
     }
 
     private func authenticatedRequest(
@@ -543,16 +647,12 @@ final class RelayHostTests: XCTestCase {
     }
 
     private func removeFixture(_ fixture: Fixture) {
-        try? FileManager.default.removeItem(at: fixture.root.deletingLastPathComponent())
+        try? FileManager.default.removeItem(at: fixture.root)
     }
 }
 
 private struct ChallengeEnvelope: Decodable {
     let challenge: RelaySessionChallenge
-}
-
-private struct PairingEnvelope: Decodable {
-    let acceptance: RelayPairingAcceptance
 }
 
 private struct AuthenticatedRequest {
@@ -565,8 +665,18 @@ private struct Fixture {
     let connection: RelayInMemoryConnection
     let root: URL
     let clock: RelayTestClock
+}
+
+private struct PendingPairing {
     let challenge: RelaySessionChallenge
-    let pairingCode: RelayPairingCode
+    let attempt: RelayClientPairingAttempt
+    let candidate: RelayPairingCandidate
+    let provisional: RelayProvisionalSession
+}
+
+private struct ConfirmationExchange {
+    let response: RelayHTTPResponse
+    let session: RelayEstablishedSession?
 }
 
 private final class RelayInMemoryConnection: @unchecked Sendable {

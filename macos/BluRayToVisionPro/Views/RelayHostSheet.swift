@@ -23,15 +23,46 @@ struct RelayHostSheet: View {
                         LabeledContent("Fixture", value: fixtureDirectory.lastPathComponent)
                         LabeledContent("Segments", value: "\(controller.segmentCount)")
                     }
-                    if let pairingCode = controller.formattedPairingCode {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Single-use pairing code")
+                    if let pairingCandidate = controller.pairingCandidate {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Compare this code with Vision Pro")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(pairingCode)
-                                .font(.system(.title2, design: .monospaced).weight(.bold))
-                                .textSelection(.enabled)
-                                .accessibilityIdentifier("relay-pairing-code")
+                            Text(pairingCandidate.shortAuthenticationString.formattedDigits)
+                                .font(.system(size: 42, weight: .bold, design: .monospaced))
+                                .tracking(5)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
+                                .accessibilityLabel("Comparison code")
+                                .accessibilityValue(pairingCandidate.shortAuthenticationString.accessibilityDigits)
+                                .accessibilityAddTraits(.isStaticText)
+                                .accessibilitySortPriority(2)
+                                .accessibilityIdentifier("relay-sas-code")
+                            Text("Confirm only if every digit matches.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text("\(remainingSeconds(until: pairingCandidate.expirationDate, now: context.date)) seconds remaining")
+                                    .font(.footnote.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            HStack {
+                                Button("Codes Match") {
+                                    Task { await controller.approveCodesMatch() }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(pairingCandidate.isMacApproved)
+                                .accessibilityIdentifier("relay-confirm-match-button")
+                                Button("Not This Device", role: .destructive) {
+                                    Task { await controller.rejectCandidate() }
+                                }
+                                .accessibilityIdentifier("relay-reject-button")
+                            }
+                            if pairingCandidate.isMacApproved {
+                                Text("Confirmed on this Mac. Waiting for Vision Pro…")
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -67,5 +98,9 @@ struct RelayHostSheet: View {
             guard case let .success(urls) = result, let directory = urls.first else { return }
             Task { await controller.start(directory: directory) }
         }
+    }
+
+    private func remainingSeconds(until expiration: Date, now: Date) -> Int {
+        max(0, Int(ceil(expiration.timeIntervalSince(now))))
     }
 }

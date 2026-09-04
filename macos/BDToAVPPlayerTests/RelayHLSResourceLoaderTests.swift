@@ -3,11 +3,17 @@ import XCTest
 @testable import BDToAVPPlayer
 
 func makePairedSessions(now: Date) async throws -> (client: RelayEstablishedSession, server: RelayEstablishedSession) {
-    let code = RelayPairingCode.random()
-    let server = try RelayServerPairingContext(pairingCode: code, now: now)
-    let attempt = try RelayClientPairingAttempt(challenge: server.challenge, pairingCode: code, now: now)
-    let result = try await server.accept(attempt.request, now: now)
-    return (try attempt.complete(with: result.acceptance, now: now), result.session)
+    let server = try RelayServerPairingContext(now: now)
+    let challenge = try await server.currentChallenge(now: now)
+    let attempt = try RelayClientPairingAttempt(challenge: challenge, now: now)
+    let offer = try await server.accept(attempt.request, now: now)
+    let provisional = try attempt.complete(with: offer.candidate, now: now)
+    try await server.approve(candidateID: offer.candidate.candidateID, now: now)
+    let established = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: now)
+    return (
+        try provisional.complete(with: XCTUnwrap(established.response.acceptance), now: now),
+        try XCTUnwrap(established.session)
+    )
 }
 
 func makePairedClientSession(now: Date) async throws -> RelayEstablishedSession {

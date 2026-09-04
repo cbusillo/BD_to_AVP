@@ -6,84 +6,146 @@ import XCTest
 final class RelaySessionCoreTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
     private let sessionID = try! RelaySessionIdentifier(rawValue: "A9B8C7D6-E5F4-4321-ABCD-1234567890AB")
-    private let pairingCode = try! RelayPairingCode("2345-6789-ABCD-EFGH")
-    private let wrongPairingCode = try! RelayPairingCode("QRST-UVWX-YZ23-4567")
 
-    func testSuccessfulPairingSeparatesChallengeAndSessionExpiry() async throws {
-        let server = try makeServer(challengeTTL: 30, sessionTTL: 7_200)
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
-        let result = try await server.accept(client.request, now: now)
-        let clientSession = try client.complete(with: result.acceptance, now: now)
+    func testSuccessfulPairingSeparatesCandidateAndSessionExpiry() async throws {
+        let server = try makeServer(challengeTTL: 120, candidateTTL: 60, sessionTTL: 7_200)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let offered = try await server.accept(client.request, now: now)
+        let provisional = try client.complete(with: offered.candidate, now: now)
+        let pendingSummary = try await server.pendingCandidateSummary(now: now)
+        let pending = try XCTUnwrap(pendingSummary)
+
+        XCTAssertEqual(provisional.shortAuthenticationString, pending.shortAuthenticationString)
+        XCTAssertEqual(provisional.shortAuthenticationString.digits.count, 6)
+        XCTAssertTrue(provisional.shortAuthenticationString.digits.allSatisfy(\.isNumber))
+        XCTAssertEqual(offered.candidate.expiresAtUnixMilliseconds, 1_700_000_060_000)
+        XCTAssertEqual(challenge.expiresAtUnixMilliseconds, 1_700_000_120_000)
+
+        try await server.approve(candidateID: offered.candidate.candidateID, now: now)
+        let confirmation = try await server.confirm(
+            provisional.confirmation(decision: .codesMatch),
+            now: now
+        )
+        let acceptance = try XCTUnwrap(confirmation.response.acceptance)
+        let clientSession = try provisional.complete(with: acceptance, now: now)
+        let serverSession = try XCTUnwrap(confirmation.session)
 
         XCTAssertEqual(clientSession.role, .client)
-        XCTAssertEqual(result.session.role, .server)
-        XCTAssertEqual(clientSession.sessionID, result.session.sessionID)
-        XCTAssertEqual(clientSession.sessionIdentity, result.session.sessionIdentity)
-        XCTAssertEqual(clientSession.mediaCapability, result.session.mediaCapability)
-        XCTAssertEqual(result.acceptance.expiresAtUnixMilliseconds, 1_700_007_200_000)
-        XCTAssertEqual(server.challenge.expiresAtUnixMilliseconds, 1_700_000_030_000)
-        XCTAssertNotEqual(result.acceptance.expiresAtUnixMilliseconds, server.challenge.expiresAtUnixMilliseconds)
-        XCTAssertFalse(String(describing: clientSession.sessionIdentity).contains(clientSession.sessionIdentity.value))
-        XCTAssertFalse(String(reflecting: clientSession.sessionIdentity).contains(clientSession.sessionIdentity.value))
+        XCTAssertEqual(serverSession.role, .server)
+        XCTAssertEqual(clientSession.sessionIdentity, serverSession.sessionIdentity)
+        XCTAssertEqual(clientSession.mediaCapability, serverSession.mediaCapability)
+        XCTAssertEqual(acceptance.expiresAtUnixMilliseconds, 1_700_007_200_000)
+        XCTAssertFalse(String(describing: provisional.shortAuthenticationString).contains(provisional.shortAuthenticationString.digits))
     }
 
-    func testPairingCodeIsCanonicalHighEntropyAndRedacted() throws {
-        let normalized = try RelayPairingCode("2345 6789-abcd-efgh")
-        XCTAssertEqual(normalized, pairingCode)
-        XCTAssertEqual(normalized.formattedValue, "2345-6789-ABCD-EFGH")
-        XCTAssertEqual(RelayPairingCode.alphabet.count, 32)
-        XCTAssertEqual(RelayPairingCode.random().formattedValue.count, 19)
-        XCTAssertFalse(String(describing: normalized).contains(normalized.formattedValue))
-        XCTAssertFalse(String(reflecting: normalized).contains(normalized.formattedValue))
+    func testCandidateRequiresBothConfirmationsInEitherOrder() async throws {
+        let clientFirstServer = try makeServer()
+        let clientFirstChallenge = try await clientFirstServer.currentChallenge(now: now)
+        let clientFirstAttempt = try makeClient(challenge: clientFirstChallenge)
+        let clientFirstOffer = try await clientFirstServer.accept(clientFirstAttempt.request, now: now)
+        let clientFirstProvisional = try clientFirstAttempt.complete(with: clientFirstOffer.candidate, now: now)
+        let waiting = try await clientFirstServer.confirm(
+            clientFirstProvisional.confirmation(decision: .codesMatch),
+            now: now
+        )
+        XCTAssertEqual(waiting.response.state, .waitingForMac)
+        XCTAssertNil(waiting.session)
+        try await clientFirstServer.approve(candidateID: clientFirstOffer.candidate.candidateID, now: now)
+        let clientFirstEstablished = try await clientFirstServer.confirm(
+            clientFirstProvisional.confirmation(decision: .codesMatch),
+            now: now
+        )
+        XCTAssertEqual(clientFirstEstablished.response.state, .established)
+        XCTAssertNotNil(clientFirstEstablished.session)
+
+        let macFirstServer = try makeServer()
+        let macFirstChallenge = try await macFirstServer.currentChallenge(now: now)
+        let macFirstAttempt = try makeClient(challenge: macFirstChallenge)
+        let macFirstOffer = try await macFirstServer.accept(macFirstAttempt.request, now: now)
+        let macFirstProvisional = try macFirstAttempt.complete(with: macFirstOffer.candidate, now: now)
+        try await macFirstServer.approve(candidateID: macFirstOffer.candidate.candidateID, now: now)
+        let macFirstEstablished = try await macFirstServer.confirm(
+            macFirstProvisional.confirmation(decision: .codesMatch),
+            now: now
+        )
+        XCTAssertEqual(macFirstEstablished.response.state, .established)
+        XCTAssertNotNil(macFirstEstablished.session)
     }
 
-    func testPairingCodeRejectsAmbiguousAndWrongLengthInput() {
-        XCTAssertThrowsError(try RelayPairingCode("0123-4567-89AB-CDEF"))
-        XCTAssertThrowsError(try RelayPairingCode("2345-6789-ABCD-EFG"))
-        XCTAssertThrowsError(try RelayPairingCode("2345-6789-ABCD-EFGH!"))
-    }
+    func testCandidateExclusivityExpiryRotationAndAttemptBudget() async throws {
+        XCTAssertThrowsError(try makeServer(maximumCandidates: 4))
+        let server = try makeServer(challengeTTL: 120, candidateTTL: 1, maximumCandidates: 3)
+        let firstChallenge = try await server.currentChallenge(now: now)
+        let firstAttempt = try makeClient(challenge: firstChallenge)
+        let firstOffer = try await server.accept(firstAttempt.request, now: now)
+        let competingAttempt = try makeClient(challenge: firstChallenge)
 
-    func testPairingAttemptBudgetExhaustsWithoutLiveReset() async throws {
-        XCTAssertThrowsError(try makeServer(maximumFailedAttempts: 6))
-        let server = try makeServer(maximumFailedAttempts: 2)
-        let wrongClient = try makeClient(challenge: server.challenge, pairingCode: wrongPairingCode)
-
-        await assertRelayError(.pairingProofMismatch) {
-            _ = try await server.accept(wrongClient.request, now: self.now)
+        await assertRelayError(.pairingCandidateInProgress) {
+            _ = try await server.accept(competingAttempt.request, now: self.now)
         }
+        let expiredCandidate = try await server.pendingCandidateSummary(now: now.addingTimeInterval(2))
+        XCTAssertNil(expiredCandidate)
+        let secondChallenge = try await server.currentChallenge(now: now.addingTimeInterval(2))
+        XCTAssertNotEqual(secondChallenge.serverPublicKey, firstChallenge.serverPublicKey)
+        XCTAssertNotEqual(secondChallenge.serverNonceCommitment, firstChallenge.serverNonceCommitment)
+        await assertRelayError(.pairingCandidateNotFound) {
+            try await server.approve(candidateID: firstOffer.candidate.candidateID, now: self.now.addingTimeInterval(2))
+        }
+
+        let secondAttempt = try makeClient(challenge: secondChallenge, clientPrivateKeyByte: 0x55, clientNonceByte: 0x66)
+        let secondOffer = try await server.accept(secondAttempt.request, now: now.addingTimeInterval(2))
+        try await server.reject(candidateID: secondOffer.candidate.candidateID, now: now.addingTimeInterval(2))
+        let thirdChallenge = try await server.currentChallenge(now: now.addingTimeInterval(2))
+        let thirdAttempt = try makeClient(challenge: thirdChallenge, clientPrivateKeyByte: 0x77, clientNonceByte: 0x88)
+        let thirdOffer = try await server.accept(thirdAttempt.request, now: now.addingTimeInterval(2))
+        try await server.reject(candidateID: thirdOffer.candidate.candidateID, now: now.addingTimeInterval(2))
+
         await assertRelayError(.pairingAttemptsExhausted) {
-            _ = try await server.accept(wrongClient.request, now: self.now)
-        }
-        let remainingAttempts = await server.remainingFailedAttempts()
-        XCTAssertEqual(remainingAttempts, 0)
-        await assertRelayError(.pairingAttemptsExhausted) {
-            _ = try await server.accept(wrongClient.request, now: self.now)
+            _ = try await server.currentChallenge(now: self.now.addingTimeInterval(2))
         }
     }
 
-    func testMismatchedSessionDoesNotConsumePairingAttemptBudget() async throws {
-        let server = try makeServer(maximumFailedAttempts: 2)
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
+    func testMismatchedSessionAndStaleChallengeDoNotConsumeAttemptBudget() async throws {
+        let server = try makeServer(maximumCandidates: 2)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
         let otherSessionID = try RelaySessionIdentifier(rawValue: "11111111-2222-4333-8444-555555555555")
         let mismatchedRequest = try RelayPairingRequest(
             sessionID: otherSessionID,
+            serverNonceCommitment: challenge.serverNonceCommitment,
             clientPublicKey: client.request.clientPublicKey,
-            clientNonce: client.request.clientNonce,
-            pairingProof: client.request.pairingProof
+            clientNonce: client.request.clientNonce
+        )
+        let staleCommitmentRequest = try RelayPairingRequest(
+            sessionID: challenge.sessionID,
+            serverNonceCommitment: Data(repeating: 0x99, count: 32),
+            clientPublicKey: client.request.clientPublicKey,
+            clientNonce: client.request.clientNonce
         )
 
         await assertRelayError(.invalidRequest) {
             _ = try await server.accept(mismatchedRequest, now: self.now)
         }
-        let remainingAttempts = await server.remainingFailedAttempts()
-        XCTAssertEqual(remainingAttempts, 2)
+        await assertRelayError(.invalidRequest) {
+            _ = try await server.accept(staleCommitmentRequest, now: self.now)
+        }
+        let firstOffer = try await server.accept(client.request, now: now)
+        try await server.reject(candidateID: firstOffer.candidate.candidateID, now: now)
+        let nextChallenge = try await server.currentChallenge(now: now)
+        let nextClient = try makeClient(challenge: nextChallenge, clientPrivateKeyByte: 0x55, clientNonceByte: 0x66)
+        _ = try await server.accept(nextClient.request, now: now)
     }
 
     func testPairingContextRejectsSecondSuccess() async throws {
         let server = try makeServer()
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let offer = try await server.accept(client.request, now: now)
+        let provisional = try client.complete(with: offer.candidate, now: now)
+        try await server.approve(candidateID: offer.candidate.candidateID, now: now)
+        _ = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: now)
 
-        _ = try await server.accept(client.request, now: now)
         await assertRelayError(.pairingAlreadyCompleted) {
             _ = try await server.accept(client.request, now: self.now)
         }
@@ -91,32 +153,48 @@ final class RelaySessionCoreTests: XCTestCase {
 
     func testProtocolMessagesRoundTripCodable() async throws {
         let server = try makeServer()
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
-        let result = try await server.accept(client.request, now: now)
-        let session = try client.complete(with: result.acceptance, now: now)
-        let authenticatedRequest = try session.signRequest(
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let offer = try await server.accept(client.request, now: now)
+        let provisional = try client.complete(with: offer.candidate, now: now)
+        let clientConfirmation = try provisional.confirmation(decision: .codesMatch)
+        let waiting = try await server.confirm(clientConfirmation, now: now)
+        try await server.approve(candidateID: offer.candidate.candidateID, now: now)
+        let established = try await server.confirm(clientConfirmation, now: now)
+        let acceptance = try XCTUnwrap(established.response.acceptance)
+        let clientSession = try provisional.complete(with: acceptance, now: now)
+        let serverSession = try XCTUnwrap(established.session)
+        let authenticatedRequest = try clientSession.signRequest(
             method: "GET",
             requestTarget: "/playlist.m3u8?edition=main",
             timestamp: now,
             nonce: "codable-nonce-0001",
             body: Data()
         )
-        let authenticatedResponse = try result.session.authenticateResponse(
+        let authenticatedResponse = try serverSession.authenticateResponse(
             requestNonce: authenticatedRequest.nonce,
             statusCode: 200,
             body: Data("response".utf8)
         )
 
-        XCTAssertEqual(try roundTrip(server.challenge), server.challenge)
+        XCTAssertEqual(try roundTrip(challenge), challenge)
         XCTAssertEqual(try roundTrip(client.request), client.request)
-        XCTAssertEqual(try roundTrip(result.acceptance), result.acceptance)
+        XCTAssertEqual(try roundTrip(offer.candidate), offer.candidate)
+        XCTAssertEqual(try roundTrip(clientConfirmation), clientConfirmation)
+        XCTAssertEqual(try roundTrip(waiting.response), waiting.response)
+        XCTAssertEqual(try roundTrip(acceptance), acceptance)
+        XCTAssertEqual(try roundTrip(established.response), established.response)
         XCTAssertEqual(try roundTrip(authenticatedRequest), authenticatedRequest)
         XCTAssertEqual(try roundTrip(authenticatedResponse), authenticatedResponse)
     }
 
     func testMalformedCodablePayloadsAreRejected() async throws {
         let server = try makeServer()
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let offer = try await server.accept(client.request, now: now)
+        let provisional = try client.complete(with: offer.candidate, now: now)
+        let confirmation = try provisional.confirmation(decision: .codesMatch)
         let sessions = try await pairedSessions()
         let request = try sessions.client.signRequest(
             method: "GET",
@@ -129,18 +207,42 @@ final class RelaySessionCoreTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(
             RelaySessionChallenge.self,
             from: replacingEncodedSubstring(
-                in: server.challenge,
-                original: "\"expiresAtUnixMilliseconds\":1700000120000",
-                replacement: "\"expiresAtUnixMilliseconds\":9223372036854775807"
+                in: challenge,
+                original: challenge.serverNonceCommitment.base64EncodedString(),
+                replacement: Data(repeating: 1, count: 31).base64EncodedString()
             )
         ))
         XCTAssertThrowsError(try JSONDecoder().decode(
             RelayPairingRequest.self,
             from: replacingEncodedSubstring(
                 in: client.request,
-                original: Data(repeating: 0x44, count: 32).base64EncodedString(),
+                original: client.request.serverNonceCommitment.base64EncodedString(),
                 replacement: Data(repeating: 1, count: 31).base64EncodedString()
             )
+        ))
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            RelayPairingCandidate.self,
+            from: replacingEncodedSubstring(
+                in: offer.candidate,
+                original: offer.candidate.serverNonce.base64EncodedString(),
+                replacement: Data(repeating: 1, count: 31).base64EncodedString()
+            )
+        ))
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            RelayPairingCandidateIdentifier.self,
+            from: Data("{\"rawValue\":\"not-a-uuid\"}".utf8)
+        ))
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            RelayPairingConfirmation.self,
+            from: replacingEncodedSubstring(
+                in: confirmation,
+                original: confirmation.clientConfirmationMAC!.base64EncodedString(),
+                replacement: Data(repeating: 1, count: 31).base64EncodedString()
+            )
+        ))
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            RelayPairingConfirmationResponse.self,
+            from: Data("{\"candidateID\":{\"rawValue\":\"\(offer.candidate.candidateID.rawValue)\"},\"state\":\"established\"}".utf8)
         ))
         XCTAssertThrowsError(try JSONDecoder().decode(
             RelayAuthenticatedRequest.self,
@@ -150,119 +252,94 @@ final class RelaySessionCoreTests: XCTestCase {
                 replacement: "\"method\":\"\(String(repeating: "A", count: 33))\""
             )
         ))
-        XCTAssertThrowsError(try JSONDecoder().decode(
-            RelayAuthenticatedRequest.self,
-            from: replacingEncodedSubstring(
-                in: request,
-                original: "\"signerRole\":\"client\"",
-                replacement: "\"signerRole\":\"observer\""
-            )
-        ))
     }
 
-    func testAcceptanceProofAndExpiryTamperingAreRejected() async throws {
+    func testCommitmentCandidateAndConfirmationTamperingAreRejected() async throws {
         let server = try makeServer()
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
-        let result = try await server.accept(client.request, now: now)
-        var proof = result.acceptance.serverProof
-        proof[0] ^= 0xFF
-        let proofTampered = try RelayPairingAcceptance(
-            sessionID: result.acceptance.sessionID,
-            expiresAtUnixMilliseconds: result.acceptance.expiresAtUnixMilliseconds,
-            serverProof: proof
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let offer = try await server.accept(client.request, now: now)
+        let tamperedNonceCandidate = try RelayPairingCandidate(
+            candidateID: offer.candidate.candidateID,
+            sessionID: offer.candidate.sessionID,
+            serverNonce: Data(repeating: 0x99, count: 32),
+            expiresAtUnixMilliseconds: offer.candidate.expiresAtUnixMilliseconds,
+            serverProof: offer.candidate.serverProof
         )
-        let expiryTampered = try RelayPairingAcceptance(
-            sessionID: result.acceptance.sessionID,
-            expiresAtUnixMilliseconds: result.acceptance.expiresAtUnixMilliseconds + 1,
-            serverProof: result.acceptance.serverProof
-        )
-
-        XCTAssertThrowsError(try client.complete(with: proofTampered, now: now)) { error in
-            XCTAssertEqual(error as? RelaySessionError, .acceptanceProofMismatch)
+        XCTAssertThrowsError(try client.complete(with: tamperedNonceCandidate, now: now)) {
+            XCTAssertEqual($0 as? RelaySessionError, .nonceCommitmentMismatch)
         }
-        XCTAssertThrowsError(try client.complete(with: expiryTampered, now: now)) { error in
-            XCTAssertEqual(error as? RelaySessionError, .acceptanceProofMismatch)
+
+        var tamperedProof = offer.candidate.serverProof
+        tamperedProof[0] ^= 0xFF
+        let proofCandidate = try RelayPairingCandidate(
+            candidateID: offer.candidate.candidateID,
+            sessionID: offer.candidate.sessionID,
+            serverNonce: offer.candidate.serverNonce,
+            expiresAtUnixMilliseconds: offer.candidate.expiresAtUnixMilliseconds,
+            serverProof: tamperedProof
+        )
+        XCTAssertThrowsError(try client.complete(with: proofCandidate, now: now)) {
+            XCTAssertEqual($0 as? RelaySessionError, .candidateProofMismatch)
         }
-    }
 
-    func testRogueServerWithoutPairingCodeCannotForgeAcceptance() throws {
-        let server = try makeServer()
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
-        let transcript = RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
-        let rogueMaterial = try RelayCrypto.derivedKeyMaterial(
-            sessionID: sessionID,
-            pairingCode: wrongPairingCode,
-            ownPrivateKeyData: Data(repeating: 0x11, count: 32),
-            peerPublicKeyData: client.request.clientPublicKey,
-            transcript: transcript
+        let provisional = try client.complete(with: offer.candidate, now: now)
+        let reflectedConfirmation = try RelayPairingConfirmation(
+            candidateID: offer.candidate.candidateID,
+            decision: .codesMatch,
+            clientConfirmationMAC: offer.candidate.serverProof
         )
-        let expiration = try XCTUnwrap(RelayTime.unixMilliseconds(for: now.addingTimeInterval(7_200)))
-        let forgedAcceptance = try RelayPairingAcceptance(
-            sessionID: sessionID,
-            expiresAtUnixMilliseconds: expiration,
-            serverProof: RelayCrypto.acceptanceProof(
-                keyMaterial: rogueMaterial,
-                challenge: server.challenge,
-                request: client.request,
-                sessionExpirationUnixMilliseconds: expiration
-            )
-        )
-
-        XCTAssertThrowsError(try client.complete(with: forgedAcceptance, now: now)) { error in
-            XCTAssertEqual(error as? RelaySessionError, .acceptanceProofMismatch)
+        await assertRelayError(.clientConfirmationMismatch) {
+            _ = try await server.confirm(reflectedConfirmation, now: self.now)
         }
-    }
-
-    func testClientRejectsAuthenticatedSessionLifetimeAboveMaximum() async throws {
-        let server = try makeServer()
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
-        let keyMaterial = try RelayCrypto.derivedKeyMaterial(
-            sessionID: sessionID,
-            pairingCode: pairingCode,
-            ownPrivateKeyData: Data(repeating: 0x11, count: 32),
-            peerPublicKeyData: client.request.clientPublicKey,
-            transcript: RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
+        try await server.approve(candidateID: offer.candidate.candidateID, now: now)
+        let established = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: now)
+        let acceptance = try XCTUnwrap(established.response.acceptance)
+        var tamperedServerMAC = acceptance.serverConfirmationMAC
+        tamperedServerMAC[0] ^= 0x80
+        let tamperedAcceptance = try RelayPairingAcceptance(
+            candidateID: acceptance.candidateID,
+            sessionID: acceptance.sessionID,
+            expiresAtUnixMilliseconds: acceptance.expiresAtUnixMilliseconds,
+            serverConfirmationMAC: tamperedServerMAC
         )
-        let nowMilliseconds = try XCTUnwrap(RelayTime.unixMilliseconds(for: now))
-        let excessiveExpiration = nowMilliseconds + RelayLimits.maximumSessionTTLMilliseconds + 1
-        let acceptance = try RelayPairingAcceptance(
-            sessionID: sessionID,
-            expiresAtUnixMilliseconds: excessiveExpiration,
-            serverProof: RelayCrypto.acceptanceProof(
-                keyMaterial: keyMaterial,
-                challenge: server.challenge,
-                request: client.request,
-                sessionExpirationUnixMilliseconds: excessiveExpiration
-            )
-        )
-
-        XCTAssertThrowsError(try client.complete(with: acceptance, now: now)) { error in
-            XCTAssertEqual(error as? RelaySessionError, .invalidRequest)
+        XCTAssertThrowsError(try provisional.complete(with: tamperedAcceptance, now: now)) {
+            XCTAssertEqual($0 as? RelaySessionError, .serverConfirmationMismatch)
         }
     }
 
-    func testExpiredChallengeIsRejectedByBothSides() async throws {
-        let server = try makeServer(challengeTTL: 1)
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
-
-        await assertRelayError(.expiredChallenge) {
-            _ = try await server.accept(client.request, now: self.now.addingTimeInterval(2))
-        }
+    func testExpiredChallengeAndCandidateFailClosed() async throws {
+        let server = try makeServer(challengeTTL: 1, candidateTTL: 1)
+        let challenge = try await server.currentChallenge(now: now)
         XCTAssertThrowsError(
             try RelayClientPairingAttempt(
-                challenge: server.challenge,
-                pairingCode: pairingCode,
+                challenge: challenge,
                 clientPrivateKeyData: Data(repeating: 0x33, count: 32),
                 clientNonce: Data(repeating: 0x44, count: 32),
                 now: now.addingTimeInterval(2)
             )
-        ) { error in
-            XCTAssertEqual(error as? RelaySessionError, .expiredChallenge)
+        ) {
+            XCTAssertEqual($0 as? RelaySessionError, .expiredChallenge)
+        }
+        let client = try makeClient(challenge: challenge)
+        await assertRelayError(.invalidRequest) {
+            _ = try await server.accept(client.request, now: self.now.addingTimeInterval(2))
+        }
+
+        let freshChallenge = try await server.currentChallenge(now: now.addingTimeInterval(2))
+        let freshClient = try makeClient(challenge: freshChallenge)
+        let offer = try await server.accept(freshClient.request, now: now.addingTimeInterval(2))
+        let provisional = try freshClient.complete(with: offer.candidate, now: now.addingTimeInterval(2))
+        await assertRelayError(.confirmationExpired) {
+            _ = try await server.confirm(
+                provisional.confirmation(decision: .codesMatch),
+                now: self.now.addingTimeInterval(4)
+            )
         }
     }
 
     func testEstablishedSessionOutlivesPairingChallengeButStillExpires() async throws {
-        let sessions = try await pairedSessions(challengeTTL: 1, sessionTTL: 60)
+        let sessions = try await pairedSessions(challengeTTL: 1, candidateTTL: 1, sessionTTL: 60)
         let request = try sessions.client.signRequest(
             method: "GET",
             requestTarget: "/playlist.m3u8",
@@ -295,23 +372,32 @@ final class RelaySessionCoreTests: XCTestCase {
             timestamp: now.addingTimeInterval(61),
             nonce: "session-expiry-002",
             body: Data()
-        )) { error in
-            XCTAssertEqual(error as? RelaySessionError, .requestExpired)
+        )) {
+            XCTAssertEqual($0 as? RelaySessionError, .requestExpired)
         }
     }
 
     func testAuthenticatedRequestTimestampCannotCrossSessionExpiry() async throws {
         let server = try makeServer(sessionTTL: 60)
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
         let keyMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: sessionID,
-            pairingCode: pairingCode,
-            ownPrivateKeyData: Data(repeating: 0x11, count: 32),
-            peerPublicKeyData: client.request.clientPublicKey,
-            transcript: RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
+            ownPrivateKeyData: Data(repeating: 0x33, count: 32),
+            peerPublicKeyData: challenge.serverPublicKey,
+            transcript: RelayCanonical.pairingTranscript(
+                challenge: challenge,
+                request: client.request,
+                serverNonce: Data(repeating: 0x22, count: 32)
+            )
         )
-        let result = try await server.accept(client.request, now: now)
-        let timestamp = result.acceptance.expiresAtUnixMilliseconds + 1
+        let offer = try await server.accept(client.request, now: now)
+        let provisional = try client.complete(with: offer.candidate, now: now)
+        try await server.approve(candidateID: offer.candidate.candidateID, now: now)
+        let established = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: now)
+        let acceptance = try XCTUnwrap(established.response.acceptance)
+        let serverSession = try XCTUnwrap(established.session)
+        let timestamp = acceptance.expiresAtUnixMilliseconds + 1
         let bodyHash = RelayCrypto.sha256(Data())
         let unsignedRequest = try RelayAuthenticatedRequest(
             sessionID: sessionID,
@@ -338,17 +424,16 @@ final class RelaySessionCoreTests: XCTestCase {
         )
 
         await assertRelayError(.requestExpired) {
-            try await result.session.verify(
+            try await serverSession.verify(
                 signedRequest,
                 actualMethod: signedRequest.method,
                 actualRequestTarget: signedRequest.requestTarget,
                 body: Data(),
-                now: RelayTime.date(fromUnixMilliseconds: result.acceptance.expiresAtUnixMilliseconds - 1),
+                now: RelayTime.date(fromUnixMilliseconds: acceptance.expiresAtUnixMilliseconds - 1),
                 replayStore: try RelayReplayNonceStore()
             )
         }
     }
-
     func testDirectionalSigningWorksBothWays() async throws {
         let sessions = try await pairedSessions()
         let clientRequest = try sessions.client.signRequest(
@@ -773,22 +858,26 @@ final class RelaySessionCoreTests: XCTestCase {
         }
     }
 
-    func testKeyScheduleSeparatesDirectionsCapabilityAndAcceptance() async throws {
+    func testKeyScheduleSeparatesDirectionsCapabilitiesAndConfirmation() async throws {
         let server = try makeServer()
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let transcript = RelayCanonical.pairingTranscript(
+            challenge: challenge,
+            request: client.request,
+            serverNonce: Data(repeating: 0x22, count: 32)
+        )
         let serverMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: sessionID,
-            pairingCode: pairingCode,
             ownPrivateKeyData: Data(repeating: 0x11, count: 32),
             peerPublicKeyData: client.request.clientPublicKey,
-            transcript: RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
+            transcript: transcript
         )
         let clientMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: sessionID,
-            pairingCode: pairingCode,
             ownPrivateKeyData: Data(repeating: 0x33, count: 32),
-            peerPublicKeyData: server.challenge.serverPublicKey,
-            transcript: RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
+            peerPublicKeyData: challenge.serverPublicKey,
+            transcript: transcript
         )
 
         XCTAssertEqual(serverMaterial.sessionIdentity, clientMaterial.sessionIdentity)
@@ -796,15 +885,21 @@ final class RelaySessionCoreTests: XCTestCase {
         XCTAssertEqual(serverMaterial.serverToClientRequestKey, clientMaterial.serverToClientRequestKey)
         XCTAssertEqual(serverMaterial.serverToClientResponseKey, clientMaterial.serverToClientResponseKey)
         XCTAssertEqual(serverMaterial.mediaCapability, clientMaterial.mediaCapability)
-        XCTAssertEqual(serverMaterial.acceptanceProofKey, clientMaterial.acceptanceProofKey)
+        XCTAssertEqual(serverMaterial.candidateProofKey, clientMaterial.candidateProofKey)
+        XCTAssertEqual(serverMaterial.shortAuthenticationStringKey, clientMaterial.shortAuthenticationStringKey)
+        XCTAssertEqual(serverMaterial.clientConfirmationKey, clientMaterial.clientConfirmationKey)
+        XCTAssertEqual(serverMaterial.serverConfirmationKey, clientMaterial.serverConfirmationKey)
         XCTAssertEqual(Set([
             serverMaterial.sessionIdentity,
             serverMaterial.clientToServerRequestKey,
             serverMaterial.serverToClientRequestKey,
             serverMaterial.serverToClientResponseKey,
             serverMaterial.mediaCapability,
-            serverMaterial.acceptanceProofKey,
-        ]).count, 6)
+            serverMaterial.candidateProofKey,
+            serverMaterial.shortAuthenticationStringKey,
+            serverMaterial.clientConfirmationKey,
+            serverMaterial.serverConfirmationKey,
+        ]).count, 9)
     }
 
     func testAuthenticatedResponseBindsNonceStatusAndBody() async throws {
@@ -933,9 +1028,14 @@ final class RelaySessionCoreTests: XCTestCase {
 
     func testGoldenProtocolTranscriptVectors() async throws {
         let server = try makeServer()
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
-        let result = try await server.accept(client.request, now: now)
-        let clientSession = try client.complete(with: result.acceptance, now: now)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let offer = try await server.accept(client.request, now: now)
+        let provisional = try client.complete(with: offer.candidate, now: now)
+        try await server.approve(candidateID: offer.candidate.candidateID, now: now)
+        let established = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: now)
+        let clientSession = try provisional.complete(with: XCTUnwrap(established.response.acceptance), now: now)
+        let serverSession = try XCTUnwrap(established.session)
         let request = try clientSession.signRequest(
             method: "GET",
             requestTarget: "/playlist.m3u8?edition=main&track=left",
@@ -943,14 +1043,18 @@ final class RelaySessionCoreTests: XCTestCase {
             nonce: "golden-nonce-0001",
             body: Data("golden-body".utf8)
         )
-        let response = try result.session.authenticateResponse(
+        let response = try serverSession.authenticateResponse(
             requestNonce: request.nonce,
             statusCode: 200,
             body: Data("golden-response".utf8)
         )
 
         let pairingDigest = RelayCrypto.sha256(
-            RelayCanonical.pairingTranscript(challenge: server.challenge, request: client.request)
+            RelayCanonical.pairingTranscript(
+                challenge: challenge,
+                request: client.request,
+                serverNonce: offer.candidate.serverNonce
+            )
         ).hexadecimalString
         let requestDigest = RelayCrypto.sha256(
             RelayCanonical.authenticatedRequestTranscript(request)
@@ -959,13 +1063,13 @@ final class RelaySessionCoreTests: XCTestCase {
             RelayCanonical.authenticatedResponseTranscript(response)
         ).hexadecimalString
 
-        XCTAssertEqual(pairingDigest, "1730a92dbe43af656779d816a09b2eb130a6f517d7266c0975396f685e03600e")
+        XCTAssertEqual(pairingDigest, "5751e052a54c759660802d3c1aa82095b341ebf876e0ea47b58e4265907b9eff")
         XCTAssertEqual(requestDigest, "0a5824bf58e41acc26fc4c76a39266354920408fea426503ae5f53716986592b")
         XCTAssertEqual(responseDigest, "dadedddef62021aca21dd5d86ba64bbedd1dd12532131d05ff2204e63a75a408")
-        XCTAssertEqual(response.signature.hexadecimalString, "095be40192a0616a6333b78ad59ac3179aa20d93597d24673e47bf8032babaab")
-        XCTAssertEqual(request.signature.hexadecimalString, "470ab8d171b5afcd2ab8372390fdfd258fcbf2ffc71a47796691cfceea37f2bb")
-        XCTAssertEqual(clientSession.sessionIdentity.value, "hdGy_ajRZ7WKKrlEF5_LC0GbWzn53JaS6SrOK3l3W1E")
-        XCTAssertEqual(clientSession.mediaCapability.value, "uGgRcGEt-s8-KLC2K2FJNfk7LP39wXcB68KJnRESnZA")
+        XCTAssertEqual(response.signature.hexadecimalString, "5d7d52f3c63385a28185afab8e82818af4f6f25a4f5d86882e8195fa18fb9725")
+        XCTAssertEqual(request.signature.hexadecimalString, "739dc7b99c7568a94f0a56b6cd1acfac78d5760e83e1a6445687915d93ad3b90")
+        XCTAssertEqual(clientSession.sessionIdentity.value, "aKMZUQwUT0lGZyJmIOs8PWAir0mnqKBmmLfrEGxVu6I")
+        XCTAssertEqual(clientSession.mediaCapability.value, "eoSTE-PkbmoZzpx8TTHs2FX9k8F-gcO2pQzTxo1_SBU")
     }
 
     func testPlaylistGrowthUsesFixedTargetDuration() throws {
@@ -1162,30 +1266,31 @@ final class RelaySessionCoreTests: XCTestCase {
     private func makeServer(
         sessionID: RelaySessionIdentifier? = nil,
         challengeTTL: TimeInterval = 120,
+        candidateTTL: TimeInterval = 60,
         sessionTTL: TimeInterval = 7_200,
-        maximumFailedAttempts: Int = 5
+        maximumCandidates: Int = 3
     ) throws -> RelayServerPairingContext {
         try RelayServerPairingContext(
             sessionID: sessionID ?? self.sessionID,
-            pairingCode: pairingCode,
             serverPrivateKeyData: Data(repeating: 0x11, count: 32),
             serverNonce: Data(repeating: 0x22, count: 32),
             now: now,
             challengeTTL: challengeTTL,
+            candidateTTL: candidateTTL,
             sessionTTL: sessionTTL,
-            maximumFailedAttempts: maximumFailedAttempts
+            maximumCandidates: maximumCandidates
         )
     }
 
     private func makeClient(
         challenge: RelaySessionChallenge,
-        pairingCode: RelayPairingCode
+        clientPrivateKeyByte: UInt8 = 0x33,
+        clientNonceByte: UInt8 = 0x44
     ) throws -> RelayClientPairingAttempt {
         try RelayClientPairingAttempt(
             challenge: challenge,
-            pairingCode: pairingCode,
-            clientPrivateKeyData: Data(repeating: 0x33, count: 32),
-            clientNonce: Data(repeating: 0x44, count: 32),
+            clientPrivateKeyData: Data(repeating: clientPrivateKeyByte, count: 32),
+            clientNonce: Data(repeating: clientNonceByte, count: 32),
             now: now
         )
     }
@@ -1193,16 +1298,25 @@ final class RelaySessionCoreTests: XCTestCase {
     private func pairedSessions(
         sessionID: RelaySessionIdentifier? = nil,
         challengeTTL: TimeInterval = 120,
+        candidateTTL: TimeInterval = 60,
         sessionTTL: TimeInterval = 7_200
     ) async throws -> (client: RelayEstablishedSession, server: RelayEstablishedSession) {
         let server = try makeServer(
             sessionID: sessionID,
             challengeTTL: challengeTTL,
+            candidateTTL: candidateTTL,
             sessionTTL: sessionTTL
         )
-        let client = try makeClient(challenge: server.challenge, pairingCode: pairingCode)
-        let result = try await server.accept(client.request, now: now)
-        return (try client.complete(with: result.acceptance, now: now), result.session)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let offer = try await server.accept(client.request, now: now)
+        let provisional = try client.complete(with: offer.candidate, now: now)
+        try await server.approve(candidateID: offer.candidate.candidateID, now: now)
+        let established = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: now)
+        return (
+            try provisional.complete(with: XCTUnwrap(established.response.acceptance), now: now),
+            try XCTUnwrap(established.session)
+        )
     }
 
     private func roundTrip<Value: Codable>(_ value: Value) throws -> Value {

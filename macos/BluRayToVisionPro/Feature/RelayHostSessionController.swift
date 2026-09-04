@@ -6,6 +6,9 @@ protocol RelayHostSessionControlling: AnyObject {
     func stop() async
     func stopForAppQuit() async
     func currentLifecycle() async -> RelayHostLifecycle
+    func currentPairingCandidate() async -> RelayPendingPairingCandidate?
+    func approvePairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws
+    func rejectPairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws
 }
 
 @MainActor
@@ -14,6 +17,7 @@ final class RelayHostSessionController: ObservableObject {
         case idle
         case starting
         case advertising
+        case confirming
         case paired
         case finished
         case cancelled
@@ -22,11 +26,11 @@ final class RelayHostSessionController: ObservableObject {
     }
 
     typealias FixtureLoader = @MainActor (URL) throws -> RelayEventHLSFixture
-    typealias SessionStarter = @MainActor (URL, RelayEventHLSFixture, RelayPairingCode) async throws -> any RelayHostSessionControlling
+    typealias SessionStarter = @MainActor (URL, RelayEventHLSFixture) async throws -> any RelayHostSessionControlling
 
     @Published private(set) var lifecycle: Lifecycle = .idle
     @Published private(set) var fixtureDirectory: URL?
-    @Published private(set) var formattedPairingCode: String?
+    @Published private(set) var pairingCandidate: RelayPendingPairingCandidate?
     @Published private(set) var segmentCount = 0
 
     private let loadFixture: FixtureLoader
@@ -42,9 +46,7 @@ final class RelayHostSessionController: ObservableObject {
         self.startSession = startSession
     }
 
-    var isSessionActive: Bool {
-        session != nil
-    }
+    var isSessionActive: Bool { session != nil }
 
     var statusText: String {
         switch lifecycle {
@@ -53,13 +55,15 @@ final class RelayHostSessionController: ObservableObject {
         case .starting:
             "Checking the fixture and starting the local relay…"
         case .advertising:
-            "Advertising on your local network. Enter this code once on Vision Pro."
+            "Advertising on your local network. Select this Mac on Vision Pro to compare codes."
+        case .confirming:
+            "Compare the six-digit code with Vision Pro, then confirm this exact device."
         case .paired:
             "Vision Pro is paired. The relay remains available for this session."
         case .finished:
             "The relay playlist is finished."
         case .cancelled:
-            "Relay cancelled. The pairing code is no longer valid."
+            "Relay cancelled. The numeric comparison is no longer valid."
         case .stopped:
             "Relay stopped."
         case let .failed(message):
@@ -72,6 +76,7 @@ final class RelayHostSessionController: ObservableObject {
         case .idle: "Not started"
         case .starting: "Starting"
         case .advertising: "Pairing available"
+        case .confirming: "Awaiting confirmation"
         case .paired: "Paired"
         case .finished: "Finished"
         case .cancelled: "Cancelled"
@@ -83,13 +88,11 @@ final class RelayHostSessionController: ObservableObject {
     func start(directory: URL) async {
         guard session == nil else { return }
         lifecycle = .starting
-        let pairingCode = RelayPairingCode.random()
         do {
             let fixture = try loadFixture(directory)
-            let session = try await startSession(directory, fixture, pairingCode)
+            let session = try await startSession(directory, fixture)
             self.session = session
             fixtureDirectory = directory
-            formattedPairingCode = pairingCode.formattedValue
             segmentCount = fixture.segments.count
             lifecycle = .advertising
             monitorLifecycle()
@@ -99,33 +102,39 @@ final class RelayHostSessionController: ObservableObject {
     }
 
     func cancel() async {
-        guard let session else { return }
-        await session.cancel()
-        lifecycleMonitoringTask?.cancel()
-        lifecycleMonitoringTask = nil
-        self.session = nil
-        formattedPairingCode = nil
+        await endSession { await $0.cancel() }
         lifecycle = .cancelled
     }
 
     func stop() async {
-        guard let session else { return }
-        await session.stop()
-        lifecycleMonitoringTask?.cancel()
-        lifecycleMonitoringTask = nil
-        self.session = nil
-        formattedPairingCode = nil
+        await endSession { await $0.stop() }
         lifecycle = .stopped
     }
 
     func stopForAppQuit() async {
-        guard let session else { return }
-        await session.stopForAppQuit()
-        lifecycleMonitoringTask?.cancel()
-        lifecycleMonitoringTask = nil
-        self.session = nil
-        formattedPairingCode = nil
+        await endSession { await $0.stopForAppQuit() }
         lifecycle = .stopped
+    }
+
+    func approveCodesMatch() async {
+        guard let session, let pairingCandidate else { return }
+        do {
+            try await session.approvePairingCandidate(pairingCandidate.candidateID)
+            self.pairingCandidate = await session.currentPairingCandidate()
+        } catch {
+            lifecycle = .failed(Self.message(for: error))
+        }
+    }
+
+    func rejectCandidate() async {
+        guard let session, let pairingCandidate else { return }
+        do {
+            try await session.rejectPairingCandidate(pairingCandidate.candidateID)
+            self.pairingCandidate = nil
+            lifecycle = .advertising
+        } catch {
+            lifecycle = .failed(Self.message(for: error))
+        }
     }
 
     private static func message(for error: Error) -> String {
@@ -138,9 +147,24 @@ final class RelayHostSessionController: ObservableObject {
             "The selected media.m3u8 playlist is not a supported EVENT-HLS fixture."
         case let RelayEventHLSFixtureError.missingSegment(resourceIdentifier):
             "The playlist references a missing segment: \(resourceIdentifier)."
+        case RelaySessionError.pairingCandidateNotFound:
+            "That pairing request is no longer active. Ask Vision Pro to try again."
+        case RelaySessionError.confirmationExpired:
+            "That comparison code expired. Select this Mac again on Vision Pro."
+        case RelaySessionError.pairingAttemptsExhausted:
+            "Too many pairing requests were rejected. Restart the relay to continue."
         default:
             "The relay could not start. Choose a complete EVENT-HLS fixture and try again."
         }
+    }
+
+    private func endSession(_ operation: @escaping @MainActor (any RelayHostSessionControlling) async -> Void) async {
+        guard let session else { return }
+        await operation(session)
+        lifecycleMonitoringTask?.cancel()
+        lifecycleMonitoringTask = nil
+        self.session = nil
+        pairingCandidate = nil
     }
 
     private func monitorLifecycle() {
@@ -157,23 +181,27 @@ final class RelayHostSessionController: ObservableObject {
         guard let session else { return }
         switch await session.currentLifecycle() {
         case .pairing:
+            pairingCandidate = nil
             lifecycle = .advertising
+        case .awaitingConfirmation:
+            pairingCandidate = await session.currentPairingCandidate()
+            lifecycle = pairingCandidate == nil ? .advertising : .confirming
         case .paired:
-            formattedPairingCode = nil
+            pairingCandidate = nil
             lifecycle = .paired
         case .finished:
-            formattedPairingCode = nil
+            pairingCandidate = nil
             lifecycle = .finished
         case .cancelled:
-            formattedPairingCode = nil
+            pairingCandidate = nil
             lifecycle = .cancelled
             clearTerminalSession()
         case .expired:
-            formattedPairingCode = nil
-            lifecycle = .failed("The pairing session expired. Start a new relay to continue.")
+            pairingCandidate = nil
+            lifecycle = .failed("The relay pairing window ended. Start a new relay to continue.")
             clearTerminalSession()
         case .stopped:
-            formattedPairingCode = nil
+            pairingCandidate = nil
             lifecycle = .stopped
             clearTerminalSession()
         }
@@ -196,33 +224,24 @@ private final class RelayHostSession: RelayHostSessionControlling {
         self.server = server
     }
 
-    static func start(
-        directory: URL,
-        fixture: RelayEventHLSFixture,
-        pairingCode: RelayPairingCode
-    ) async throws -> any RelayHostSessionControlling {
+    static func start(directory: URL, fixture: RelayEventHLSFixture) async throws -> any RelayHostSessionControlling {
         let host = try RelayHost.start(
             configuration: try RelayHostConfiguration(fixtureDirectory: directory),
-            fixture: fixture,
-            pairingCode: pairingCode
+            fixture: fixture
         )
         let server = try await RelayNetworkServer.start(host: host)
         return RelayHostSession(host: host, server: server)
     }
 
-    func cancel() async {
-        await server.cancel()
+    func cancel() async { await server.cancel() }
+    func stop() async { await server.stop() }
+    func stopForAppQuit() async { await server.stopForAppQuit() }
+    func currentLifecycle() async -> RelayHostLifecycle { await host.currentLifecycle() }
+    func currentPairingCandidate() async -> RelayPendingPairingCandidate? { await host.currentPairingCandidate() }
+    func approvePairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws {
+        try await host.approvePairingCandidate(candidateID)
     }
-
-    func stop() async {
-        await server.stop()
-    }
-
-    func stopForAppQuit() async {
-        await server.stopForAppQuit()
-    }
-
-    func currentLifecycle() async -> RelayHostLifecycle {
-        await host.currentLifecycle()
+    func rejectPairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws {
+        try await host.rejectPairingCandidate(candidateID)
     }
 }

@@ -79,7 +79,7 @@ private final class RelayBonjourDescriptorResolver: NSObject, NetServiceDelegate
 }
 
 final class RelayBonjourBrowser: RelayEndpointBrowsing {
-    static let serviceType = "_bdtoavp-relay._tcp"
+    static let serviceType = RelayWireContract.bonjourServiceType
 
     let discoveryStream: AsyncStream<[RelayDiscoveredEndpoint]>
     private let continuation: AsyncStream<[RelayDiscoveredEndpoint]>.Continuation
@@ -104,6 +104,10 @@ final class RelayBonjourBrowser: RelayEndpointBrowsing {
         browser.browseResultsChangedHandler = { [weak resolver] results, _ in
             let descriptors = results.compactMap { result -> RelayBonjourDescriptor? in
                 guard case let .service(name: name, type: type, domain: domain, interface: _) = result.endpoint else { return nil }
+                guard case let .bonjour(txtRecord) = result.metadata,
+                      case let .string(version)? = txtRecord.getEntry(for: "v"),
+                      version == String(RelayWireContract.protocolVersion)
+                else { return nil }
                 return RelayBonjourDescriptor(name: name, type: type, domain: domain)
             }
             DispatchQueue.main.async {

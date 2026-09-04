@@ -154,7 +154,7 @@ final class RelayNetworkServer: @unchecked Sendable {
                 case .cancelled, .expired, .stopped:
                     await self?.cancelNetworkResources()
                     return
-                case .pairing, .paired, .finished:
+                case .pairing, .awaitingConfirmation, .paired, .finished:
                     break
                 }
                 try? await Task.sleep(for: lifecyclePollInterval)

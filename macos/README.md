@@ -21,14 +21,17 @@ uv run python scripts/native_app.py test
 uv run python scripts/native_app.py build
 ```
 
-The source-agnostic Mac-to-Vision-Pro relay advertises protocol version 2. Its
-X25519 session key schedule also requires the single-use human pairing code, so
-the server acceptance proof mutually authenticates the Mac rather than merely
-proving possession of the advertised ephemeral key. Every post-pair HTTP
-response carries a bounded HMAC header that binds the server role, originating
-request nonce, status code, and body SHA-256, including binary media and control
-responses. Clients verify that proof before interpreting response status or
-content; this integrity contract does not depend on TLS.
+The source-agnostic Mac-to-Vision-Pro relay advertises protocol version 3. It
+uses X25519 and transcript-bound HKDF to show both devices the same six-digit
+numeric-comparison code. The Mac commits its nonce before Vision Pro contributes
+its key material, then reveals it for client verification; this prevents server
+nonce grinding. A single provisional candidate has a 60-second window and needs
+an authenticated Vision Pro confirmation plus an exact candidate-bound Mac
+approval before any playlist or media route is available. The unpaired relay
+advertises for at most ten minutes, rotating its ephemeral challenge every two
+minutes while idle. Every protected HTTP
+response carries a bounded HMAC header binding server role, request nonce,
+status, and body SHA-256; clients verify it before interpreting content.
 
 The project exact-pins Sparkle 2.9.4 through Swift Package Manager. Debug builds
 use a separate Development identity, omit direct-distribution update metadata,

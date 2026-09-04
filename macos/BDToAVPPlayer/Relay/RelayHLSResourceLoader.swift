@@ -64,6 +64,8 @@ enum RelayAuthenticatedRequestFactory {
     static func makeRequest(
         baseURL: URL,
         path: String,
+        method: String = "GET",
+        body: Data = Data(),
         signer: any RelayRequestSigning,
         clock: @escaping @Sendable () -> Date,
         nonce: @escaping @Sendable () -> String
@@ -74,14 +76,15 @@ enum RelayAuthenticatedRequestFactory {
         let url = baseURL.appendingPathComponent(path.dropFirst().description)
         let target = url.path + (url.query.map { "?\($0)" } ?? "")
         let signed = try signer.signRelayRequest(
-            method: "GET",
+            method: method,
             requestTarget: target,
-            body: Data(),
+            body: body,
             timestamp: clock(),
             nonce: nonce()
         )
         var request = URLRequest(url: url)
-        request.httpMethod = "GET"
+        request.httpMethod = method
+        request.httpBody = body
         request.setValue(
             try JSONEncoder().encode(signed).base64EncodedString(),
             forHTTPHeaderField: RelayWireContract.authenticationHeader

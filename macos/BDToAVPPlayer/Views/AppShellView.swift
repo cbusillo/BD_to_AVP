@@ -155,7 +155,7 @@ struct AppShellView: View {
         switch relayCoordinator.state {
         case .idle, .sessionExpired, .failed:
             true
-        case .discovery, .pairing, .connected, .reconnecting, .networkUnavailable:
+        case .discovery, .confirming, .connected, .reconnecting, .networkUnavailable:
             false
         }
     }
