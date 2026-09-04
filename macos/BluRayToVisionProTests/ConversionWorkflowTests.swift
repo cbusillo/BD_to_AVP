@@ -1935,6 +1935,51 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(encoded, fixture)
     }
 
+    func testLiveSourceJobSpecEncodesSourceOnlyContract() throws {
+        let source = ConversionSource(kind: .discImage, url: URL(fileURLWithPath: "/tmp/movie.iso"))
+        let spec = WorkerJobSpec(
+            liveSource: source,
+            destinationURL: URL(fileURLWithPath: "/tmp/live-source", isDirectory: true),
+            playlist: 1_005,
+            audioPID: 4_352,
+            replayWindowSeconds: 180,
+            replayMaxBytes: 268_435_456,
+            maximumPairs: 240,
+            jobID: UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
+        )
+
+        let data = try JSONEncoder().encode(spec)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let liveSource = try XCTUnwrap(json["live_source"] as? [String: Any])
+
+        XCTAssertEqual(json["operation"] as? String, "start_live_source")
+        XCTAssertEqual((json["source"] as? [String: Any])?["kind"] as? String, "disc_image")
+        XCTAssertEqual((json["destination"] as? [String: Any])?["path"] as? String, "/tmp/live-source")
+        XCTAssertEqual(liveSource["playlist"] as? Int, 1_005)
+        XCTAssertEqual(liveSource["audio_pid"] as? Int, 4_352)
+        XCTAssertEqual(liveSource["replay_window_seconds"] as? Int, 180)
+        XCTAssertEqual(liveSource["replay_max_bytes"] as? Int, 268_435_456)
+        XCTAssertEqual(liveSource["maximum_pairs"] as? Int, 240)
+        XCTAssertNil(json["encoding"])
+        XCTAssertNil(json["job"])
+        XCTAssertNil(json["preview"])
+    }
+
+    func testLiveSourceJobSpecAllowsPlaylistZero() throws {
+        let spec = WorkerJobSpec(
+            liveSource: ConversionSource(kind: .discImage, url: URL(fileURLWithPath: "/tmp/movie.iso")),
+            destinationURL: URL(fileURLWithPath: "/tmp/live-source", isDirectory: true),
+            playlist: 0,
+            audioPID: 4_352
+        )
+
+        let data = try JSONEncoder().encode(spec)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let liveSource = try XCTUnwrap(json["live_source"] as? [String: Any])
+
+        XCTAssertEqual(liveSource["playlist"] as? Int, 0)
+    }
+
     func testPhysicalDiscJobSpecMatchesSharedV12WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic

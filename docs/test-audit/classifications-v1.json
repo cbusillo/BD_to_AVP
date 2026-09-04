@@ -348,6 +348,7 @@
         "tests/test_ffmpeg_vendor.py",
         "tests/test_gui_processing.py",
         "tests/test_languages.py",
+        "tests/test_live_source_service.py",
         "tests/test_main.py",
         "tests/test_mp4box_builder.py",
         "tests/test_native_app.py",
@@ -447,6 +448,15 @@
         "tests/fixtures/native_worker_stage_started_progress_v5.json",
         "tests/fixtures/native_worker_stage_started_progress_v8.json",
         "tests/fixtures/native_worker_stage_started_progress_v9.json"
+      ]
+    },
+    {
+      "id": "python-executable-protocol-fixtures",
+      "classification": "valuable",
+      "rationale": "{path} is an executable test fixture for a maintained native-worker process and framing contract. No repository evidence supports replacing or removing it.",
+      "evidence_ids": ["worker-protocol-fixture-contract"],
+      "paths": [
+        "tests/fixtures/fake_ssif_probe.py"
       ]
     },
     {

@@ -43,6 +43,7 @@ class WorkerOperation(StrEnum):
     INSPECT_SOURCE = "inspect_source"
     CONVERT_SOURCE = "convert_source"
     PREVIEW_SOURCE = "preview_source"
+    START_LIVE_SOURCE = "start_live_source"
 
 
 class WorkerSourceKind(StrEnum):
@@ -223,6 +224,15 @@ class PreviewOptions:
 
 
 @dataclass(frozen=True)
+class LiveSourceOptions:
+    playlist: int
+    audio_pid: int
+    replay_window_seconds: int
+    replay_max_bytes: int
+    maximum_pairs: int | None = None
+
+
+@dataclass(frozen=True)
 class JobSpec:
     protocol_version: int
     job_id: str
@@ -232,6 +242,7 @@ class JobSpec:
     encoding: EncodingOptions | None = None
     job: JobOptions | None = None
     preview: PreviewOptions | None = None
+    live_source: LiveSourceOptions | None = None
 
     @classmethod
     def from_json_line(cls, line: str) -> "JobSpec":
@@ -288,6 +299,7 @@ class JobSpec:
             WorkerOperation.INSPECT_SOURCE: base_keys,
             WorkerOperation.CONVERT_SOURCE: base_keys | {"destination", "encoding", "job"},
             WorkerOperation.PREVIEW_SOURCE: base_keys | {"destination", "encoding", "job", "preview"},
+            WorkerOperation.START_LIVE_SOURCE: base_keys | {"destination", "live_source"},
         }[operation]
         cls._reject_unknown_keys(raw, operation_keys, "request", job_id)
 
@@ -333,10 +345,10 @@ class JobSpec:
         source_path = cls._parse_absolute_path(raw_source_path, "source", job_id)
         has_title_id = "title_id" in source
         title_id = cls._parse_optional_title_id(source.get("title_id"), job_id)
-        if operation is WorkerOperation.INSPECT_SOURCE and has_title_id:
+        if operation in {WorkerOperation.INSPECT_SOURCE, WorkerOperation.START_LIVE_SOURCE} and has_title_id:
             raise WorkerProtocolError(
                 "invalid_source",
-                "Inspection requests cannot select a source title.",
+                "This source request cannot select a conversion title.",
                 job_id=job_id,
             )
         if source_kind is WorkerSourceKind.DIRECT_FILE and has_title_id:
@@ -363,6 +375,7 @@ class JobSpec:
         encoding: EncodingOptions | None = None
         job_options: JobOptions | None = None
         preview_options: PreviewOptions | None = None
+        live_source_options: LiveSourceOptions | None = None
         if operation in {WorkerOperation.CONVERT_SOURCE, WorkerOperation.PREVIEW_SOURCE}:
             destination = JobDestination(
                 path=cls._parse_destination(raw.get("destination"), job_id),
@@ -404,6 +417,15 @@ class JobSpec:
                     "Preview jobs cannot remove the source or continue from partial output.",
                     job_id=job_id,
                 )
+        elif operation is WorkerOperation.START_LIVE_SOURCE:
+            if source_kind not in {WorkerSourceKind.DISC_IMAGE, WorkerSourceKind.BLU_RAY_FOLDER}:
+                raise WorkerProtocolError(
+                    "invalid_live_source",
+                    "Live source jobs require an ISO image or Blu-ray folder.",
+                    job_id=job_id,
+                )
+            destination = JobDestination(path=cls._parse_destination(raw.get("destination"), job_id))
+            live_source_options = cls._parse_live_source_options(raw.get("live_source"), job_id)
 
         return cls(
             protocol_version=protocol_version,
@@ -414,6 +436,7 @@ class JobSpec:
             encoding=encoding,
             job=job_options,
             preview=preview_options,
+            live_source=live_source_options,
         )
 
     @staticmethod
@@ -1306,6 +1329,81 @@ class JobSpec:
         )
 
     @classmethod
+    def _parse_live_source_options(cls, value: Any, job_id: str) -> LiveSourceOptions:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_live_source",
+                "The live source request must contain source-service options.",
+                job_id=job_id,
+            )
+        required_keys = {"playlist", "audio_pid", "replay_window_seconds", "replay_max_bytes"}
+        cls._reject_unknown_keys(
+            value,
+            required_keys | {"maximum_pairs"},
+            "live_source",
+            job_id,
+            error_code="invalid_live_source",
+        )
+        missing_keys = required_keys - set(value.keys())
+        if missing_keys:
+            missing = ", ".join(sorted(missing_keys))
+            raise WorkerProtocolError(
+                "invalid_live_source",
+                f"The live_source object is missing required field(s): {missing}.",
+                job_id=job_id,
+            )
+        maximum_pairs = None
+        if "maximum_pairs" in value:
+            maximum_pairs = cls._parse_int(
+                value,
+                "maximum_pairs",
+                "live_source",
+                job_id,
+                minimum=1,
+                maximum=(1 << 63) - 1,
+                error_code="invalid_live_source",
+            )
+        return LiveSourceOptions(
+            playlist=cls._parse_int(
+                value,
+                "playlist",
+                "live_source",
+                job_id,
+                minimum=0,
+                maximum=99_999,
+                error_code="invalid_live_source",
+            ),
+            audio_pid=cls._parse_int(
+                value,
+                "audio_pid",
+                "live_source",
+                job_id,
+                minimum=1,
+                maximum=8_191,
+                error_code="invalid_live_source",
+            ),
+            replay_window_seconds=cls._parse_int(
+                value,
+                "replay_window_seconds",
+                "live_source",
+                job_id,
+                minimum=1,
+                maximum=3_600,
+                error_code="invalid_live_source",
+            ),
+            replay_max_bytes=cls._parse_int(
+                value,
+                "replay_max_bytes",
+                "live_source",
+                job_id,
+                minimum=1_048_576,
+                maximum=8 * 1_024 * 1_024 * 1_024,
+                error_code="invalid_live_source",
+            ),
+            maximum_pairs=maximum_pairs,
+        )
+
+    @classmethod
     def _require_exact_keys(
         cls,
         value: Mapping[str, Any],
@@ -1484,6 +1582,9 @@ class WorkerActivityReporter:
 
     def artifact_ready(self, artifact: Mapping[str, Any]) -> None:
         self._emitter.emit(WorkerEventType.ARTIFACT_READY, {"artifact": dict(artifact)})
+
+    def live_source_ready(self, source: Mapping[str, Any]) -> None:
+        self._emitter.emit(WorkerEventType.ARTIFACT_READY, {"live_source": dict(source)})
 
     def heartbeat_payload(self, elapsed_seconds: int) -> dict[str, Any]:
         with self._lock:

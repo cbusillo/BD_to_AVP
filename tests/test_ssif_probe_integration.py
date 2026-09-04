@@ -4,6 +4,7 @@ import os
 import signal
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"
 RAINFOREST_PLAYLIST = "1005"
 RAINFOREST_CLIP = "00007"
 RAINFOREST_FIRST_100_FRAME_LINES_SHA256 = "186a33d0a66c39619b94d354f77fbe364ee24c2e441ee25d90a8902b75199166"
+SERVICE_FRAME_HEADER = struct.Struct(">4sBBHQQQII")
 
 
 def framemd5_frame_lines_sha256(path: Path) -> str:
@@ -143,6 +145,64 @@ class SsifProbeIntegrationTests(unittest.TestCase):
         self.assertIn(edge_process.returncode, {0, -signal.SIGPIPE}, edge_stderr.decode())
         self.assertEqual(stream_process.returncode, 0, stream_stderr.decode())
         self.assertEqual(framemd5_frame_lines_sha256(output_path), RAINFOREST_FIRST_100_FRAME_LINES_SHA256)
+
+    def test_bounded_live_source_emits_selected_audio_and_replay_boundaries(self) -> None:
+        process = subprocess.Popen(
+            [
+                str(self.helper_path),
+                "stream-service",
+                str(self.source_path),
+                RAINFOREST_PLAYLIST,
+                str(0x1101),
+                "116",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        expected_sequence = 0
+        video_dts: list[int] = []
+        audio_dts: list[int] = []
+        replay_boundaries = 0
+        completed = False
+        while True:
+            header = process.stdout.read(SERVICE_FRAME_HEADER.size)
+            if not header:
+                break
+            self.assertEqual(len(header), SERVICE_FRAME_HEADER.size)
+            magic, version, kind, flags, sequence, _, dts, primary_length, secondary_length = (
+                SERVICE_FRAME_HEADER.unpack(header)
+            )
+            self.assertEqual(magic, b"SSFS")
+            self.assertEqual(version, 1)
+            self.assertEqual(sequence, expected_sequence)
+            expected_sequence += 1
+            remaining = primary_length + secondary_length
+            while remaining > 0:
+                chunk = process.stdout.read(min(remaining, 1_048_576))
+                self.assertTrue(chunk)
+                remaining -= len(chunk)
+            if kind == 1:
+                video_dts.append(dts)
+                replay_boundaries += int(bool(flags & 1))
+            elif kind == 2:
+                audio_dts.append(dts)
+            elif kind == 3:
+                completed = True
+            else:
+                self.fail(f"Unexpected live-source record kind: {kind}")
+        stderr = process.communicate(timeout=30)[1]
+
+        self.assertEqual(process.returncode, 0, stderr.decode())
+        self.assertTrue(completed)
+        self.assertEqual(len(video_dts), 116)
+        self.assertGreater(len(audio_dts), 0)
+        self.assertGreater(replay_boundaries, 0)
+        self.assertEqual(video_dts, sorted(video_dts))
+        self.assertEqual(audio_dts, sorted(audio_dts))
+        status = json.loads(stderr)
+        self.assertEqual(status["pairs"], 116)
+        self.assertEqual(status["audio_samples"], len(audio_dts))
 
 
 if __name__ == "__main__":

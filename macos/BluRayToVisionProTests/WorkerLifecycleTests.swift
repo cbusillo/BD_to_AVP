@@ -40,6 +40,38 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(state.result, result)
     }
 
+    func testLiveSourceLifecyclePublishesReplayAndCompletes() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(URL(fileURLWithPath: "/tmp/movie.iso"))
+        try state.begin(jobID: jobID, operationKind: .liveSource)
+        try state.receive(event(.workerReady, sequence: 0, payload: .init(workerVersion: "0.3.3")))
+        try state.receive(event(.jobStarted, sequence: 1, payload: .init(operation: "start_live_source")))
+        let artifact = LiveSourceArtifact(
+            kind: "live_source_manifest",
+            manifestPath: "/tmp/live-source/live-source.json",
+            videoStreamID: "mvc",
+            audioStreamID: "audio:4352"
+        )
+        try state.receive(event(.artifactReady, sequence: 2, payload: .init(liveSource: artifact)))
+
+        XCTAssertEqual(state.phase, .processing)
+        XCTAssertEqual(state.activityMessage, "Live source replay is ready.")
+
+        let result = LiveSourceResult(
+            manifestPath: artifact.manifestPath,
+            videoStreamID: artifact.videoStreamID,
+            audioStreamID: artifact.audioStreamID,
+            earliestAvailableTicks: 0,
+            latestAvailableTicks: 180_000,
+            retainedGOPs: 2
+        )
+        try state.receive(event(.jobCompleted, sequence: 3, payload: .init(liveSourceResult: result)))
+
+        XCTAssertEqual(state.phase, .completed)
+        XCTAssertEqual(state.stageMessage, "Live source complete")
+        XCTAssertEqual(state.liveSourceResult, result)
+    }
+
     func testElapsedTimeTextFormatsMinuteAndHourDurations() {
         XCTAssertNil(ElapsedTimeText.format(seconds: 0))
         XCTAssertEqual(ElapsedTimeText.format(seconds: 65), "1:05")

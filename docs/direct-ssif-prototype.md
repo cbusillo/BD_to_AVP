@@ -2,12 +2,14 @@
 
 ## Status
 
-Issue #209 owns a development-only prototype for unencrypted and
-already-decrypted Blu-ray ISO and BDMV sources. This first slice proves the
+Issue #209 owns the completed development prototype for unencrypted and
+already-decrypted Blu-ray ISO and BDMV sources. Issue #717 promotes its bounded
+source behavior into the worker contract documented in
+`docs/live-source-service.md`. The original slice proves the
 unencrypted ISO path and deliberately rejects any AACS or BD+ marker;
 compatibility with BDMV folders and already-decrypted images that retain those
 markers remains unproven. The prototype does not replace the production MakeMKV
-path, change worker protocol v4, alter the native app, or ship a new binary.
+path or ship the development-linked helper as a production binary.
 
 The prototype proves a narrower source contract:
 
@@ -148,13 +150,15 @@ Ordinary CI uses synthetic M2TS packets and does not require copyrighted media.
   until that boundary has dedicated evidence.
 - BDMV folder paths are accepted by the helper but do not yet have real-media
   parity evidence against the validated ISO.
-- No audio or PGS fan-out yet; inspection records their stable metadata only.
+- The promoted live service emits one explicitly selected audio PID with 90 kHz
+  timing metadata. PGS fan-out remains outside the live-source contract.
 - The demux currently requires the Blu-ray 3D primary/dependent PID pair
   `0x1011`/`0x1012`; runtime PMT discovery remains a promotion gate. A source
   without that pair fails with `mvc_pids_unavailable` rather than producing an
   empty stream.
-- No crop detection, preview seeking, restart cache, subtitle OCR, final muxing,
-  or production worker dispatch.
+- No crop detection, subtitle OCR, final muxing, or end-to-end HLS production.
+  The worker replay store is keyframe-led and bounded, but #713 still owns its
+  integration with decode, encode, audio delivery, and relay playback.
 - No claim that MakeMKV can be removed from supported encrypted-disc workflows.
 
 ## Packaging And Licensing
@@ -178,11 +182,17 @@ Production integration remains a separate change. Completed evidence:
 - accepted first-15,000-frame framemd5 SHA-256
   `9ada30b0ef6e4b21c73bcb6cc92f66fee0c2b2e197c82423870536cfe6ab7103`.
 
-Remaining promotion gates:
+Completed source-service promotion gates:
+
+- selected audio fan-out with stable identity and timing metadata;
+- cancellation and child cleanup under the worker process owner;
+- a bounded keyframe-led replay contract with honest retained positions; and
+- source-only worker dispatch that leaves MakeMKV conversion unchanged.
+
+Remaining product and packaging gates:
 
 - deterministic multi-clip playlist timing and seek/replay behavior;
-- selected audio and PGS fan-out with language/default/forced semantics;
-- cancellation and child cleanup under the worker process owner;
-- a seekable or replayable source contract for crop, preview, retry, and resume;
+- PGS fan-out with language/default/forced semantics;
 - bundled-library licensing, deployment-target, signing, and notarization proof;
+- end-to-end decode, MV-HEVC segmentation, audio muxing, and relay playback; and
 - unchanged MakeMKV fallback for encrypted and unsupported sources.

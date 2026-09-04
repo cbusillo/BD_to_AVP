@@ -425,6 +425,38 @@ extension WorkerDecision {
     }
 }
 
+struct LiveSourceArtifact: Decodable, Equatable {
+    let kind: String
+    let manifestPath: String
+    let videoStreamID: String
+    let audioStreamID: String
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case manifestPath = "manifest_path"
+        case videoStreamID = "video_stream_id"
+        case audioStreamID = "audio_stream_id"
+    }
+}
+
+struct LiveSourceResult: Decodable, Equatable {
+    let manifestPath: String
+    let videoStreamID: String
+    let audioStreamID: String
+    let earliestAvailableTicks: Int64
+    let latestAvailableTicks: Int64
+    let retainedGOPs: Int
+
+    enum CodingKeys: String, CodingKey {
+        case manifestPath = "manifest_path"
+        case videoStreamID = "video_stream_id"
+        case audioStreamID = "audio_stream_id"
+        case earliestAvailableTicks = "earliest_available_ticks"
+        case latestAvailableTicks = "latest_available_ticks"
+        case retainedGOPs = "retained_gops"
+    }
+}
+
 struct WorkerEventPayload: Decodable, Equatable {
     let workerVersion: String?
     let processGroupID: Int32?
@@ -438,7 +470,9 @@ struct WorkerEventPayload: Decodable, Equatable {
     let result: SourceInspection?
     let conversionResult: ConversionResult?
     let artifact: PreviewArtifact?
+    let liveSource: LiveSourceArtifact?
     let previewResult: PreviewArtifact?
+    let liveSourceResult: LiveSourceResult?
     let error: WorkerFailure?
     let decision: WorkerDecision?
     let observabilityEvent: ObservabilityEvent?
@@ -457,7 +491,9 @@ struct WorkerEventPayload: Decodable, Equatable {
         result: SourceInspection? = nil,
         conversionResult: ConversionResult? = nil,
         artifact: PreviewArtifact? = nil,
+        liveSource: LiveSourceArtifact? = nil,
         previewResult: PreviewArtifact? = nil,
+        liveSourceResult: LiveSourceResult? = nil,
         error: WorkerFailure? = nil,
         decision: WorkerDecision? = nil,
         observabilityEvent: ObservabilityEvent? = nil,
@@ -475,7 +511,9 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.result = result
         self.conversionResult = conversionResult
         self.artifact = artifact
+        self.liveSource = liveSource
         self.previewResult = previewResult
+        self.liveSourceResult = liveSourceResult
         self.error = error
         self.decision = decision
         self.observabilityEvent = observabilityEvent
@@ -501,7 +539,9 @@ struct WorkerEventPayload: Decodable, Equatable {
         result = try container.decodeIfPresent(SourceInspection.self, forKey: .result)
         conversionResult = try container.decodeIfPresent(ConversionResult.self, forKey: .conversionResult)
         artifact = try container.decodeIfPresent(PreviewArtifact.self, forKey: .artifact)
+        liveSource = try container.decodeIfPresent(LiveSourceArtifact.self, forKey: .liveSource)
         previewResult = try container.decodeIfPresent(PreviewArtifact.self, forKey: .previewResult)
+        liveSourceResult = try container.decodeIfPresent(LiveSourceResult.self, forKey: .liveSourceResult)
         error = try container.decodeIfPresent(WorkerFailure.self, forKey: .error)
         decision = try container.decodeIfPresent(WorkerDecision.self, forKey: .decision)
         observabilityEvent = try container.decodeIfPresent(ObservabilityEvent.self, forKey: .observabilityEvent)
@@ -530,7 +570,9 @@ struct WorkerEventPayload: Decodable, Equatable {
         case result
         case conversionResult = "conversion_result"
         case artifact
+        case liveSource = "live_source"
         case previewResult = "preview_result"
+        case liveSourceResult = "live_source_result"
         case error
         case decision
         case observabilityEvent = "event"
