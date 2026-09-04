@@ -23,15 +23,30 @@ struct RelayHostSheet: View {
                         LabeledContent("Fixture", value: fixtureDirectory.lastPathComponent)
                         LabeledContent("Segments", value: "\(controller.segmentCount)")
                     }
-                    if let pairingCode = controller.formattedPairingCode {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Single-use pairing code")
+                    if let pairingCandidate = controller.pairingCandidate {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Compare this code with Vision Pro")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(pairingCode)
-                                .font(.system(.title2, design: .monospaced).weight(.bold))
-                                .textSelection(.enabled)
+                            Text(pairingCandidate.shortAuthenticationString.digits)
+                                .font(.system(size: 42, weight: .bold, design: .monospaced))
+                                .tracking(7)
+                                .accessibilityLabel("Pairing code \(pairingCandidate.shortAuthenticationString.digits.map(String.init).joined(separator: " "))")
                                 .accessibilityIdentifier("relay-pairing-code")
+                            Text("Confirm only if every digit matches. This request expires at \(pairingCandidate.expirationDate.formatted(date: .omitted, time: .shortened)).")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            HStack {
+                                Button("Codes Match") {
+                                    Task { await controller.approveCodesMatch() }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityIdentifier("relay-codes-match")
+                                Button("Not This Device", role: .destructive) {
+                                    Task { await controller.rejectCandidate() }
+                                }
+                                .accessibilityIdentifier("relay-not-this-device")
+                            }
                         }
                     }
                 }

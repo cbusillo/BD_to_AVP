@@ -4,8 +4,6 @@ struct RelayConnectionView: View {
     @ObservedObject var coordinator: RelaySessionCoordinator
     let playRelay: () -> Void
 
-    @StateObject private var pairingEntry = RelayPairingEntryModel()
-
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
@@ -29,8 +27,8 @@ struct RelayConnectionView: View {
             switch coordinator.state {
             case .discovery:
                 discoveryContent
-            case .pairing:
-                pairingContent
+            case .confirming:
+                confirmationContent
             case .connected:
                 connectedContent
             case .reconnecting, .networkUnavailable:
@@ -61,7 +59,7 @@ struct RelayConnectionView: View {
                 coordinator.disconnect()
             }
             .buttonStyle(.bordered)
-        case .discovery, .pairing, .reconnecting, .networkUnavailable:
+        case .discovery, .confirming, .reconnecting, .networkUnavailable:
             EmptyView()
         }
     }
@@ -106,29 +104,32 @@ struct RelayConnectionView: View {
         }
     }
 
-    private var pairingContent: some View {
+    private var confirmationContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Enter the 16-character pairing code shown on \(coordinator.connectedServer?.displayName ?? "your Mac").")
+            Text("Compare this code with \(coordinator.connectedServer?.displayName ?? "your Mac").")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                SecureField("Pairing code", text: $pairingEntry.pairingCode)
-                    .textContentType(.oneTimeCode)
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                    .fontDesign(.monospaced)
+            if let shortAuthenticationString = coordinator.shortAuthenticationString {
+                Text(shortAuthenticationString.digits)
+                    .font(.system(size: 48, weight: .bold, design: .monospaced))
+                    .tracking(8)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .accessibilityLabel("Pairing code \(shortAuthenticationString.digits.map(String.init).joined(separator: " "))")
                     .accessibilityIdentifier("relay-pairing-code")
-                    .onSubmit(submitPairingCode)
-                Button("Pair", action: submitPairingCode)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(pairingEntry.isSubmitting || pairingEntry.pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("relay-pair-button")
             }
-            if let pairingErrorMessage = coordinator.pairingErrorMessage {
-                Label(pairingErrorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .accessibilityIdentifier("relay-pairing-feedback")
+            Text("Confirm only if every digit matches the code on your Mac. Both devices must confirm before media becomes available.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button("Codes Match") {
+                    Task { await coordinator.confirmCodesMatch() }
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("relay-codes-match")
+                Button("Not My Mac", role: .destructive) {
+                    Task { await coordinator.rejectCandidate() }
+                }
+                .accessibilityIdentifier("relay-not-my-mac")
             }
         }
     }
@@ -164,14 +165,6 @@ struct RelayConnectionView: View {
             .foregroundStyle(.secondary)
     }
 
-    private func submitPairingCode() {
-        guard let pairingCode = pairingEntry.beginSubmission() else { return }
-        Task {
-            await coordinator.submitPairingCode(pairingCode)
-            pairingEntry.finishSubmission()
-        }
-    }
-
     private var statusIcon: String {
         switch coordinator.state {
         case .connected:
@@ -180,7 +173,7 @@ struct RelayConnectionView: View {
             "arrow.triangle.2.circlepath.circle.fill"
         case .sessionExpired, .failed:
             "exclamationmark.circle.fill"
-        case .idle, .discovery, .pairing:
+        case .idle, .discovery, .confirming:
             "dot.radiowaves.left.and.right"
         }
     }
@@ -193,7 +186,7 @@ struct RelayConnectionView: View {
             .orange
         case .sessionExpired, .failed:
             .red
-        case .idle, .discovery, .pairing:
+        case .idle, .discovery, .confirming:
             .blue
         }
     }
@@ -204,8 +197,8 @@ struct RelayConnectionView: View {
             "Connect to a paired Mac to play its live MV-HEVC relay."
         case .discovery:
             "Looking for relay-enabled Macs on your local network."
-        case let .pairing(_, expiresAt):
-            "Pairing code expires \(expiresAt.formatted(date: .omitted, time: .shortened))."
+        case let .confirming(_, _, expiresAt):
+            "Compare the code before \(expiresAt.formatted(date: .omitted, time: .shortened))."
         case let .connected(_, expiresAt):
             "Connected until \(expiresAt.formatted(date: .omitted, time: .shortened))."
         case let .reconnecting(attempt):
@@ -213,7 +206,7 @@ struct RelayConnectionView: View {
         case .networkUnavailable:
             "Waiting for your local network to return."
         case .sessionExpired:
-            "The pairing session expired or is no longer available."
+            "The numeric-comparison session expired or is no longer available."
         case let .failed(message):
             message
         }

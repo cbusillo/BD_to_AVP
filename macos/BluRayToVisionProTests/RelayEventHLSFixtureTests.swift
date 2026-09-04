@@ -74,13 +74,13 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let session = RecordingRelaySession()
-        let controller = RelayHostSessionController(startSession: { _, _, _ in session })
+        let controller = RelayHostSessionController(startSession: { _, _ in session })
 
         await controller.start(directory: fixture)
         XCTAssertEqual(controller.lifecycle, .advertising)
         XCTAssertTrue(controller.isSessionActive)
         XCTAssertEqual(controller.segmentCount, 2)
-        XCTAssertNotNil(controller.formattedPairingCode)
+        XCTAssertNil(controller.pairingCandidate)
 
         await controller.cancel()
         XCTAssertEqual(controller.lifecycle, .cancelled)
@@ -92,7 +92,7 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let session = RecordingRelaySession()
-        let controller = RelayHostSessionController(startSession: { _, _, _ in session })
+        let controller = RelayHostSessionController(startSession: { _, _ in session })
 
         await controller.start(directory: fixture)
         await controller.stop()
@@ -114,7 +114,7 @@ final class RelayEventHLSFixtureTests: XCTestCase {
                 loadCount += 1
                 return fixture
             },
-            startSession: { receivedDirectory, received, _ in
+            startSession: { receivedDirectory, received in
                 XCTAssertEqual(receivedDirectory, directory)
                 receivedFixture = received
                 return session
@@ -183,4 +183,10 @@ private final class RecordingRelaySession: RelayHostSessionControlling {
     func stopForAppQuit() async {}
 
     func currentLifecycle() async -> RelayHostLifecycle { .pairing }
+
+    func currentPairingCandidate() async -> RelayPendingPairingCandidate? { nil }
+
+    func approvePairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws {}
+
+    func rejectPairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws {}
 }

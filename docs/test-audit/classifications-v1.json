@@ -211,9 +211,9 @@
         "macos/BDToAVPPlayerTests/PlayerAppModelTests.swift",
         "macos/BDToAVPPlayerTests/RelayBonjourBrowserTests.swift",
         "macos/BDToAVPPlayerTests/RelayHLSResourceLoaderTests.swift",
-        "macos/BDToAVPPlayerTests/RelayPairingEntryModelTests.swift",
         "macos/BDToAVPPlayerTests/RelayRemotePlaybackSourceTests.swift",
         "macos/BDToAVPPlayerTests/RelaySessionCoordinatorTests.swift",
+        "macos/BDToAVPPlayerTests/RelayTestSupport.swift",
         "macos/BDToAVPPlayerTests/ResumeStoreTests.swift"
       ]
     },

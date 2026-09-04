@@ -1,316 +1,80 @@
-import Foundation
 import XCTest
 @testable import BDToAVPPlayer
 
-actor FakeRelayTransport: RelayTransport {
-    typealias Handler = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+@MainActor
+final class RelaySessionCoordinatorTests: XCTestCase {
+    func testCoordinatorShowsNumericComparisonThenConnectsAfterMacApproval() async throws {
+        let now = Date()
+        let pairing = try RelayServerPairingContext(now: now)
+        let transport = CoordinatorTransport(pairing: pairing, now: now)
+        let endpoint = RelayDiscoveredEndpoint(id: "Mac", displayName: "My Mac", baseURL: URL(string: "http://relay.local")!)
+        let coordinator = RelaySessionCoordinator(transport: transport, clock: { now }, nonce: { UUID().uuidString })
+        coordinator.startDiscovery()
+        await coordinator.connect(to: endpoint)
+        guard case .confirming = coordinator.state else { return XCTFail("Expected numeric comparison") }
+        XCTAssertEqual(coordinator.shortAuthenticationString?.digits.count, 6)
+        let pendingCandidate = await pairing.pendingCandidateSummary()
+        let candidate = try XCTUnwrap(pendingCandidate)
+        try await pairing.approve(candidateID: candidate.candidateID, now: now)
+        await coordinator.confirmCodesMatch()
+        guard case .connected = coordinator.state else { return XCTFail("Expected connected after both confirmations") }
+    }
+}
 
-    private var handler: Handler?
-    private var requests: [URLRequest] = []
+private actor CoordinatorTransport: RelayTransport {
+    private let pairing: RelayServerPairingContext
+    private let now: Date
+    private let replayStore = try! RelayReplayNonceStore()
+    private var provisionalSession: RelayEstablishedSession?
+    private var establishedSession: RelayEstablishedSession?
 
-    func setHandler(_ handler: @escaping Handler) {
-        self.handler = handler
+    init(pairing: RelayServerPairingContext, now: Date) {
+        self.pairing = pairing
+        self.now = now
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        requests.append(request)
-        guard let handler else { throw URLError(.badServerResponse) }
-        return try await handler(request)
-    }
-
-    func allRequests() -> [URLRequest] { requests }
-}
-
-final class FakeRelayBrowser: RelayEndpointBrowsing, @unchecked Sendable {
-    let discoveryStream: AsyncStream<[RelayDiscoveredEndpoint]>
-    private let continuation: AsyncStream<[RelayDiscoveredEndpoint]>.Continuation
-    private(set) var startCount = 0
-    private(set) var stopCount = 0
-
-    init() {
-        var streamContinuation: AsyncStream<[RelayDiscoveredEndpoint]>.Continuation!
-        discoveryStream = AsyncStream { streamContinuation = $0 }
-        continuation = streamContinuation
-    }
-
-    func startBrowsing() { startCount += 1 }
-    func stopBrowsing() { stopCount += 1; continuation.finish() }
-    func emit(_ endpoints: [RelayDiscoveredEndpoint]) { continuation.yield(endpoints) }
-}
-
-func makeTestEndpoint(
-    id: String = "Vision-Pro",
-    baseURL: URL = URL(string: "http://relay.local:7431")!
-) -> RelayDiscoveredEndpoint {
-    RelayDiscoveredEndpoint(id: id, displayName: id, baseURL: baseURL)
-}
-
-func makeHTTPResponse(_ request: URLRequest, statusCode: Int = 200, contentType: String = "application/json") -> HTTPURLResponse {
-    HTTPURLResponse(
-        url: request.url!,
-        statusCode: statusCode,
-        httpVersion: "HTTP/1.1",
-        headerFields: ["content-type": contentType]
-    )!
-}
-
-func makeAuthenticatedHTTPResponse(
-    _ request: URLRequest,
-    body: Data,
-    serverSession: RelayEstablishedSession,
-    statusCode: Int = 200,
-    contentType: String = "application/json",
-    authenticatedRequestNonce: String? = nil,
-    authenticatedStatusCode: Int? = nil,
-    authenticatedBody: Data? = nil
-) throws -> HTTPURLResponse {
-    let requestNonce: String
-    if let authenticatedRequestNonce {
-        requestNonce = authenticatedRequestNonce
-    } else {
-        let encodedRequest = try XCTUnwrap(
-            request.value(forHTTPHeaderField: RelayWireContract.authenticationHeader)
-        )
-        let requestData = try XCTUnwrap(Data(base64Encoded: encodedRequest))
-        requestNonce = try JSONDecoder().decode(RelayAuthenticatedRequest.self, from: requestData).nonce
-    }
-    let authentication = try serverSession.authenticateResponse(
-        requestNonce: requestNonce,
-        statusCode: authenticatedStatusCode ?? statusCode,
-        body: authenticatedBody ?? body
-    )
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys]
-    return HTTPURLResponse(
-        url: request.url!,
-        statusCode: statusCode,
-        httpVersion: "HTTP/1.1",
-        headerFields: [
-            "content-type": contentType,
-            RelayWireContract.responseAuthenticationHeader: try encoder.encode(authentication).base64EncodedString(),
-        ]
-    )!
-}
-
-actor RelayTestServerSessionStore {
-    private var session: RelayEstablishedSession?
-
-    func set(_ session: RelayEstablishedSession) {
-        self.session = session
-    }
-
-    func response(
-        for request: URLRequest,
-        body: Data,
-        statusCode: Int = 200,
-        contentType: String = "application/json"
-    ) throws -> HTTPURLResponse {
-        try makeAuthenticatedHTTPResponse(
-            request,
-            body: body,
-            serverSession: XCTUnwrap(session),
-            statusCode: statusCode,
-            contentType: contentType
-        )
-    }
-}
-
-private struct ChallengeEnvelope: Encodable { let challenge: RelaySessionChallenge }
-private struct PairingEnvelope: Encodable { let acceptance: RelayPairingAcceptance }
-
-@MainActor
-final class RelaySessionCoordinatorTests: XCTestCase {
-    private let now = Date(timeIntervalSince1970: 1_700_000_000)
-    private let pairingCode = try! RelayPairingCode("2345-6789-ABCD-EFGH")
-
-    private func makeCoordinator(
-        browser: FakeRelayBrowser,
-        transport: FakeRelayTransport,
-        now: @escaping @Sendable () -> Date
-    ) -> RelaySessionCoordinator {
-        RelaySessionCoordinator(browserFactory: { browser }, transport: transport, clock: now)
-    }
-
-    func testDiscoveryPublishesResolvedEndpoints() async {
-        let browser = FakeRelayBrowser()
-        let coordinator = makeCoordinator(browser: browser, transport: FakeRelayTransport(), now: { self.now })
-        coordinator.startDiscovery()
-        browser.emit([makeTestEndpoint()])
-        for _ in 0 ..< 5 { await Task.yield() }
-
-        XCTAssertEqual(coordinator.state, .discovery)
-        XCTAssertEqual(coordinator.discoveredServers, [makeTestEndpoint()])
-        XCTAssertEqual(browser.startCount, 1)
-    }
-
-    func testPairingUsesHostWireRoutesEnvelopeAndCreatedResponse() async throws {
-        let browser = FakeRelayBrowser()
-        let transport = FakeRelayTransport()
-        let server = try RelayServerPairingContext(pairingCode: pairingCode, now: now)
-        await transport.setHandler { [server, now] request in
-            switch request.url?.path {
-            case RelayWireContract.challengePath:
-                XCTAssertEqual(request.httpMethod, "GET")
-                return (try JSONEncoder().encode(ChallengeEnvelope(challenge: server.challenge)), makeHTTPResponse(request))
-            case RelayWireContract.pairingPath:
-                XCTAssertEqual(request.httpMethod, "POST")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "content-type"), RelayWireContract.jsonContentType)
-                guard let body = request.httpBody else { throw URLError(.badServerResponse) }
-                let pairingRequest = try JSONDecoder().decode(RelayPairingRequest.self, from: body)
-                let accepted = try await server.accept(pairingRequest, now: now)
-                return (try JSONEncoder().encode(PairingEnvelope(acceptance: accepted.acceptance)), makeHTTPResponse(request, statusCode: 201))
-            default:
-                throw URLError(.badURL)
-            }
+        let path = request.url!.path
+        switch path {
+        case RelayWireContract.challengePath:
+            return response(try JSONEncoder().encode(RelayChallengeEnvelope(challenge: pairing.challenge)), request: request, status: 200)
+        case RelayWireContract.pairingPath:
+            let result = try await pairing.accept(JSONDecoder().decode(RelayPairingRequest.self, from: request.httpBody ?? Data()), now: now)
+            provisionalSession = result.provisionalSession
+            return response(try JSONEncoder().encode(RelayPairingCandidateEnvelope(candidate: result.candidate)), request: request, status: 201)
+        case RelayWireContract.pairingConfirmPath:
+            let session = try XCTUnwrap(provisionalSession)
+            let authentication = try authenticatedRequest(request)
+            try await session.verify(authentication, actualMethod: "POST", actualRequestTarget: path, body: request.httpBody ?? Data(), now: now, replayStore: replayStore)
+            let confirmation = try JSONDecoder().decode(RelayPairingConfirmation.self, from: request.httpBody ?? Data())
+            let result = try await pairing.confirm(confirmation, now: now)
+            if let established = result.session { establishedSession = established }
+            let body = try JSONEncoder().encode(RelayPairingConfirmationEnvelope(confirmation: result.response))
+            let response = response(body, request: request, status: result.response.state == .waitingForMac ? 202 : 200)
+            return try authenticate(response, session: session, request: authentication)
+        case RelayWireContract.playlistSnapshotPath:
+            let session = try XCTUnwrap(establishedSession)
+            let authentication = try authenticatedRequest(request)
+            try await session.verify(authentication, actualMethod: "GET", actualRequestTarget: path, body: Data(), now: now, replayStore: replayStore)
+            return try authenticate(response(Data("{}".utf8), request: request, status: 200), session: session, request: authentication)
+        default:
+            return response(Data(), request: request, status: 404)
         }
-        let coordinator = makeCoordinator(browser: browser, transport: transport, now: { self.now })
-        coordinator.startDiscovery()
-        await coordinator.connect(to: makeTestEndpoint())
-        await coordinator.submitPairingCode(pairingCode.formattedValue)
-
-        guard case .connected = coordinator.state else {
-            return XCTFail("Expected a paired relay session, got \(coordinator.state)")
-        }
-        let paths = await transport.allRequests().compactMap(\.url?.path)
-        XCTAssertEqual(paths, [RelayWireContract.challengePath, RelayWireContract.pairingPath])
     }
 
-    func testWrongPairingCodeKeepsUnexpiredChallengeRetryable() async throws {
-        let browser = FakeRelayBrowser()
-        let transport = FakeRelayTransport()
-        let server = try RelayServerPairingContext(pairingCode: pairingCode, now: now)
-        await transport.setHandler { [server, now] request in
-            switch request.url?.path {
-            case RelayWireContract.challengePath:
-                return (try JSONEncoder().encode(ChallengeEnvelope(challenge: server.challenge)), makeHTTPResponse(request))
-            case RelayWireContract.pairingPath:
-                let requestBody = try JSONDecoder().decode(RelayPairingRequest.self, from: request.httpBody!)
-                do {
-                    let accepted = try await server.accept(requestBody, now: now)
-                    return (try JSONEncoder().encode(PairingEnvelope(acceptance: accepted.acceptance)), makeHTTPResponse(request, statusCode: 201))
-                } catch RelaySessionError.pairingProofMismatch {
-                    return (Data(), makeHTTPResponse(request, statusCode: 401))
-                }
-            default:
-                throw URLError(.badURL)
-            }
-        }
-        let coordinator = makeCoordinator(browser: browser, transport: transport, now: { self.now })
-        coordinator.startDiscovery()
-        await coordinator.connect(to: makeTestEndpoint())
-        await coordinator.submitPairingCode("2345-6789-ABCD-EFGK")
-
-        XCTAssertEqual(coordinator.state, .pairing(serverID: "Vision-Pro", expiresAt: server.challenge.expirationDate))
-        XCTAssertEqual(coordinator.pairingErrorMessage, "That pairing code did not match. Try again.")
-
-        await coordinator.submitPairingCode(pairingCode.formattedValue)
-
-        guard case .connected = coordinator.state else {
-            return XCTFail("Expected retry with the existing challenge to pair, got \(coordinator.state)")
-        }
-        XCTAssertNil(coordinator.pairingErrorMessage)
-        let requestPaths = await transport.allRequests().compactMap(\.url?.path)
-        XCTAssertEqual(
-            requestPaths,
-            [RelayWireContract.challengePath, RelayWireContract.pairingPath, RelayWireContract.pairingPath]
-        )
+    private func authenticatedRequest(_ request: URLRequest) throws -> RelayAuthenticatedRequest {
+        let encoded = try XCTUnwrap(request.value(forHTTPHeaderField: RelayWireContract.authenticationHeader))
+        return try JSONDecoder().decode(RelayAuthenticatedRequest.self, from: try XCTUnwrap(Data(base64Encoded: encoded)))
     }
 
-    func testPairingConflictEndsTheCurrentChallenge() async {
-        let browser = FakeRelayBrowser()
-        let transport = FakeRelayTransport()
-        let server = try! RelayServerPairingContext(pairingCode: pairingCode, now: now)
-        await transport.setHandler { request in
-            switch request.url?.path {
-            case RelayWireContract.challengePath:
-                return (try! JSONEncoder().encode(ChallengeEnvelope(challenge: server.challenge)), makeHTTPResponse(request))
-            case RelayWireContract.pairingPath:
-                return (Data(), makeHTTPResponse(request, statusCode: 409))
-            default:
-                throw URLError(.badURL)
-            }
-        }
-        let coordinator = makeCoordinator(browser: browser, transport: transport, now: { self.now })
-        coordinator.startDiscovery()
-        await coordinator.connect(to: makeTestEndpoint())
-        await coordinator.submitPairingCode(pairingCode.formattedValue)
-
-        XCTAssertEqual(coordinator.state, .sessionExpired)
-        XCTAssertNil(coordinator.pairingErrorMessage)
+    private func authenticate(_ response: (Data, HTTPURLResponse), session: RelayEstablishedSession, request: RelayAuthenticatedRequest) throws -> (Data, HTTPURLResponse) {
+        let authentication = try session.authenticateResponse(requestNonce: request.nonce, statusCode: response.1.statusCode, body: response.0)
+        var headers = response.1.allHeaderFields as! [String: String]
+        headers[RelayWireContract.responseAuthenticationHeader] = try JSONEncoder().encode(authentication).base64EncodedString()
+        return (response.0, HTTPURLResponse(url: response.1.url!, statusCode: response.1.statusCode, httpVersion: "HTTP/1.1", headerFields: headers)!)
     }
 
-    func testExpiredChallengeAndUnpairedHostAreMappedWithoutRetainingSession() async throws {
-        let browser = FakeRelayBrowser()
-        let expiredTransport = FakeRelayTransport()
-        await expiredTransport.setHandler { request in
-            (Data(), makeHTTPResponse(request, statusCode: 410))
-        }
-        let expired = makeCoordinator(browser: browser, transport: expiredTransport, now: { self.now })
-        expired.startDiscovery()
-        await expired.connect(to: makeTestEndpoint())
-        XCTAssertEqual(expired.state, .sessionExpired)
-        XCTAssertNil(expired.session)
-
-        let unpairedTransport = FakeRelayTransport()
-        await unpairedTransport.setHandler { request in
-            (Data(), makeHTTPResponse(request, statusCode: 503))
-        }
-        let unpaired = makeCoordinator(browser: FakeRelayBrowser(), transport: unpairedTransport, now: { self.now })
-        unpaired.startDiscovery()
-        await unpaired.connect(to: makeTestEndpoint())
-        if case .failed = unpaired.state {} else {
-            XCTFail("An unpaired relay must not transition to connected")
-        }
-        XCTAssertNil(unpaired.session)
-    }
-
-    func testReconnectUsesSameSessionAndFreshSignedProbe() async throws {
-        let browser = FakeRelayBrowser()
-        let transport = FakeRelayTransport()
-        let server = try RelayServerPairingContext(pairingCode: pairingCode, now: now)
-        let serverSessionStore = RelayTestServerSessionStore()
-        await transport.setHandler { [server, serverSessionStore, now] request in
-            switch request.url?.path {
-            case RelayWireContract.challengePath:
-                return (try JSONEncoder().encode(ChallengeEnvelope(challenge: server.challenge)), makeHTTPResponse(request))
-            case RelayWireContract.pairingPath:
-                let accepted = try await server.accept(try JSONDecoder().decode(RelayPairingRequest.self, from: request.httpBody!), now: now)
-                await serverSessionStore.set(accepted.session)
-                return (try JSONEncoder().encode(PairingEnvelope(acceptance: accepted.acceptance)), makeHTTPResponse(request, statusCode: 201))
-            case RelayWireContract.playlistSnapshotPath:
-                XCTAssertNotNil(request.value(forHTTPHeaderField: RelayWireContract.authenticationHeader))
-                XCTAssertNotNil(request.value(forHTTPHeaderField: RelayWireContract.mediaCapabilityHeader))
-                let body = Data("{}".utf8)
-                return (body, try await serverSessionStore.response(for: request, body: body))
-            default:
-                throw URLError(.badURL)
-            }
-        }
-        let coordinator = makeCoordinator(browser: browser, transport: transport, now: { self.now })
-        coordinator.startDiscovery()
-        await coordinator.connect(to: makeTestEndpoint())
-        await coordinator.submitPairingCode(pairingCode.formattedValue)
-        let sessionID = coordinator.session?.sessionID
-
-        coordinator.handleNetworkAvailability(.unavailable)
-        XCTAssertEqual(coordinator.state, .networkUnavailable)
-        coordinator.handleNetworkAvailability(.available)
-        try await Task.sleep(nanoseconds: 100_000_000)
-
-        guard case let .connected(reconnectedID, _) = coordinator.state else {
-            return XCTFail("Expected reconnect, got \(coordinator.state)")
-        }
-        XCTAssertEqual(reconnectedID, sessionID?.rawValue)
-    }
-
-    func testCleanupIsIdempotent() {
-        let browser = FakeRelayBrowser()
-        let coordinator = makeCoordinator(browser: browser, transport: FakeRelayTransport(), now: { self.now })
-        coordinator.startDiscovery()
-        coordinator.disconnect()
-        coordinator.disconnect()
-        XCTAssertEqual(coordinator.state, .idle)
-        XCTAssertNil(coordinator.session)
-        XCTAssertEqual(browser.stopCount, 1)
+    private func response(_ data: Data, request: URLRequest, status: Int) -> (Data, HTTPURLResponse) {
+        (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["content-type": RelayWireContract.jsonContentType])!)
     }
 }

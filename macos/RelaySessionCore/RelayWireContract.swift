@@ -1,11 +1,12 @@
 import Foundation
 
 enum RelayWireContract {
-    static let protocolVersion = 2
+    static let protocolVersion = 3
     static let bonjourServiceType = "_bdtoavp-relay._tcp"
 
     static let challengePath = "/relay/v1/challenge"
     static let pairingPath = "/relay/v1/pairing"
+    static let pairingConfirmPath = "/relay/v1/pairing/confirm"
     static let playlistPath = "/relay/v1/playlist.m3u8"
     static let playlistSnapshotPath = "/relay/v1/playlist.json"
     static let finishPath = "/relay/v1/control/finish"
@@ -23,8 +24,12 @@ struct RelayChallengeEnvelope: Codable, Sendable {
     let challenge: RelaySessionChallenge
 }
 
-struct RelayPairingEnvelope: Codable, Sendable {
-    let acceptance: RelayPairingAcceptance
+struct RelayPairingCandidateEnvelope: Codable, Sendable {
+    let candidate: RelayPairingCandidate
+}
+
+struct RelayPairingConfirmationEnvelope: Codable, Sendable {
+    let confirmation: RelayPairingConfirmationResponse
 }
 
 struct RelayPlaylistSnapshot: Codable, Equatable, Sendable {

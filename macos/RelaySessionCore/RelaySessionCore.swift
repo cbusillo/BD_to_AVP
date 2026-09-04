@@ -3,16 +3,21 @@ import Foundation
 
 public enum RelaySessionError: Error, Equatable, Sendable {
     case invalidSessionIdentifier
-    case invalidPairingCode
     case invalidPublicKey
     case invalidNonce
+    case invalidNonceCommitment
+    case invalidCandidateIdentifier
     case invalidProof
     case invalidTimestamp
     case invalidRequest
     case expiredChallenge
-    case pairingProofMismatch
-    case acceptanceProofMismatch
+    case nonceCommitmentMismatch
+    case candidateProofMismatch
+    case clientConfirmationMismatch
+    case serverConfirmationMismatch
     case pairingAlreadyCompleted
+    case pairingCandidateInProgress
+    case pairingCandidateNotFound
     case pairingAttemptsExhausted
     case requestBodyMismatch
     case requestSignatureMismatch
@@ -68,86 +73,23 @@ public struct RelaySessionIdentifier: Codable, Equatable, Hashable, Sendable {
     }
 }
 
-public struct RelayPairingCode: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
-    public static let characterCount = 16
-    public static let alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-
-    fileprivate let rawValue: String
-
-    public init(_ enteredValue: String) throws {
-        guard enteredValue.utf8.count <= 64 else {
-            throw RelaySessionError.invalidPairingCode
-        }
-        var canonicalBytes: [UInt8] = []
-        canonicalBytes.reserveCapacity(Self.characterCount)
-
-        for byte in enteredValue.utf8 {
-            if byte == Character("-").asciiValue || byte == Character(" ").asciiValue {
-                continue
-            }
-            let uppercaseByte = byte >= Character("a").asciiValue! && byte <= Character("z").asciiValue!
-                ? byte - 32
-                : byte
-            guard Self.alphabet.utf8.contains(uppercaseByte) else {
-                throw RelaySessionError.invalidPairingCode
-            }
-            canonicalBytes.append(uppercaseByte)
-        }
-
-        guard canonicalBytes.count == Self.characterCount else {
-            throw RelaySessionError.invalidPairingCode
-        }
-        rawValue = String(decoding: canonicalBytes, as: UTF8.self)
-    }
-
-    public static func random() -> RelayPairingCode {
-        let alphabetBytes = Array(alphabet.utf8)
-        let randomBytes = RelayCrypto.randomBytes(count: characterCount)
-        let canonicalBytes = randomBytes.map { alphabetBytes[Int($0 & 31)] }
-        return RelayPairingCode(canonicalValue: String(decoding: canonicalBytes, as: UTF8.self))
-    }
-
-    public var formattedValue: String {
-        let bytes = Array(rawValue.utf8)
-        return stride(from: 0, to: bytes.count, by: 4)
-            .map { String(decoding: bytes[$0 ..< min($0 + 4, bytes.count)], as: UTF8.self) }
-            .joined(separator: "-")
-    }
-
-    public static func == (lhs: RelayPairingCode, rhs: RelayPairingCode) -> Bool {
-        RelayCrypto.constantTimeEqual(Data(lhs.rawValue.utf8), Data(rhs.rawValue.utf8))
-    }
-
-    public var description: String {
-        "<relay pairing code: redacted>"
-    }
-
-    public var debugDescription: String {
-        description
-    }
-
-    private init(canonicalValue: String) {
-        rawValue = canonicalValue
-    }
-}
-
 public struct RelaySessionChallenge: Codable, Equatable, Sendable {
     public let sessionID: RelaySessionIdentifier
     public let serverPublicKey: Data
-    public let serverNonce: Data
+    public let serverNonceCommitment: Data
     public let expiresAtUnixMilliseconds: Int64
 
     public init(
         sessionID: RelaySessionIdentifier,
         serverPublicKey: Data,
-        serverNonce: Data,
+        serverNonceCommitment: Data,
         expiresAtUnixMilliseconds: Int64
     ) throws {
         guard serverPublicKey.count == RelayCrypto.curve25519KeyLength else {
             throw RelaySessionError.invalidPublicKey
         }
-        guard serverNonce.count == RelayCrypto.nonceLength else {
-            throw RelaySessionError.invalidNonce
+        guard serverNonceCommitment.count == RelayCrypto.sha256Length else {
+            throw RelaySessionError.invalidNonceCommitment
         }
         guard RelayTime.isValidUnixMilliseconds(expiresAtUnixMilliseconds) else {
             throw RelaySessionError.invalidTimestamp
@@ -155,7 +97,7 @@ public struct RelaySessionChallenge: Codable, Equatable, Sendable {
 
         self.sessionID = sessionID
         self.serverPublicKey = serverPublicKey
-        self.serverNonce = serverNonce
+        self.serverNonceCommitment = serverNonceCommitment
         self.expiresAtUnixMilliseconds = expiresAtUnixMilliseconds
     }
 
@@ -166,7 +108,7 @@ public struct RelaySessionChallenge: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionID
         case serverPublicKey
-        case serverNonce
+        case serverNonceCommitment
         case expiresAtUnixMilliseconds
     }
 
@@ -175,7 +117,7 @@ public struct RelaySessionChallenge: Codable, Equatable, Sendable {
         try self.init(
             sessionID: container.decode(RelaySessionIdentifier.self, forKey: .sessionID),
             serverPublicKey: container.decode(Data.self, forKey: .serverPublicKey),
-            serverNonce: container.decode(Data.self, forKey: .serverNonce),
+            serverNonceCommitment: container.decode(Data.self, forKey: .serverNonceCommitment),
             expiresAtUnixMilliseconds: container.decode(Int64.self, forKey: .expiresAtUnixMilliseconds)
         )
     }
@@ -185,13 +127,11 @@ public struct RelayPairingRequest: Codable, Equatable, Sendable {
     public let sessionID: RelaySessionIdentifier
     public let clientPublicKey: Data
     public let clientNonce: Data
-    public let pairingProof: Data
 
     public init(
         sessionID: RelaySessionIdentifier,
         clientPublicKey: Data,
-        clientNonce: Data,
-        pairingProof: Data
+        clientNonce: Data
     ) throws {
         guard clientPublicKey.count == RelayCrypto.curve25519KeyLength else {
             throw RelaySessionError.invalidPublicKey
@@ -199,21 +139,15 @@ public struct RelayPairingRequest: Codable, Equatable, Sendable {
         guard clientNonce.count == RelayCrypto.nonceLength else {
             throw RelaySessionError.invalidNonce
         }
-        guard pairingProof.count == RelayCrypto.sha256Length else {
-            throw RelaySessionError.invalidProof
-        }
-
         self.sessionID = sessionID
         self.clientPublicKey = clientPublicKey
         self.clientNonce = clientNonce
-        self.pairingProof = pairingProof
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionID
         case clientPublicKey
         case clientNonce
-        case pairingProof
     }
 
     public init(from decoder: Decoder) throws {
@@ -221,32 +155,120 @@ public struct RelayPairingRequest: Codable, Equatable, Sendable {
         try self.init(
             sessionID: container.decode(RelaySessionIdentifier.self, forKey: .sessionID),
             clientPublicKey: container.decode(Data.self, forKey: .clientPublicKey),
-            clientNonce: container.decode(Data.self, forKey: .clientNonce),
-            pairingProof: container.decode(Data.self, forKey: .pairingProof)
+            clientNonce: container.decode(Data.self, forKey: .clientNonce)
         )
     }
 }
 
-public struct RelayPairingAcceptance: Codable, Equatable, Sendable {
+public struct RelayPairingCandidateIdentifier: Codable, Equatable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) throws {
+        guard let value = UUID(uuidString: rawValue) else {
+            throw RelaySessionError.invalidCandidateIdentifier
+        }
+        self.rawValue = value.uuidString.lowercased()
+    }
+
+    public static func random() -> RelayPairingCandidateIdentifier {
+        try! RelayPairingCandidateIdentifier(rawValue: UUID().uuidString)
+    }
+}
+
+public struct RelayShortAuthenticationString: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    public let digits: String
+
+    fileprivate init(digits: String) {
+        self.digits = digits
+    }
+
+    public var description: String { "<relay numeric comparison: redacted>" }
+    public var debugDescription: String { description }
+}
+
+public struct RelayPairingCandidate: Codable, Equatable, Sendable {
+    public let candidateID: RelayPairingCandidateIdentifier
     public let sessionID: RelaySessionIdentifier
+    public let serverNonce: Data
     public let expiresAtUnixMilliseconds: Int64
     public let serverProof: Data
 
     public init(
+        candidateID: RelayPairingCandidateIdentifier,
         sessionID: RelaySessionIdentifier,
+        serverNonce: Data,
         expiresAtUnixMilliseconds: Int64,
         serverProof: Data
+    ) throws {
+        guard serverNonce.count == RelayCrypto.nonceLength else { throw RelaySessionError.invalidNonce }
+        guard RelayTime.isValidUnixMilliseconds(expiresAtUnixMilliseconds) else { throw RelaySessionError.invalidTimestamp }
+        guard serverProof.count == RelayCrypto.sha256Length else { throw RelaySessionError.invalidProof }
+        self.candidateID = candidateID
+        self.sessionID = sessionID
+        self.serverNonce = serverNonce
+        self.expiresAtUnixMilliseconds = expiresAtUnixMilliseconds
+        self.serverProof = serverProof
+    }
+
+    public var expirationDate: Date { RelayTime.date(fromUnixMilliseconds: expiresAtUnixMilliseconds) }
+}
+
+public enum RelayPairingConfirmationDecision: String, Codable, Equatable, Sendable {
+    case codesMatch
+    case notMyMac
+}
+
+public struct RelayPairingConfirmation: Codable, Equatable, Sendable {
+    public let candidateID: RelayPairingCandidateIdentifier
+    public let decision: RelayPairingConfirmationDecision
+    public let clientConfirmationMAC: Data?
+
+    public init(
+        candidateID: RelayPairingCandidateIdentifier,
+        decision: RelayPairingConfirmationDecision,
+        clientConfirmationMAC: Data?
+    ) throws {
+        switch decision {
+        case .codesMatch:
+            guard clientConfirmationMAC?.count == RelayCrypto.sha256Length else { throw RelaySessionError.invalidProof }
+        case .notMyMac:
+            guard clientConfirmationMAC == nil else { throw RelaySessionError.invalidProof }
+        }
+        self.candidateID = candidateID
+        self.decision = decision
+        self.clientConfirmationMAC = clientConfirmationMAC
+    }
+}
+
+public enum RelayPairingConfirmationState: String, Codable, Equatable, Sendable {
+    case waitingForMac
+    case established
+    case rejected
+}
+
+public struct RelayPairingAcceptance: Codable, Equatable, Sendable {
+    public let candidateID: RelayPairingCandidateIdentifier
+    public let sessionID: RelaySessionIdentifier
+    public let expiresAtUnixMilliseconds: Int64
+    public let serverConfirmationMAC: Data
+
+    public init(
+        candidateID: RelayPairingCandidateIdentifier,
+        sessionID: RelaySessionIdentifier,
+        expiresAtUnixMilliseconds: Int64,
+        serverConfirmationMAC: Data
     ) throws {
         guard RelayTime.isValidUnixMilliseconds(expiresAtUnixMilliseconds) else {
             throw RelaySessionError.invalidTimestamp
         }
-        guard serverProof.count == RelayCrypto.sha256Length else {
+        guard serverConfirmationMAC.count == RelayCrypto.sha256Length else {
             throw RelaySessionError.invalidProof
         }
 
+        self.candidateID = candidateID
         self.sessionID = sessionID
         self.expiresAtUnixMilliseconds = expiresAtUnixMilliseconds
-        self.serverProof = serverProof
+        self.serverConfirmationMAC = serverConfirmationMAC
     }
 
     public var expirationDate: Date {
@@ -254,18 +276,33 @@ public struct RelayPairingAcceptance: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case candidateID
         case sessionID
         case expiresAtUnixMilliseconds
-        case serverProof
+        case serverConfirmationMAC
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
+            candidateID: container.decode(RelayPairingCandidateIdentifier.self, forKey: .candidateID),
             sessionID: container.decode(RelaySessionIdentifier.self, forKey: .sessionID),
             expiresAtUnixMilliseconds: container.decode(Int64.self, forKey: .expiresAtUnixMilliseconds),
-            serverProof: container.decode(Data.self, forKey: .serverProof)
+            serverConfirmationMAC: container.decode(Data.self, forKey: .serverConfirmationMAC)
         )
+    }
+}
+
+public struct RelayPairingConfirmationResponse: Codable, Equatable, Sendable {
+    public let candidateID: RelayPairingCandidateIdentifier
+    public let state: RelayPairingConfirmationState
+    public let acceptance: RelayPairingAcceptance?
+
+    public init(candidateID: RelayPairingCandidateIdentifier, state: RelayPairingConfirmationState, acceptance: RelayPairingAcceptance? = nil) throws {
+        guard (state == .established) == (acceptance != nil) else { throw RelaySessionError.invalidRequest }
+        self.candidateID = candidateID
+        self.state = state
+        self.acceptance = acceptance
     }
 }
 
@@ -525,29 +562,50 @@ public actor RelayReplayNonceStore {
 }
 
 public struct RelayServerPairingResult: Sendable {
-    public let acceptance: RelayPairingAcceptance
-    public let session: RelayEstablishedSession
+    public let candidate: RelayPairingCandidate
+    let provisionalSession: RelayEstablishedSession
+}
+
+public struct RelayPendingPairingCandidate: Equatable, Sendable {
+    public let candidateID: RelayPairingCandidateIdentifier
+    public let shortAuthenticationString: RelayShortAuthenticationString
+    public let expiresAtUnixMilliseconds: Int64
+
+    public var expirationDate: Date { RelayTime.date(fromUnixMilliseconds: expiresAtUnixMilliseconds) }
+}
+
+public struct RelayServerConfirmationResult: Sendable {
+    public let response: RelayPairingConfirmationResponse
+    let session: RelayEstablishedSession?
 }
 
 public actor RelayServerPairingContext {
     public nonisolated let challenge: RelaySessionChallenge
-    public nonisolated let pairingCode: RelayPairingCode
+
+    private struct PendingCandidate: Sendable {
+        let request: RelayPairingRequest
+        let candidate: RelayPairingCandidate
+        let keyMaterial: RelaySessionKeyMaterial
+        var macApproved = false
+        var clientConfirmed = false
+    }
 
     private let serverPrivateKeyData: Data
+    private let serverNonce: Data
     private let sessionTTLMilliseconds: Int64
-    private let maximumFailedAttempts: Int
-    private var failedAttempts = 0
+    private let maximumCandidates: Int
+    private var candidateAttempts = 0
+    private var pendingCandidate: PendingCandidate?
     private var completed = false
 
     public init(
         sessionID: RelaySessionIdentifier = .random(),
-        pairingCode: RelayPairingCode = .random(),
         serverPrivateKeyData: Data? = nil,
         serverNonce: Data? = nil,
         now: Date = Date(),
-        challengeTTL: TimeInterval = 120,
+        challengeTTL: TimeInterval = 60,
         sessionTTL: TimeInterval = 7_200,
-        maximumFailedAttempts: Int = 5
+        maximumCandidates: Int = 3
     ) throws {
         guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now),
               let challengeTTLMilliseconds = RelayTime.milliseconds(
@@ -558,7 +616,7 @@ public actor RelayServerPairingContext {
                   from: sessionTTL,
                   maximum: RelayLimits.maximumSessionTTLMilliseconds
               ), sessionTTLMilliseconds > 0,
-              (1 ... RelayLimits.maximumPairingAttempts).contains(maximumFailedAttempts),
+              (1 ... RelayLimits.maximumPairingCandidates).contains(maximumCandidates),
               let challengeExpiration = RelayTime.adding(challengeTTLMilliseconds, to: nowMilliseconds)
         else {
             throw RelaySessionError.invalidValidationPolicy
@@ -581,23 +639,30 @@ public actor RelayServerPairingContext {
             throw RelaySessionError.invalidPublicKey
         }
 
+        let committedServerNonce = serverNonce ?? RelayCrypto.randomBytes(count: RelayCrypto.nonceLength)
+        guard committedServerNonce.count == RelayCrypto.nonceLength else {
+            throw RelaySessionError.invalidNonce
+        }
         self.challenge = try RelaySessionChallenge(
             sessionID: sessionID,
             serverPublicKey: privateKey.publicKey.rawRepresentation,
-            serverNonce: serverNonce ?? RelayCrypto.randomBytes(count: RelayCrypto.nonceLength),
+            serverNonceCommitment: RelayCrypto.sha256(committedServerNonce),
             expiresAtUnixMilliseconds: challengeExpiration
         )
-        self.pairingCode = pairingCode
         self.serverPrivateKeyData = privateKeyData
+        self.serverNonce = committedServerNonce
         self.sessionTTLMilliseconds = sessionTTLMilliseconds
-        self.maximumFailedAttempts = maximumFailedAttempts
+        self.maximumCandidates = maximumCandidates
     }
 
     public func accept(_ request: RelayPairingRequest, now: Date) throws -> RelayServerPairingResult {
         guard !completed else {
             throw RelaySessionError.pairingAlreadyCompleted
         }
-        guard failedAttempts < maximumFailedAttempts else {
+        guard pendingCandidate == nil else {
+            throw RelaySessionError.pairingCandidateInProgress
+        }
+        guard candidateAttempts < maximumCandidates else {
             throw RelaySessionError.pairingAttemptsExhausted
         }
         guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now) else {
@@ -610,172 +675,308 @@ public actor RelayServerPairingContext {
             throw RelaySessionError.invalidRequest
         }
 
-        let expectedPairingProof = RelayCrypto.pairingProof(
-            pairingCode: pairingCode,
-            challenge: challenge,
-            clientPublicKey: request.clientPublicKey,
-            clientNonce: request.clientNonce
-        )
-        guard RelayCrypto.constantTimeEqual(expectedPairingProof, request.pairingProof) else {
-            recordFailedAttempt()
-            if failedAttempts >= maximumFailedAttempts {
-                throw RelaySessionError.pairingAttemptsExhausted
-            }
-            throw RelaySessionError.pairingProofMismatch
-        }
-
         let keyMaterial: RelaySessionKeyMaterial
         do {
             keyMaterial = try RelayCrypto.derivedKeyMaterial(
                 sessionID: challenge.sessionID,
-                pairingCode: pairingCode,
                 ownPrivateKeyData: serverPrivateKeyData,
                 peerPublicKeyData: request.clientPublicKey,
-                transcript: RelayCanonical.pairingTranscript(challenge: challenge, request: request)
+                transcript: RelayCanonical.pairingTranscript(
+                    challenge: challenge,
+                    request: request,
+                    serverNonce: serverNonce
+                )
             )
         } catch {
-            recordFailedAttempt()
             throw error
         }
-        guard let sessionExpiration = RelayTime.adding(sessionTTLMilliseconds, to: nowMilliseconds) else {
-            throw RelaySessionError.invalidTimestamp
-        }
-
-        let serverProof = RelayCrypto.acceptanceProof(
+        let candidateID = RelayPairingCandidateIdentifier.random()
+        let serverProof = RelayCrypto.candidateProof(
             keyMaterial: keyMaterial,
             challenge: challenge,
             request: request,
-            sessionExpirationUnixMilliseconds: sessionExpiration
+            serverNonce: serverNonce,
+            candidateID: candidateID
         )
-        let acceptance = try RelayPairingAcceptance(
+        let candidate = try RelayPairingCandidate(
+            candidateID: candidateID,
             sessionID: challenge.sessionID,
-            expiresAtUnixMilliseconds: sessionExpiration,
+            serverNonce: serverNonce,
+            expiresAtUnixMilliseconds: challenge.expiresAtUnixMilliseconds,
             serverProof: serverProof
         )
-        completed = true
+        candidateAttempts += 1
+        pendingCandidate = PendingCandidate(request: request, candidate: candidate, keyMaterial: keyMaterial)
         return RelayServerPairingResult(
-            acceptance: acceptance,
-            session: RelayEstablishedSession(
+            candidate: candidate,
+            provisionalSession: RelayEstablishedSession(
                 sessionID: challenge.sessionID,
                 role: .server,
-                expiresAtUnixMilliseconds: sessionExpiration,
+                expiresAtUnixMilliseconds: challenge.expiresAtUnixMilliseconds,
                 keyMaterial: keyMaterial
             )
         )
     }
 
-    public func remainingFailedAttempts() -> Int {
-        maximumFailedAttempts - failedAttempts
+    public func pendingCandidateSummary() -> RelayPendingPairingCandidate? {
+        guard let pendingCandidate else { return nil }
+        return RelayPendingPairingCandidate(
+            candidateID: pendingCandidate.candidate.candidateID,
+            shortAuthenticationString: RelayCrypto.shortAuthenticationString(
+                keyMaterial: pendingCandidate.keyMaterial,
+                challenge: challenge,
+                request: pendingCandidate.request,
+                serverNonce: serverNonce
+            ),
+            expiresAtUnixMilliseconds: pendingCandidate.candidate.expiresAtUnixMilliseconds
+        )
     }
 
-    private func recordFailedAttempt() {
-        if failedAttempts < maximumFailedAttempts {
-            failedAttempts += 1
-        }
+    public func approve(candidateID: RelayPairingCandidateIdentifier, now: Date) throws {
+        try ensurePendingCandidate(candidateID: candidateID, now: now)
+        pendingCandidate?.macApproved = true
     }
+
+    public func reject(candidateID: RelayPairingCandidateIdentifier, now: Date) throws {
+        try ensurePendingCandidate(candidateID: candidateID, now: now)
+        pendingCandidate = nil
+    }
+
+    public func confirm(_ confirmation: RelayPairingConfirmation, now: Date) throws -> RelayServerConfirmationResult {
+        try ensurePendingCandidate(candidateID: confirmation.candidateID, now: now)
+        guard var pendingCandidate else { throw RelaySessionError.pairingCandidateNotFound }
+
+        if confirmation.decision == .notMyMac {
+            self.pendingCandidate = nil
+            return RelayServerConfirmationResult(
+                response: try RelayPairingConfirmationResponse(
+                    candidateID: confirmation.candidateID,
+                    state: .rejected
+                ),
+                session: nil
+            )
+        }
+
+        let expectedConfirmation = RelayCrypto.clientConfirmationMAC(
+            keyMaterial: pendingCandidate.keyMaterial,
+            challenge: challenge,
+            request: pendingCandidate.request,
+            serverNonce: serverNonce,
+            candidateID: pendingCandidate.candidate.candidateID
+        )
+        guard let clientConfirmationMAC = confirmation.clientConfirmationMAC,
+              RelayCrypto.constantTimeEqual(expectedConfirmation, clientConfirmationMAC)
+        else {
+            throw RelaySessionError.clientConfirmationMismatch
+        }
+        pendingCandidate.clientConfirmed = true
+        guard pendingCandidate.macApproved else {
+            self.pendingCandidate = pendingCandidate
+            return RelayServerConfirmationResult(
+                response: try RelayPairingConfirmationResponse(
+                    candidateID: confirmation.candidateID,
+                    state: .waitingForMac
+                ),
+                session: nil
+            )
+        }
+        guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now),
+              let sessionExpiration = RelayTime.adding(sessionTTLMilliseconds, to: nowMilliseconds)
+        else { throw RelaySessionError.invalidTimestamp }
+
+        let acceptance = try RelayPairingAcceptance(
+            candidateID: pendingCandidate.candidate.candidateID,
+            sessionID: challenge.sessionID,
+            expiresAtUnixMilliseconds: sessionExpiration,
+            serverConfirmationMAC: RelayCrypto.serverConfirmationMAC(
+                keyMaterial: pendingCandidate.keyMaterial,
+                challenge: challenge,
+                request: pendingCandidate.request,
+                serverNonce: serverNonce,
+                candidateID: pendingCandidate.candidate.candidateID,
+                sessionExpirationUnixMilliseconds: sessionExpiration
+            )
+        )
+        completed = true
+        self.pendingCandidate = nil
+        return RelayServerConfirmationResult(
+            response: try RelayPairingConfirmationResponse(
+                candidateID: confirmation.candidateID,
+                state: .established,
+                acceptance: acceptance
+            ),
+            session: RelayEstablishedSession(
+                sessionID: challenge.sessionID,
+                role: .server,
+                expiresAtUnixMilliseconds: sessionExpiration,
+                keyMaterial: pendingCandidate.keyMaterial
+            )
+        )
+    }
+
+    private func ensurePendingCandidate(candidateID: RelayPairingCandidateIdentifier, now: Date) throws {
+        guard !completed else { throw RelaySessionError.pairingAlreadyCompleted }
+        guard let pendingCandidate else { throw RelaySessionError.pairingCandidateNotFound }
+        guard pendingCandidate.candidate.candidateID == candidateID else { throw RelaySessionError.pairingCandidateNotFound }
+        guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now),
+              nowMilliseconds <= pendingCandidate.candidate.expiresAtUnixMilliseconds
+        else { throw RelaySessionError.expiredChallenge }
+    }
+}
+
+public struct RelayProvisionalSession: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    public let candidateID: RelayPairingCandidateIdentifier
+    public let shortAuthenticationString: RelayShortAuthenticationString
+    let authenticationSession: RelayEstablishedSession
+
+    private let challenge: RelaySessionChallenge
+    private let request: RelayPairingRequest
+    private let serverNonce: Data
+    private let keyMaterial: RelaySessionKeyMaterial
+
+    fileprivate init(
+        candidate: RelayPairingCandidate,
+        challenge: RelaySessionChallenge,
+        request: RelayPairingRequest,
+        keyMaterial: RelaySessionKeyMaterial
+    ) {
+        candidateID = candidate.candidateID
+        shortAuthenticationString = RelayCrypto.shortAuthenticationString(
+            keyMaterial: keyMaterial,
+            challenge: challenge,
+            request: request,
+            serverNonce: candidate.serverNonce
+        )
+        authenticationSession = RelayEstablishedSession(
+            sessionID: challenge.sessionID,
+            role: .client,
+            expiresAtUnixMilliseconds: candidate.expiresAtUnixMilliseconds,
+            keyMaterial: keyMaterial
+        )
+        self.challenge = challenge
+        self.request = request
+        serverNonce = candidate.serverNonce
+        self.keyMaterial = keyMaterial
+    }
+
+    public func confirmation(decision: RelayPairingConfirmationDecision) throws -> RelayPairingConfirmation {
+        let mac = decision == .codesMatch
+            ? RelayCrypto.clientConfirmationMAC(
+                keyMaterial: keyMaterial,
+                challenge: challenge,
+                request: request,
+                serverNonce: serverNonce,
+                candidateID: candidateID
+            )
+            : nil
+        return try RelayPairingConfirmation(
+            candidateID: candidateID,
+            decision: decision,
+            clientConfirmationMAC: mac
+        )
+    }
+
+    public func complete(with acceptance: RelayPairingAcceptance, now: Date) throws -> RelayEstablishedSession {
+        guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now),
+              nowMilliseconds <= authenticationSession.expiresAtUnixMilliseconds,
+              acceptance.candidateID == candidateID,
+              acceptance.sessionID == challenge.sessionID,
+              acceptance.expiresAtUnixMilliseconds >= nowMilliseconds
+        else { throw RelaySessionError.invalidRequest }
+        let expectedConfirmation = RelayCrypto.serverConfirmationMAC(
+            keyMaterial: keyMaterial,
+            challenge: challenge,
+            request: request,
+            serverNonce: serverNonce,
+            candidateID: candidateID,
+            sessionExpirationUnixMilliseconds: acceptance.expiresAtUnixMilliseconds
+        )
+        guard RelayCrypto.constantTimeEqual(expectedConfirmation, acceptance.serverConfirmationMAC) else {
+            throw RelaySessionError.serverConfirmationMismatch
+        }
+        return RelayEstablishedSession(
+            sessionID: challenge.sessionID,
+            role: .client,
+            expiresAtUnixMilliseconds: acceptance.expiresAtUnixMilliseconds,
+            keyMaterial: keyMaterial
+        )
+    }
+
+    public var description: String { "RelayProvisionalSession(candidateID: \(candidateID.rawValue), secrets: redacted)" }
+    public var debugDescription: String { description }
 }
 
 public struct RelayClientPairingAttempt: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public let request: RelayPairingRequest
     private let challenge: RelaySessionChallenge
-    private let pendingKeyMaterial: RelaySessionKeyMaterial
+    private let clientPrivateKeyData: Data
 
     public init(
         challenge: RelaySessionChallenge,
-        pairingCode: RelayPairingCode,
         clientPrivateKeyData: Data,
         clientNonce: Data,
         now: Date
     ) throws {
-        guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now) else {
-            throw RelaySessionError.invalidTimestamp
-        }
-        guard nowMilliseconds <= challenge.expiresAtUnixMilliseconds else {
-            throw RelaySessionError.expiredChallenge
-        }
-        guard clientPrivateKeyData.count == RelayCrypto.curve25519KeyLength else {
-            throw RelaySessionError.invalidPublicKey
-        }
-
+        guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now),
+              nowMilliseconds <= challenge.expiresAtUnixMilliseconds
+        else { throw RelaySessionError.expiredChallenge }
+        guard clientPrivateKeyData.count == RelayCrypto.curve25519KeyLength else { throw RelaySessionError.invalidPublicKey }
+        guard clientNonce.count == RelayCrypto.nonceLength else { throw RelaySessionError.invalidNonce }
         let privateKey: Curve25519.KeyAgreement.PrivateKey
-        do {
-            privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: clientPrivateKeyData)
-        } catch {
-            throw RelaySessionError.invalidPublicKey
-        }
-
-        let request = try RelayPairingRequest(
+        do { privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: clientPrivateKeyData) }
+        catch { throw RelaySessionError.invalidPublicKey }
+        request = try RelayPairingRequest(
             sessionID: challenge.sessionID,
             clientPublicKey: privateKey.publicKey.rawRepresentation,
-            clientNonce: clientNonce,
-            pairingProof: RelayCrypto.pairingProof(
-                pairingCode: pairingCode,
-                challenge: challenge,
-                clientPublicKey: privateKey.publicKey.rawRepresentation,
-                clientNonce: clientNonce
-            )
+            clientNonce: clientNonce
         )
         self.challenge = challenge
-        self.request = request
-        pendingKeyMaterial = try RelayCrypto.derivedKeyMaterial(
-            sessionID: challenge.sessionID,
-            pairingCode: pairingCode,
-            ownPrivateKeyData: clientPrivateKeyData,
-            peerPublicKeyData: challenge.serverPublicKey,
-            transcript: RelayCanonical.pairingTranscript(challenge: challenge, request: request)
-        )
+        self.clientPrivateKeyData = clientPrivateKeyData
     }
 
-    public init(challenge: RelaySessionChallenge, pairingCode: RelayPairingCode, now: Date) throws {
+    public init(challenge: RelaySessionChallenge, now: Date) throws {
         let privateKey = Curve25519.KeyAgreement.PrivateKey()
         try self.init(
             challenge: challenge,
-            pairingCode: pairingCode,
             clientPrivateKeyData: privateKey.rawRepresentation,
             clientNonce: RelayCrypto.randomBytes(count: RelayCrypto.nonceLength),
             now: now
         )
     }
 
-    public func complete(with acceptance: RelayPairingAcceptance, now: Date) throws -> RelayEstablishedSession {
-        guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now) else {
-            throw RelaySessionError.invalidTimestamp
-        }
-        guard nowMilliseconds <= challenge.expiresAtUnixMilliseconds else {
-            throw RelaySessionError.expiredChallenge
-        }
-        let sessionLifetime = acceptance.expiresAtUnixMilliseconds.subtractingReportingOverflow(nowMilliseconds)
-        guard acceptance.sessionID == challenge.sessionID,
-              !sessionLifetime.overflow,
-              (0 ... RelayLimits.maximumSessionTTLMilliseconds).contains(sessionLifetime.partialValue)
-        else {
-            throw RelaySessionError.invalidRequest
-        }
-
-        let expectedServerProof = RelayCrypto.acceptanceProof(
-            keyMaterial: pendingKeyMaterial,
+    public func complete(with candidate: RelayPairingCandidate, now: Date) throws -> RelayProvisionalSession {
+        guard let nowMilliseconds = RelayTime.unixMilliseconds(for: now),
+              nowMilliseconds <= challenge.expiresAtUnixMilliseconds,
+              candidate.sessionID == challenge.sessionID,
+              candidate.expiresAtUnixMilliseconds == challenge.expiresAtUnixMilliseconds,
+              RelayCrypto.constantTimeEqual(RelayCrypto.sha256(candidate.serverNonce), challenge.serverNonceCommitment)
+        else { throw RelaySessionError.nonceCommitmentMismatch }
+        let transcript = RelayCanonical.pairingTranscript(
             challenge: challenge,
             request: request,
-            sessionExpirationUnixMilliseconds: acceptance.expiresAtUnixMilliseconds
+            serverNonce: candidate.serverNonce
         )
-        guard RelayCrypto.constantTimeEqual(expectedServerProof, acceptance.serverProof) else {
-            throw RelaySessionError.acceptanceProofMismatch
-        }
-        return RelayEstablishedSession(
+        let keyMaterial = try RelayCrypto.derivedKeyMaterial(
             sessionID: challenge.sessionID,
-            role: .client,
-            expiresAtUnixMilliseconds: acceptance.expiresAtUnixMilliseconds,
-            keyMaterial: pendingKeyMaterial
+            ownPrivateKeyData: clientPrivateKeyData,
+            peerPublicKeyData: challenge.serverPublicKey,
+            transcript: transcript
         )
+        let expectedProof = RelayCrypto.candidateProof(
+            keyMaterial: keyMaterial,
+            challenge: challenge,
+            request: request,
+            serverNonce: candidate.serverNonce,
+            candidateID: candidate.candidateID
+        )
+        guard RelayCrypto.constantTimeEqual(expectedProof, candidate.serverProof) else {
+            throw RelaySessionError.candidateProofMismatch
+        }
+        return RelayProvisionalSession(candidate: candidate, challenge: challenge, request: request, keyMaterial: keyMaterial)
     }
 
-    public var description: String {
-        "RelayClientPairingAttempt(sessionID: \(request.sessionID.rawValue), keyMaterial: redacted)"
-    }
-
-    public var debugDescription: String {
-        description
-    }
+    public var description: String { "RelayClientPairingAttempt(sessionID: \(request.sessionID.rawValue), keyMaterial: redacted)" }
+    public var debugDescription: String { description }
 }
 
 public struct RelayEstablishedSession: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -1028,7 +1229,9 @@ struct RelaySessionKeyMaterial: Sendable {
     let serverToClientRequestKey: Data
     let serverToClientResponseKey: Data
     let mediaCapability: Data
-    let acceptanceProofKey: Data
+    let candidateProofKey: Data
+    let clientConfirmationKey: Data
+    let serverConfirmationKey: Data
 }
 
 enum RelayCrypto {
@@ -1041,26 +1244,8 @@ enum RelayCrypto {
         return SymmetricKey(size: .bits256).withUnsafeBytes { Data($0.prefix(count)) }
     }
 
-    static func pairingProof(
-        pairingCode: RelayPairingCode,
-        challenge: RelaySessionChallenge,
-        clientPublicKey: Data,
-        clientNonce: Data
-    ) -> Data {
-        let pairingKey = pairingKey(for: pairingCode)
-        return Data(HMAC<SHA256>.authenticationCode(
-            for: RelayCanonical.pairingProofTranscript(
-                challenge: challenge,
-                clientPublicKey: clientPublicKey,
-                clientNonce: clientNonce
-            ),
-            using: pairingKey
-        ))
-    }
-
     static func derivedKeyMaterial(
         sessionID: RelaySessionIdentifier,
-        pairingCode: RelayPairingCode,
         ownPrivateKeyData: Data,
         peerPublicKeyData: Data,
         transcript: Data
@@ -1081,17 +1266,9 @@ enum RelayCrypto {
             throw RelaySessionError.invalidPublicKey
         }
         let pairingTranscriptSHA256 = sha256(transcript)
-        let scheduleTranscript = RelayCanonical.sessionKeyScheduleTranscript(
-            sessionID: sessionID,
-            pairingTranscriptSHA256: pairingTranscriptSHA256
-        )
-        let codeBoundSalt = Data(HMAC<SHA256>.authenticationCode(
-            for: scheduleTranscript,
-            using: pairingKey(for: pairingCode)
-        ))
         let masterKey = sharedSecret.hkdfDerivedSymmetricKey(
             using: SHA256.self,
-            salt: codeBoundSalt,
+            salt: pairingTranscriptSHA256,
             sharedInfo: RelayCanonical.sessionMasterTranscript(
                 sessionID: sessionID,
                 pairingTranscriptSHA256: pairingTranscriptSHA256
@@ -1105,24 +1282,86 @@ enum RelayCrypto {
             serverToClientRequestKey: derivedValue(masterKey: masterKey, label: "request-server-to-client", sessionID: sessionID),
             serverToClientResponseKey: derivedValue(masterKey: masterKey, label: "response-server-to-client", sessionID: sessionID),
             mediaCapability: derivedValue(masterKey: masterKey, label: "media-capability", sessionID: sessionID),
-            acceptanceProofKey: derivedValue(masterKey: masterKey, label: "acceptance-proof", sessionID: sessionID)
+            candidateProofKey: derivedValue(masterKey: masterKey, label: "candidate-proof", sessionID: sessionID),
+            clientConfirmationKey: derivedValue(masterKey: masterKey, label: "client-confirmation", sessionID: sessionID),
+            serverConfirmationKey: derivedValue(masterKey: masterKey, label: "server-confirmation", sessionID: sessionID)
         )
     }
 
-    static func acceptanceProof(
+    static func candidateProof(
         keyMaterial: RelaySessionKeyMaterial,
         challenge: RelaySessionChallenge,
         request: RelayPairingRequest,
+        serverNonce: Data,
+        candidateID: RelayPairingCandidateIdentifier
+    ) -> Data {
+        hmac(
+            keyMaterial: keyMaterial.candidateProofKey,
+            message: RelayCanonical.candidateTranscript(
+                challenge: challenge,
+                request: request,
+                serverNonce: serverNonce,
+                candidateID: candidateID
+            )
+        )
+    }
+
+    static func clientConfirmationMAC(
+        keyMaterial: RelaySessionKeyMaterial,
+        challenge: RelaySessionChallenge,
+        request: RelayPairingRequest,
+        serverNonce: Data,
+        candidateID: RelayPairingCandidateIdentifier
+    ) -> Data {
+        hmac(
+            keyMaterial: keyMaterial.clientConfirmationKey,
+            message: RelayCanonical.clientConfirmationTranscript(
+                challenge: challenge,
+                request: request,
+                serverNonce: serverNonce,
+                candidateID: candidateID
+            )
+        )
+    }
+
+    static func serverConfirmationMAC(
+        keyMaterial: RelaySessionKeyMaterial,
+        challenge: RelaySessionChallenge,
+        request: RelayPairingRequest,
+        serverNonce: Data,
+        candidateID: RelayPairingCandidateIdentifier,
         sessionExpirationUnixMilliseconds: Int64
     ) -> Data {
         hmac(
-            keyMaterial: keyMaterial.acceptanceProofKey,
-            message: RelayCanonical.acceptanceTranscript(
+            keyMaterial: keyMaterial.serverConfirmationKey,
+            message: RelayCanonical.serverConfirmationTranscript(
                 challenge: challenge,
                 request: request,
+                serverNonce: serverNonce,
+                candidateID: candidateID,
                 sessionExpirationUnixMilliseconds: sessionExpirationUnixMilliseconds
             )
         )
+    }
+
+    static func shortAuthenticationString(
+        keyMaterial: RelaySessionKeyMaterial,
+        challenge: RelaySessionChallenge,
+        request: RelayPairingRequest,
+        serverNonce: Data
+    ) -> RelayShortAuthenticationString {
+        let material = hmac(
+            keyMaterial: keyMaterial.candidateProofKey,
+            message: RelayCanonical.shortAuthenticationStringTranscript(
+                challenge: challenge,
+                request: request,
+                serverNonce: serverNonce
+            )
+        )
+        let value = material.prefix(8).reduce(UInt64(0)) { partial, byte in
+            (partial << 8) | UInt64(byte)
+        } % 1_000_000
+        return RelayShortAuthenticationString(digits: String(format: "%06llu", value))
     }
 
     static func hmac(keyMaterial: Data, message: Data) -> Data {
@@ -1153,15 +1392,6 @@ enum RelayCrypto {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    private static func pairingKey(for pairingCode: RelayPairingCode) -> SymmetricKey {
-        HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: Data(pairingCode.rawValue.utf8)),
-            salt: Data("bd-to-avp.relay.pairing-code.salt.v2".utf8),
-            info: Data("bd-to-avp.relay.pairing-code.key.v2".utf8),
-            outputByteCount: sha256Length
-        )
-    }
-
     private static func derivedValue(
         masterKey: Data,
         label: String,
@@ -1175,38 +1405,75 @@ enum RelayCrypto {
 }
 
 enum RelayCanonical {
-    static func pairingProofTranscript(
+    static func pairingTranscript(
         challenge: RelaySessionChallenge,
-        clientPublicKey: Data,
-        clientNonce: Data
+        request: RelayPairingRequest,
+        serverNonce: Data
     ) -> Data {
         transcript(
-            domain: "bd-to-avp.relay.pairing-proof.v2",
+            domain: "bd-to-avp.relay.pairing-transcript.v3",
             fields: [
                 ("challenge", challengeTranscript(challenge)),
-                ("clientPublicKey", clientPublicKey),
-                ("clientNonce", clientNonce),
+                ("clientPublicKey", request.clientPublicKey),
+                ("clientNonce", request.clientNonce),
+                ("serverNonce", serverNonce),
             ]
         )
     }
 
-    static func pairingTranscript(challenge: RelaySessionChallenge, request: RelayPairingRequest) -> Data {
-        pairingProofTranscript(
-            challenge: challenge,
-            clientPublicKey: request.clientPublicKey,
-            clientNonce: request.clientNonce
+    static func candidateTranscript(
+        challenge: RelaySessionChallenge,
+        request: RelayPairingRequest,
+        serverNonce: Data,
+        candidateID: RelayPairingCandidateIdentifier
+    ) -> Data {
+        transcript(
+            domain: "bd-to-avp.relay.pairing-candidate.v3",
+            fields: [
+                ("pairingTranscript", pairingTranscript(challenge: challenge, request: request, serverNonce: serverNonce)),
+                ("candidateID", Data(candidateID.rawValue.utf8)),
+            ]
         )
     }
 
-    static func acceptanceTranscript(
+    static func shortAuthenticationStringTranscript(
         challenge: RelaySessionChallenge,
         request: RelayPairingRequest,
+        serverNonce: Data
+    ) -> Data {
+        transcript(
+            domain: "bd-to-avp.relay.short-authentication-string.v3",
+            fields: [
+                ("pairingTranscript", pairingTranscript(challenge: challenge, request: request, serverNonce: serverNonce)),
+            ]
+        )
+    }
+
+    static func clientConfirmationTranscript(
+        challenge: RelaySessionChallenge,
+        request: RelayPairingRequest,
+        serverNonce: Data,
+        candidateID: RelayPairingCandidateIdentifier
+    ) -> Data {
+        transcript(
+            domain: "bd-to-avp.relay.client-confirmation.v3",
+            fields: [
+                ("candidateTranscript", candidateTranscript(challenge: challenge, request: request, serverNonce: serverNonce, candidateID: candidateID)),
+            ]
+        )
+    }
+
+    static func serverConfirmationTranscript(
+        challenge: RelaySessionChallenge,
+        request: RelayPairingRequest,
+        serverNonce: Data,
+        candidateID: RelayPairingCandidateIdentifier,
         sessionExpirationUnixMilliseconds: Int64
     ) -> Data {
         transcript(
-            domain: "bd-to-avp.relay.pairing-acceptance.v2",
+            domain: "bd-to-avp.relay.server-confirmation.v3",
             fields: [
-                ("pairingTranscript", pairingTranscript(challenge: challenge, request: request)),
+                ("candidateTranscript", candidateTranscript(challenge: challenge, request: request, serverNonce: serverNonce, candidateID: candidateID)),
                 ("sessionExpiresAtUnixMilliseconds", integerData(sessionExpirationUnixMilliseconds)),
             ]
         )
@@ -1240,25 +1507,12 @@ enum RelayCanonical {
         )
     }
 
-    static func sessionKeyScheduleTranscript(
-        sessionID: RelaySessionIdentifier,
-        pairingTranscriptSHA256: Data
-    ) -> Data {
-        transcript(
-            domain: "bd-to-avp.relay.session-key-schedule.v3",
-            fields: [
-                ("sessionID", Data(sessionID.rawValue.utf8)),
-                ("pairingTranscriptSHA256", pairingTranscriptSHA256),
-            ]
-        )
-    }
-
     static func sessionMasterTranscript(
         sessionID: RelaySessionIdentifier,
         pairingTranscriptSHA256: Data
     ) -> Data {
         transcript(
-            domain: "bd-to-avp.relay.session-master.v3",
+            domain: "bd-to-avp.relay.session-master.v4",
             fields: [
                 ("sessionID", Data(sessionID.rawValue.utf8)),
                 ("pairingTranscriptSHA256", pairingTranscriptSHA256),
@@ -1268,7 +1522,7 @@ enum RelayCanonical {
 
     static func keyDerivationTranscript(label: String, sessionID: RelaySessionIdentifier) -> Data {
         transcript(
-            domain: "bd-to-avp.relay.key-derivation.v2",
+            domain: "bd-to-avp.relay.key-derivation.v3",
             fields: [
                 ("label", Data(label.utf8)),
                 ("sessionID", Data(sessionID.rawValue.utf8)),
@@ -1318,11 +1572,11 @@ enum RelayCanonical {
 
     private static func challengeTranscript(_ challenge: RelaySessionChallenge) -> Data {
         transcript(
-            domain: "bd-to-avp.relay.challenge.v2",
+            domain: "bd-to-avp.relay.challenge.v3",
             fields: [
                 ("sessionID", Data(challenge.sessionID.rawValue.utf8)),
                 ("serverPublicKey", challenge.serverPublicKey),
-                ("serverNonce", challenge.serverNonce),
+                ("serverNonceCommitment", challenge.serverNonceCommitment),
                 ("expiresAtUnixMilliseconds", integerData(challenge.expiresAtUnixMilliseconds)),
             ]
         )
@@ -1359,7 +1613,7 @@ enum RelayLimits {
     static let maximumRequestAgeMilliseconds: Int64 = 5 * 60 * 1_000
     static let maximumFutureSkewMilliseconds: Int64 = 60 * 1_000
     static let maximumReplayCapacity = 4_096
-    static let maximumPairingAttempts = 5
+    static let maximumPairingCandidates = 3
     static let maximumMethodLength = 32
     static let maximumRequestTargetLength = 8_192
     static let minimumNonceLength = 16

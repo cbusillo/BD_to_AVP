@@ -25,10 +25,10 @@ which remains the qualification-only validator.
   app's Application Support directory. Library media records omit source
   filesystem URLs, but bookmark blobs necessarily encode the source location so
   the app can regain security-scoped access.
-- The Live Relay panel discovers Macs through Bonjour, fetches a short-lived
-  challenge, accepts the single-use code shown by the Mac app, and starts an
-  authenticated MV-HEVC EVENT-HLS asset without requiring a hostname or cloud
-  service.
+- The Live Relay panel discovers protocol-v3 Macs through Bonjour, fetches a
+  short-lived challenge, compares a large six-digit code with the Mac app, and
+  starts an authenticated MV-HEVC EVENT-HLS asset without requiring a hostname
+  or cloud service.
 
 ## Live Relay
 
@@ -39,12 +39,17 @@ separate media capability. Every protected request binds the actual HTTP method,
 raw request target, body, timestamp, and fresh nonce; replayed, expired,
 reflected, unpaired, and capability-free requests fail closed.
 
-The player rewrites the playlist, initialization map, and media segment URLs to
-an app-owned resource-loader scheme so AVFoundation cannot bypass authenticated
-loading. A previously paired client can reconnect while the session remains
-unexpired. Wrong codes preserve the current challenge until the Mac exhausts
-its bounded attempt budget, while the text field clears the submitted code
-before the network attempt completes.
+The pairing transcript commits the server nonce before the client contribution,
+then derives the numeric-comparison code under a dedicated HKDF domain after
+the nonce is revealed and verified. One provisional candidate is retained for
+60 seconds; Vision Pro's authenticated confirmation and the exact candidate's
+Mac approval are both required before protected routes open. A competing client
+cannot displace the displayed candidate, stale UI approvals are rejected by
+candidate ID, and three rejected candidates require a new relay. The player
+rewrites the playlist, initialization map, and media segment URLs to an
+app-owned resource-loader scheme so AVFoundation cannot bypass authenticated
+loading. A previously established client can reconnect while its session remains
+unexpired.
 
 The current local-network transport provides authenticated integrity and replay
 protection, not confidentiality: HTTP media bodies and the short-lived media
