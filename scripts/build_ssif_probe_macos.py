@@ -3,7 +3,6 @@
 import argparse
 import hashlib
 import json
-import os
 import platform
 import re
 import shutil
@@ -208,7 +207,9 @@ def load_manifest(path: Path) -> SsifProbeManifest:
         libbluray=parse_dependency(data["libbluray"], "libbluray"),
         libudfread=parse_dependency(data["libudfread"], "libudfread"),
         filenames={field: require_string(value, f"filenames {field}") for field, value in filenames.items()},
-        unsigned_checksums={relative_path: require_string(checksum, relative_path) for relative_path, checksum in checksums.items()},
+        unsigned_checksums={
+            relative_path: require_string(checksum, relative_path) for relative_path, checksum in checksums.items()
+        },
     )
     if manifest.linkage != "private-shared":
         raise RuntimeError(f"unsupported SSIF probe linkage: {manifest.linkage}")
@@ -370,7 +371,15 @@ def rewrite_install_names(prefix: Path, manifest: SsifProbeManifest) -> tuple[Pa
     run(["/usr/bin/install_name_tool", "-id", manifest.libbluray.install_name, str(bluray_path)])
     for dependency in macho_dependencies(bluray_path):
         if dependency.endswith(manifest.libudfread.library_filename) and dependency != manifest.libudfread.install_name:
-            run(["/usr/bin/install_name_tool", "-change", dependency, manifest.libudfread.install_name, str(bluray_path)])
+            run(
+                [
+                    "/usr/bin/install_name_tool",
+                    "-change",
+                    dependency,
+                    manifest.libudfread.install_name,
+                    str(bluray_path),
+                ]
+            )
     return bluray_path, udfread_path
 
 
@@ -456,9 +465,10 @@ def verify_artifacts(
         manifest.libbluray.install_name
     ]:
         raise RuntimeError("libbluray does not have the required private install name")
-    if command_output(["/usr/bin/otool", "-D", str(artifacts["bd_to_avp/lib/libudfread.3.dylib"])]).splitlines()[1:] != [
-        manifest.libudfread.install_name
-    ]:
+    udfread_install_names = command_output(
+        ["/usr/bin/otool", "-D", str(artifacts["bd_to_avp/lib/libudfread.3.dylib"])]
+    ).splitlines()[1:]
+    if udfread_install_names != [manifest.libudfread.install_name]:
         raise RuntimeError("libudfread does not have the required private install name")
     if macho_rpaths(probe_path) != [manifest.rpath]:
         raise RuntimeError("ssif_probe does not have the required private-library rpath")
@@ -611,8 +621,16 @@ def require_macos_arm64(parser: argparse.ArgumentParser, manifest: SsifProbeMani
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build and verify the bundled macOS SSIF probe.")
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--verify-only", action="store_true", help="Verify committed bundled artifacts without building.")
-    modes.add_argument("--record-checksums", action="store_true", help="Record checksums for already-built unsigned artifacts.")
+    modes.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="Verify committed bundled artifacts without building.",
+    )
+    modes.add_argument(
+        "--record-checksums",
+        action="store_true",
+        help="Record checksums for already-built unsigned artifacts.",
+    )
     args = parser.parse_args()
     manifest = load_manifest(MANIFEST_PATH)
     require_macos_arm64(parser, manifest)
