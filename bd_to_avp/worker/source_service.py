@@ -532,7 +532,7 @@ class SSIFLiveSourceService:
         store = ReplayStore(self.destination, self.options, video_stream, audio_stream)
         try:
             return self._stream(store)
-        except BaseException:
+        except (Exception, KeyboardInterrupt, SystemExit):
             try:
                 store.cleanup()
             except SourceServiceError as cleanup_error:
@@ -705,7 +705,7 @@ class SSIFLiveSourceService:
                 if store.ready_emitted and not ready_sent:
                     self.activity.live_source_ready(store.artifact())
                     ready_sent = True
-        except BaseException as error:
+        except (Exception, KeyboardInterrupt, SystemExit) as error:
             primary_error = error
             internal_cancellation.set()
         finally:
@@ -807,7 +807,7 @@ class SSIFLiveSourceService:
                 cancellation_event=cancellation,
                 started_event=started,
             )
-        except BaseException as error:
+        except (Exception, KeyboardInterrupt, SystemExit) as error:
             state.error = error
 
     def _raise_process_error(self, error: BaseException | None, fallback_code: str) -> None:

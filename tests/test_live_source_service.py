@@ -7,9 +7,9 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock as mock
 
 from pathlib import Path
-from unittest import mock
 
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import WorkerOperationError, start_live_source
@@ -638,7 +638,7 @@ class SSIFLiveSourceServiceTests(unittest.TestCase):
             def run_service() -> None:
                 try:
                     service.run()
-                except BaseException as error:
+                except Exception as error:
                     captured.append(error)
 
             thread = threading.Thread(target=run_service)
