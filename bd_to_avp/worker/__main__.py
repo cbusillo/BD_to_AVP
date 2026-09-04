@@ -21,6 +21,7 @@ from bd_to_avp.worker.protocol import (
     WorkerEventEmitter,
     WorkerEventType,
     WorkerObservabilitySink,
+    WorkerOperation,
     WorkerProtocolError,
     bounded_detail,
 )
@@ -120,10 +121,12 @@ def run_worker(
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=max(heartbeat_interval * 2, 0.2))
 
-        owner.check_cancelled()
+        if job.operation is not WorkerOperation.START_LIVE_SOURCE:
+            owner.check_cancelled()
         result_key = {
             "convert_source": "conversion_result",
             "preview_source": "preview_result",
+            "start_live_source": "live_source_result",
         }.get(job.operation.value, "result")
         emitter.emit(WorkerEventType.JOB_COMPLETED, {result_key: result})
         return 0

@@ -491,6 +491,22 @@ struct WorkerJobSpec: Encodable, Equatable {
         }
     }
 
+    struct LiveSource: Encodable, Equatable {
+        let playlist: Int
+        let audioPID: Int
+        let replayWindowSeconds: Int
+        let replayMaxBytes: Int
+        let maximumPairs: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case playlist
+            case audioPID = "audio_pid"
+            case replayWindowSeconds = "replay_window_seconds"
+            case replayMaxBytes = "replay_max_bytes"
+            case maximumPairs = "maximum_pairs"
+        }
+    }
+
     let protocolVersion: Int
     let type: String
     let jobID: UUID
@@ -500,6 +516,7 @@ struct WorkerJobSpec: Encodable, Equatable {
     let encoding: Encoding?
     let job: Job?
     let preview: Preview?
+    let liveSource: LiveSource?
 
     init(source: ConversionSource, jobID: UUID = UUID()) {
         protocolVersion = Self.protocolVersion
@@ -511,6 +528,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         encoding = nil
         job = nil
         preview = nil
+        liveSource = nil
     }
 
     init(sourceURL: URL, jobID: UUID = UUID()) {
@@ -523,6 +541,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         encoding = nil
         job = nil
         preview = nil
+        liveSource = nil
     }
 
     init(draft: ConversionDraft, jobID: UUID = UUID()) {
@@ -537,6 +556,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         encoding = Self.encoding(from: draft.options.encoding, job: job)
         self.job = job
         preview = nil
+        liveSource = nil
     }
 
     init(
@@ -575,6 +595,36 @@ struct WorkerJobSpec: Encodable, Equatable {
             position: previewDraft.samplePosition.rawValue,
             durationSeconds: previewDraft.durationSeconds
         )
+        liveSource = nil
+    }
+
+    init(
+        liveSource source: ConversionSource,
+        destinationURL: URL,
+        playlist: Int,
+        audioPID: Int,
+        replayWindowSeconds: Int = 120,
+        replayMaxBytes: Int = 512 * 1_024 * 1_024,
+        maximumPairs: Int? = nil,
+        jobID: UUID = UUID()
+    ) {
+        precondition(source.kind == .discImage || source.kind == .bluRayFolder)
+        protocolVersion = Self.protocolVersion
+        type = "job.start"
+        self.jobID = jobID
+        operation = "start_live_source"
+        self.source = Source(source: source)
+        destination = Destination(path: destinationURL.path)
+        encoding = nil
+        job = nil
+        preview = nil
+        liveSource = LiveSource(
+            playlist: playlist,
+            audioPID: audioPID,
+            replayWindowSeconds: replayWindowSeconds,
+            replayMaxBytes: replayMaxBytes,
+            maximumPairs: maximumPairs
+        )
     }
 
     func encode(to encoder: Encoder) throws {
@@ -588,6 +638,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         try container.encodeIfPresent(encoding, forKey: .encoding)
         try container.encodeIfPresent(job, forKey: .job)
         try container.encodeIfPresent(preview, forKey: .preview)
+        try container.encodeIfPresent(liveSource, forKey: .liveSource)
     }
 
     private static func encoding(
@@ -950,5 +1001,6 @@ struct WorkerJobSpec: Encodable, Equatable {
         case encoding
         case job
         case preview
+        case liveSource = "live_source"
     }
 }

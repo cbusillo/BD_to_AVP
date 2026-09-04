@@ -24,6 +24,7 @@ enum WorkerOperationKind: Equatable {
     case inspection
     case conversion
     case preview
+    case liveSource
 
     var isInspection: Bool {
         self == .inspection
@@ -37,6 +38,8 @@ enum WorkerOperationKind: Equatable {
             "Preparing conversion"
         case .preview:
             "Preparing preview"
+        case .liveSource:
+            "Preparing live source"
         }
     }
 
@@ -48,6 +51,8 @@ enum WorkerOperationKind: Equatable {
             "Starting conversion"
         case .preview:
             "Starting preview"
+        case .liveSource:
+            "Starting live source"
         }
     }
 
@@ -59,6 +64,8 @@ enum WorkerOperationKind: Equatable {
             "Conversion stopped."
         case .preview:
             "Preview stopped."
+        case .liveSource:
+            "Live source stopped."
         }
     }
 }
@@ -133,6 +140,7 @@ struct WorkerLifecycleState: Equatable {
     private(set) var result: SourceInspection?
     private(set) var conversionResult: ConversionResult?
     private(set) var previewResult: PreviewArtifact?
+    private(set) var liveSourceResult: LiveSourceResult?
     private(set) var videoRoute: VideoRouteReport?
     private(set) var failureMessage: String?
     private(set) var failureDetails: String?
@@ -233,7 +241,9 @@ struct WorkerLifecycleState: Equatable {
             warningMessage = event.payload.message ?? "The operation reported a warning."
             appendActivity(warningMessage, severity: .warning)
         case .artifactReady:
-            activityMessage = "Preview artifact is ready."
+            activityMessage = operationKind == .liveSource
+                ? "Live source replay is ready."
+                : "Preview artifact is ready."
             appendActivity(activityMessage)
         case .observability:
             break
@@ -259,6 +269,12 @@ struct WorkerLifecycleState: Equatable {
                 previewResult = completedPreview
                 videoRoute = completedPreview.videoRoute ?? videoRoute
                 stageMessage = "Preview complete"
+            case .liveSource:
+                guard let completedSource = event.payload.liveSourceResult else {
+                    throw WorkerLifecycleError.missingPayload(event: event.type)
+                }
+                liveSourceResult = completedSource
+                stageMessage = "Live source complete"
             }
             progress = nil
             phase = .completed
@@ -388,6 +404,7 @@ struct WorkerLifecycleState: Equatable {
         result = nil
         conversionResult = nil
         previewResult = nil
+        liveSourceResult = nil
         videoRoute = nil
         failureMessage = nil
         failureDetails = nil

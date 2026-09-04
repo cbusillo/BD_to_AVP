@@ -14,7 +14,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define CONTRACT_VERSION 1
+#define CONTRACT_VERSION 2
+#define SERVICE_FRAME_VERSION 1
+#define SERVICE_FRAME_HEADER_SIZE 40
+#define SERVICE_RECORD_VIDEO 1
+#define SERVICE_RECORD_AUDIO 2
+#define SERVICE_RECORD_COMPLETE 3
+#define SERVICE_FLAG_RANDOM_ACCESS 1
 #define M2TS_PACKET_SIZE 192
 #define READ_CHUNK_SIZE (6144 * 32)
 #define MAX_PES_BYTES (16 * 1024 * 1024)
@@ -36,12 +42,14 @@ typedef enum {
     DEMUX_UNMATCHED_PES = -8,
     DEMUX_NO_MVC_PES = -9,
     DEMUX_INSUFFICIENT_PAIRS = -10,
+    DEMUX_NO_AUDIO_PES = -11,
 } DemuxResult;
 
 typedef struct {
     uint8_t *data;
     size_t length;
     size_t capacity;
+    uint64_t pts;
     uint64_t dts;
     bool active;
 } PesBuilder;
@@ -50,6 +58,7 @@ typedef struct PesItem {
     uint8_t *data;
     size_t length;
     size_t capacity;
+    uint64_t pts;
     uint64_t dts;
     struct PesItem *next;
 } PesItem;
@@ -63,6 +72,7 @@ typedef struct {
 typedef struct {
     uint64_t packets;
     uint64_t pairs;
+    uint64_t audio_samples;
     uint64_t last_dts;
     size_t maximum_pending_bytes;
 } DemuxStats;
@@ -70,10 +80,16 @@ typedef struct {
 typedef struct {
     PesBuilder base_builder;
     PesBuilder dependent_builder;
+    PesBuilder audio_builder;
     PesQueue base_pending;
     PesQueue dependent_pending;
     DemuxStats stats;
     uint64_t maximum_pairs;
+    uint64_t record_sequence;
+    uint16_t selected_audio_pid;
+    bool service_framing;
+    bool pair_limit_reached;
+    uint64_t cutoff_dts;
     WriteFunction write_function;
     void *write_context;
 } DemuxContext;
@@ -153,9 +169,97 @@ static const char *demux_error_code(DemuxResult result) {
             return "mvc_pids_unavailable";
         case DEMUX_INSUFFICIENT_PAIRS:
             return "insufficient_mvc_pairs";
+        case DEMUX_NO_AUDIO_PES:
+            return "selected_audio_unavailable";
         default:
             return "demux_failed";
     }
+}
+
+static void encode_u16(uint8_t *output, uint16_t value) {
+    output[0] = (uint8_t)(value >> 8);
+    output[1] = (uint8_t)value;
+}
+
+static void encode_u32(uint8_t *output, uint32_t value) {
+    output[0] = (uint8_t)(value >> 24);
+    output[1] = (uint8_t)(value >> 16);
+    output[2] = (uint8_t)(value >> 8);
+    output[3] = (uint8_t)value;
+}
+
+static void encode_u64(uint8_t *output, uint64_t value) {
+    for (size_t index = 0; index < 8; index++) {
+        output[index] = (uint8_t)(value >> (56 - index * 8));
+    }
+}
+
+static int write_bytes(DemuxContext *context, const uint8_t *data, size_t size) {
+    int result = context->write_function(context->write_context, data, size);
+    if (result > 0) {
+        return DEMUX_DONE;
+    }
+    if (result < 0) {
+        return DEMUX_WRITE_FAILED;
+    }
+    return DEMUX_OK;
+}
+
+static DemuxResult write_service_record(
+    DemuxContext *context,
+    uint8_t type,
+    uint16_t flags,
+    uint64_t pts,
+    uint64_t dts,
+    const uint8_t *primary,
+    size_t primary_length,
+    const uint8_t *secondary,
+    size_t secondary_length
+) {
+    if (primary_length > UINT32_MAX || secondary_length > UINT32_MAX) {
+        return DEMUX_PENDING_LIMIT;
+    }
+    uint8_t header[SERVICE_FRAME_HEADER_SIZE] = {
+        'S', 'S', 'F', 'S', SERVICE_FRAME_VERSION, type, 0, 0,
+    };
+    encode_u16(header + 6, flags);
+    encode_u64(header + 8, context->record_sequence++);
+    encode_u64(header + 16, pts);
+    encode_u64(header + 24, dts);
+    encode_u32(header + 32, (uint32_t)primary_length);
+    encode_u32(header + 36, (uint32_t)secondary_length);
+    DemuxResult result = (DemuxResult)write_bytes(context, header, sizeof(header));
+    if (result != DEMUX_OK) {
+        return result;
+    }
+    if (primary_length > 0) {
+        result = (DemuxResult)write_bytes(context, primary, primary_length);
+        if (result != DEMUX_OK) {
+            return result;
+        }
+    }
+    if (secondary_length > 0) {
+        result = (DemuxResult)write_bytes(context, secondary, secondary_length);
+    }
+    return result;
+}
+
+static bool contains_idr_nal(const uint8_t *data, size_t length) {
+    for (size_t index = 0; index + 3 < length; index++) {
+        size_t header_index = 0;
+        if (data[index] == 0 && data[index + 1] == 0 && data[index + 2] == 1) {
+            header_index = index + 3;
+        } else if (index + 4 < length && data[index] == 0 && data[index + 1] == 0 &&
+                   data[index + 2] == 0 && data[index + 3] == 1) {
+            header_index = index + 4;
+        } else {
+            continue;
+        }
+        if ((data[header_index] & 0x1f) == 5) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void free_builder(PesBuilder *builder) {
@@ -177,6 +281,7 @@ static void free_queue(PesQueue *queue) {
 static void free_demux(DemuxContext *context) {
     free_builder(&context->base_builder);
     free_builder(&context->dependent_builder);
+    free_builder(&context->audio_builder);
     free_queue(&context->base_pending);
     free_queue(&context->dependent_pending);
 }
@@ -248,23 +353,37 @@ static DemuxResult emit_pair(DemuxContext *context, PesItem *base, PesItem *depe
     if (context->stats.pairs > 0 && base->dts < context->stats.last_dts) {
         return DEMUX_NON_MONOTONIC;
     }
-    int write_result = context->write_function(context->write_context, base->data, base->length);
-    if (write_result > 0) {
-        return DEMUX_DONE;
+    DemuxResult write_result;
+    if (context->service_framing) {
+        uint16_t flags = contains_idr_nal(base->data, base->length) ? SERVICE_FLAG_RANDOM_ACCESS : 0;
+        write_result = write_service_record(
+            context,
+            SERVICE_RECORD_VIDEO,
+            flags,
+            base->pts,
+            base->dts,
+            base->data,
+            base->length,
+            dependent->data,
+            dependent->length
+        );
+    } else {
+        write_result = (DemuxResult)write_bytes(context, base->data, base->length);
+        if (write_result == DEMUX_OK) {
+            write_result = (DemuxResult)write_bytes(context, dependent->data, dependent->length);
+        }
     }
-    if (write_result < 0) {
-        return DEMUX_WRITE_FAILED;
-    }
-    write_result = context->write_function(context->write_context, dependent->data, dependent->length);
-    if (write_result > 0) {
-        return DEMUX_DONE;
-    }
-    if (write_result < 0) {
-        return DEMUX_WRITE_FAILED;
+    if (write_result != DEMUX_OK) {
+        return write_result;
     }
     context->stats.last_dts = base->dts;
     context->stats.pairs++;
     if (context->maximum_pairs > 0 && context->stats.pairs >= context->maximum_pairs) {
+        if (context->service_framing && context->selected_audio_pid != 0) {
+            context->pair_limit_reached = true;
+            context->cutoff_dts = base->dts;
+            return DEMUX_OK;
+        }
         return DEMUX_DONE;
     }
     return DEMUX_OK;
@@ -277,6 +396,31 @@ static DemuxResult complete_pes(DemuxContext *context, uint16_t pid, PesBuilder 
         return DEMUX_OK;
     }
 
+    if (context->selected_audio_pid != 0 && pid == context->selected_audio_pid) {
+        if (context->pair_limit_reached && builder->dts > context->cutoff_dts) {
+            builder->active = false;
+            builder->length = 0;
+            return context->stats.audio_samples > 0 ? DEMUX_DONE : DEMUX_NO_AUDIO_PES;
+        }
+        DemuxResult result = write_service_record(
+            context,
+            SERVICE_RECORD_AUDIO,
+            0,
+            builder->pts,
+            builder->dts,
+            builder->data,
+            builder->length,
+            NULL,
+            0
+        );
+        if (result == DEMUX_OK) {
+            context->stats.audio_samples++;
+        }
+        builder->active = false;
+        builder->length = 0;
+        return result;
+    }
+
     PesItem *item = calloc(1, sizeof(*item));
     if (item == NULL) {
         return DEMUX_OUT_OF_MEMORY;
@@ -284,6 +428,7 @@ static DemuxResult complete_pes(DemuxContext *context, uint16_t pid, PesBuilder 
     item->data = builder->data;
     item->length = builder->length;
     item->capacity = builder->capacity;
+    item->pts = builder->pts;
     item->dts = builder->dts;
     memset(builder, 0, sizeof(*builder));
 
@@ -316,7 +461,11 @@ static DemuxResult process_packet(DemuxContext *context, const uint8_t *packet) 
     }
 
     uint16_t pid = (uint16_t)(((packet[5] & 0x1f) << 8) | packet[6]);
-    if (pid != 0x1011 && pid != 0x1012) {
+    bool selected_audio = context->selected_audio_pid != 0 && pid == context->selected_audio_pid;
+    if (pid != 0x1011 && pid != 0x1012 && !selected_audio) {
+        return DEMUX_OK;
+    }
+    if (context->pair_limit_reached && !selected_audio) {
         return DEMUX_OK;
     }
 
@@ -336,11 +485,21 @@ static DemuxResult process_packet(DemuxContext *context, const uint8_t *packet) 
         return DEMUX_OK;
     }
 
-    PesBuilder *builder = pid == 0x1011 ? &context->base_builder : &context->dependent_builder;
+    PesBuilder *builder;
+    if (pid == 0x1011) {
+        builder = &context->base_builder;
+    } else if (pid == 0x1012) {
+        builder = &context->dependent_builder;
+    } else {
+        builder = &context->audio_builder;
+    }
     if ((packet[5] & 0x40) != 0) {
         DemuxResult complete_result = complete_pes(context, pid, builder);
         if (complete_result != DEMUX_OK) {
             return complete_result;
+        }
+        if (context->pair_limit_reached && !selected_audio) {
+            return DEMUX_OK;
         }
         if (M2TS_PACKET_SIZE - offset < 9 || packet[offset] != 0x00 || packet[offset + 1] != 0x00 ||
             packet[offset + 2] != 0x01) {
@@ -356,7 +515,13 @@ static DemuxResult process_packet(DemuxContext *context, const uint8_t *packet) 
             return DEMUX_INVALID_PES;
         }
         uint64_t presentation_timestamp = parse_timestamp(packet + offset + 9);
+        builder->pts = presentation_timestamp;
         builder->dts = timestamp_flags == 0x03 ? parse_timestamp(packet + offset + 14) : presentation_timestamp;
+        if (selected_audio && context->pair_limit_reached && builder->dts > context->cutoff_dts) {
+            builder->active = false;
+            builder->length = 0;
+            return context->stats.audio_samples > 0 ? DEMUX_DONE : DEMUX_NO_AUDIO_PES;
+        }
         builder->active = true;
         offset += header_size;
     }
@@ -373,10 +538,14 @@ static DemuxResult demux_stream(
     WriteFunction write_function,
     void *write_context,
     uint64_t maximum_pairs,
+    uint16_t selected_audio_pid,
+    bool service_framing,
     DemuxStats *stats
 ) {
     DemuxContext context = {
         .maximum_pairs = maximum_pairs,
+        .selected_audio_pid = selected_audio_pid,
+        .service_framing = service_framing,
         .write_function = write_function,
         .write_context = write_context,
     };
@@ -409,21 +578,28 @@ static DemuxResult demux_stream(
         completed_early = true;
         result = DEMUX_OK;
     }
-    if (result == DEMUX_OK && !completed_early) {
+    if (result == DEMUX_OK && !completed_early && !context.pair_limit_reached) {
         result = complete_pes(&context, 0x1011, &context.base_builder);
     }
     if (result == DEMUX_DONE) {
         completed_early = true;
         result = DEMUX_OK;
     }
-    if (result == DEMUX_OK && !completed_early) {
+    if (result == DEMUX_OK && !completed_early && !context.pair_limit_reached) {
         result = complete_pes(&context, 0x1012, &context.dependent_builder);
     }
     if (result == DEMUX_DONE) {
         completed_early = true;
         result = DEMUX_OK;
     }
-    if (result == DEMUX_OK && !completed_early &&
+    if (result == DEMUX_OK && !completed_early && selected_audio_pid != 0) {
+        result = complete_pes(&context, selected_audio_pid, &context.audio_builder);
+    }
+    if (result == DEMUX_DONE) {
+        completed_early = true;
+        result = DEMUX_OK;
+    }
+    if (result == DEMUX_OK && !completed_early && !context.pair_limit_reached &&
         (context.base_pending.count != 0 || context.dependent_pending.count != 0)) {
         result = DEMUX_UNMATCHED_PES;
     }
@@ -432,6 +608,25 @@ static DemuxResult demux_stream(
     }
     if (result == DEMUX_OK && !completed_early && maximum_pairs > 0 && context.stats.pairs < maximum_pairs) {
         result = DEMUX_INSUFFICIENT_PAIRS;
+    }
+    if (result == DEMUX_OK && selected_audio_pid != 0 && context.stats.audio_samples == 0) {
+        result = DEMUX_NO_AUDIO_PES;
+    }
+    if (result == DEMUX_OK && service_framing) {
+        result = write_service_record(
+            &context,
+            SERVICE_RECORD_COMPLETE,
+            0,
+            0,
+            0,
+            NULL,
+            0,
+            NULL,
+            0
+        );
+        if (result == DEMUX_DONE) {
+            result = DEMUX_OK;
+        }
     }
 
     *stats = context.stats;
@@ -765,7 +960,13 @@ static int inspect_source(const char *source_path, uint32_t playlist) {
     return 0;
 }
 
-static int stream_mvc(const char *source_path, uint32_t playlist, uint64_t maximum_pairs) {
+static int stream_source(
+    const char *source_path,
+    uint32_t playlist,
+    uint16_t selected_audio_pid,
+    uint64_t maximum_pairs,
+    bool service_framing
+) {
     const char *source_kind = NULL;
     if (!validate_source_path(source_path, &source_kind)) {
         return print_error("invalid_source", "The source must be an existing ISO image or Blu-ray folder.");
@@ -813,6 +1014,20 @@ static int stream_mvc(const char *source_path, uint32_t playlist, uint64_t maxim
         bd_close(bluray);
         return print_error(reason, "The requested playlist is outside the bounded direct-SSIF prototype.");
     }
+    if (selected_audio_pid != 0) {
+        bool audio_available = false;
+        for (uint8_t index = 0; index < title_info->clips[0].audio_stream_count; index++) {
+            if (title_info->clips[0].audio_streams[index].pid == selected_audio_pid) {
+                audio_available = true;
+                break;
+            }
+        }
+        if (!audio_available) {
+            bd_free_title_info(title_info);
+            bd_close(bluray);
+            return print_error("selected_audio_unavailable", "The selected audio PID is not available in the playlist.");
+        }
+    }
 
     bd_free_title_info(title_info);
     bd_close(bluray);
@@ -833,6 +1048,8 @@ static int stream_mvc(const char *source_path, uint32_t playlist, uint64_t maxim
         write_standard_file,
         stdout,
         maximum_pairs,
+        selected_audio_pid,
+        service_framing,
         &stats
     );
     file->close(file);
@@ -844,17 +1061,37 @@ static int stream_mvc(const char *source_path, uint32_t playlist, uint64_t maxim
     fprintf(
         stderr,
         "{\"schema_version\":%d,\"type\":\"stream.complete\",\"playlist\":%u,"
-        "\"packets\":%" PRIu64 ",\"pairs\":%" PRIu64 ",\"maximum_pending_bytes\":%zu}\n",
+        "\"packets\":%" PRIu64 ",\"pairs\":%" PRIu64 ",\"audio_samples\":%" PRIu64
+        ",\"maximum_pending_bytes\":%zu}\n",
         CONTRACT_VERSION,
         playlist,
         stats.packets,
         stats.pairs,
+        stats.audio_samples,
         stats.maximum_pending_bytes
     );
     return 0;
 }
 
-static int demux_file(const char *input_path, uint64_t maximum_pairs) {
+static int stream_mvc(const char *source_path, uint32_t playlist, uint64_t maximum_pairs) {
+    return stream_source(source_path, playlist, 0, maximum_pairs, false);
+}
+
+static int stream_service(
+    const char *source_path,
+    uint32_t playlist,
+    uint16_t selected_audio_pid,
+    uint64_t maximum_pairs
+) {
+    return stream_source(source_path, playlist, selected_audio_pid, maximum_pairs, true);
+}
+
+static int demux_input_file(
+    const char *input_path,
+    uint16_t selected_audio_pid,
+    uint64_t maximum_pairs,
+    bool service_framing
+) {
     FILE *input = fopen(input_path, "rb");
     if (input == NULL) {
         return print_error("input_open_failed", "The M2TS input file could not be opened.");
@@ -867,6 +1104,8 @@ static int demux_file(const char *input_path, uint64_t maximum_pairs) {
         write_standard_file,
         stdout,
         maximum_pairs,
+        selected_audio_pid,
+        service_framing,
         &stats
     );
     fclose(input);
@@ -876,13 +1115,22 @@ static int demux_file(const char *input_path, uint64_t maximum_pairs) {
     fprintf(
         stderr,
         "{\"schema_version\":%d,\"type\":\"stream.complete\",\"packets\":%" PRIu64
-        ",\"pairs\":%" PRIu64 ",\"maximum_pending_bytes\":%zu}\n",
+        ",\"pairs\":%" PRIu64 ",\"audio_samples\":%" PRIu64 ",\"maximum_pending_bytes\":%zu}\n",
         CONTRACT_VERSION,
         stats.packets,
         stats.pairs,
+        stats.audio_samples,
         stats.maximum_pending_bytes
     );
     return 0;
+}
+
+static int demux_file(const char *input_path, uint64_t maximum_pairs) {
+    return demux_input_file(input_path, 0, maximum_pairs, false);
+}
+
+static int demux_service_file(const char *input_path, uint16_t selected_audio_pid, uint64_t maximum_pairs) {
+    return demux_input_file(input_path, selected_audio_pid, maximum_pairs, true);
 }
 
 static int print_usage(void) {
@@ -890,7 +1138,9 @@ static int print_usage(void) {
         "Usage:\n"
         "  ssif_probe inspect <source> <playlist>\n"
         "  ssif_probe stream-mvc <source> <playlist> [maximum-pairs]\n"
+        "  ssif_probe stream-service <source> <playlist> <audio-pid> [maximum-pairs]\n"
         "  ssif_probe demux-file <m2ts-file> [maximum-pairs]\n"
+        "  ssif_probe demux-service-file <m2ts-file> <audio-pid> [maximum-pairs]\n"
         "  ssif_probe --version\n",
         stderr
     );
@@ -919,12 +1169,38 @@ int main(int argc, char **argv) {
         }
         return stream_mvc(argv[2], (uint32_t)playlist, maximum_pairs);
     }
+    if ((argc == 5 || argc == 6) && strcmp(argv[1], "stream-service") == 0) {
+        uint64_t playlist = 0;
+        uint64_t selected_audio_pid = 0;
+        uint64_t maximum_pairs = 0;
+        if (!parse_unsigned(argv[3], 99999, &playlist) ||
+            !parse_unsigned(argv[4], 8191, &selected_audio_pid) || selected_audio_pid == 0 ||
+            (argc == 6 && !parse_unsigned(argv[5], UINT64_MAX, &maximum_pairs))) {
+            return print_error(
+                "invalid_arguments",
+                "Playlist, audio-pid, and maximum-pairs must be valid non-negative integers."
+            );
+        }
+        return stream_service(argv[2], (uint32_t)playlist, (uint16_t)selected_audio_pid, maximum_pairs);
+    }
     if ((argc == 3 || argc == 4) && strcmp(argv[1], "demux-file") == 0) {
         uint64_t maximum_pairs = 0;
         if (argc == 4 && !parse_unsigned(argv[3], UINT64_MAX, &maximum_pairs)) {
             return print_error("invalid_arguments", "maximum-pairs must be a non-negative integer.");
         }
         return demux_file(argv[2], maximum_pairs);
+    }
+    if ((argc == 4 || argc == 5) && strcmp(argv[1], "demux-service-file") == 0) {
+        uint64_t selected_audio_pid = 0;
+        uint64_t maximum_pairs = 0;
+        if (!parse_unsigned(argv[3], 8191, &selected_audio_pid) || selected_audio_pid == 0 ||
+            (argc == 5 && !parse_unsigned(argv[4], UINT64_MAX, &maximum_pairs))) {
+            return print_error(
+                "invalid_arguments",
+                "audio-pid and maximum-pairs must be valid non-negative integers."
+            );
+        }
+        return demux_service_file(argv[2], (uint16_t)selected_audio_pid, maximum_pairs);
     }
     return print_usage();
 }
