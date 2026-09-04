@@ -20,6 +20,7 @@ CORE_TOOLS = {
     "ffmpeg": ["-hide_banner", "-version"],
     "ffprobe": ["-hide_banner", "-version"],
     "MP4Box": ["-version"],
+    "ssif_probe": ["--version"],
 }
 GUI_RUNTIME_TOOLS = {
     "edge264_test": ["--help"],

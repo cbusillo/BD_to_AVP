@@ -56,6 +56,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["fetch-depth"], "0")
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
+    def test_ci_verifies_committed_ssif_artifacts_without_homebrew_dependencies(self) -> None:
+        workflow = load_workflow("ci.yml")
+        steps = workflow["jobs"]["validate"]["steps"]
+        ssif_step = next(step for step in steps if step.get("name") == "Verify committed SSIF probe artifacts")
+        workflow_text = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+        self.assertEqual(ssif_step["run"], "uv run python scripts/build_ssif_probe_macos.py --verify-only")
+        self.assertNotIn("brew install libbluray", workflow_text)
+        self.assertNotIn("brew install libudfread", workflow_text)
+        self.assertNotIn("brew install pkgconf", workflow_text)
+        self.assertNotIn("uv run python scripts/build_ssif_probe_macos.py\n", workflow_text)
+
     def test_sparkle_bundle_uses_importable_module_entrypoint(self) -> None:
         workflow = load_release_engine()
         workflow_text = str(workflow)
