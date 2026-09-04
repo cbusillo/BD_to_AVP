@@ -28,24 +28,40 @@ struct RelayHostSheet: View {
                             Text("Compare this code with Vision Pro")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(pairingCandidate.shortAuthenticationString.digits)
+                            Text(pairingCandidate.shortAuthenticationString.formattedDigits)
                                 .font(.system(size: 42, weight: .bold, design: .monospaced))
-                                .tracking(7)
-                                .accessibilityLabel("Pairing code \(pairingCandidate.shortAuthenticationString.digits.map(String.init).joined(separator: " "))")
-                                .accessibilityIdentifier("relay-pairing-code")
-                            Text("Confirm only if every digit matches. This request expires at \(pairingCandidate.expirationDate.formatted(date: .omitted, time: .shortened)).")
+                                .tracking(5)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
+                                .accessibilityLabel("Comparison code")
+                                .accessibilityValue(pairingCandidate.shortAuthenticationString.accessibilityDigits)
+                                .accessibilityAddTraits(.isStaticText)
+                                .accessibilitySortPriority(2)
+                                .accessibilityIdentifier("relay-sas-code")
+                            Text("Confirm only if every digit matches.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text("\(remainingSeconds(until: pairingCandidate.expirationDate, now: context.date)) seconds remaining")
+                                    .font(.footnote.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
                             HStack {
                                 Button("Codes Match") {
                                     Task { await controller.approveCodesMatch() }
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .accessibilityIdentifier("relay-codes-match")
+                                .disabled(pairingCandidate.isMacApproved)
+                                .accessibilityIdentifier("relay-confirm-match-button")
                                 Button("Not This Device", role: .destructive) {
                                     Task { await controller.rejectCandidate() }
                                 }
-                                .accessibilityIdentifier("relay-not-this-device")
+                                .accessibilityIdentifier("relay-reject-button")
+                            }
+                            if pairingCandidate.isMacApproved {
+                                Text("Confirmed on this Mac. Waiting for Vision Pro…")
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -82,5 +98,9 @@ struct RelayHostSheet: View {
             guard case let .success(urls) = result, let directory = urls.first else { return }
             Task { await controller.start(directory: directory) }
         }
+    }
+
+    private func remainingSeconds(until expiration: Date, now: Date) -> Int {
+        max(0, Int(ceil(expiration.timeIntervalSince(now))))
     }
 }

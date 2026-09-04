@@ -27,7 +27,9 @@ numeric-comparison code. The Mac commits its nonce before Vision Pro contributes
 its key material, then reveals it for client verification; this prevents server
 nonce grinding. A single provisional candidate has a 60-second window and needs
 an authenticated Vision Pro confirmation plus an exact candidate-bound Mac
-approval before any playlist or media route is available. Every protected HTTP
+approval before any playlist or media route is available. The unpaired relay
+advertises for at most ten minutes, rotating its ephemeral challenge every two
+minutes while idle. Every protected HTTP
 response carries a bounded HMAC header binding server role, request nonce,
 status, and body SHA-256; clients verify it before interpreting content.
 

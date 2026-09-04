@@ -120,6 +120,7 @@ final class RelayHostSessionController: ObservableObject {
         guard let session, let pairingCandidate else { return }
         do {
             try await session.approvePairingCandidate(pairingCandidate.candidateID)
+            self.pairingCandidate = await session.currentPairingCandidate()
         } catch {
             lifecycle = .failed(Self.message(for: error))
         }
@@ -148,6 +149,10 @@ final class RelayHostSessionController: ObservableObject {
             "The playlist references a missing segment: \(resourceIdentifier)."
         case RelaySessionError.pairingCandidateNotFound:
             "That pairing request is no longer active. Ask Vision Pro to try again."
+        case RelaySessionError.confirmationExpired:
+            "That comparison code expired. Select this Mac again on Vision Pro."
+        case RelaySessionError.pairingAttemptsExhausted:
+            "Too many pairing requests were rejected. Restart the relay to continue."
         default:
             "The relay could not start. Choose a complete EVENT-HLS fixture and try again."
         }
@@ -176,6 +181,9 @@ final class RelayHostSessionController: ObservableObject {
         guard let session else { return }
         switch await session.currentLifecycle() {
         case .pairing:
+            pairingCandidate = nil
+            lifecycle = .advertising
+        case .awaitingConfirmation:
             pairingCandidate = await session.currentPairingCandidate()
             lifecycle = pairingCandidate == nil ? .advertising : .confirming
         case .paired:
@@ -190,7 +198,7 @@ final class RelayHostSessionController: ObservableObject {
             clearTerminalSession()
         case .expired:
             pairingCandidate = nil
-            lifecycle = .failed("The numeric-comparison window expired. Start a new relay to continue.")
+            lifecycle = .failed("The relay pairing window ended. Start a new relay to continue.")
             clearTerminalSession()
         case .stopped:
             pairingCandidate = nil

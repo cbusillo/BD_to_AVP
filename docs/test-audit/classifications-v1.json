@@ -213,7 +213,6 @@
         "macos/BDToAVPPlayerTests/RelayHLSResourceLoaderTests.swift",
         "macos/BDToAVPPlayerTests/RelayRemotePlaybackSourceTests.swift",
         "macos/BDToAVPPlayerTests/RelaySessionCoordinatorTests.swift",
-        "macos/BDToAVPPlayerTests/RelayTestSupport.swift",
         "macos/BDToAVPPlayerTests/ResumeStoreTests.swift"
       ]
     },

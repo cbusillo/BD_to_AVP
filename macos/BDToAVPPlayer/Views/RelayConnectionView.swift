@@ -110,26 +110,47 @@ struct RelayConnectionView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             if let shortAuthenticationString = coordinator.shortAuthenticationString {
-                Text(shortAuthenticationString.digits)
+                Text(shortAuthenticationString.formattedDigits)
                     .font(.system(size: 48, weight: .bold, design: .monospaced))
-                    .tracking(8)
+                    .tracking(6)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .accessibilityLabel("Pairing code \(shortAuthenticationString.digits.map(String.init).joined(separator: " "))")
-                    .accessibilityIdentifier("relay-pairing-code")
+                    .accessibilityLabel("Comparison code")
+                    .accessibilityValue(shortAuthenticationString.accessibilityDigits)
+                    .accessibilityAddTraits(.isStaticText)
+                    .accessibilitySortPriority(2)
+                    .accessibilityIdentifier("relay-sas-code")
+            }
+            if case let .confirming(_, _, expiresAt) = coordinator.state {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text("\(remainingSeconds(until: expiresAt, now: context.date)) seconds remaining")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("\(remainingSeconds(until: expiresAt, now: context.date)) seconds remaining")
+                }
             }
             Text("Confirm only if every digit matches the code on your Mac. Both devices must confirm before media becomes available.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+            if coordinator.isWaitingForMacConfirmation {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Confirmed here. Waiting for your Mac…")
+                        .font(.footnote.weight(.medium))
+                }
+            }
             HStack(spacing: 10) {
                 Button("Codes Match") {
                     Task { await coordinator.confirmCodesMatch() }
                 }
                 .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("relay-codes-match")
+                .disabled(coordinator.isWaitingForMacConfirmation)
+                .accessibilityIdentifier("relay-confirm-match-button")
                 Button("Not My Mac", role: .destructive) {
                     Task { await coordinator.rejectCandidate() }
                 }
-                .accessibilityIdentifier("relay-not-my-mac")
+                .accessibilityIdentifier("relay-reject-button")
             }
         }
     }
@@ -160,7 +181,7 @@ struct RelayConnectionView: View {
     }
 
     private var expiredContent: some View {
-        Text("Pairing has ended. Find your Mac again to request a new pairing code.")
+        Text("Pairing has ended. Find your Mac again to compare a new code.")
             .font(.subheadline)
             .foregroundStyle(.secondary)
     }
@@ -210,5 +231,9 @@ struct RelayConnectionView: View {
         case let .failed(message):
             message
         }
+    }
+
+    private func remainingSeconds(until expiration: Date, now: Date) -> Int {
+        max(0, Int(ceil(expiration.timeIntervalSince(now))))
     }
 }

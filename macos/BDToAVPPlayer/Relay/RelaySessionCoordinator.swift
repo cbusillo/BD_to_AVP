@@ -38,6 +38,7 @@ final class RelaySessionCoordinator: ObservableObject {
     @Published private(set) var discoveredServers: [RelayDiscoveredEndpoint] = []
     @Published private(set) var connectedServer: RelayDiscoveredEndpoint?
     @Published private(set) var shortAuthenticationString: RelayShortAuthenticationString?
+    @Published private(set) var isWaitingForMacConfirmation = false
 
     private(set) var session: RelayEstablishedSession?
     private(set) var connectedServerBaseURL: URL?
@@ -104,6 +105,7 @@ final class RelaySessionCoordinator: ObservableObject {
             let provisionalSession = try attempt.complete(with: candidate, now: clock())
             self.provisionalSession = provisionalSession
             shortAuthenticationString = provisionalSession.shortAuthenticationString
+            isWaitingForMacConfirmation = false
             connectedServerBaseURL = endpoint.baseURL
             connectedServer = endpoint
             state = .confirming(
@@ -133,12 +135,17 @@ final class RelaySessionCoordinator: ObservableObject {
 
     func handleNetworkAvailability(_ availability: RelayNetworkAvailability) {
         switch availability {
-        case .unavailable where hasLiveSession:
-            startReconnect(attempt: 1)
-        case .available where isReconnecting:
-            startReconnect(attempt: 1)
-        default:
-            break
+        case .unavailable:
+            reconnectTask?.cancel()
+            reconnectTask = nil
+            guard hasLiveSession else {
+                state = .sessionExpired
+                return
+            }
+            state = .networkUnavailable
+        case .available:
+            guard state == .networkUnavailable || isReconnecting else { return }
+            startReconnect(attempt: 0)
         }
     }
 
@@ -158,8 +165,13 @@ final class RelaySessionCoordinator: ObservableObject {
     }
 
     private func submitConfirmation(_ decision: RelayPairingConfirmationDecision, beginPolling: Bool) async {
-        guard case let .confirming(_, _, expiresAt) = state,
-              expiresAt > clock(),
+        guard case let .confirming(_, _, expiresAt) = state else { return }
+        guard expiresAt > clock() else {
+            clearPendingPairingSelection()
+            state = .sessionExpired
+            return
+        }
+        guard
               let provisionalSession,
               let baseURL = connectedServerBaseURL
         else { return }
@@ -191,9 +203,10 @@ final class RelaySessionCoordinator: ObservableObject {
             guard result.candidateID == provisionalSession.candidateID else { throw RelaySessionError.pairingCandidateNotFound }
             switch result.state {
             case .waitingForMac:
+                isWaitingForMacConfirmation = true
                 if beginPolling { beginConfirmationPolling() }
             case .rejected:
-                clearPendingPairing()
+                clearPendingPairingSelection()
                 state = .discovery
             case .established:
                 guard let acceptance = result.acceptance else { throw RelaySessionError.invalidResponse }
@@ -204,9 +217,12 @@ final class RelaySessionCoordinator: ObservableObject {
                 guard let session else { return }
                 state = .connected(sessionID: session.sessionID.rawValue, expiresAt: session.expirationDate)
             }
-        } catch RelayTransportError.sessionExpired, RelayTransportError.unpaired {
+        } catch RelayTransportError.sessionExpired {
             clearPendingPairing()
             state = .sessionExpired
+        } catch RelayTransportError.unpaired {
+            clearPendingPairingSelection()
+            state = .discovery
         } catch {
             state = .failed("Unable to confirm numeric comparison: \(error.localizedDescription)")
         }
@@ -218,7 +234,7 @@ final class RelaySessionCoordinator: ObservableObject {
             defer { self?.confirmationPollingTask = nil }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
-                guard let self, case .confirming = self.state else { return }
+                guard !Task.isCancelled, let self, case .confirming = self.state else { return }
                 await self.submitConfirmation(.codesMatch, beginPolling: false)
                 if self.state == .sessionExpired || self.isFailed { return }
             }
@@ -291,6 +307,13 @@ final class RelaySessionCoordinator: ObservableObject {
         confirmationPollingTask = nil
         provisionalSession = nil
         shortAuthenticationString = nil
+        isWaitingForMacConfirmation = false
+    }
+
+    private func clearPendingPairingSelection() {
+        clearPendingPairing()
+        connectedServerBaseURL = nil
+        connectedServer = nil
     }
 
     private func stopBrowser() {
