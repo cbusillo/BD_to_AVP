@@ -75,6 +75,14 @@ struct RelayHostSheet: View {
                 }
                 .disabled(controller.isSessionActive || controller.lifecycle == .starting)
 
+                if !controller.isSessionActive, controller.fixtureDirectory != nil {
+                    Button("Restart Relay") {
+                        Task { await controller.restart() }
+                    }
+                    .disabled(controller.lifecycle == .starting)
+                    .accessibilityIdentifier("relay-restart-button")
+                }
+
                 Spacer()
 
                 if controller.isSessionActive {

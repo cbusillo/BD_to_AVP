@@ -59,7 +59,10 @@ struct RelayConnectionView: View {
                 coordinator.disconnect()
             }
             .buttonStyle(.bordered)
-        case .discovery, .confirming, .reconnecting, .networkUnavailable:
+        case .discovery:
+            Button("Cancel") { coordinator.disconnect() }
+                .buttonStyle(.bordered)
+        case .confirming, .reconnecting, .networkUnavailable:
             EmptyView()
         }
     }

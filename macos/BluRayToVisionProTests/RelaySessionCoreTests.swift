@@ -7,13 +7,31 @@ final class RelaySessionCoreTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
     private let sessionID = try! RelaySessionIdentifier(rawValue: "A9B8C7D6-E5F4-4321-ABCD-1234567890AB")
 
-    func testDefaultCandidateWindowAllowsTwoMinutesForComparison() async throws {
+    func testDefaultCandidateWindowAllowsFiveMinutesFromSelection() async throws {
         let server = try RelayServerPairingContext(now: now)
         let challenge = try await server.currentChallenge(now: now)
         let client = try makeClient(challenge: challenge)
         let offered = try await server.accept(client.request, now: now)
 
-        XCTAssertEqual(offered.candidate.expiresAtUnixMilliseconds, 1_700_000_120_000)
+        XCTAssertEqual(offered.candidate.expiresAtUnixMilliseconds, 1_700_000_300_000)
+    }
+
+    func testLateSelectionGetsFullWindowAndCanConfirmAfterChallengeExpires() async throws {
+        let server = try RelayServerPairingContext(now: now)
+        let selectedAt = now.addingTimeInterval(119)
+        let challenge = try await server.currentChallenge(now: selectedAt)
+        let client = try RelayClientPairingAttempt(challenge: challenge, now: selectedAt)
+        let offered = try await server.accept(client.request, now: selectedAt)
+        let provisional = try client.complete(with: offered.candidate, now: selectedAt)
+        XCTAssertEqual(offered.candidate.expirationDate, selectedAt.addingTimeInterval(300))
+        XCTAssertEqual(offered.provisionalSession.expirationDate, offered.candidate.expirationDate)
+
+        let confirmedAt = selectedAt.addingTimeInterval(299)
+        try await server.approve(candidateID: offered.candidate.candidateID, now: confirmedAt)
+        let result = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: confirmedAt)
+        let acceptance = try XCTUnwrap(result.response.acceptance)
+        _ = try provisional.complete(with: acceptance, now: confirmedAt)
+        XCTAssertNotNil(result.session)
     }
 
     func testSuccessfulPairingSeparatesCandidateAndSessionExpiry() async throws {

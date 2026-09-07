@@ -99,7 +99,7 @@ actor RelayHost {
     private let fixtureRoot: URL
     private let replayStore: RelayReplayNonceStore
     private let now: @Sendable () -> Date
-    private let pairingExpiresAt: Date
+    private var pairingExpiresAt: Date
     private let initializationResourceIdentifier: String
     private var allowedMediaResourceIdentifiers: Set<String>
 
@@ -160,7 +160,7 @@ actor RelayHost {
         fixture: RelayEventHLSFixture,
         now: @escaping @Sendable () -> Date = { Date() },
         challengeTTL: TimeInterval = 120,
-        candidateTTL: TimeInterval = 120,
+        candidateTTL: TimeInterval = 300,
         pairingSessionTTL: TimeInterval = 600,
         sessionTTL: TimeInterval = 7_200
     ) throws -> RelayHost {
@@ -390,6 +390,8 @@ actor RelayHost {
             cleanUpAsExpired()
             throw RelaySessionError.pairingAttemptsExhausted
         }
+        // A comparison started before the advertising deadline gets its full window.
+        pairingExpiresAt = max(pairingExpiresAt, result.candidate.expirationDate)
         provisionalSession = result.provisionalSession
         lifecycle = .awaitingConfirmation
         return .json(RelayPairingCandidateEnvelope(candidate: result.candidate), statusCode: 201)

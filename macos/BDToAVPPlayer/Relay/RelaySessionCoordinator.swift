@@ -45,9 +45,12 @@ final class RelaySessionCoordinator: ObservableObject {
 
     private let transport: any RelayTransport
     private let browserFactory: @Sendable () -> any RelayEndpointBrowsing
+    private let discoveryTimeout: Duration
     private let clock: @Sendable () -> Date
     private let nonce: @Sendable () -> String
     private var browser: (any RelayEndpointBrowsing)?
+    private var discoveryTimeoutTask: Task<Void, Never>?
+    private var pairingExpirationTask: Task<Void, Never>?
     private var browsingTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var confirmationPollingTask: Task<Void, Never>?
@@ -57,11 +60,13 @@ final class RelaySessionCoordinator: ObservableObject {
     init(
         browserFactory: @escaping @Sendable () -> any RelayEndpointBrowsing = { RelayBonjourBrowser() },
         transport: any RelayTransport = URLSessionRelayTransport(),
+        discoveryTimeout: Duration = .seconds(15),
         clock: @escaping @Sendable () -> Date = { Date() },
         nonce: @escaping @Sendable () -> String = { UUID().uuidString }
     ) {
         self.browserFactory = browserFactory
         self.transport = transport
+        self.discoveryTimeout = discoveryTimeout
         self.clock = clock
         self.nonce = nonce
     }
@@ -73,11 +78,20 @@ final class RelaySessionCoordinator: ObservableObject {
         browser = newBrowser
         state = .discovery
         browsingTask = Task { @MainActor [weak self, newBrowser] in
-            for await endpoints in newBrowser.discoveryStream where !Task.isCancelled {
+            for await endpoints in newBrowser.discoveryStream {
+                guard !Task.isCancelled else { return }
                 self?.discoveredServers = endpoints
             }
+            guard !Task.isCancelled, let self, self.state == .discovery else { return }
+            self.failDiscovery()
         }
         newBrowser.startBrowsing()
+        discoveryTimeoutTask = Task { @MainActor [weak self, discoveryTimeout] in
+            try? await Task.sleep(for: discoveryTimeout)
+            guard !Task.isCancelled, let self, self.state == .discovery,
+                  self.discoveredServers.isEmpty else { return }
+            self.failDiscovery()
+        }
     }
 
     func connect(to endpoint: RelayDiscoveredEndpoint) async {
@@ -103,6 +117,8 @@ final class RelaySessionCoordinator: ObservableObject {
             }
             let candidate = try JSONDecoder().decode(RelayPairingCandidateEnvelope.self, from: candidateData).candidate
             let provisionalSession = try attempt.complete(with: candidate, now: clock())
+            discoveryTimeoutTask?.cancel()
+            discoveryTimeoutTask = nil
             self.provisionalSession = provisionalSession
             shortAuthenticationString = provisionalSession.shortAuthenticationString
             isWaitingForMacConfirmation = false
@@ -113,11 +129,30 @@ final class RelaySessionCoordinator: ObservableObject {
                 candidateID: provisionalSession.candidateID.rawValue,
                 expiresAt: candidate.expirationDate
             )
+            pairingExpirationTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled, let self else { return }
+                    self.refreshPairingExpiration()
+                    guard case .confirming = self.state else { return }
+                }
+            }
         } catch RelayTransportError.sessionExpired {
             state = .sessionExpired
         } catch {
             state = .failed("Unable to start numeric comparison: \(error.localizedDescription)")
         }
+    }
+
+    private func failDiscovery() {
+        stopBrowser()
+        state = .failed("No relay found. On your Mac, open Relay Fixture and click Restart Relay, then try Find My Mac again.")
+    }
+
+    func refreshPairingExpiration() {
+        guard case let .confirming(_, _, expiresAt) = state, expiresAt <= clock() else { return }
+        clearPendingPairingSelection()
+        state = .sessionExpired
     }
 
     func confirmCodesMatch() async {
@@ -303,6 +338,8 @@ final class RelaySessionCoordinator: ObservableObject {
     }
 
     private func clearPendingPairing() {
+        pairingExpirationTask?.cancel()
+        pairingExpirationTask = nil
         confirmationPollingTask?.cancel()
         confirmationPollingTask = nil
         provisionalSession = nil
@@ -317,6 +354,8 @@ final class RelaySessionCoordinator: ObservableObject {
     }
 
     private func stopBrowser() {
+        discoveryTimeoutTask?.cancel()
+        discoveryTimeoutTask = nil
         browsingTask?.cancel(); browsingTask = nil
         browser?.stopBrowsing(); browser = nil
         discoveredServers = []
@@ -333,6 +372,8 @@ final class RelaySessionCoordinator: ObservableObject {
     }
 
     deinit {
+        discoveryTimeoutTask?.cancel()
+        pairingExpirationTask?.cancel()
         browsingTask?.cancel()
         reconnectTask?.cancel()
         confirmationPollingTask?.cancel()

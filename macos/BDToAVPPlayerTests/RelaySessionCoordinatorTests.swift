@@ -202,6 +202,67 @@ final class RelaySessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(browser.startCount, 1)
     }
 
+    func testEmptyDiscoveryEndsWithRecoveryInstructionsAndRetryUsesFreshBrowser() async {
+        let coordinator = RelaySessionCoordinator(
+            browserFactory: { FakeRelayBrowser() },
+            transport: FakeRelayTransport(),
+            discoveryTimeout: .milliseconds(10)
+        )
+        coordinator.startDiscovery()
+        let didFail = await waitUntil {
+            if case .failed = coordinator.state { return true }
+            return false
+        }
+        XCTAssertTrue(didFail)
+        guard case let .failed(message) = coordinator.state else { return }
+        XCTAssertTrue(message.contains("Restart Relay"))
+        coordinator.startDiscovery()
+        XCTAssertEqual(coordinator.state, .discovery)
+        coordinator.disconnect()
+    }
+
+    func testEndedDiscoveryStreamShowsRecoveryInsteadOfSpinning() async {
+        let browser = FakeRelayBrowser()
+        let coordinator = makeCoordinator(browser: browser, transport: FakeRelayTransport(), now: { self.now })
+        coordinator.startDiscovery()
+        browser.stopBrowsing()
+        let didFail = await waitUntil {
+            if case .failed = coordinator.state { return true }
+            return false
+        }
+        XCTAssertTrue(didFail)
+    }
+
+    func testCandidateExpirationClearsCodeWithoutWaitingForAClickAndCanPairAgain() async throws {
+        let clock = RelayCoordinatorTestClock(now)
+        let transport = FakeRelayTransport()
+        let server = try RelayCoordinatorTestServer(now: now, clock: { clock.now() })
+        await transport.setHandler { request in try await server.handle(request) }
+        let coordinator = RelaySessionCoordinator(
+            browserFactory: { FakeRelayBrowser() }, transport: transport, clock: { clock.now() }
+        )
+        coordinator.startDiscovery()
+        await coordinator.connect(to: makeTestEndpoint())
+        guard case let .confirming(_, oldCandidateID, expiresAt) = coordinator.state else {
+            return XCTFail("Expected a pending candidate")
+        }
+        clock.set(expiresAt.addingTimeInterval(1))
+        coordinator.refreshPairingExpiration()
+        XCTAssertEqual(coordinator.state, .sessionExpired)
+        XCTAssertNil(coordinator.shortAuthenticationString)
+        XCTAssertNil(coordinator.connectedServer)
+        coordinator.startDiscovery()
+        await coordinator.connect(to: makeTestEndpoint())
+        guard case let .confirming(_, newCandidateID, _) = coordinator.state else {
+            return XCTFail("Expected a fresh comparison")
+        }
+        XCTAssertNotEqual(newCandidateID, oldCandidateID)
+        try await server.approvePending()
+        await coordinator.confirmCodesMatch()
+        guard case .connected = coordinator.state else { return XCTFail("Retry must establish pairing") }
+        coordinator.disconnect()
+    }
+
     func testConnectAndMacFirstConfirmationUseProtocolV3Routes() async throws {
         let browser = FakeRelayBrowser()
         let transport = FakeRelayTransport()

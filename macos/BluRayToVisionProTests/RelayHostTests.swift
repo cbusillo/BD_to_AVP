@@ -299,6 +299,19 @@ final class RelayHostTests: XCTestCase {
         XCTAssertNotEqual(challenge.serverNonceCommitment, pending.challenge.serverNonceCommitment)
     }
 
+    func testActiveComparisonOutlivesAdvertisingDeadlineAndAuthenticatesConfirmation() async throws {
+        let fixture = try await makeFixture(challengeTTL: 30, candidateTTL: 300, pairingSessionTTL: 10)
+        defer { removeFixture(fixture) }
+        fixture.clock.set(initialDate.addingTimeInterval(9))
+        let pending = try await beginPairing(fixture)
+        fixture.clock.set(initialDate.addingTimeInterval(308))
+        let lifecycle = await fixture.host.currentLifecycle()
+        XCTAssertEqual(lifecycle, .awaitingConfirmation)
+        try await fixture.host.approvePairingCandidate(pending.candidate.candidateID)
+        let result = try await confirm(pending, fixture: fixture, nonce: "late-confirmation-01")
+        XCTAssertNotNil(result.session)
+    }
+
     func testLifecyclePollingExpiresQuietPairingSession() async throws {
         let fixture = try await makeFixture(pairingSessionTTL: 1)
         defer { removeFixture(fixture) }
@@ -574,7 +587,8 @@ final class RelayHostTests: XCTestCase {
             method: "POST",
             target: RelayWireContract.pairingConfirmPath,
             nonce: nonce,
-            body: body
+            body: body,
+            timestamp: fixture.clock.now()
         )
         let response = await fixture.connection.exchange(request(
             method: "POST",
@@ -596,12 +610,13 @@ final class RelayHostTests: XCTestCase {
         target: String,
         nonce: String,
         body: Data = Data(),
-        mediaCapability: String? = nil
+        mediaCapability: String? = nil,
+        timestamp: Date? = nil
     ) throws -> AuthenticatedRequest {
         let authentication = try session.signRequest(
             method: method,
             requestTarget: target,
-            timestamp: initialDate,
+            timestamp: timestamp ?? initialDate,
             nonce: nonce,
             body: body
         )

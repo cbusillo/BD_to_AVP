@@ -101,6 +101,11 @@ final class RelayHostSessionController: ObservableObject {
         }
     }
 
+    func restart() async {
+        guard !isSessionActive, lifecycle != .starting, let fixtureDirectory else { return }
+        await start(directory: fixtureDirectory)
+    }
+
     func cancel() async {
         await endSession { await $0.cancel() }
         lifecycle = .cancelled
@@ -198,7 +203,7 @@ final class RelayHostSessionController: ObservableObject {
             clearTerminalSession()
         case .expired:
             pairingCandidate = nil
-            lifecycle = .failed("The relay pairing window ended. Start a new relay to continue.")
+            lifecycle = .failed("The relay pairing window ended. Click Restart Relay, then find this Mac again on Vision Pro.")
             clearTerminalSession()
         case .stopped:
             pairingCandidate = nil

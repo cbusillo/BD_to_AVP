@@ -102,6 +102,25 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         XCTAssertEqual(session.stopCount, 1)
     }
 
+    func testControllerRestartsTheSelectedFixtureWithoutReopeningThePicker() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        var starts = 0
+        let controller = RelayHostSessionController(startSession: { directory, _ in
+            XCTAssertEqual(directory, fixture)
+            starts += 1
+            return RecordingRelaySession()
+        })
+        await controller.start(directory: fixture)
+        await controller.restart()
+        XCTAssertEqual(starts, 1)
+        await controller.stop()
+        await controller.restart()
+        XCTAssertEqual(starts, 2)
+        XCTAssertEqual(controller.lifecycle, .advertising)
+        await controller.stop()
+    }
+
     func testControllerLoadsFixtureOnceAndPassesTheSameFixtureToItsSession() async throws {
         let directory = try makeFixture()
         defer { try? FileManager.default.removeItem(at: directory) }

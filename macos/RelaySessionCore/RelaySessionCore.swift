@@ -687,7 +687,7 @@ public actor RelayServerPairingContext {
         serverNonce: Data? = nil,
         now: Date = Date(),
         challengeTTL: TimeInterval = 120,
-        candidateTTL: TimeInterval = 120,
+        candidateTTL: TimeInterval = 300,
         sessionTTL: TimeInterval = 7_200,
         maximumCandidates: Int = 3
     ) throws {
@@ -808,6 +808,7 @@ public actor RelayServerPairingContext {
             serverNonce: serverNonce,
             candidateID: candidateID
         )
+        // The challenge bounds the handshake; the human comparison gets its own full window.
         guard let candidateExpiration = RelayTime.adding(candidateTTLMilliseconds, to: nowMilliseconds) else {
             throw RelaySessionError.invalidTimestamp
         }
@@ -815,7 +816,7 @@ public actor RelayServerPairingContext {
             candidateID: candidateID,
             sessionID: challenge.sessionID,
             serverNonce: serverNonce,
-            expiresAtUnixMilliseconds: min(candidateExpiration, challenge.expiresAtUnixMilliseconds),
+            expiresAtUnixMilliseconds: candidateExpiration,
             serverProof: serverProof
         )
         candidateAttempts += 1
@@ -825,7 +826,7 @@ public actor RelayServerPairingContext {
             provisionalSession: RelayEstablishedSession(
                 sessionID: challenge.sessionID,
                 role: .server,
-                expiresAtUnixMilliseconds: challenge.expiresAtUnixMilliseconds,
+                expiresAtUnixMilliseconds: candidateExpiration,
                 keyMaterial: keyMaterial
             )
         )
@@ -1110,7 +1111,6 @@ public struct RelayClientPairingAttempt: Sendable, CustomStringConvertible, Cust
               nowMilliseconds <= challenge.expiresAtUnixMilliseconds,
               candidate.sessionID == challenge.sessionID,
               candidate.expiresAtUnixMilliseconds >= nowMilliseconds,
-              candidate.expiresAtUnixMilliseconds <= challenge.expiresAtUnixMilliseconds,
               candidate.expiresAtUnixMilliseconds - nowMilliseconds <= RelayLimits.maximumCandidateTTLMilliseconds
         else { throw RelaySessionError.invalidRequest }
         guard RelayCrypto.constantTimeEqual(
@@ -1788,7 +1788,7 @@ enum RelayCanonical {
 enum RelayLimits {
     static let maximumUnixMilliseconds: Int64 = 253_402_300_799_999
     static let maximumChallengeTTLMilliseconds: Int64 = 10 * 60 * 1_000
-    static let maximumCandidateTTLMilliseconds: Int64 = 120 * 1_000
+    static let maximumCandidateTTLMilliseconds: Int64 = 300 * 1_000
     static let maximumSessionTTLMilliseconds: Int64 = 24 * 60 * 60 * 1_000
     static let maximumRequestAgeMilliseconds: Int64 = 5 * 60 * 1_000
     static let maximumFutureSkewMilliseconds: Int64 = 60 * 1_000

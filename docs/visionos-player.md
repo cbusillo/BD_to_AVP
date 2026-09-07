@@ -42,7 +42,8 @@ reflected, unpaired, and capability-free requests fail closed.
 The pairing transcript commits the server nonce before the client contribution,
 then derives the numeric-comparison code under a dedicated HKDF domain after
 the nonce is revealed and verified. One provisional candidate is retained for
-two minutes; Vision Pro's authenticated confirmation and the exact candidate's
+five minutes from the pairing request, independently of the discovery challenge;
+Vision Pro's authenticated confirmation and the exact candidate's
 Mac approval are both required before protected routes open. A competing client
 cannot displace the displayed candidate, stale UI approvals are rejected by
 candidate ID, and three rejected candidates require a new relay. The player
@@ -54,6 +55,10 @@ restricts routes to playback media, bounds concurrent connections, and cancels
 its listener and requests when playback ends. AVFoundation requires HTTP media
 segment loading; supplying fMP4 bytes through a custom-scheme resource loader
 fails with `CoreMediaErrorDomain -12881`.
+An expired comparison clears automatically on Vision Pro. Discovery stops with
+recovery instructions after 15 seconds without a Mac. The Mac offers **Restart
+Relay** using the selected fixture after its ten-minute advertising window ends;
+a comparison already in progress retains its full five minutes.
 A previously established client can reconnect while its session remains
 unexpired.
 
