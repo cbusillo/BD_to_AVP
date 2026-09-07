@@ -279,7 +279,10 @@ final class RelaySessionCoordinatorTests: XCTestCase {
         let coordinator = makeCoordinator(browser: browser, transport: transport, now: { clock.now() })
         coordinator.startDiscovery()
         await coordinator.connect(to: makeTestEndpoint())
-        clock.set(now.addingTimeInterval(61))
+        guard case let .confirming(_, _, expiresAt) = coordinator.state else {
+            return XCTFail("Expected a pending pairing candidate")
+        }
+        clock.set(expiresAt)
 
         await coordinator.confirmCodesMatch()
 

@@ -46,10 +46,23 @@ two minutes; Vision Pro's authenticated confirmation and the exact candidate's
 Mac approval are both required before protected routes open. A competing client
 cannot displace the displayed candidate, stale UI approvals are rejected by
 candidate ID, and three rejected candidates require a new relay. The player
-rewrites the playlist, initialization map, and media segment URLs to an
-app-owned resource-loader scheme so AVFoundation cannot bypass authenticated
-loading. A previously established client can reconnect while its session remains
+serves the playlist, initialization map, and media segments through a device-only
+HTTP listener bound to `127.0.0.1`, with a random per-playback URL capability.
+Every upstream request is signed and each complete response is authenticated
+before the bridge serves any bytes, including byte-range responses. The bridge
+restricts routes to playback media, bounds concurrent connections, and cancels
+its listener and requests when playback ends. AVFoundation requires HTTP media
+segment loading; supplying fMP4 bytes through a custom-scheme resource loader
+fails with `CoreMediaErrorDomain -12881`.
+A previously established client can reconnect while its session remains
 unexpired.
+
+`uv run python scripts/create_event_hls_mv_hevc_fixture.py` generates the
+deterministic six-second fixture and checks stereo metadata, AAC tracks, and
+actual macOS AVFoundation playback through the production loopback bridge. The
+acceptance helper requires decoded frames and playback through the final
+segment before publishing the fixture. This local gate does not establish
+physical Vision Pro stereo presentation, audio sync, or interaction qualification.
 
 The current local-network transport provides authenticated integrity and replay
 protection, not confidentiality: HTTP media bodies and the short-lived media

@@ -48,16 +48,15 @@ final class RelayRemotePlaybackSourceTests: XCTestCase {
         XCTAssertEqual(source.retainedSeekPolicy.validateSeek(to: 120), RelayRetainedSeekDecision.ended(finalDuration: 120))
     }
 
-    func testAssetUsesTheAuthenticatedCustomPlaylistURL() async throws {
+    func testAssetUsesDeviceLoopbackHTTP() async throws {
         let fixedNow = now
         let session = try await makePairedClientSession(now: fixedNow)
         var source = try RelayRemotePlaybackSource(session: session, serverBaseURL: baseURL)
-        let (_, loader) = source.makeAssetAndLoader(transport: FakeRelayTransport(), clock: { fixedNow })
+        let (asset, loader) = try await source.makeAssetAndLoader(transport: FakeRelayTransport(), clock: { fixedNow })
         XCTAssertNotNil(loader)
-        XCTAssertEqual(
-            RelayHLSResourceLoader.customPlaylistURL(for: baseURL)?.absoluteString,
-            "bdtoavprelay://relay.local:7431/relay/v1/playlist.m3u8"
-        )
+        XCTAssertEqual(asset.url.scheme, "http")
+        XCTAssertEqual(asset.url.host, "127.0.0.1")
+        XCTAssertTrue(asset.url.path.hasSuffix(RelayWireContract.playlistPath))
         source.cancelLoader()
         source.cancelLoader()
     }

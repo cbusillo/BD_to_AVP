@@ -160,6 +160,7 @@ targets:
     sources:
       - path: BDToAVPPlayer
       - path: RelaySessionCore
+      - path: BluRayToVisionPro/Relay/RelayHTTP.swift
     dependencies:
       - sdk: AVFoundation.framework
       - sdk: AVKit.framework

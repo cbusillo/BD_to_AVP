@@ -172,3 +172,13 @@ class EventHlsFixtureTests(unittest.TestCase):
 
             with patch("scripts.create_event_hls_mv_hevc_fixture._run", side_effect=fake_run):
                 validate_fixture(fixture_directory, ffprobe_path=Path("ffprobe"), mp4box_path=Path("MP4Box"))
+
+            def rejected_playback(command, **kwargs):
+                if Path(command[0]).name == "verify-event-hls-playback":
+                    raise FixtureGenerationError("AVFoundation rejected video playback")
+                return fake_run(command, **kwargs)
+
+            with patch("scripts.create_event_hls_mv_hevc_fixture._run", side_effect=rejected_playback):
+                with self.assertRaisesRegex(FixtureGenerationError, "AVFoundation rejected"):
+                    validate_fixture(fixture_directory, ffprobe_path=Path("ffprobe"), mp4box_path=Path("MP4Box"))
+            self.assertFalse((fixture_directory.parent / "assembled-media.mp4").exists())

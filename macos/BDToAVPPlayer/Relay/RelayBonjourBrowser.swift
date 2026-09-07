@@ -53,10 +53,10 @@ enum RelayBonjourEndpointFactory {
     ) -> RelayDiscoveredEndpoint? {
         guard port > 0 else { return nil }
         let numericHosts = addresses.compactMap(numericHost(from:))
-        let url = numericHosts.first(where: { $0.family == AF_INET }).flatMap { url(host: $0.host, port: port) }
-            ?? numericHosts.first(where: { $0.family == AF_INET6 }).flatMap { url(host: $0.host, port: port) }
-            ?? normalized(hostName).flatMap { url(host: $0, port: port) }
-        guard let url else { return nil }
+        let ipv4URL = numericHosts.first(where: { $0.family == AF_INET }).flatMap { Self.url(host: $0.host, port: port) }
+        let ipv6URL = numericHosts.first(where: { $0.family == AF_INET6 }).flatMap { Self.url(host: $0.host, port: port) }
+        let hostnameURL = normalized(hostName).flatMap { Self.url(host: $0, port: port) }
+        guard let url = ipv4URL ?? ipv6URL ?? hostnameURL else { return nil }
         return RelayDiscoveredEndpoint(
             id: "\(name).\(type).\(domain)",
             displayName: name,

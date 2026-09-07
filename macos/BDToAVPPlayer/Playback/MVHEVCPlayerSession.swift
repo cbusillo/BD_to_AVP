@@ -435,8 +435,10 @@ final class MVHEVCPlayerSession: ObservableObject {
                 session: configuration.session,
                 serverBaseURL: configuration.serverBaseURL
             )
+            var sourceInstalled = false
+            defer { if !sourceInstalled { source.cancelLoader() } }
             try await source.refreshRetainedWindow(transport: configuration.transport)
-            let (asset, _) = source.makeAssetAndLoader(transport: configuration.transport)
+            let (asset, _) = try await source.makeAssetAndLoader(transport: configuration.transport)
             let item = AVPlayerItem(asset: asset)
             let preparedSelections = try await prepareMediaSelections(for: asset, item: item)
             guard generation == preparationGeneration, !Task.isCancelled else {
@@ -445,6 +447,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
 
             remotePlaybackSource = source
+            sourceInstalled = true
             relayTransport = configuration.transport
             playerItem = item
             packedStereoSource = nil

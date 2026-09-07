@@ -58,7 +58,7 @@ def _command_environment(*tools: Path) -> dict[str, str]:
 
 
 def _run(
-    command: Sequence[str | Path], *, environment: Mapping[str, str] | None = None
+    command: Sequence[str | Path], *, environment: Mapping[str, str] | None = None, timeout_seconds: int = 600
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -68,7 +68,7 @@ def _run(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=dict(environment) if environment is not None else None,
-            timeout=600,
+            timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as error:
         raise FixtureGenerationError(f"Fixture command timed out: {Path(str(command[0])).name}") from error
@@ -333,6 +333,26 @@ def validate_fixture(fixture_directory: Path, *, ffprobe_path: Path, mp4box_path
         _validate_media_tracks(_probe_document(ffprobe_path, assembled_path), require_audio=True)
     finally:
         assembled_path.unlink(missing_ok=True)
+    _validate_avfoundation_playback(fixture_directory)
+
+
+def _validate_avfoundation_playback(fixture_directory: Path) -> None:
+    """Require actual decoded playback through the production HTTP bridge."""
+    sources = sorted((REPOSITORY_ROOT / "macos/RelaySessionCore").glob("*.swift"))
+    sources.extend(
+        REPOSITORY_ROOT / path
+        for path in (
+            "macos/BluRayToVisionPro/Relay/RelayHTTP.swift",
+            "macos/BDToAVPPlayer/Relay/RelayTransport.swift",
+            "macos/BDToAVPPlayer/Relay/RelayHLSResourceLoader.swift",
+            "macos/BDToAVPPlayer/Relay/RelayLoopbackHTTPServer.swift",
+            "scripts/verify_event_hls_playback.swift",
+        )
+    )
+    with tempfile.TemporaryDirectory(prefix="relay-hls-acceptance-") as temporary_directory:
+        executable = Path(temporary_directory) / "verify-event-hls-playback"
+        _run(["xcrun", "swiftc", "-parse-as-library", *sources, "-o", executable])
+        _run([executable, fixture_directory], timeout_seconds=60)
 
 
 def create_fixture(output_directory: Path, *, encoder_path: Path | None = None, overwrite: bool = False) -> None:
