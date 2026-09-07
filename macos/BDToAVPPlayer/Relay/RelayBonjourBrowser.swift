@@ -19,6 +19,93 @@ private struct RelayBonjourDescriptor: Hashable {
     let domain: String
 }
 
+enum RelayBonjourProtocolFilter {
+    static func accepts(_ txtRecord: NWTXTRecord?) -> Bool {
+        guard let txtRecord else { return true }
+        guard let entry = txtRecord.getEntry(for: "v"), let version = stringValue(of: entry) else {
+            return false
+        }
+        return version == String(RelayWireContract.protocolVersion)
+    }
+
+    private static func stringValue(of entry: NWTXTRecord.Entry) -> String? {
+        switch entry {
+        case let .string(value):
+            value
+        case let .data(data):
+            String(data: data, encoding: .utf8)
+        case .empty, .none:
+            nil
+        @unknown default:
+            nil
+        }
+    }
+}
+
+enum RelayBonjourEndpointFactory {
+    static func endpoint(
+        name: String,
+        type: String,
+        domain: String,
+        addresses: [Data],
+        hostName: String?,
+        port: Int
+    ) -> RelayDiscoveredEndpoint? {
+        guard port > 0 else { return nil }
+        let numericHosts = addresses.compactMap(numericHost(from:))
+        let url = numericHosts.first(where: { $0.family == AF_INET }).flatMap { url(host: $0.host, port: port) }
+            ?? numericHosts.first(where: { $0.family == AF_INET6 }).flatMap { url(host: $0.host, port: port) }
+            ?? normalized(hostName).flatMap { url(host: $0, port: port) }
+        guard let url else { return nil }
+        return RelayDiscoveredEndpoint(
+            id: "\(name).\(type).\(domain)",
+            displayName: name,
+            baseURL: url
+        )
+    }
+
+    private static func numericHost(from data: Data) -> (family: Int32, host: String)? {
+        data.withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress, bytes.count >= MemoryLayout<sockaddr>.size else { return nil }
+            let socketAddress = baseAddress.assumingMemoryBound(to: sockaddr.self)
+            let addressLength = Int(socketAddress.pointee.sa_len)
+            guard addressLength > 0, addressLength <= bytes.count else { return nil }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(
+                socketAddress,
+                socklen_t(addressLength),
+                &host,
+                socklen_t(host.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            ) == 0 else { return nil }
+            let value = String(cString: host)
+            guard value != "0.0.0.0", value != "::" else { return nil }
+            return (Int32(socketAddress.pointee.sa_family), value)
+        }
+    }
+
+    private static func normalized(_ hostName: String?) -> String? {
+        guard let value = hostName?.trimmingCharacters(in: CharacterSet(charactersIn: ".")), !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
+    private static func url(host: String, port: Int) -> URL? {
+        if host.contains(":") {
+            let escapedHost = host.replacingOccurrences(of: "%", with: "%25")
+            return URL(string: "http://[\(escapedHost)]:\(port)")
+        }
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = host
+        components.port = port
+        return components.url
+    }
+}
+
 private final class RelayBonjourDescriptorResolver: NSObject, NetServiceDelegate {
     private var services: [ObjectIdentifier: NetService] = [:]
     private var completions: [ObjectIdentifier: (RelayDiscoveredEndpoint?) -> Void] = [:]
@@ -58,15 +145,13 @@ private final class RelayBonjourDescriptorResolver: NSObject, NetServiceDelegate
     }
 
     private func endpoint(for service: NetService) -> RelayDiscoveredEndpoint? {
-        guard let host = service.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
-              !host.isEmpty,
-              service.port > 0,
-              let url = URL(string: "http://\(host):\(service.port)")
-        else { return nil }
-        return RelayDiscoveredEndpoint(
-            id: "\(service.name).\(service.type).\(service.domain)",
-            displayName: service.name,
-            baseURL: url
+        RelayBonjourEndpointFactory.endpoint(
+            name: service.name,
+            type: service.type,
+            domain: service.domain,
+            addresses: service.addresses ?? [],
+            hostName: service.hostName,
+            port: service.port
         )
     }
 
@@ -86,6 +171,7 @@ final class RelayBonjourBrowser: RelayEndpointBrowsing {
     private let browser: NWBrowser
     private let queue: DispatchQueue
     private let resolver = RelayBonjourDescriptorResolver()
+    private var discoveryGeneration = 0
 
     init(queue: DispatchQueue = .global(qos: .utility)) {
         self.queue = queue
@@ -99,25 +185,25 @@ final class RelayBonjourBrowser: RelayEndpointBrowsing {
         var streamContinuation: AsyncStream<[RelayDiscoveredEndpoint]>.Continuation!
         discoveryStream = AsyncStream { streamContinuation = $0 }
         continuation = streamContinuation
-        let capturedContinuation = streamContinuation!
-
-        browser.browseResultsChangedHandler = { [weak resolver] results, _ in
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
             let descriptors = results.compactMap { result -> RelayBonjourDescriptor? in
                 guard case let .service(name: name, type: type, domain: domain, interface: _) = result.endpoint else { return nil }
-                guard case let .bonjour(txtRecord) = result.metadata,
-                      case let .string(version)? = txtRecord.getEntry(for: "v"),
-                      version == String(RelayWireContract.protocolVersion)
-                else { return nil }
+                let txtRecord: NWTXTRecord? = if case let .bonjour(record) = result.metadata { record } else { nil }
+                guard RelayBonjourProtocolFilter.accepts(txtRecord) else { return nil }
                 return RelayBonjourDescriptor(name: name, type: type, domain: domain)
             }
-            DispatchQueue.main.async {
-                resolver?.resolve(descriptors) { endpoints in
-                    capturedContinuation.yield(endpoints)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                discoveryGeneration &+= 1
+                let generation = discoveryGeneration
+                resolver.resolve(Array(Set(descriptors))) { [weak self] endpoints in
+                    guard let self, discoveryGeneration == generation else { return }
+                    continuation.yield(endpoints)
                 }
             }
         }
-        browser.stateUpdateHandler = { state in
-            if case .failed = state { capturedContinuation.finish() }
+        browser.stateUpdateHandler = { [weak self] state in
+            if case .failed = state { self?.continuation.finish() }
         }
     }
 

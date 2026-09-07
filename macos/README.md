@@ -25,7 +25,7 @@ The source-agnostic Mac-to-Vision-Pro relay advertises protocol version 3. It
 uses X25519 and transcript-bound HKDF to show both devices the same six-digit
 numeric-comparison code. The Mac commits its nonce before Vision Pro contributes
 its key material, then reveals it for client verification; this prevents server
-nonce grinding. A single provisional candidate has a 60-second window and needs
+nonce grinding. A single provisional candidate has a two-minute window and needs
 an authenticated Vision Pro confirmation plus an exact candidate-bound Mac
 approval before any playlist or media route is available. The unpaired relay
 advertises for at most ten minutes, rotating its ephemeral challenge every two

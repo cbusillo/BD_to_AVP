@@ -687,7 +687,7 @@ public actor RelayServerPairingContext {
         serverNonce: Data? = nil,
         now: Date = Date(),
         challengeTTL: TimeInterval = 120,
-        candidateTTL: TimeInterval = 60,
+        candidateTTL: TimeInterval = 120,
         sessionTTL: TimeInterval = 7_200,
         maximumCandidates: Int = 3
     ) throws {
@@ -1788,7 +1788,7 @@ enum RelayCanonical {
 enum RelayLimits {
     static let maximumUnixMilliseconds: Int64 = 253_402_300_799_999
     static let maximumChallengeTTLMilliseconds: Int64 = 10 * 60 * 1_000
-    static let maximumCandidateTTLMilliseconds: Int64 = 60 * 1_000
+    static let maximumCandidateTTLMilliseconds: Int64 = 120 * 1_000
     static let maximumSessionTTLMilliseconds: Int64 = 24 * 60 * 60 * 1_000
     static let maximumRequestAgeMilliseconds: Int64 = 5 * 60 * 1_000
     static let maximumFutureSkewMilliseconds: Int64 = 60 * 1_000

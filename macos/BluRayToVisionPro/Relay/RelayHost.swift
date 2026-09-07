@@ -160,7 +160,7 @@ actor RelayHost {
         fixture: RelayEventHLSFixture,
         now: @escaping @Sendable () -> Date = { Date() },
         challengeTTL: TimeInterval = 120,
-        candidateTTL: TimeInterval = 60,
+        candidateTTL: TimeInterval = 120,
         pairingSessionTTL: TimeInterval = 600,
         sessionTTL: TimeInterval = 7_200
     ) throws -> RelayHost {

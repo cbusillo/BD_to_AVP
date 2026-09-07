@@ -42,7 +42,7 @@ reflected, unpaired, and capability-free requests fail closed.
 The pairing transcript commits the server nonce before the client contribution,
 then derives the numeric-comparison code under a dedicated HKDF domain after
 the nonce is revealed and verified. One provisional candidate is retained for
-60 seconds; Vision Pro's authenticated confirmation and the exact candidate's
+two minutes; Vision Pro's authenticated confirmation and the exact candidate's
 Mac approval are both required before protected routes open. A competing client
 cannot displace the displayed candidate, stale UI approvals are rejected by
 candidate ID, and three rejected candidates require a new relay. The player

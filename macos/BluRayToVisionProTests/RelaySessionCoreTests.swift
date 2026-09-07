@@ -7,6 +7,15 @@ final class RelaySessionCoreTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
     private let sessionID = try! RelaySessionIdentifier(rawValue: "A9B8C7D6-E5F4-4321-ABCD-1234567890AB")
 
+    func testDefaultCandidateWindowAllowsTwoMinutesForComparison() async throws {
+        let server = try RelayServerPairingContext(now: now)
+        let challenge = try await server.currentChallenge(now: now)
+        let client = try makeClient(challenge: challenge)
+        let offered = try await server.accept(client.request, now: now)
+
+        XCTAssertEqual(offered.candidate.expiresAtUnixMilliseconds, 1_700_000_120_000)
+    }
+
     func testSuccessfulPairingSeparatesCandidateAndSessionExpiry() async throws {
         let server = try makeServer(challengeTTL: 120, candidateTTL: 60, sessionTTL: 7_200)
         let challenge = try await server.currentChallenge(now: now)
