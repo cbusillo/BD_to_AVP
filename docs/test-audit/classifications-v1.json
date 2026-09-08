@@ -147,6 +147,7 @@
         "macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift",
         "macos/BluRayToVisionProTests/RelayHostTests.swift",
         "macos/BluRayToVisionProTests/RelayNetworkServerTests.swift",
+        "macos/BluRayToVisionProTests/RelaySocketTransportTests.swift",
         "macos/BluRayToVisionProTests/RelaySessionCoreTests.swift",
         "macos/BluRayToVisionProTests/ResolutionMemoryStoreTests.swift",
         "macos/BluRayToVisionProTests/RouteResolutionTests.swift",

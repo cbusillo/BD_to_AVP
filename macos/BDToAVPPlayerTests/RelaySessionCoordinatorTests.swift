@@ -194,9 +194,11 @@ final class RelaySessionCoordinatorTests: XCTestCase {
         let browser = FakeRelayBrowser()
         let coordinator = makeCoordinator(browser: browser, transport: FakeRelayTransport(), now: { self.now })
         coordinator.startDiscovery()
+        defer { coordinator.disconnect() }
         browser.emit([makeTestEndpoint()])
-        for _ in 0 ..< 5 { await Task.yield() }
+        let didDiscover = await waitUntil { coordinator.discoveredServers == [makeTestEndpoint()] }
 
+        XCTAssertTrue(didDiscover)
         XCTAssertEqual(coordinator.state, .discovery)
         XCTAssertEqual(coordinator.discoveredServers, [makeTestEndpoint()])
         XCTAssertEqual(browser.startCount, 1)

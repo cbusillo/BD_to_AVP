@@ -36,6 +36,10 @@ enum RelayQualificationDriver {
                 return
             }
             emit("paired")
+            if ProcessInfo.processInfo.environment["BD_TO_AVP_RELAY_TRANSFER_PROBE"] == "1" {
+                try await probeTransfers(configuration)
+                return
+            }
             let preparationStarted = ContinuousClock.now
             await player.prepareRelayPlayback(configuration)
             emitPlayerDetails(player)
@@ -79,6 +83,23 @@ enum RelayQualificationDriver {
         for event in item?.errorLog()?.events ?? [] {
             emit("media_error status=\(event.errorStatusCode) comment=\(event.errorComment ?? "none")")
         }
+    }
+
+    private static func probeTransfers(_ configuration: RelayRemotePlaybackConfiguration) async throws {
+        var source = try RelayRemotePlaybackSource(
+            session: configuration.session, serverBaseURL: configuration.serverBaseURL
+        )
+        try await source.refreshRetainedWindow(transport: configuration.transport)
+        let client = RelayAuthenticatedResourceClient(
+            signer: configuration.session, transport: configuration.transport,
+            serverBaseURL: configuration.serverBaseURL, maximumTransientRetries: 0
+        )
+        for segment in source.retainedSeekPolicy.window?.segments.prefix(3) ?? [] {
+            let started = ContinuousClock.now
+            let result = try await client.load(source.resolveSegmentURL(for: segment))
+            emit("direct_transfer resource=\(segment.resourceIdentifier) bytes=\(result.0.count) elapsed=\(started.duration(to: .now))")
+        }
+        emit("direct_transfer_complete")
     }
 
     private static func wait(seconds: Int, until condition: () -> Bool) async throws {

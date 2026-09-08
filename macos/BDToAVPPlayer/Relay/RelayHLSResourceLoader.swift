@@ -181,11 +181,13 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                     nonce: nonce
                 )
 #if BD_TO_AVP_QUALIFICATION
+                let transferStarted = ContinuousClock.now
                 FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_start resource=\(customURL.lastPathComponent)\n".utf8))
 #endif
                 let result = try await transport.data(for: request.request)
 #if BD_TO_AVP_QUALIFICATION
-                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_received resource=\(customURL.lastPathComponent) status=\(result.1.statusCode) bytes=\(result.0.count)\n".utf8))
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_received resource=\(customURL.lastPathComponent) status=\(result.1.statusCode) bytes=\(result.0.count) elapsed=\(transferStarted.duration(to: .now))\n".utf8))
+                let verificationStarted = ContinuousClock.now
 #endif
                 try RelayAuthenticatedResponseVerifier.verify(
                     data: result.0,
@@ -194,6 +196,9 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                     signer: signer,
                     now: clock()
                 )
+#if BD_TO_AVP_QUALIFICATION
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_verified resource=\(customURL.lastPathComponent) elapsed=\(verificationStarted.duration(to: .now))\n".utf8))
+#endif
                 switch result.1.statusCode {
                 case 200:
                     return result

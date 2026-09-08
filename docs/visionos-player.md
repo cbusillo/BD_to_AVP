@@ -82,6 +82,14 @@ The Mac retains a ten-second request deadline, then sends responses in 64 KiB
 chunks with a ten-second progress timeout and a sixty-second total response cap.
 This lets active segment transfers outlive the request deadline while still
 closing stalled clients. The player's loopback request cap remains thirty seconds.
+The Mac listener uses BSD sockets and DNS-SD Bonjour registration. On the physical
+reference setup, identical files transferred in 0.10–0.17 seconds through a
+standard socket server but took 22–44 seconds through the Network-framework
+server, including a minimal reproduction without relay authentication. Waiting
+for peer close and changing TCP options did not eliminate the delay. Authentication,
+LAN peer checks, the sixteen-connection cap, and cancellation remain above the
+socket transport. Shutdown interrupts blocked I/O; descriptor closure is serialized
+after that I/O returns.
 
 The authenticated playlist snapshot supplies the retained window. The player
 refreshes that window during playback, moves the scrubber floor forward when
@@ -115,6 +123,11 @@ pixel buffers once ready; neither later readiness nor frame samples waive the
 startup target or establish physical stereo presentation and audio sync.
 It does not run unless both the compilation condition and explicit server-name
 environment variable are present. Normal builds contain no driver.
+
+Add `BD_TO_AVP_RELAY_TRANSFER_PROBE=1` to the launch environment to download up
+to three retained segments through the authenticated client without AVPlayer.
+This probe disables transient retries and reports transfer and verification
+durations separately. It does not establish playback acceptance.
 
 This is programmatic device qualification, not UI acceptance or proof of stereo
 presentation or audio sync. The ordinary pairing UI and physical
