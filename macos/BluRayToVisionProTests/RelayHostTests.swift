@@ -467,6 +467,128 @@ final class RelayHostTests: XCTestCase {
         XCTAssertEqual(stoppedLifecycle, .stopped)
     }
 
+    func testCandidatePollingCannotResurrectCancelledHostAfterSuspension() async throws {
+        let gate = PairingSuspensionGate()
+        let fixture = try await makeFixture(pairingSuspensionHook: { point in
+            await gate.suspendIfArmed(at: point)
+        })
+        defer { removeFixture(fixture) }
+        _ = try await beginPairing(fixture)
+        await gate.arm(.pendingCandidateSummary)
+
+        let polling = Task { await fixture.host.currentPairingCandidate() }
+        await gate.waitUntilSuspended()
+        await fixture.host.cancel()
+        await gate.resume()
+
+        let candidate = await polling.value
+        let lifecycle = await fixture.host.currentLifecycle()
+        XCTAssertNil(candidate)
+        XCTAssertEqual(lifecycle, .cancelled)
+    }
+
+    func testPairingRequestCannotResurrectCancelledHostAfterSuspension() async throws {
+        let gate = PairingSuspensionGate()
+        let fixture = try await makeFixture(pairingSuspensionHook: { point in
+            await gate.suspendIfArmed(at: point)
+        })
+        defer { removeFixture(fixture) }
+        let challengeResponse = await fixture.connection.exchange(
+            request(method: "GET", target: RelayWireContract.challengePath)
+        )
+        let challenge = try JSONDecoder().decode(ChallengeEnvelope.self, from: challengeResponse.body).challenge
+        let attempt = try RelayClientPairingAttempt(
+            challenge: challenge,
+            clientPrivateKeyData: Curve25519.KeyAgreement.PrivateKey().rawRepresentation,
+            clientNonce: Data(repeating: 7, count: 32),
+            now: fixture.clock.now()
+        )
+        await gate.arm(.accept)
+
+        let exchange = Task {
+            await fixture.connection.exchange(request(
+                method: "POST",
+                target: RelayWireContract.pairingPath,
+                body: try! JSONEncoder().encode(attempt.request)
+            ))
+        }
+        await gate.waitUntilSuspended()
+        await fixture.host.cancel()
+        await gate.resume()
+
+        let response = await exchange.value
+        let lifecycle = await fixture.host.currentLifecycle()
+        let candidate = await fixture.host.currentPairingCandidate()
+        XCTAssertEqual(response.statusCode, 503)
+        XCTAssertEqual(lifecycle, .cancelled)
+        XCTAssertNil(candidate)
+    }
+
+    func testExhaustedPairingRequestCannotExpireCancelledHostAfterSuspension() async throws {
+        let gate = PairingSuspensionGate()
+        let fixture = try await makeFixture(maximumCandidates: 1, pairingSuspensionHook: { point in
+            await gate.suspendIfArmed(at: point)
+        })
+        defer { removeFixture(fixture) }
+        let pending = try await beginPairing(fixture)
+        try await fixture.host.rejectPairingCandidate(pending.candidate.candidateID)
+        await gate.arm(.accept)
+
+        let exchange = Task {
+            await fixture.connection.exchange(request(
+                method: "POST",
+                target: RelayWireContract.pairingPath,
+                body: try! JSONEncoder().encode(pending.attempt.request)
+            ))
+        }
+        await gate.waitUntilSuspended()
+        await fixture.host.cancel()
+        await gate.resume()
+
+        let response = await exchange.value
+        let lifecycle = await fixture.host.currentLifecycle()
+        XCTAssertEqual(response.statusCode, 503)
+        XCTAssertEqual(lifecycle, .cancelled)
+    }
+
+    func testConfirmationRaceReturnsAuthenticatedUnavailableWithoutReplacingCancellation() async throws {
+        let gate = PairingSuspensionGate()
+        let fixture = try await makeFixture(pairingSuspensionHook: { point in
+            await gate.suspendIfArmed(at: point)
+        })
+        defer { removeFixture(fixture) }
+        let pending = try await beginPairing(fixture)
+        try await fixture.host.approvePairingCandidate(pending.candidate.candidateID)
+        let confirmation = try pending.provisional.confirmation(decision: .codesMatch)
+        let body = try JSONEncoder().encode(confirmation)
+        let signed = try authenticatedRequest(
+            session: pending.provisional.authenticationSession,
+            method: "POST",
+            target: RelayWireContract.pairingConfirmPath,
+            nonce: "confirm-cancel-race-1",
+            body: body
+        )
+        await gate.arm(.confirm)
+
+        let exchange = Task {
+            await fixture.connection.exchange(self.request(
+                method: "POST",
+                target: RelayWireContract.pairingConfirmPath,
+                headers: signed.headers,
+                body: body
+            ))
+        }
+        await gate.waitUntilSuspended()
+        await fixture.host.cancel()
+        await gate.resume()
+
+        let response = await exchange.value
+        let lifecycle = await fixture.host.currentLifecycle()
+        XCTAssertEqual(response.statusCode, 503)
+        try verifyResponse(response, for: signed, using: pending.provisional.authenticationSession)
+        XCTAssertEqual(lifecycle, .cancelled)
+    }
+
     func testRejectsLoopbackAndNonlocalInMemoryConnections() async throws {
         let fixture = try await makeFixture()
         defer { removeFixture(fixture) }
@@ -485,7 +607,8 @@ final class RelayHostTests: XCTestCase {
         pairingSessionTTL: TimeInterval = 600,
         sessionTTL: TimeInterval = 120,
         retainedSegmentLimit: Int = 3,
-        maximumCandidates: Int = 3
+        maximumCandidates: Int = 3,
+        pairingSuspensionHook: (@Sendable (RelayHostPairingSuspensionPoint) async -> Void)? = nil
     ) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -533,7 +656,8 @@ final class RelayHostTests: XCTestCase {
             ),
             fixture: eventFixture,
             pairingSessionTTL: pairingSessionTTL,
-            now: { clock.now() }
+            now: { clock.now() },
+            pairingSuspensionHook: pairingSuspensionHook
         )
         return Fixture(
             host: host,
@@ -722,5 +846,40 @@ private final class RelayTestClock: @unchecked Sendable {
         lock.withLock {
             self.value = value
         }
+    }
+}
+
+private actor PairingSuspensionGate {
+    private var armedPoint: RelayHostPairingSuspensionPoint?
+    private var didSuspend = false
+    private var enteredContinuation: CheckedContinuation<Void, Never>?
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func arm(_ point: RelayHostPairingSuspensionPoint) {
+        armedPoint = point
+        didSuspend = false
+    }
+
+    func suspendIfArmed(at point: RelayHostPairingSuspensionPoint) async {
+        guard armedPoint == point else { return }
+        armedPoint = nil
+        didSuspend = true
+        enteredContinuation?.resume()
+        enteredContinuation = nil
+        await withCheckedContinuation { continuation in
+            resumeContinuation = continuation
+        }
+    }
+
+    func waitUntilSuspended() async {
+        if didSuspend { return }
+        await withCheckedContinuation { continuation in
+            enteredContinuation = continuation
+        }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
     }
 }
