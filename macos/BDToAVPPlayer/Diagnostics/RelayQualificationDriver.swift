@@ -51,6 +51,7 @@ enum RelayQualificationDriver {
                 try await wait(seconds: 90) { player.state == .ready || player.state == .failed }
             }
             emit("preparation_elapsed=\(preparationStarted.duration(to: .now))")
+            emit("readiness_target_met=\(preparationStarted.duration(to: .now) <= .seconds(30)) target_seconds=30")
             emit("player_state=\(player.state) error=\(player.failureMessage ?? "none")")
             guard player.state == .ready else { return }
             let video = AVPlayerItemVideoOutput(pixelBufferAttributes: [
@@ -60,16 +61,42 @@ enum RelayQualificationDriver {
             item?.add(video)
             defer { item?.remove(video) }
             var decodedFrames = 0
-            for _ in 0 ..< 10 {
-                try await Task.sleep(for: .seconds(1))
+            var decodedIntervals = Set<Int>()
+            var latestDecodedTime: Double = -.infinity
+            var loggedSecond = -1
+            let fixtureDuration = player.duration
+            guard fixtureDuration.isFinite, fixtureDuration >= 2, fixtureDuration <= 30 else {
+                throw qualificationFailure("Decoded fixture probe requires a finalized fixture between two and thirty seconds.")
+            }
+            let observationDeadline = ContinuousClock.now.advanced(by: .seconds(fixtureDuration + 10))
+            while ContinuousClock.now < observationDeadline {
+                try await Task.sleep(for: .milliseconds(50))
+                guard player.state == .ready else { throw qualificationFailure("Player left ready state during fixture observation.") }
                 let time = player.player.currentTime()
+                var displayTime = CMTime.invalid
                 if video.hasNewPixelBuffer(forItemTime: time),
-                   video.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) != nil {
+                   video.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime) != nil,
+                   displayTime.seconds.isFinite {
+                    if decodedFrames == 0 {
+                        emit("first_decoded_frame_elapsed=\(preparationStarted.duration(to: .now)) startup_target_met=\(preparationStarted.duration(to: .now) <= .seconds(30))")
+                    }
                     decodedFrames += 1
+                    latestDecodedTime = displayTime.seconds
+                    decodedIntervals.insert(Int(displayTime.seconds / 2))
                 }
-                emit("playback_time=\(player.currentTime) duration=\(player.duration) state=\(player.state)")
+                if time.seconds.isFinite, Int(time.seconds) != loggedSecond {
+                    loggedSecond = Int(time.seconds)
+                    emit("playback_time=\(time.seconds) duration=\(fixtureDuration) state=\(player.state)")
+                }
+                if time.seconds >= fixtureDuration - 0.1 { break }
             }
             emit("decoded_frame_samples=\(decodedFrames)")
+            let requiredIntervals = Set(0..<Int(ceil(fixtureDuration / 2)))
+            guard latestDecodedTime >= fixtureDuration - 0.25,
+                  decodedIntervals.isSuperset(of: requiredIntervals) else {
+                throw qualificationFailure("Missing decoded samples across the fixture timeline or near its end.")
+            }
+            emit("decoded_timeline_passed intervals=\(requiredIntervals.count) final_sample_time=\(latestDecodedTime)")
             if ProcessInfo.processInfo.environment["BD_TO_AVP_RELAY_CONTROL_PROBE"] == "1" {
                 try await probeControls(coordinator: coordinator, player: player)
             }
