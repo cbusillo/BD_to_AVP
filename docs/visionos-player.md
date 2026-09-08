@@ -129,6 +129,13 @@ to three retained segments through the authenticated client without AVPlayer.
 This probe disables transient retries and reports transfer and verification
 durations separately. It does not establish playback acceptance.
 
+Add `BD_TO_AVP_RELAY_CONTROL_PROBE=1` instead to check pause, retained backward
+seek, resume, and same-session reconnect after playback observation. The reconnect
+probe injects the network-path notification but performs a real authenticated
+request; it does not physically disconnect Wi-Fi. The probe finishes playback,
+disconnects the coordinator, and checks that the loopback listener is unreachable.
+It requires a fixture at least five seconds long and returns to the library.
+
 This is programmatic device qualification, not UI acceptance or proof of stereo
 presentation or audio sync. The ordinary pairing UI and physical
 presentation still need their own checks. Physical native visionOS XCTest UI
