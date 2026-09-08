@@ -37,6 +37,15 @@ enum RelayHostError: Error, Equatable, Sendable {
     case resourceTooLarge
 }
 
+enum RelayHostPairingSuspensionPoint: Equatable, Sendable {
+    case currentChallenge
+    case pendingCandidateSummary
+    case approve
+    case reject
+    case accept
+    case confirm
+}
+
 struct RelayHostConfiguration: Sendable, Equatable {
     let fixtureDirectory: URL
     let initializationResourceIdentifier: String
@@ -99,6 +108,7 @@ actor RelayHost {
     private let fixtureRoot: URL
     private let replayStore: RelayReplayNonceStore
     private let now: @Sendable () -> Date
+    private let pairingSuspensionHook: (@Sendable (RelayHostPairingSuspensionPoint) async -> Void)?
     private var pairingExpiresAt: Date
     private let initializationResourceIdentifier: String
     private var allowedMediaResourceIdentifiers: Set<String>
@@ -115,7 +125,8 @@ actor RelayHost {
         fixture: RelayEventHLSFixture,
         replayStore: RelayReplayNonceStore? = nil,
         pairingSessionTTL: TimeInterval = 600,
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        pairingSuspensionHook: (@Sendable (RelayHostPairingSuspensionPoint) async -> Void)? = nil
     ) throws {
         let normalizedRoot = configuration.fixtureDirectory.standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
@@ -130,6 +141,7 @@ actor RelayHost {
             self.replayStore = try RelayReplayNonceStore()
         }
         self.now = now
+        self.pairingSuspensionHook = pairingSuspensionHook
         guard let pairingStart = RelayTime.unixMilliseconds(for: now()),
               let pairingSessionTTLMilliseconds = RelayTime.milliseconds(
                   from: pairingSessionTTL,
@@ -194,8 +206,12 @@ actor RelayHost {
         } else if lifecycle == .pairing, let pairingContext {
             do {
                 _ = try await pairingContext.currentChallenge(now: now())
+                await pairingSuspensionHook?(.currentChallenge)
             } catch RelaySessionError.pairingAttemptsExhausted {
-                cleanUpAsExpired()
+                await pairingSuspensionHook?(.currentChallenge)
+                if isCurrentPairingContext(pairingContext, lifecycle: .pairing) {
+                    cleanUpAsExpired()
+                }
             } catch {}
         }
         return lifecycle
@@ -207,17 +223,25 @@ actor RelayHost {
         guard let pairingContext else { return nil }
         do {
             let candidate = try await pairingContext.pendingCandidateSummary(now: now())
+            await pairingSuspensionHook?(.pendingCandidateSummary)
+            guard isCurrentPairingContext(pairingContext, lifecycle: .awaitingConfirmation) else { return nil }
             if candidate == nil {
                 provisionalSession = nil
                 lifecycle = .pairing
             }
             return candidate
         } catch RelaySessionError.pairingAttemptsExhausted {
-            provisionalSession = nil
-            cleanUpAsExpired()
+            await pairingSuspensionHook?(.pendingCandidateSummary)
+            if isCurrentPairingContext(pairingContext, lifecycle: .awaitingConfirmation) {
+                provisionalSession = nil
+                cleanUpAsExpired()
+            }
         } catch {
-            provisionalSession = nil
-            lifecycle = .pairing
+            await pairingSuspensionHook?(.pendingCandidateSummary)
+            if isCurrentPairingContext(pairingContext, lifecycle: .awaitingConfirmation) {
+                provisionalSession = nil
+                lifecycle = .pairing
+            }
         }
         return nil
     }
@@ -226,12 +250,20 @@ actor RelayHost {
         try expireIfNeeded()
         guard lifecycle == .awaitingConfirmation, let pairingContext else { throw RelayHostError.unavailable }
         try await pairingContext.approve(candidateID: candidateID, now: now())
+        await pairingSuspensionHook?(.approve)
+        guard isCurrentPairingContext(pairingContext, lifecycle: .awaitingConfirmation) else {
+            throw RelayHostError.unavailable
+        }
     }
 
     func rejectPairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws {
         try expireIfNeeded()
         guard lifecycle == .awaitingConfirmation, let pairingContext else { throw RelayHostError.unavailable }
         try await pairingContext.reject(candidateID: candidateID, now: now())
+        await pairingSuspensionHook?(.reject)
+        guard isCurrentPairingContext(pairingContext, lifecycle: .awaitingConfirmation) else {
+            throw RelayHostError.unavailable
+        }
         provisionalSession = nil
         lifecycle = .pairing
     }
@@ -255,6 +287,7 @@ actor RelayHost {
         guard peer.isAllowed else {
             return .empty(statusCode: 403)
         }
+        let pairingContextAtStart = pairingContext
         do {
             let request = try RelayHTTPParser.parse(requestData, limits: configuration.requestLimits)
             return try await route(request)
@@ -271,7 +304,7 @@ actor RelayHost {
             return response(for: error)
         } catch let error as RelaySessionError {
             if error == .pairingAttemptsExhausted {
-                cleanUpAsExpired()
+                cleanUpAsExpiredIfCurrent(pairingContextAtStart)
             }
             return response(for: error)
         } catch {
@@ -363,9 +396,19 @@ actor RelayHost {
         guard lifecycle == .pairing || lifecycle == .awaitingConfirmation, let pairingContext else {
             throw RelayHostError.unavailable
         }
+        let expectedLifecycle = lifecycle
         do {
-            return .json(RelayChallengeEnvelope(challenge: try await pairingContext.currentChallenge(now: now())))
+            let challenge = try await pairingContext.currentChallenge(now: now())
+            await pairingSuspensionHook?(.currentChallenge)
+            guard isCurrentPairingContext(pairingContext, lifecycle: expectedLifecycle) else {
+                throw RelayHostError.unavailable
+            }
+            return .json(RelayChallengeEnvelope(challenge: challenge))
         } catch RelaySessionError.pairingAttemptsExhausted {
+            await pairingSuspensionHook?(.currentChallenge)
+            guard isCurrentPairingContext(pairingContext, lifecycle: expectedLifecycle) else {
+                throw RelayHostError.unavailable
+            }
             cleanUpAsExpired()
             throw RelaySessionError.pairingAttemptsExhausted
         }
@@ -387,10 +430,20 @@ actor RelayHost {
         let result: RelayServerPairingResult
         do {
             result = try await pairingContext.accept(pairingRequest, now: now())
+            await pairingSuspensionHook?(.accept)
         } catch RelaySessionError.pairingAttemptsExhausted {
+            await pairingSuspensionHook?(.accept)
+            guard pairingContext === self.pairingContext,
+                  lifecycle == .pairing || lifecycle == .awaitingConfirmation
+            else {
+                throw RelayHostError.unavailable
+            }
             cleanUpAsExpired()
             throw RelaySessionError.pairingAttemptsExhausted
         }
+        guard pairingContext === self.pairingContext,
+              lifecycle == .pairing || lifecycle == .awaitingConfirmation
+        else { throw RelayHostError.unavailable }
         // A comparison started before the advertising deadline gets its full window.
         pairingExpiresAt = max(pairingExpiresAt, result.candidate.expirationDate)
         provisionalSession = result.provisionalSession
@@ -401,14 +454,31 @@ actor RelayHost {
     private func pairingConfirmationResponse(for request: RelayHTTPRequest) async throws -> RelayHTTPResponse {
         guard request.method == "POST" else { return .empty(statusCode: 405) }
         let exchange = try await authenticateProvisional(request)
+        let pairingContextAtStart = pairingContext
         let confirmation: RelayPairingConfirmation
         do {
             confirmation = try JSONDecoder().decode(RelayPairingConfirmation.self, from: request.body)
         } catch {
             return try authenticate(.empty(statusCode: 400), for: exchange)
         }
-        guard let pairingContext else { throw RelayHostError.unavailable }
-        let result = try await pairingContext.confirm(confirmation, now: now())
+        let result: RelayServerConfirmationResult
+        do {
+            guard lifecycle == .awaitingConfirmation, let pairingContext else {
+                throw RelayHostError.unavailable
+            }
+            result = try await pairingContext.confirm(confirmation, now: now())
+            await pairingSuspensionHook?(.confirm)
+            guard isCurrentPairingContext(pairingContext, lifecycle: .awaitingConfirmation) else {
+                throw RelayHostError.unavailable
+            }
+        } catch let error as RelayHostError {
+            return try authenticate(response(for: error), for: exchange)
+        } catch let error as RelaySessionError {
+            if error == .pairingAttemptsExhausted {
+                cleanUpAsExpiredIfCurrent(pairingContextAtStart)
+            }
+            return try authenticate(response(for: error), for: exchange)
+        }
         if confirmation.decision == .notMyMac {
             provisionalSession = nil
             lifecycle = .pairing
@@ -434,11 +504,33 @@ actor RelayHost {
     private func authenticateProvisional(_ request: RelayHTTPRequest) async throws -> AuthenticatedExchange {
         try expireIfNeeded()
         guard lifecycle == .awaitingConfirmation, let pairingContext else { throw RelayHostError.notPaired }
-        guard try await pairingContext.pendingCandidateSummary(now: now()) != nil else {
+        let candidate = try await pairingContext.pendingCandidateSummary(now: now())
+        await pairingSuspensionHook?(.pendingCandidateSummary)
+        guard isCurrentPairingContext(pairingContext, lifecycle: .awaitingConfirmation) else {
+            throw RelayHostError.unavailable
+        }
+        guard candidate != nil else {
             provisionalSession = nil
             throw RelaySessionError.confirmationExpired
         }
+        // The confirmation route revalidates host state after authentication and
+        // can still sign an unavailable response with this authenticated exchange.
         return try await authenticate(request, with: provisionalSession)
+    }
+
+    private func isCurrentPairingContext(
+        _ context: RelayServerPairingContext,
+        lifecycle expectedLifecycle: RelayHostLifecycle
+    ) -> Bool {
+        pairingContext === context && lifecycle == expectedLifecycle
+    }
+
+    private func cleanUpAsExpiredIfCurrent(_ context: RelayServerPairingContext?) {
+        guard let context,
+              lifecycle == .pairing || lifecycle == .awaitingConfirmation,
+              pairingContext === context
+        else { return }
+        cleanUpAsExpired()
     }
 
     private func authenticate(

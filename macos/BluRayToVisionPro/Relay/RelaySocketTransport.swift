@@ -2,20 +2,46 @@ import Darwin
 import dnssd
 import Foundation
 
+enum RelaySocketAcceptErrorDisposition: Equatable {
+    case retry
+    case retryAfterBackoff
+    case fail
+
+    static func classify(_ code: Int32) -> Self {
+        switch code {
+        case ECONNABORTED, EPROTO:
+            return .retry
+        case EMFILE, ENFILE, ENOBUFS, ENOMEM:
+            return .retryAfterBackoff
+        default:
+            return .fail
+        }
+    }
+}
+
 /// BSD sockets keep LAN media on the kernel TCP path. The Network framework
 /// path reproduced large transfer delays on the physical reference Mac.
 final class RelaySocketListener: @unchecked Sendable {
     let port: UInt16
     private let descriptor: Int32
     private let queue: DispatchQueue
+    private let acceptSyscall: @Sendable (Int32, UnsafeMutablePointer<sockaddr>, UnsafeMutablePointer<socklen_t>) -> Int32
     private let queueKey = DispatchSpecificKey<Void>()
     private var source: DispatchSourceRead?
     private var service: DNSServiceRef?
     private var cancelled = false
     private var failure: (@Sendable () -> Void)?
+    private var acceptRetryScheduled = false
+    private var sourceSuspendedForAcceptRetry = false
 
-    init(queue: DispatchQueue) throws {
+    init(
+        queue: DispatchQueue,
+        acceptSyscall: @escaping @Sendable (Int32, UnsafeMutablePointer<sockaddr>, UnsafeMutablePointer<socklen_t>) -> Int32 = {
+            Darwin.accept($0, $1, $2)
+        }
+    ) throws {
         self.queue = queue
+        self.acceptSyscall = acceptSyscall
         let descriptor = socket(AF_INET6, SOCK_STREAM, 0)
         self.descriptor = descriptor
         guard descriptor >= 0 else { throw Self.socketError() }
@@ -92,22 +118,37 @@ final class RelaySocketListener: @unchecked Sendable {
         cancelled = true
         if let service { DNSServiceRefDeallocate(service); self.service = nil }
         failure = nil
-        if let source { source.cancel(); self.source = nil }
+        if let source {
+            if sourceSuspendedForAcceptRetry {
+                source.resume()
+                sourceSuspendedForAcceptRetry = false
+            }
+            source.cancel()
+            self.source = nil
+        }
         else { Darwin.close(descriptor) }
     }
 
-    private func acceptAvailable(_ handler: @Sendable (RelaySocketConnection, String) -> Void) {
+    private func acceptAvailable(_ handler: @escaping @Sendable (RelaySocketConnection, String) -> Void) {
         guard !cancelled else { return }
         // Yield between batches so admission and timeout work gets queue time.
         for _ in 0..<16 {
             var address = sockaddr_storage()
             var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
             let accepted = withUnsafeMutablePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.accept(descriptor, $0, &length) }
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { acceptSyscall(descriptor, $0, &length) }
             }
             guard accepted >= 0 else {
                 if errno == EINTR { continue }
-                if errno != EAGAIN, errno != EWOULDBLOCK { failure?() }
+                if errno == EAGAIN || errno == EWOULDBLOCK { return }
+                switch RelaySocketAcceptErrorDisposition.classify(errno) {
+                case .retry:
+                    continue
+                case .retryAfterBackoff:
+                    scheduleAcceptRetry(handler)
+                case .fail:
+                    failure?()
+                }
                 return
             }
             var name = [CChar](repeating: 0, count: Int(NI_MAXHOST))
@@ -121,6 +162,25 @@ final class RelaySocketListener: @unchecked Sendable {
             if host.hasPrefix("::ffff:") { host = String(host.dropFirst(7)) }
             do { handler(try RelaySocketConnection(descriptor: accepted), host) }
             catch { Darwin.close(accepted) }
+        }
+    }
+
+    private func scheduleAcceptRetry(_ handler: @escaping @Sendable (RelaySocketConnection, String) -> Void) {
+        guard !cancelled, !acceptRetryScheduled else { return }
+        acceptRetryScheduled = true
+        if let source, !sourceSuspendedForAcceptRetry {
+            source.suspend()
+            sourceSuspendedForAcceptRetry = true
+        }
+        queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.acceptRetryScheduled = false
+            guard !self.cancelled else { return }
+            if let source = self.source, self.sourceSuspendedForAcceptRetry {
+                source.resume()
+                self.sourceSuspendedForAcceptRetry = false
+            }
+            self.acceptAvailable(handler)
         }
     }
 
