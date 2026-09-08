@@ -86,17 +86,20 @@ enum RelayQualificationDriver {
                 }
                 if time.seconds.isFinite, Int(time.seconds) != loggedSecond {
                     loggedSecond = Int(time.seconds)
-                    emit("playback_time=\(time.seconds) duration=\(fixtureDuration) state=\(player.state)")
+                    emit("playback_time=\(time.seconds) duration=\(fixtureDuration) state=\(player.state) time_control=\(player.player.timeControlStatus.rawValue) waiting_reason=\(player.player.reasonForWaitingToPlay?.rawValue ?? "none")")
                 }
                 if time.seconds >= fixtureDuration - 0.1 { break }
             }
             emit("decoded_frame_samples=\(decodedFrames)")
-            let requiredIntervals = Set(0..<Int(ceil(fixtureDuration / 2)))
+            // Ignore a sub-250 ms container/audio tail when counting video
+            // intervals, matching the independently enforced final-frame gate.
+            let requiredIntervals = Set(0...Int(floor((fixtureDuration - 0.25) / 2)))
             guard latestDecodedTime >= fixtureDuration - 0.25,
                   decodedIntervals.isSuperset(of: requiredIntervals) else {
+                emit("decoded_timeline_passed=false final_sample_time=\(latestDecodedTime)")
                 throw qualificationFailure("Missing decoded samples across the fixture timeline or near its end.")
             }
-            emit("decoded_timeline_passed intervals=\(requiredIntervals.count) final_sample_time=\(latestDecodedTime)")
+            emit("decoded_timeline_passed=true intervals=\(requiredIntervals.count) final_sample_time=\(latestDecodedTime)")
             if ProcessInfo.processInfo.environment["BD_TO_AVP_RELAY_CONTROL_PROBE"] == "1" {
                 try await probeControls(coordinator: coordinator, player: player)
             }

@@ -54,7 +54,9 @@ import Foundation
                     latestDecodedTime = displayTime.seconds
                     decodedIntervals.insert(Int(displayTime.seconds / 2))
                 }
-                let requiredIntervals = Set(0..<Int(ceil(duration / 2)))
+                // A short audio/container tail must not require a video sample
+                // in a new interval beyond our existing 250 ms end tolerance.
+                let requiredIntervals = Set(0...Int(floor((duration - 0.25) / 2)))
                 if latestDecodedTime >= duration - 0.25,
                    decodedIntervals.isSuperset(of: requiredIntervals) {
                     print("AVFoundation relay HLS accepted: \(duration)s, \(decodedFrames) decoded frame samples across \(requiredIntervals.count) two-second intervals; final sample at \(latestDecodedTime)s")
