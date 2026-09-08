@@ -16,6 +16,27 @@ final class RelaySessionCoreTests: XCTestCase {
         XCTAssertEqual(offered.candidate.expiresAtUnixMilliseconds, 1_700_000_300_000)
     }
 
+    func testFullCandidateWindowToleratesBoundedServerClockLead() async throws {
+        let serverNow = now.addingTimeInterval(0.1)
+        let server = try RelayServerPairingContext(now: serverNow)
+        let challenge = try await server.currentChallenge(now: serverNow)
+        let client = try makeClient(challenge: challenge)
+        let offered = try await server.accept(client.request, now: serverNow)
+        let provisional = try client.complete(with: offered.candidate, now: now)
+        try await server.approve(candidateID: offered.candidate.candidateID, now: serverNow)
+        let confirmed = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: serverNow)
+        _ = try provisional.complete(with: XCTUnwrap(confirmed.response.acceptance), now: now)
+
+        // Five seconds matches the default signed-request skew allowance.
+        _ = try client.complete(with: offered.candidate, now: serverNow.addingTimeInterval(-5))
+        XCTAssertThrowsError(try client.complete(with: offered.candidate, now: serverNow.addingTimeInterval(-5.01))) {
+            XCTAssertEqual($0 as? RelaySessionError, .invalidRequest)
+        }
+        XCTAssertThrowsError(try client.complete(with: offered.candidate, now: offered.candidate.expirationDate.addingTimeInterval(0.01))) {
+            XCTAssertEqual($0 as? RelaySessionError, .invalidRequest)
+        }
+    }
+
     func testLateSelectionGetsFullWindowAndCanConfirmAfterChallengeExpires() async throws {
         let server = try RelayServerPairingContext(now: now)
         let selectedAt = now.addingTimeInterval(119)

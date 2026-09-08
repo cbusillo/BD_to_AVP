@@ -91,6 +91,11 @@ LAN peer checks, the sixteen-connection cap, and cancellation remain above the
 socket transport. Shutdown interrupts blocked I/O; descriptor closure is serialized
 after that I/O returns.
 
+Candidate lifetime validation permits a server clock up to five seconds ahead,
+matching the default signed-request skew allowance. The server still expires the
+candidate at five minutes. Without that tolerance, a fast pairing response and
+even a 100 ms clock difference could reject a valid full-length candidate.
+
 The authenticated playlist snapshot supplies the retained window. The player
 refreshes that window during playback, moves the scrubber floor forward when
 history is evicted, and explains when a requested seek is before retained

@@ -1111,7 +1111,8 @@ public struct RelayClientPairingAttempt: Sendable, CustomStringConvertible, Cust
               nowMilliseconds <= challenge.expiresAtUnixMilliseconds,
               candidate.sessionID == challenge.sessionID,
               candidate.expiresAtUnixMilliseconds >= nowMilliseconds,
-              candidate.expiresAtUnixMilliseconds - nowMilliseconds <= RelayLimits.maximumCandidateTTLMilliseconds
+              candidate.expiresAtUnixMilliseconds - nowMilliseconds
+                <= RelayLimits.maximumCandidateTTLMilliseconds + RelayLimits.candidateClockSkewMilliseconds
         else { throw RelaySessionError.invalidRequest }
         guard RelayCrypto.constantTimeEqual(
             RelayCrypto.serverNonceCommitment(candidate.serverNonce),
@@ -1789,6 +1790,9 @@ enum RelayLimits {
     static let maximumUnixMilliseconds: Int64 = 253_402_300_799_999
     static let maximumChallengeTTLMilliseconds: Int64 = 10 * 60 * 1_000
     static let maximumCandidateTTLMilliseconds: Int64 = 300 * 1_000
+    // Match the default signed-request allowance for a peer clock ahead of ours.
+    // The server still enforces the original five-minute candidate expiration.
+    static let candidateClockSkewMilliseconds: Int64 = 5 * 1_000
     static let maximumSessionTTLMilliseconds: Int64 = 24 * 60 * 60 * 1_000
     static let maximumRequestAgeMilliseconds: Int64 = 5 * 60 * 1_000
     static let maximumFutureSkewMilliseconds: Int64 = 60 * 1_000

@@ -116,6 +116,11 @@ final class RelaySessionCoordinator: ObservableObject {
                 throw RelayTransportError.unexpectedStatusCode(candidateResponse.statusCode)
             }
             let candidate = try JSONDecoder().decode(RelayPairingCandidateEnvelope.self, from: candidateData).candidate
+#if BD_TO_AVP_QUALIFICATION
+            let receivedAt = clock()
+            let timing = "RELAY_QUALIFICATION candidate_received remaining_seconds=\(candidate.expirationDate.timeIntervalSince(receivedAt)) challenge_remaining_seconds=\(challenge.expirationDate.timeIntervalSince(receivedAt)) same_session=\(candidate.sessionID == challenge.sessionID)\n"
+            FileHandle.standardOutput.write(Data(timing.utf8))
+#endif
             let provisionalSession = try attempt.complete(with: candidate, now: clock())
             discoveryTimeoutTask?.cancel()
             discoveryTimeoutTask = nil
