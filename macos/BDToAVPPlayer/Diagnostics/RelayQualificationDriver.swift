@@ -1,5 +1,6 @@
 #if BD_TO_AVP_QUALIFICATION
 import AVFoundation
+import CoreVideo
 import Foundation
 
 /// Opt-in device qualification through the production coordinator. Mac approval
@@ -35,15 +36,36 @@ enum RelayQualificationDriver {
                 return
             }
             emit("paired")
+            let preparationStarted = ContinuousClock.now
             await player.prepareRelayPlayback(configuration)
             emitPlayerDetails(player)
-            try await wait(seconds: 30) { player.state == .ready || player.state == .failed }
+            do {
+                try await wait(seconds: 30) { player.state == .ready || player.state == .failed }
+            } catch {
+                emit("startup_target_met=false target_seconds=30")
+                // Continue observation without relaxing the acceptance target.
+                try await wait(seconds: 90) { player.state == .ready || player.state == .failed }
+            }
+            emit("preparation_elapsed=\(preparationStarted.duration(to: .now))")
             emit("player_state=\(player.state) error=\(player.failureMessage ?? "none")")
             guard player.state == .ready else { return }
+            let video = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            ])
+            let item = player.player.currentItem
+            item?.add(video)
+            defer { item?.remove(video) }
+            var decodedFrames = 0
             for _ in 0 ..< 10 {
                 try await Task.sleep(for: .seconds(1))
+                let time = player.player.currentTime()
+                if video.hasNewPixelBuffer(forItemTime: time),
+                   video.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) != nil {
+                    decodedFrames += 1
+                }
                 emit("playback_time=\(player.currentTime) duration=\(player.duration) state=\(player.state)")
             }
+            emit("decoded_frame_samples=\(decodedFrames)")
         } catch {
             emitPlayerDetails(player)
             emit("stopped error=\(error.localizedDescription) pairing_state=\(coordinator.state) player_state=\(player.state)")

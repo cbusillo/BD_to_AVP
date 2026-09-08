@@ -109,11 +109,15 @@ Vision Pro. Compare the printed code with the Mac's visible code, then approve
 **Codes Match** on the Mac. Only matching confirmation on both sides opens
 media access. The driver waits at most four minutes for Mac approval, prepares
 playback, and reports player state and ten seconds of playback-clock samples.
+If readiness misses thirty seconds, it records a failed startup target and
+continues observing for up to ninety more seconds. It also samples decoded
+pixel buffers once ready; neither later readiness nor frame samples waive the
+startup target or establish physical stereo presentation and audio sync.
 It does not run unless both the compilation condition and explicit server-name
 environment variable are present. Normal builds contain no driver.
 
-This is programmatic device qualification, not UI acceptance or proof of decoded
-frames, stereo presentation, or audio sync. The ordinary pairing UI and physical
+This is programmatic device qualification, not UI acceptance or proof of stereo
+presentation or audio sync. The ordinary pairing UI and physical
 presentation still need their own checks. Physical native visionOS XCTest UI
 startup timed out while enabling automation on September 7; simulator UI success
 must not be treated as physical-device automation support.
