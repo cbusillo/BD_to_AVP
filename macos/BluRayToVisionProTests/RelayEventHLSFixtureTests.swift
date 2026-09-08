@@ -16,6 +16,34 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         XCTAssertEqual(loaded.segments.map(\.duration), [4, 3.5])
     }
 
+    func testCompletedFixtureRemainsFinalizedWhenHosted() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let playlistURL = fixture.appendingPathComponent("media.m3u8")
+        let playlist = try String(contentsOf: playlistURL, encoding: .utf8)
+        try (playlist + "\n#EXT-X-ENDLIST\n").write(to: playlistURL, atomically: true, encoding: .utf8)
+        let loaded = try RelayEventHLSFixture.load(directory: fixture)
+        XCTAssertTrue(loaded.isFinalized)
+        let host = try RelayHost.start(
+            configuration: try RelayHostConfiguration(fixtureDirectory: fixture), fixture: loaded
+        )
+        let snapshot = try await host.currentPlaylistSnapshot()
+        XCTAssertTrue(snapshot.isFinalized)
+        XCTAssertEqual(snapshot.totalDurationMilliseconds, 7_500)
+    }
+
+    func testRejectsSegmentsFollowingFixtureEndMarker() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let playlistURL = fixture.appendingPathComponent("media.m3u8")
+        let playlist = try String(contentsOf: playlistURL, encoding: .utf8)
+        try (playlist + "\n#EXT-X-ENDLIST\n#EXTINF:4,\nmedia/00001.m4s\n")
+            .write(to: playlistURL, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try RelayEventHLSFixture.load(directory: fixture)) {
+            XCTAssertEqual($0 as? RelayEventHLSFixtureError, .invalidPlaylist)
+        }
+    }
+
     func testRejectsPlaylistWithMissingSegment() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }

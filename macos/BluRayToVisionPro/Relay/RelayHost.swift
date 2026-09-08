@@ -152,6 +152,7 @@ actor RelayHost {
         for segment in fixture.segments {
             _ = try ingestedPlaylist.append(resourceIdentifier: segment.resourceIdentifier, duration: segment.duration)
         }
+        if fixture.isFinalized { ingestedPlaylist.finalize() }
         playlist = ingestedPlaylist
     }
 
@@ -416,7 +417,7 @@ actor RelayHost {
             establishedSession = session
             provisionalSession = nil
             self.pairingContext = nil
-            lifecycle = .paired
+            lifecycle = playlist.isFinalized ? .finished : .paired
         }
         let statusCode = result.response.state == .waitingForMac ? 202 : 200
         return try authenticate(

@@ -115,6 +115,9 @@ final class RelayLoopbackHTTPServer: @unchecked Sendable {
                 self.tasks[id] = Task { [weak self] in
                     guard let self else { return }
                     let response = await self.response(to: request)
+#if BD_TO_AVP_QUALIFICATION
+                    FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION media_response status=\(response.statusCode) bytes=\(response.body.count)\n".utf8))
+#endif
                     self.queue.async { [weak self] in
                         guard let self, self.connections[id] != nil else { return }
                         connection.send(content: response.serialized(), completion: .contentProcessed { [weak self] _ in

@@ -33,9 +33,9 @@ struct RelayConnectionView: View {
                 connectedContent
             case .reconnecting, .networkUnavailable:
                 reconnectingContent
-            case .sessionExpired, .failed:
+            case .sessionExpired:
                 expiredContent
-            case .idle:
+            case .failed, .idle:
                 EmptyView()
             }
         }

@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "632fef41e383fbfaff08f25fe882639c3e553e76",
+    "sha": "c430ad914de7a75ed4f1338e6a15ac9431354eed",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -445,7 +445,7 @@
       "python-unittest-discovery": 109,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2855,
+    "ci_test_case_count": 2857,
     "classification_counts": {
       "accepted-cost": 55,
       "valuable": 185
@@ -456,7 +456,7 @@
       "TypeScript": 1
     },
     "support_fixture_count": 71,
-    "test_case_count": 2888,
+    "test_case_count": 2890,
     "test_file_count": 169,
     "unmapped_test_file_count": 0
   },
@@ -2196,11 +2196,11 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 11,
+          "occurrences": 13,
           "signal": "filesystem_access"
         }
       ],
-      "test_case_count": 9
+      "test_case_count": 11
     },
     {
       "bundle": "BluRayToVisionProTests",

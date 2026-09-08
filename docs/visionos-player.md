@@ -76,11 +76,43 @@ the synthetic/decrypted relay slice. Any adapter carrying content whose threat
 model requires confidentiality must add a separately reviewed encrypted
 transport without weakening the existing request authentication.
 
+The fixture host preserves `#EXT-X-ENDLIST`, so a completed fixture stays
+completed when relayed instead of waiting indefinitely for more live segments.
+
 The authenticated playlist snapshot supplies the retained window. The player
 refreshes that window during playback, moves the scrubber floor forward when
 history is evicted, and explains when a requested seek is before retained
 history or ahead of produced media. Session expiry and unpaired responses stop
 remote playback and require a fresh pairing.
+
+## Mac-driven relay qualification
+
+A build compiled with `BD_TO_AVP_QUALIFICATION` can perform relay setup without
+headset UI interaction. Build and install the qualification player as described
+in `visionos-sustained-playback-qualification.md`, start a fixture relay on the
+Mac, then launch the player with the exact Bonjour display name:
+
+```sh
+xcrun devicectl device process launch --device "$DEVICE_ID" \
+  --terminate-existing --console \
+  --environment-variables '{"BD_TO_AVP_RELAY_QUALIFICATION_SERVER":"YOUR_MAC_NAME"}' \
+  com.shinycomputers.bd-to-avp.player
+```
+
+The driver uses the production Bonjour browser, pairing coordinator, and relay
+player. It prints `RELAY_QUALIFICATION comparison_code=...` and confirms on
+Vision Pro. Compare the printed code with the Mac's visible code, then approve
+**Codes Match** on the Mac. Only matching confirmation on both sides opens
+media access. The driver waits at most four minutes for Mac approval, prepares
+playback, and reports player state and ten seconds of playback-clock samples.
+It does not run unless both the compilation condition and explicit server-name
+environment variable are present. Normal builds contain no driver.
+
+This is programmatic device qualification, not UI acceptance or proof of decoded
+frames, stereo presentation, or audio sync. The ordinary pairing UI and physical
+presentation still need their own checks. Physical native visionOS XCTest UI
+startup timed out while enabling automation on September 7; simulator UI success
+must not be treated as physical-device automation support.
 
 ## Source Access
 

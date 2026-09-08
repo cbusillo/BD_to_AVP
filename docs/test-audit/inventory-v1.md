@@ -1,9 +1,9 @@
 # Test Audit Inventory v1
 
-- Baseline reference: `632fef41e383fbfaff08f25fe882639c3e553e76`
+- Baseline reference: `c430ad914de7a75ed4f1338e6a15ac9431354eed`
 - Test files: **169**
 - Support fixtures: **71**
-- Test cases counted: **2888**
+- Test cases counted: **2890**
 - Classification source: `docs/test-audit/classifications-v1.json`
 
 ## Lanes
@@ -157,7 +157,7 @@ Exact-head evidence captured from `257fd21f38e49031b9fa96a733875702313ebd5c`:
 | `macos/BluRayToVisionProTests/PreviewViewModelTests.swift` | Swift | `BluRayToVisionProTests` | 18 | `accepted-cost` | macos/BluRayToVisionProTests/PreviewViewModelTests.swift covers a CI-executed conversion, diagnostics, preview, or worker boundary with fixtures, process coordination, or environment setup. That setup cost is accepted because no behavioral replacement or removal proof exists. | `ci-macos-app-unit`, `media-hardware-contract` | real-media or SSIF/ISO fixture may be required; repository fixture files | filesystem_access (64), polling_or_waiting (19), hardware_or_media (1) |
 | `macos/BluRayToVisionProTests/ProfileStoreTests.swift` | Swift | `BluRayToVisionProTests` | 31 | `valuable` | macos/BluRayToVisionProTests/ProfileStoreTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | repository fixture files | filesystem_access (93) |
 | `macos/BluRayToVisionProTests/QueueResolutionTests.swift` | Swift | `BluRayToVisionProTests` | 2 | `valuable` | macos/BluRayToVisionProTests/QueueResolutionTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | — |
-| `macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift` | Swift | `BluRayToVisionProTests` | 9 | `valuable` | macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | visionOS simulator or physical Apple Vision Pro, depending on evidence | filesystem_access (11) |
+| `macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift` | Swift | `BluRayToVisionProTests` | 11 | `valuable` | macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | visionOS simulator or physical Apple Vision Pro, depending on evidence | filesystem_access (13) |
 | `macos/BluRayToVisionProTests/RelayHostTests.swift` | Swift | `BluRayToVisionProTests` | 18 | `valuable` | macos/BluRayToVisionProTests/RelayHostTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | real-media or SSIF/ISO fixture may be required | filesystem_access (13) |
 | `macos/BluRayToVisionProTests/RelayNetworkServerTests.swift` | Swift | `BluRayToVisionProTests` | 5 | `valuable` | macos/BluRayToVisionProTests/RelayNetworkServerTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | filesystem_access (4), polling_or_waiting (5) |
 | `macos/BluRayToVisionProTests/RelaySessionCoreTests.swift` | Swift | `BluRayToVisionProTests` | 38 | `valuable` | macos/BluRayToVisionProTests/RelaySessionCoreTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | filesystem_access (1) |

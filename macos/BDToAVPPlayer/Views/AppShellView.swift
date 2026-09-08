@@ -10,6 +10,9 @@ struct AppShellView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var preparationTask: Task<Void, Never>?
     @State private var isPlayerLocatorPresented = false
+#if BD_TO_AVP_QUALIFICATION
+    @State private var hasStartedRelayQualification = false
+#endif
 
     var body: some View {
         Group {
@@ -110,6 +113,14 @@ struct AppShellView: View {
         }
         .task {
             await model.bootstrap()
+#if BD_TO_AVP_QUALIFICATION
+            if !hasStartedRelayQualification {
+                hasStartedRelayQualification = true
+                await RelayQualificationDriver.runIfRequested(
+                    coordinator: relayCoordinator, player: playerSession
+                )
+            }
+#endif
         }
     }
 
