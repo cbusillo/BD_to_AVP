@@ -57,14 +57,20 @@ enum RelayQualificationDriver {
             let video = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             ])
-            let item = player.player.currentItem
-            item?.add(video)
-            defer { item?.remove(video) }
+            guard let item = player.player.currentItem else {
+                throw qualificationFailure("Ready player has no fixture item.")
+            }
+            item.add(video)
+            defer { item.remove(video) }
             var decodedFrames = 0
             var decodedIntervals = Set<Int>()
             var latestDecodedTime: Double = -.infinity
             var loggedSecond = -1
-            let fixtureDuration = player.duration
+            // The published UI duration follows the one-second retained-window
+            // refresh. Use the prepared HLS item, whose timeline is authoritative
+            // for these decoded display timestamps, rather than racing that UI.
+            try await wait(seconds: 5) { item.duration.seconds.isFinite && item.duration.seconds >= 2 }
+            let fixtureDuration = item.duration.seconds
             guard fixtureDuration.isFinite, fixtureDuration >= 2, fixtureDuration <= 30 else {
                 throw qualificationFailure("Decoded fixture probe requires a finalized fixture between two and thirty seconds.")
             }
