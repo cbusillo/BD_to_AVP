@@ -77,6 +77,43 @@ final class RelayNetworkServerTests: XCTestCase {
         XCTAssertEqual(cancellations.connectionCancellationCount, 1)
     }
 
+    func testActiveResponseOutlivesRequestDeadlineThenStallIsCancelled() async throws {
+        let cancellations = RelayNetworkServerCancellationRecorder()
+        let resources = RelayNetworkServerResources(
+            queue: DispatchQueue(label: "com.shinycomputers.bd-to-avp.relay-tests.progress"),
+            listenerCancellation: {}, requestTimeout: 0.2, maximumResponseDuration: 5
+        )
+        let registered = await resources.register(cancellation: { cancellations.recordConnectionCancellation() })
+        let identifier = try XCTUnwrap(registered)
+        for _ in 0..<5 {
+            let canSend = await resources.responseProgress(identifier)
+            XCTAssertTrue(canSend)
+            try await Task.sleep(for: .milliseconds(80))
+        }
+        XCTAssertEqual(cancellations.connectionCancellationCount, 0)
+        let cancelledAfterStall = await waitUntil { cancellations.connectionCancellationCount == 1 }
+        XCTAssertTrue(cancelledAfterStall)
+        let canSendAfterTimeout = await resources.responseProgress(identifier)
+        XCTAssertFalse(canSendAfterTimeout)
+    }
+
+    func testResponseProgressCannotExtendTotalTransferDeadline() async throws {
+        let cancellations = RelayNetworkServerCancellationRecorder()
+        let resources = RelayNetworkServerResources(
+            queue: DispatchQueue(label: "com.shinycomputers.bd-to-avp.relay-tests.response-cap"),
+            listenerCancellation: {}, requestTimeout: 0.2, maximumResponseDuration: 0.3
+        )
+        let registered = await resources.register(cancellation: { cancellations.recordConnectionCancellation() })
+        let identifier = try XCTUnwrap(registered)
+        for _ in 0..<6 {
+            _ = await resources.responseProgress(identifier)
+            try await Task.sleep(for: .milliseconds(80))
+        }
+        XCTAssertEqual(cancellations.connectionCancellationCount, 1)
+        let count = await resources.activeConnectionCount()
+        XCTAssertEqual(count, 0)
+    }
+
     func testConcurrentStopAndNetworkLossAreIdempotent() async throws {
         let fixture = try makeHostFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

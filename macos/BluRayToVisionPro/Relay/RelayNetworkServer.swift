@@ -127,11 +127,28 @@ final class RelayNetworkServer: @unchecked Sendable {
                     return
                 }
                 let response = await self.host.handle(nextData, peer: peer)
-                connection.send(content: response.serialized(), completion: .contentProcessed { [weak self] _ in
-                    self?.resources.finish(identifier)
-                })
+                await self.sendResponse(response.serialized(), on: connection, identifier: identifier)
             }
         }
+    }
+
+    private func sendResponse(_ data: Data, on connection: NWConnection, identifier: UUID, offset: Int = 0) async {
+        guard await resources.responseProgress(identifier) else { return }
+        let end = min(offset + 64 * 1_024, data.count)
+        let isFinal = end == data.count
+        connection.send(
+            content: data.subdata(in: offset..<end),
+            contentContext: isFinal ? .finalMessage : .defaultMessage,
+            isComplete: true,
+            completion: .contentProcessed { [weak self] error in
+                guard let self else { return }
+                guard error == nil, !isFinal else {
+                    self.resources.finish(identifier)
+                    return
+                }
+                Task { await self.sendResponse(data, on: connection, identifier: identifier, offset: end) }
+            }
+        )
     }
 
     private func handleNetworkLoss() {
@@ -182,12 +199,14 @@ final class RelayNetworkServerResources: @unchecked Sendable {
     private struct ActiveConnection {
         let cancellation: @Sendable () -> Void
         let timeout: DispatchWorkItem
+        var responseDeadline: DispatchTime?
     }
 
     private let queue: DispatchQueue
     private let queueKey = DispatchSpecificKey<Void>()
     private let listenerCancellation: @Sendable () -> Void
     private let requestTimeout: TimeInterval
+    private let maximumResponseDuration: TimeInterval
     private var activeConnections: [UUID: ActiveConnection] = [:]
     private var lifecycleMonitor: Task<Void, Never>?
     private var cancelled = false
@@ -195,11 +214,13 @@ final class RelayNetworkServerResources: @unchecked Sendable {
     init(
         queue: DispatchQueue,
         listenerCancellation: @escaping @Sendable () -> Void,
-        requestTimeout: TimeInterval = 10
+        requestTimeout: TimeInterval = 10,
+        maximumResponseDuration: TimeInterval = 60
     ) {
         self.queue = queue
         self.listenerCancellation = listenerCancellation
         self.requestTimeout = requestTimeout
+        self.maximumResponseDuration = maximumResponseDuration
         queue.setSpecific(key: queueKey, value: ())
     }
 
@@ -228,6 +249,33 @@ final class RelayNetworkServerResources: @unchecked Sendable {
     func finish(_ identifier: UUID) {
         queue.async { [weak self] in
             self?.finishOnQueue(identifier)
+        }
+    }
+
+    /// Keep the request deadline absolute until parsing finishes. Afterwards,
+    /// require outbound progress within each idle window, with a total cap.
+    func responseProgress(_ identifier: UUID) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self, let active = activeConnections[identifier] else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                let now = DispatchTime.now()
+                let deadline = active.responseDeadline ?? (now + maximumResponseDuration)
+                guard now < deadline else {
+                    finishOnQueue(identifier)
+                    continuation.resume(returning: false)
+                    return
+                }
+                active.timeout.cancel()
+                let timeout = DispatchWorkItem { [weak self] in self?.finishOnQueue(identifier) }
+                activeConnections[identifier] = ActiveConnection(
+                    cancellation: active.cancellation, timeout: timeout, responseDeadline: deadline
+                )
+                queue.asyncAfter(deadline: min(now + requestTimeout, deadline), execute: timeout)
+                continuation.resume(returning: true)
+            }
         }
     }
 

@@ -180,7 +180,13 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                     clock: clock,
                     nonce: nonce
                 )
+#if BD_TO_AVP_QUALIFICATION
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_start resource=\(customURL.lastPathComponent)\n".utf8))
+#endif
                 let result = try await transport.data(for: request.request)
+#if BD_TO_AVP_QUALIFICATION
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_received resource=\(customURL.lastPathComponent) status=\(result.1.statusCode) bytes=\(result.0.count)\n".utf8))
+#endif
                 try RelayAuthenticatedResponseVerifier.verify(
                     data: result.0,
                     response: result.1,
@@ -199,6 +205,10 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                     throw RelayTransportError.unexpectedStatusCode(result.1.statusCode)
                 }
             } catch {
+#if BD_TO_AVP_QUALIFICATION
+                let diagnosticError = error as NSError
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_error resource=\(customURL.lastPathComponent) domain=\(diagnosticError.domain) code=\(diagnosticError.code)\n".utf8))
+#endif
                 guard retryCount < maximumTransientRetries, isTransient(error) else {
                     throw error
                 }

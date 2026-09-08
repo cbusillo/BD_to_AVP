@@ -78,6 +78,10 @@ transport without weakening the existing request authentication.
 
 The fixture host preserves `#EXT-X-ENDLIST`, so a completed fixture stays
 completed when relayed instead of waiting indefinitely for more live segments.
+The Mac retains a ten-second request deadline, then sends responses in 64 KiB
+chunks with a ten-second progress timeout and a sixty-second total response cap.
+This lets active segment transfers outlive the request deadline while still
+closing stalled clients. The player's loopback request cap remains thirty seconds.
 
 The authenticated playlist snapshot supplies the retained window. The player
 refreshes that window during playback, moves the scrubber floor forward when
