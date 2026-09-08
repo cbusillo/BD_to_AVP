@@ -205,7 +205,8 @@ enum RelayQualificationDriver {
         defer { session.invalidateAndCancel() }
         do {
             _ = try await session.data(for: request)
-        } catch {
+        } catch let error as URLError where error.code == .cannotConnectToHost || error.code == .networkConnectionLost {
+            emit("loopback_connection_refused code=\(error.code.rawValue)")
             return
         }
         throw qualificationFailure("Loopback listener remained reachable after cleanup.")
