@@ -52,7 +52,7 @@ final class RelaySessionCoordinator: ObservableObject {
     private var discoveryTimeoutTask: Task<Void, Never>?
     private var pairingExpirationTask: Task<Void, Never>?
     private var browsingTask: Task<Void, Never>?
-    private var reconnectTask: Task<Void, Never>?
+    private(set) var reconnectTask: Task<Void, Never>?
     private var confirmationPollingTask: Task<Void, Never>?
     private var pathMonitor: NWPathMonitor?
     private var provisionalSession: RelayProvisionalSession?
@@ -173,6 +173,21 @@ final class RelaySessionCoordinator: ObservableObject {
         state = .idle
     }
 
+    func handlePlaybackTermination(_ event: RelayPlaybackTerminationEvent) {
+        // A delayed player callback must not invalidate a newer pairing.
+        guard session?.sessionID.rawValue == event.sessionID else { return }
+        switch event.reason {
+        case .sessionEnded, .rejected:
+            cleanUp()
+            state = .sessionExpired
+        case .serverUnreachable:
+            // Preserve valid credentials and use the existing bounded signed
+            // reconnect probe. AVP path availability does not detect a Mac quit.
+            guard state != .networkUnavailable, !isReconnecting else { return }
+            startReconnect(attempt: 0)
+        }
+    }
+
     func handleNetworkAvailability(_ availability: RelayNetworkAvailability) {
         switch availability {
         case .unavailable:
@@ -184,7 +199,9 @@ final class RelaySessionCoordinator: ObservableObject {
             }
             state = .networkUnavailable
         case .available:
-            guard state == .networkUnavailable || isReconnecting else { return }
+            // Repeated available-path notifications must not cancel and replace
+            // an already running authenticated reconnect attempt.
+            guard state == .networkUnavailable else { return }
             startReconnect(attempt: 0)
         }
     }
@@ -297,13 +314,20 @@ final class RelaySessionCoordinator: ObservableObject {
             guard let self else { return }
             try? await Task.sleep(for: .seconds(RelayBackoff.delay(for: attempt)))
             guard !Task.isCancelled, self.isReconnecting, self.hasLiveSession else { return }
+            let reconnectSessionID = self.session?.sessionID
             do {
                 try await self.probeExistingSession()
+                guard !Task.isCancelled, self.isReconnecting,
+                      self.session?.sessionID == reconnectSessionID else { return }
                 if let session = self.session { self.state = .connected(sessionID: session.sessionID.rawValue, expiresAt: session.expirationDate) }
             } catch RelayTransportError.sessionExpired, RelayTransportError.unpaired {
+                guard !Task.isCancelled, self.isReconnecting,
+                      self.session?.sessionID == reconnectSessionID else { return }
                 self.session = nil
                 self.state = .sessionExpired
             } catch {
+                guard !Task.isCancelled, self.isReconnecting,
+                      self.session?.sessionID == reconnectSessionID else { return }
                 self.startReconnect(attempt: attempt + 1)
             }
         }

@@ -98,6 +98,12 @@ struct AppShellView: View {
             guard let request else { return }
             prepareForPlayback(request.item)
         }
+        .onChange(of: relayCoordinator.state) { _, state in
+            playerSession.handleRelayCoordinatorState(state)
+        }
+        .onChange(of: playerSession.relayTerminationEvent) { _, event in
+            if let event { relayCoordinator.handlePlaybackTermination(event) }
+        }
         .onDisappear {
             preparationTask?.cancel()
         }
@@ -154,6 +160,8 @@ struct AppShellView: View {
 
     private func startRelayPlayback() {
         guard let configuration = relayCoordinator.remotePlaybackConfiguration() else {
+            playerSession.finish()
+            finishPlayback()
             return
         }
         preparationTask?.cancel()

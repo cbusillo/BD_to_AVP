@@ -434,6 +434,8 @@ final class RelaySessionCoordinatorTests: XCTestCase {
         }
         XCTAssertTrue(requestsDuringOutage.isEmpty)
         coordinator.handleNetworkAvailability(.available)
+        coordinator.handleNetworkAvailability(.available)
+        coordinator.handleNetworkAvailability(.available)
         let didReconnect = await waitUntil {
             if case .connected = coordinator.state { return true }
             return false
@@ -450,6 +452,106 @@ final class RelaySessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshotRequests.count, 1)
         XCTAssertNotNil(snapshotRequests.first?.value(forHTTPHeaderField: RelayWireContract.authenticationHeader))
         XCTAssertNotNil(snapshotRequests.first?.value(forHTTPHeaderField: RelayWireContract.mediaCapabilityHeader))
+    }
+
+    func testPlayerReportedHostLossProbesSameAuthenticatedSession() async throws {
+        let transport = FakeRelayTransport()
+        let server = try RelayCoordinatorTestServer(now: now, clock: { self.now })
+        await transport.setHandler { request in try await server.handle(request) }
+        let coordinator = makeCoordinator(browser: FakeRelayBrowser(), transport: transport, now: { self.now })
+        defer { coordinator.disconnect() }
+        coordinator.startDiscovery()
+        await coordinator.connect(to: makeTestEndpoint())
+        try await server.approvePending()
+        await coordinator.confirmCodesMatch()
+        let sessionID = try XCTUnwrap(coordinator.session?.sessionID.rawValue)
+
+        coordinator.handlePlaybackTermination(.init(sessionID: sessionID, reason: .serverUnreachable))
+        let recovered = await waitUntil {
+            if case .connected = coordinator.state { return true }
+            return false
+        }
+
+        XCTAssertTrue(recovered)
+        XCTAssertEqual(coordinator.session?.sessionID.rawValue, sessionID)
+        let probes = await transport.allRequests().filter { $0.url?.path == RelayWireContract.playlistSnapshotPath }
+        XCTAssertEqual(probes.count, 1)
+        XCTAssertNotNil(probes.first?.value(forHTTPHeaderField: RelayWireContract.authenticationHeader))
+    }
+
+    func testPlayerSessionEndedClearsCredentialsAndStaleEventsAreIgnored() async throws {
+        let transport = FakeRelayTransport()
+        let server = try RelayCoordinatorTestServer(now: now, clock: { self.now })
+        await transport.setHandler { request in try await server.handle(request) }
+        let coordinator = makeCoordinator(browser: FakeRelayBrowser(), transport: transport, now: { self.now })
+        coordinator.startDiscovery()
+        await coordinator.connect(to: makeTestEndpoint())
+        try await server.approvePending()
+        await coordinator.confirmCodesMatch()
+        let sessionID = try XCTUnwrap(coordinator.session?.sessionID.rawValue)
+
+        coordinator.handlePlaybackTermination(.init(sessionID: "older-session", reason: .sessionEnded))
+        XCTAssertEqual(coordinator.session?.sessionID.rawValue, sessionID)
+        guard case .connected = coordinator.state else { return XCTFail("Stale event changed current pairing") }
+
+        coordinator.handlePlaybackTermination(.init(sessionID: sessionID, reason: .sessionEnded))
+        XCTAssertEqual(coordinator.state, .sessionExpired)
+        XCTAssertNil(coordinator.session)
+        XCTAssertNil(coordinator.connectedServerBaseURL)
+        XCTAssertNil(coordinator.remotePlaybackConfiguration())
+    }
+
+    func testPlayerAuthenticationRejectionInvalidatesWithoutReconnectProbe() async throws {
+        let transport = FakeRelayTransport()
+        let server = try RelayCoordinatorTestServer(now: now, clock: { self.now })
+        await transport.setHandler { request in try await server.handle(request) }
+        let coordinator = makeCoordinator(browser: FakeRelayBrowser(), transport: transport, now: { self.now })
+        coordinator.startDiscovery()
+        await coordinator.connect(to: makeTestEndpoint())
+        try await server.approvePending()
+        await coordinator.confirmCodesMatch()
+        let sessionID = try XCTUnwrap(coordinator.session?.sessionID.rawValue)
+
+        coordinator.handlePlaybackTermination(.init(sessionID: sessionID, reason: .rejected))
+
+        XCTAssertEqual(coordinator.state, .sessionExpired)
+        XCTAssertNil(coordinator.session)
+        XCTAssertNil(coordinator.reconnectTask)
+        let probes = await transport.allRequests().filter { $0.url?.path == RelayWireContract.playlistSnapshotPath }
+        XCTAssertTrue(probes.isEmpty)
+    }
+
+    func testLateRejectedReconnectCannotOverwriteDisconnect() async throws {
+        let transport = FakeRelayTransport()
+        let server = try RelayCoordinatorTestServer(now: now, clock: { self.now })
+        await transport.setHandler { request in try await server.handle(request) }
+        let coordinator = makeCoordinator(browser: FakeRelayBrowser(), transport: transport, now: { self.now })
+        coordinator.startDiscovery()
+        await coordinator.connect(to: makeTestEndpoint())
+        try await server.approvePending()
+        await coordinator.confirmCodesMatch()
+        let sessionID = try XCTUnwrap(coordinator.session?.sessionID.rawValue)
+        let entered = expectation(description: "reconnect request suspended")
+        let gate = RelayReconnectResponseGate()
+        await transport.setHandler { _ in
+            if await gate.markFirstEntry() { entered.fulfill() }
+            await gate.wait()
+            throw RelayTransportError.sessionExpired
+        }
+        coordinator.handlePlaybackTermination(.init(sessionID: sessionID, reason: .serverUnreachable))
+        let pendingAttempt = try XCTUnwrap(coordinator.reconnectTask)
+        await fulfillment(of: [entered], timeout: 2)
+        // The real path monitor may replace the first probe with another while
+        // it is suspended. Await both handles after disconnecting.
+        let latestAttempt = coordinator.reconnectTask
+
+        coordinator.disconnect()
+        await gate.release()
+        await pendingAttempt.value
+        await latestAttempt?.value
+
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertNil(coordinator.session)
     }
 
     func testCleanupIsIdempotent() {
@@ -472,5 +574,28 @@ final class RelaySessionCoordinatorTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(50))
         }
         return false
+    }
+}
+
+private actor RelayReconnectResponseGate {
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+    private var released = false
+    private var entered = false
+
+    func markFirstEntry() -> Bool {
+        guard !entered else { return false }
+        entered = true
+        return true
+    }
+
+    func wait() async {
+        guard !released else { return }
+        await withCheckedContinuation { continuations.append($0) }
+    }
+
+    func release() {
+        released = true
+        for continuation in continuations { continuation.resume() }
+        continuations = []
     }
 }

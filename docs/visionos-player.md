@@ -147,6 +147,20 @@ presentation still need their own checks. Physical native visionOS XCTest UI
 startup timed out while enabling automation on September 7; simulator UI success
 must not be treated as physical-device automation support.
 
+Relay interruption handling keeps playback ownership separate from pairing.
+Terminal session/authentication failures release the player item, loopback
+listener, observers, and refresh task before showing the error. Three consecutive
+failed snapshot refreshes also release playback resources; successful refreshes
+reset that count. This is a request-count bound, with transport timeouts still
+applying, rather than a promise of three seconds.
+
+A device network outage releases playback resources while retaining the unexpired
+pairing. Once connectivity returns, the coordinator verifies the same session
+with a signed request; use Retry to resume relay playback. If the Mac cancels or
+quits, bounded reconnect attempts end with an honest failure. A session or
+authentication rejection requires pairing again. Failed relay playback keeps its
+relay identity so Retry cannot accidentally enter the local-file flow.
+
 ## Source Access
 
 Imported files receive persistent bookmark data. Playback resolves the bookmark
