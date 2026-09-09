@@ -45,9 +45,13 @@ updates:
       - dependencies
       - javascript
     groups:
-      all-version-updates:
+      # Keep major upgrades separate so migrations do not block routine updates.
+      minor-and-patch-updates:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
       all-security-updates:
         applies-to: security-updates
         patterns:
