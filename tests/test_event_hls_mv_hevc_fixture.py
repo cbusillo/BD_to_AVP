@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 
@@ -13,18 +14,59 @@ from scripts.create_event_hls_mv_hevc_fixture import (
     FixtureGenerationError,
     _playlist_segments,
     _publish_fragments,
+    _check_acceptance_cue_times,
     _validate_media_tracks,
     hls_packaging_command,
+    main,
     source_generator_command,
     validate_fixture,
 )
 
 
 class EventHlsFixtureTests(unittest.TestCase):
+    def test_decoded_acceptance_cues_reject_packaging_offset(self) -> None:
+        audio = list(range(2, 24, 2))
+        with self.assertRaisesRegex(FixtureGenerationError, "misaligned"):
+            _check_acceptance_cue_times([cue + 2 / 30 for cue in audio], audio)
+
+    def test_decoded_acceptance_cues_allow_subframe_edges(self) -> None:
+        audio = list(range(2, 24, 2))
+        _check_acceptance_cue_times([cue + 0.001 for cue in audio], audio)
+
+    def test_decoded_acceptance_cues_require_all_eleven_pairs(self) -> None:
+        with self.assertRaisesRegex(FixtureGenerationError, "eleven"):
+            _check_acceptance_cue_times([2], [2])
+
     def test_source_generator_reuses_direct_mv_hevc_script(self) -> None:
         command = source_generator_command(Path("source.mov"), Path("encoder"))
 
         self.assertEqual(command, [DIRECT_FIXTURE_GENERATOR, Path("source.mov"), Path("encoder")])
+
+    def test_source_generator_acceptance_profile_is_opt_in(self) -> None:
+        command = source_generator_command(Path("source.mov"), Path("encoder"), acceptance=True)
+
+        self.assertEqual(command, [DIRECT_FIXTURE_GENERATOR, "--acceptance", Path("source.mov"), Path("encoder")])
+
+    def test_source_generator_acceptance_profile_allows_default_encoder(self) -> None:
+        command = source_generator_command(Path("source.mov"), acceptance=True)
+
+        self.assertEqual(command, [DIRECT_FIXTURE_GENERATOR, "--acceptance", Path("source.mov")])
+
+    def test_cli_propagates_opt_in_acceptance_profile(self) -> None:
+        with (
+            patch.object(sys, "argv", ["create_event_hls_mv_hevc_fixture.py", "--acceptance"]),
+            patch("scripts.create_event_hls_mv_hevc_fixture.create_fixture") as create_fixture,
+        ):
+            self.assertEqual(main(), 0)
+
+        self.assertTrue(create_fixture.call_args.kwargs["acceptance"])
+
+    def test_cli_rejects_unknown_profile(self) -> None:
+        with patch.object(sys, "argv", ["create_event_hls_mv_hevc_fixture.py", "--profile", "long"]):
+            with self.assertRaises(SystemExit) as raised:
+                main()
+
+        self.assertEqual(raised.exception.code, 2)
 
     def test_hls_command_preserves_stereo_video_and_audio(self) -> None:
         command = hls_packaging_command(Path("MP4Box"), Path("source.mov"), Path("fixture"))
@@ -172,3 +214,13 @@ class EventHlsFixtureTests(unittest.TestCase):
 
             with patch("scripts.create_event_hls_mv_hevc_fixture._run", side_effect=fake_run):
                 validate_fixture(fixture_directory, ffprobe_path=Path("ffprobe"), mp4box_path=Path("MP4Box"))
+
+            def rejected_playback(command, **kwargs):
+                if Path(command[0]).name == "verify-event-hls-playback":
+                    raise FixtureGenerationError("AVFoundation rejected video playback")
+                return fake_run(command, **kwargs)
+
+            with patch("scripts.create_event_hls_mv_hevc_fixture._run", side_effect=rejected_playback):
+                with self.assertRaisesRegex(FixtureGenerationError, "AVFoundation rejected"):
+                    validate_fixture(fixture_directory, ffprobe_path=Path("ffprobe"), mp4box_path=Path("MP4Box"))
+            self.assertFalse((fixture_directory.parent / "assembled-media.mp4").exists())

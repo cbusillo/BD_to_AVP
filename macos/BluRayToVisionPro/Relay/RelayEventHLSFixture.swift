@@ -20,6 +20,7 @@ struct RelayEventHLSFixture: Equatable, Sendable {
     let initializationResourceIdentifier: String
     let targetDuration: TimeInterval
     let segments: [Segment]
+    let isFinalized: Bool
 
     static func load(
         directory: URL,
@@ -58,14 +59,15 @@ struct RelayEventHLSFixture: Equatable, Sendable {
         return RelayEventHLSFixture(
             initializationResourceIdentifier: parsed.initializationResourceIdentifier,
             targetDuration: parsed.targetDuration,
-            segments: parsed.segments
+            segments: parsed.segments,
+            isFinalized: parsed.isFinalized
         )
     }
 
     private static func parse(
         _ source: String,
         initializationResourceIdentifier: String
-    ) throws -> (initializationResourceIdentifier: String, targetDuration: TimeInterval, segments: [Segment]) {
+    ) throws -> (initializationResourceIdentifier: String, targetDuration: TimeInterval, segments: [Segment], isFinalized: Bool) {
         let lines = source
             .split(whereSeparator: \.isNewline)
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -73,12 +75,18 @@ struct RelayEventHLSFixture: Equatable, Sendable {
             throw RelayEventHLSFixtureError.invalidPlaylist
         }
 
+        var isFinalized = false
         var isEventPlaylist = false
         var parsedInitializationResourceIdentifier: String?
         var targetDuration: TimeInterval?
         var pendingDuration: TimeInterval?
         var segments: [Segment] = []
         for line in lines.dropFirst() where !line.isEmpty {
+            if line == "#EXT-X-ENDLIST" {
+                guard !isFinalized, pendingDuration == nil else { throw RelayEventHLSFixtureError.invalidPlaylist }
+                isFinalized = true
+                continue
+            }
             if line == "#EXT-X-PLAYLIST-TYPE:EVENT" {
                 guard !isEventPlaylist else {
                     throw RelayEventHLSFixtureError.invalidPlaylist
@@ -115,7 +123,7 @@ struct RelayEventHLSFixture: Equatable, Sendable {
             }
             if line.hasPrefix("#EXTINF:") {
                 let rawValue = line.dropFirst("#EXTINF:".count).split(separator: ",", maxSplits: 1).first ?? ""
-                guard pendingDuration == nil,
+                guard !isFinalized, pendingDuration == nil,
                       let value = TimeInterval(rawValue),
                       value.isFinite,
                       value > 0
@@ -146,7 +154,7 @@ struct RelayEventHLSFixture: Equatable, Sendable {
         else {
             throw RelayEventHLSFixtureError.invalidPlaylist
         }
-        return (parsedInitializationResourceIdentifier, targetDuration, segments)
+        return (parsedInitializationResourceIdentifier, targetDuration, segments, isFinalized)
     }
 
     private static func requireRegularFile(

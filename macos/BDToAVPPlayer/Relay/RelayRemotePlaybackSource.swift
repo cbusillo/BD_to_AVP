@@ -51,7 +51,7 @@ struct RelayRemotePlaybackSource {
     let session: RelayEstablishedSession
     let serverBaseURL: URL
     private(set) var playlist: RelayEventPlaylist
-    private var loader: RelayHLSResourceLoader?
+    private var loader: RelayLoopbackHTTPServer?
     private(set) var retainedSeekPolicy = RelayRetainedSeekPolicy()
 
     init(
@@ -128,20 +128,21 @@ struct RelayRemotePlaybackSource {
         transport: any RelayTransport,
         clock: @escaping @Sendable () -> Date = { Date() },
         nonce: @escaping @Sendable () -> String = { UUID().uuidString }
-    ) -> (AVURLAsset, RelayHLSResourceLoader) {
-        let assetURL = RelayHLSResourceLoader.customPlaylistURL(for: serverBaseURL) ?? serverBaseURL
-
-        let newLoader = RelayHLSResourceLoader(
+    ) async throws -> (AVURLAsset, RelayLoopbackHTTPServer) {
+        cancelLoader()
+        let client = RelayAuthenticatedResourceClient(
             signer: session,
             transport: transport,
             serverBaseURL: serverBaseURL,
             clock: clock,
             nonce: nonce
         )
+        let (newLoader, assetURL) = try await RelayLoopbackHTTPServer.start(serverBaseURL: serverBaseURL) {
+            try await client.load($0)
+        }
         loader = newLoader
 
         let asset = AVURLAsset(url: assetURL)
-        asset.resourceLoader.setDelegate(newLoader, queue: .global(qos: .userInitiated))
         return (asset, newLoader)
     }
 

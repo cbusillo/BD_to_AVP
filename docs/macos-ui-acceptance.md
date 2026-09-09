@@ -30,7 +30,7 @@ baseline for `0.3.0` and later.
 | Accessibility semantics | Pass | The Settings accessibility tree exposes named profile controls and navigation tabs. Audio and subtitle language pickers have distinct labels, search prompts, and hints. Preview decoration is hidden from assistive technology, the status row has one meaningful label, and the player has an explicit label and hint. |
 | Window sizing | Pass | The main window was reviewed at its 1120×820 default size and at the configured 1080-point minimum width. The full title, both workspaces, and primary actions remain visible; the source workspace scrolls vertically when multi-title details exceed the available height. |
 | Long-running status | Pass | Conversion and preview heartbeats now expose elapsed time while remaining indeterminate when no trustworthy progress denominator exists. |
-| Live relay host | Pass | The toolbar opens a dedicated EVENT-HLS relay sheet. The user chooses a bounded fixture folder, sees lifecycle and segment state plus a single-use pairing code, and can stop or cancel deterministically. Both app plists declare the Bonjour service and local-network purpose. |
+| Live relay host | Pass | The toolbar opens a dedicated EVENT-HLS relay sheet. The user chooses a bounded fixture folder, sees lifecycle and segment state plus a six-digit comparison code, and explicitly confirms or rejects the exact Vision Pro candidate without typing. Both app plists declare the Bonjour service and local-network purpose. |
 
 ## Relay Validation
 

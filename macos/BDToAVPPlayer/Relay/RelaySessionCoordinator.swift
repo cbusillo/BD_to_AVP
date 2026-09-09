@@ -5,7 +5,7 @@ import Network
 enum RelayCoordinatorState: Equatable {
     case idle
     case discovery
-    case pairing(serverID: String, expiresAt: Date)
+    case confirming(serverID: String, candidateID: String, expiresAt: Date)
     case connected(sessionID: String, expiresAt: Date)
     case reconnecting(attempt: Int)
     case networkUnavailable
@@ -13,10 +13,7 @@ enum RelayCoordinatorState: Equatable {
     case failed(String)
 }
 
-enum RelayNetworkAvailability: Sendable {
-    case available
-    case unavailable
-}
+enum RelayNetworkAvailability: Sendable { case available, unavailable }
 
 struct RelayRemotePlaybackConfiguration {
     let session: RelayEstablishedSession
@@ -29,7 +26,6 @@ enum RelayBackoff {
     static let maximumAttempts = 3
     static let base: TimeInterval = 0.25
     static let maximum: TimeInterval = 2
-
     static func delay(for attempt: Int) -> TimeInterval {
         guard attempt > 0 else { return 0 }
         return min(base * pow(2, Double(attempt - 1)), maximum)
@@ -40,31 +36,37 @@ enum RelayBackoff {
 final class RelaySessionCoordinator: ObservableObject {
     @Published private(set) var state: RelayCoordinatorState = .idle
     @Published private(set) var discoveredServers: [RelayDiscoveredEndpoint] = []
-    @Published private(set) var pairingErrorMessage: String?
     @Published private(set) var connectedServer: RelayDiscoveredEndpoint?
+    @Published private(set) var shortAuthenticationString: RelayShortAuthenticationString?
+    @Published private(set) var isWaitingForMacConfirmation = false
 
     private(set) var session: RelayEstablishedSession?
     private(set) var connectedServerBaseURL: URL?
 
     private let transport: any RelayTransport
     private let browserFactory: @Sendable () -> any RelayEndpointBrowsing
+    private let discoveryTimeout: Duration
     private let clock: @Sendable () -> Date
     private let nonce: @Sendable () -> String
-
     private var browser: (any RelayEndpointBrowsing)?
+    private var discoveryTimeoutTask: Task<Void, Never>?
+    private var pairingExpirationTask: Task<Void, Never>?
     private var browsingTask: Task<Void, Never>?
-    private var reconnectTask: Task<Void, Never>?
+    private(set) var reconnectTask: Task<Void, Never>?
+    private var confirmationPollingTask: Task<Void, Never>?
     private var pathMonitor: NWPathMonitor?
-    private var pendingChallenge: RelaySessionChallenge?
+    private var provisionalSession: RelayProvisionalSession?
 
     init(
         browserFactory: @escaping @Sendable () -> any RelayEndpointBrowsing = { RelayBonjourBrowser() },
         transport: any RelayTransport = URLSessionRelayTransport(),
+        discoveryTimeout: Duration = .seconds(15),
         clock: @escaping @Sendable () -> Date = { Date() },
         nonce: @escaping @Sendable () -> String = { UUID().uuidString }
     ) {
         self.browserFactory = browserFactory
         self.transport = transport
+        self.discoveryTimeout = discoveryTimeout
         self.clock = clock
         self.nonce = nonce
     }
@@ -78,91 +80,111 @@ final class RelaySessionCoordinator: ObservableObject {
         browsingTask = Task { @MainActor [weak self, newBrowser] in
             for await endpoints in newBrowser.discoveryStream {
                 guard !Task.isCancelled else { return }
-                self?.receiveDiscoveredEndpoints(endpoints)
+                self?.discoveredServers = endpoints
             }
+            guard !Task.isCancelled, let self, self.state == .discovery else { return }
+            self.failDiscovery()
         }
         newBrowser.startBrowsing()
+        discoveryTimeoutTask = Task { @MainActor [weak self, discoveryTimeout] in
+            try? await Task.sleep(for: discoveryTimeout)
+            guard !Task.isCancelled, let self, self.state == .discovery,
+                  self.discoveredServers.isEmpty else { return }
+            self.failDiscovery()
+        }
     }
 
     func connect(to endpoint: RelayDiscoveredEndpoint) async {
         guard state == .discovery else { return }
-        pairingErrorMessage = nil
         do {
-            let request = URLRequest(relayURL: endpoint.baseURL, path: RelayWireContract.challengePath)
-            let (data, response) = try await transport.data(for: request)
-            guard response.statusCode == 200 else {
-                try handleSessionStatus(response.statusCode)
-                throw RelayTransportError.unexpectedStatusCode(response.statusCode)
+            let challengeRequest = URLRequest(relayURL: endpoint.baseURL, path: RelayWireContract.challengePath)
+            let (challengeData, challengeResponse) = try await transport.data(for: challengeRequest)
+            guard challengeResponse.statusCode == 200 else {
+                try handleSessionStatus(challengeResponse.statusCode)
+                throw RelayTransportError.unexpectedStatusCode(challengeResponse.statusCode)
             }
-            let envelope = try JSONDecoder().decode(RelayChallengeEnvelope.self, from: data)
-            guard envelope.challenge.expirationDate > clock() else {
-                state = .sessionExpired
-                return
+            let challenge = try JSONDecoder().decode(RelayChallengeEnvelope.self, from: challengeData).challenge
+            guard challenge.expirationDate > clock() else { state = .sessionExpired; return }
+            let attempt = try RelayClientPairingAttempt(challenge: challenge, now: clock())
+            var pairingRequest = URLRequest(relayURL: endpoint.baseURL, path: RelayWireContract.pairingPath)
+            pairingRequest.httpMethod = "POST"
+            pairingRequest.httpBody = try JSONEncoder().encode(attempt.request)
+            pairingRequest.setValue(RelayWireContract.jsonContentType, forHTTPHeaderField: "content-type")
+            let (candidateData, candidateResponse) = try await transport.data(for: pairingRequest)
+            guard candidateResponse.statusCode == 201 else {
+                try handleSessionStatus(candidateResponse.statusCode)
+                throw RelayTransportError.unexpectedStatusCode(candidateResponse.statusCode)
             }
-            pendingChallenge = envelope.challenge
+            let candidate = try JSONDecoder().decode(RelayPairingCandidateEnvelope.self, from: candidateData).candidate
+#if BD_TO_AVP_QUALIFICATION
+            let receivedAt = clock()
+            let timing = "RELAY_QUALIFICATION candidate_received remaining_seconds=\(candidate.expirationDate.timeIntervalSince(receivedAt)) challenge_remaining_seconds=\(challenge.expirationDate.timeIntervalSince(receivedAt)) same_session=\(candidate.sessionID == challenge.sessionID)\n"
+            FileHandle.standardOutput.write(Data(timing.utf8))
+#endif
+            let provisionalSession = try attempt.complete(with: candidate, now: clock())
+            discoveryTimeoutTask?.cancel()
+            discoveryTimeoutTask = nil
+            self.provisionalSession = provisionalSession
+            shortAuthenticationString = provisionalSession.shortAuthenticationString
+            isWaitingForMacConfirmation = false
             connectedServerBaseURL = endpoint.baseURL
             connectedServer = endpoint
-            state = .pairing(serverID: endpoint.id, expiresAt: envelope.challenge.expirationDate)
+            state = .confirming(
+                serverID: endpoint.id,
+                candidateID: provisionalSession.candidateID.rawValue,
+                expiresAt: candidate.expirationDate
+            )
+            pairingExpirationTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled, let self else { return }
+                    self.refreshPairingExpiration()
+                    guard case .confirming = self.state else { return }
+                }
+            }
         } catch RelayTransportError.sessionExpired {
             state = .sessionExpired
         } catch {
-            state = .failed("Unable to fetch pairing challenge: \(error.localizedDescription)")
+            state = .failed("Unable to start numeric comparison: \(error.localizedDescription)")
         }
     }
 
-    func submitPairingCode(_ rawValue: String) async {
-        guard case .pairing = state,
-              let challenge = pendingChallenge,
-              let baseURL = connectedServerBaseURL
-        else { return }
-        pairingErrorMessage = nil
-        guard challenge.expirationDate > clock() else {
-            clearPendingPairing()
-            state = .sessionExpired
-            return
-        }
+    private func failDiscovery() {
+        stopBrowser()
+        state = .failed("No relay found. On your Mac, open Relay Fixture and click Restart Relay, then try Find My Mac again.")
+    }
 
-        do {
-            let pairingCode = try RelayPairingCode(rawValue)
-            let attempt = try RelayClientPairingAttempt(
-                challenge: challenge,
-                pairingCode: pairingCode,
-                now: clock()
-            )
-            var request = URLRequest(relayURL: baseURL, path: RelayWireContract.pairingPath)
-            request.httpMethod = "POST"
-            request.httpBody = try JSONEncoder().encode(attempt.request)
-            request.setValue(RelayWireContract.jsonContentType, forHTTPHeaderField: "content-type")
+    func refreshPairingExpiration() {
+        guard case let .confirming(_, _, expiresAt) = state, expiresAt <= clock() else { return }
+        clearPendingPairingSelection()
+        state = .sessionExpired
+    }
 
-            let (data, response) = try await transport.data(for: request)
-            switch response.statusCode {
-            case 201:
-                break
-            case 401:
-                pairingErrorMessage = "That pairing code did not match. Try again."
-                return
-            case 409:
-                clearPendingPairing()
-                state = .sessionExpired
-                return
-            default:
-                try handleSessionStatus(response.statusCode)
-                throw RelayTransportError.unexpectedStatusCode(response.statusCode)
-            }
-            let envelope = try JSONDecoder().decode(RelayPairingEnvelope.self, from: data)
-            let established = try attempt.complete(with: envelope.acceptance, now: clock())
-            session = established
-            pendingChallenge = nil
-            pairingErrorMessage = nil
-            state = .connected(sessionID: established.sessionID.rawValue, expiresAt: established.expirationDate)
-            startPathMonitor()
-        } catch RelaySessionError.invalidPairingCode {
-            pairingErrorMessage = "Enter the 16-character code shown on your Mac."
-        } catch RelayTransportError.sessionExpired {
-            clearPendingPairing()
+    func confirmCodesMatch() async {
+        await submitConfirmation(.codesMatch, beginPolling: true)
+    }
+
+    func rejectCandidate() async {
+        await submitConfirmation(.notMyMac, beginPolling: false)
+    }
+
+    func disconnect() {
+        cleanUp()
+        state = .idle
+    }
+
+    func handlePlaybackTermination(_ event: RelayPlaybackTerminationEvent) {
+        // A delayed player callback must not invalidate a newer pairing.
+        guard session?.sessionID.rawValue == event.sessionID else { return }
+        switch event.reason {
+        case .sessionEnded, .rejected:
+            cleanUp()
             state = .sessionExpired
-        } catch {
-            state = .failed("Pairing failed: \(error.localizedDescription)")
+        case .serverUnreachable:
+            // Preserve valid credentials and use the existing bounded signed
+            // reconnect probe. AVP path availability does not detect a Mac quit.
+            guard state != .networkUnavailable, !isReconnecting else { return }
+            startReconnect(attempt: 0)
         }
     }
 
@@ -177,26 +199,18 @@ final class RelaySessionCoordinator: ObservableObject {
             }
             state = .networkUnavailable
         case .available:
-            guard state == .networkUnavailable || isReconnecting else { return }
+            // Repeated available-path notifications must not cancel and replace
+            // an already running authenticated reconnect attempt.
+            guard state == .networkUnavailable else { return }
             startReconnect(attempt: 0)
         }
     }
 
-    func disconnect() {
-        cleanUp()
-        state = .idle
-    }
-
     func remotePlaybackConfiguration() -> RelayRemotePlaybackConfiguration? {
-        guard hasLiveSession,
-              let session,
-              let connectedServerBaseURL,
-              let connectedServer
-        else {
-            if self.session != nil {
-                self.session = nil
-                state = .sessionExpired
-            }
+        guard let session, let connectedServerBaseURL, let connectedServer else { return nil }
+        guard session.expirationDate > clock() else {
+            self.session = nil
+            state = .sessionExpired
             return nil
         }
         return RelayRemotePlaybackConfiguration(
@@ -207,30 +221,89 @@ final class RelaySessionCoordinator: ObservableObject {
         )
     }
 
-    private var isFailed: Bool {
-        if case .failed = state { return true }
-        return false
-    }
-
-    private var isReconnecting: Bool {
-        if case .reconnecting = state { return true }
-        return false
-    }
-
-    private var hasLiveSession: Bool {
-        guard let session else { return false }
-        return session.expirationDate > clock()
-    }
-
-    private func receiveDiscoveredEndpoints(_ endpoints: [RelayDiscoveredEndpoint]) {
-        discoveredServers = endpoints
-    }
-
-    private func startReconnect(attempt: Int) {
-        guard hasLiveSession else {
+    private func submitConfirmation(_ decision: RelayPairingConfirmationDecision, beginPolling: Bool) async {
+        guard case let .confirming(_, _, expiresAt) = state else { return }
+        guard expiresAt > clock() else {
+            clearPendingPairingSelection()
             state = .sessionExpired
             return
         }
+        guard
+              let provisionalSession,
+              let baseURL = connectedServerBaseURL
+        else { return }
+        do {
+            let confirmation = try provisionalSession.confirmation(decision: decision)
+            let body = try JSONEncoder().encode(confirmation)
+            let prepared = try RelayAuthenticatedRequestFactory.makeRequest(
+                baseURL: baseURL,
+                path: RelayWireContract.pairingConfirmPath,
+                method: "POST",
+                body: body,
+                signer: provisionalSession.authenticationSession,
+                clock: clock,
+                nonce: nonce
+            )
+            let (data, response) = try await transport.data(for: prepared.request)
+            try RelayAuthenticatedResponseVerifier.verify(
+                data: data,
+                response: response,
+                request: prepared,
+                signer: provisionalSession.authenticationSession,
+                now: clock()
+            )
+            guard response.statusCode == 200 || response.statusCode == 202 else {
+                try handleSessionStatus(response.statusCode)
+                throw RelayTransportError.unexpectedStatusCode(response.statusCode)
+            }
+            let result = try JSONDecoder().decode(RelayPairingConfirmationEnvelope.self, from: data).confirmation
+            guard result.candidateID == provisionalSession.candidateID else { throw RelaySessionError.pairingCandidateNotFound }
+            switch result.state {
+            case .waitingForMac:
+                isWaitingForMacConfirmation = true
+                if beginPolling { beginConfirmationPolling() }
+            case .rejected:
+                clearPendingPairingSelection()
+                state = .discovery
+            case .established:
+                guard let acceptance = result.acceptance else { throw RelaySessionError.invalidResponse }
+                session = try provisionalSession.complete(with: acceptance, now: clock())
+                clearPendingPairing()
+                stopBrowser()
+                startPathMonitor()
+                guard let session else { return }
+                state = .connected(sessionID: session.sessionID.rawValue, expiresAt: session.expirationDate)
+            }
+        } catch RelayTransportError.sessionExpired {
+            clearPendingPairing()
+            state = .sessionExpired
+        } catch RelayTransportError.unpaired {
+            clearPendingPairingSelection()
+            state = .discovery
+        } catch {
+            state = .failed("Unable to confirm numeric comparison: \(error.localizedDescription)")
+        }
+    }
+
+    private func beginConfirmationPolling() {
+        guard confirmationPollingTask == nil else { return }
+        confirmationPollingTask = Task { @MainActor [weak self] in
+            defer { self?.confirmationPollingTask = nil }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, let self, case .confirming = self.state else { return }
+                await self.submitConfirmation(.codesMatch, beginPolling: false)
+                if self.state == .sessionExpired || self.isFailed { return }
+            }
+        }
+    }
+
+    private var isFailed: Bool { if case .failed = state { return true }; return false }
+    private var isReconnecting: Bool { if case .reconnecting = state { return true }; return false }
+    private var hasLiveSession: Bool { session?.expirationDate ?? .distantPast > clock() }
+
+    private func startReconnect(attempt: Int) {
+        guard hasLiveSession else { state = .sessionExpired; return }
         guard attempt <= RelayBackoff.maximumAttempts else {
             state = .failed("Relay did not reconnect after \(RelayBackoff.maximumAttempts) attempts.")
             return
@@ -239,52 +312,40 @@ final class RelaySessionCoordinator: ObservableObject {
         state = .reconnecting(attempt: attempt)
         reconnectTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let delay = RelayBackoff.delay(for: attempt)
-            if delay > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            }
-            guard !Task.isCancelled, self.isReconnecting, self.hasLiveSession else {
-                return
-            }
+            try? await Task.sleep(for: .seconds(RelayBackoff.delay(for: attempt)))
+            guard !Task.isCancelled, self.isReconnecting, self.hasLiveSession else { return }
+            let reconnectSessionID = self.session?.sessionID
             do {
                 try await self.probeExistingSession()
-                guard let session = self.session else { return }
-                self.state = .connected(sessionID: session.sessionID.rawValue, expiresAt: session.expirationDate)
+                guard !Task.isCancelled, self.isReconnecting,
+                      self.session?.sessionID == reconnectSessionID else { return }
+                if let session = self.session { self.state = .connected(sessionID: session.sessionID.rawValue, expiresAt: session.expirationDate) }
             } catch RelayTransportError.sessionExpired, RelayTransportError.unpaired {
-                self.clearPendingPairing()
+                guard !Task.isCancelled, self.isReconnecting,
+                      self.session?.sessionID == reconnectSessionID else { return }
                 self.session = nil
                 self.state = .sessionExpired
             } catch {
+                guard !Task.isCancelled, self.isReconnecting,
+                      self.session?.sessionID == reconnectSessionID else { return }
                 self.startReconnect(attempt: attempt + 1)
             }
         }
     }
 
     private func probeExistingSession() async throws {
-        guard let session, let baseURL = connectedServerBaseURL else {
-            throw RelayTransportError.unpaired
-        }
-        let preparedRequest = try RelayAuthenticatedRequestFactory.makeRequest(
-            baseURL: baseURL,
-            path: RelayWireContract.playlistSnapshotPath,
-            signer: session,
-            clock: clock,
-            nonce: nonce
+        guard let session, let baseURL = connectedServerBaseURL else { throw RelayTransportError.unpaired }
+        let prepared = try RelayAuthenticatedRequestFactory.makeRequest(
+            baseURL: baseURL, path: RelayWireContract.playlistSnapshotPath, signer: session, clock: clock, nonce: nonce
         )
-        var request = preparedRequest.request
+        var request = prepared.request
         request.setValue(session.mediaCapability.value, forHTTPHeaderField: RelayWireContract.mediaCapabilityHeader)
         let (data, response) = try await transport.data(for: request)
         try RelayAuthenticatedResponseVerifier.verify(
-            data: data,
-            response: response,
-            request: RelayPreparedRequest(request: request, authentication: preparedRequest.authentication),
-            signer: session,
-            now: clock()
+            data: data, response: response,
+            request: RelayPreparedRequest(request: request, authentication: prepared.authentication), signer: session, now: clock()
         )
-        guard response.statusCode == 200 else {
-            try handleSessionStatus(response.statusCode)
-            throw RelayTransportError.unexpectedStatusCode(response.statusCode)
-        }
+        guard response.statusCode == 200 else { try handleSessionStatus(response.statusCode); throw RelayTransportError.unexpectedStatusCode(response.statusCode) }
     }
 
     private func handleSessionStatus(_ statusCode: Int) throws {
@@ -300,31 +361,38 @@ final class RelaySessionCoordinator: ObservableObject {
         let monitor = NWPathMonitor()
         pathMonitor = monitor
         monitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor [weak self] in
-                self?.handleNetworkAvailability(path.status == .satisfied ? .available : .unavailable)
-            }
+            Task { @MainActor in self?.handleNetworkAvailability(path.status == .satisfied ? .available : .unavailable) }
         }
         monitor.start(queue: .global(qos: .utility))
     }
 
     private func clearPendingPairing() {
-        pendingChallenge = nil
-        pairingErrorMessage = nil
+        pairingExpirationTask?.cancel()
+        pairingExpirationTask = nil
+        confirmationPollingTask?.cancel()
+        confirmationPollingTask = nil
+        provisionalSession = nil
+        shortAuthenticationString = nil
+        isWaitingForMacConfirmation = false
+    }
+
+    private func clearPendingPairingSelection() {
+        clearPendingPairing()
+        connectedServerBaseURL = nil
+        connectedServer = nil
     }
 
     private func stopBrowser() {
-        browsingTask?.cancel()
-        browsingTask = nil
-        browser?.stopBrowsing()
-        browser = nil
+        discoveryTimeoutTask?.cancel()
+        discoveryTimeoutTask = nil
+        browsingTask?.cancel(); browsingTask = nil
+        browser?.stopBrowsing(); browser = nil
         discoveredServers = []
     }
 
     private func cleanUp() {
-        reconnectTask?.cancel()
-        reconnectTask = nil
-        pathMonitor?.cancel()
-        pathMonitor = nil
+        reconnectTask?.cancel(); reconnectTask = nil
+        pathMonitor?.cancel(); pathMonitor = nil
         clearPendingPairing()
         stopBrowser()
         session = nil
@@ -333,8 +401,11 @@ final class RelaySessionCoordinator: ObservableObject {
     }
 
     deinit {
+        discoveryTimeoutTask?.cancel()
+        pairingExpirationTask?.cancel()
         browsingTask?.cancel()
         reconnectTask?.cancel()
+        confirmationPollingTask?.cancel()
         pathMonitor?.cancel()
     }
 }

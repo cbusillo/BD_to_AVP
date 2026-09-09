@@ -11,18 +11,16 @@ final class RelayNetworkServer: @unchecked Sendable {
     private static let requestTimeout: TimeInterval = 10
 
     private let host: RelayHost
-    private let queue: DispatchQueue
     private let resources: RelayNetworkServerResources
     private let lifecyclePollInterval: Duration
 
     private init(
         host: RelayHost,
-        listener: NWListener,
+        listener: RelaySocketListener,
         queue: DispatchQueue,
         lifecyclePollInterval: Duration
     ) {
         self.host = host
-        self.queue = queue
         resources = RelayNetworkServerResources(
             queue: queue,
             listenerCancellation: { listener.cancel() },
@@ -46,31 +44,24 @@ final class RelayNetworkServer: @unchecked Sendable {
             throw RelayNetworkServerError.invalidBonjourMetadata
         }
 
-        let parameters = NWParameters.tcp
-        parameters.includePeerToPeer = true
-        let listener = try NWListener(using: parameters, on: .any)
-        listener.service = NWListener.Service(
-            name: String(serviceName.prefix(63)),
-            type: advertisement.serviceType,
-            domain: nil,
-            txtRecord: advertisement.txtRecord
-        )
+        let listener = try RelaySocketListener(queue: queue)
         let server = RelayNetworkServer(
             host: host,
             listener: listener,
             queue: queue,
             lifecyclePollInterval: lifecyclePollInterval
         )
-        listener.newConnectionHandler = { [weak server] connection in
-            server?.accept(connection)
-        }
-        listener.stateUpdateHandler = { [weak server] state in
-            guard case .failed = state else {
-                return
+        try listener.start(
+            name: String(serviceName.prefix(63)), type: advertisement.serviceType,
+            txtRecord: advertisement.txtRecord,
+            accept: { [weak server] connection, address in
+                guard let server else { connection.cancel(); return }
+                server.accept(connection, address: address)
+            },
+            failure: { [weak server] in
+                server?.handleNetworkLoss()
             }
-            server?.handleNetworkLoss()
-        }
-        listener.start(queue: queue)
+        )
         await server.startLifecycleMonitor()
         return server
     }
@@ -90,8 +81,8 @@ final class RelayNetworkServer: @unchecked Sendable {
         await host.stop()
     }
 
-    private func accept(_ connection: NWConnection) {
-        let peer = RelayNetworkPeerClassifier.classify(connection.endpoint)
+    private func accept(_ connection: RelaySocketConnection, address: String) {
+        let peer = RelayNetworkPeerClassifier.classify(address: address)
         Task { [weak self] in
             guard let self,
                   peer == .localNetwork,
@@ -100,37 +91,48 @@ final class RelayNetworkServer: @unchecked Sendable {
                 connection.cancel()
                 return
             }
-            connection.start(queue: queue)
             receiveRequest(on: connection, identifier: identifier, accumulated: Data(), peer: peer)
         }
     }
 
     private func receiveRequest(
-        on connection: NWConnection,
+        on connection: RelaySocketConnection,
         identifier: UUID,
         accumulated: Data,
         peer: RelayHostPeer
     ) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1_024) { [weak self] content, _, _, error in
+        connection.receive { [weak self] content, error in
             guard let self else {
                 connection.cancel()
                 return
             }
-            guard error == nil else {
+            guard error == nil, let content, !content.isEmpty else {
                 self.resources.finish(identifier)
                 return
             }
-            let nextData = accumulated + (content ?? Data())
+            let nextData = accumulated + content
             Task {
                 if await self.host.needsMoreRequestBytes(nextData) {
                     self.receiveRequest(on: connection, identifier: identifier, accumulated: nextData, peer: peer)
                     return
                 }
                 let response = await self.host.handle(nextData, peer: peer)
-                connection.send(content: response.serialized(), completion: .contentProcessed { [weak self] _ in
-                    self?.resources.finish(identifier)
-                })
+                await self.sendResponse(response.serialized(), on: connection, identifier: identifier)
             }
+        }
+    }
+
+    private func sendResponse(_ data: Data, on connection: RelaySocketConnection, identifier: UUID, offset: Int = 0) async {
+        guard await resources.responseProgress(identifier) else { return }
+        let end = min(offset + 64 * 1_024, data.count)
+        let isFinal = end == data.count
+        connection.send(data.subdata(in: offset..<end)) { [weak self] error in
+            guard let self else { return }
+            guard error == nil, !isFinal else {
+                self.resources.finish(identifier)
+                return
+            }
+            Task { await self.sendResponse(data, on: connection, identifier: identifier, offset: end) }
         }
     }
 
@@ -154,7 +156,7 @@ final class RelayNetworkServer: @unchecked Sendable {
                 case .cancelled, .expired, .stopped:
                     await self?.cancelNetworkResources()
                     return
-                case .pairing, .paired, .finished:
+                case .pairing, .awaitingConfirmation, .paired, .finished:
                     break
                 }
                 try? await Task.sleep(for: lifecyclePollInterval)
@@ -182,12 +184,14 @@ final class RelayNetworkServerResources: @unchecked Sendable {
     private struct ActiveConnection {
         let cancellation: @Sendable () -> Void
         let timeout: DispatchWorkItem
+        var responseDeadline: DispatchTime?
     }
 
     private let queue: DispatchQueue
     private let queueKey = DispatchSpecificKey<Void>()
     private let listenerCancellation: @Sendable () -> Void
     private let requestTimeout: TimeInterval
+    private let maximumResponseDuration: TimeInterval
     private var activeConnections: [UUID: ActiveConnection] = [:]
     private var lifecycleMonitor: Task<Void, Never>?
     private var cancelled = false
@@ -195,11 +199,13 @@ final class RelayNetworkServerResources: @unchecked Sendable {
     init(
         queue: DispatchQueue,
         listenerCancellation: @escaping @Sendable () -> Void,
-        requestTimeout: TimeInterval = 10
+        requestTimeout: TimeInterval = 10,
+        maximumResponseDuration: TimeInterval = 60
     ) {
         self.queue = queue
         self.listenerCancellation = listenerCancellation
         self.requestTimeout = requestTimeout
+        self.maximumResponseDuration = maximumResponseDuration
         queue.setSpecific(key: queueKey, value: ())
     }
 
@@ -228,6 +234,33 @@ final class RelayNetworkServerResources: @unchecked Sendable {
     func finish(_ identifier: UUID) {
         queue.async { [weak self] in
             self?.finishOnQueue(identifier)
+        }
+    }
+
+    /// Keep the request deadline absolute until parsing finishes. Afterwards,
+    /// require outbound progress within each idle window, with a total cap.
+    func responseProgress(_ identifier: UUID) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self, let active = activeConnections[identifier] else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                let now = DispatchTime.now()
+                let deadline = active.responseDeadline ?? (now + maximumResponseDuration)
+                guard now < deadline else {
+                    finishOnQueue(identifier)
+                    continuation.resume(returning: false)
+                    return
+                }
+                active.timeout.cancel()
+                let timeout = DispatchWorkItem { [weak self] in self?.finishOnQueue(identifier) }
+                activeConnections[identifier] = ActiveConnection(
+                    cancellation: active.cancellation, timeout: timeout, responseDeadline: deadline
+                )
+                queue.asyncAfter(deadline: min(now + requestTimeout, deadline), execute: timeout)
+                continuation.resume(returning: true)
+            }
         }
     }
 

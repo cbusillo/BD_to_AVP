@@ -631,6 +631,226 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(session.duration, 0)
     }
 
+    @MainActor
+    func testExpiredRelayRefreshClosesLoopbackAndPreservesFailureForRetry() async throws {
+        let fixture = try await makeRelayPlaybackFixture()
+        let session = MVHEVCPlayerSession()
+        session.installRelayPlaybackResources(
+            source: fixture.source,
+            transport: fixture.transport,
+            item: try makePlayableRelayTestItem(),
+            mediaItem: relayItem(for: fixture.source),
+            observeItemStatus: false,
+            startRefreshLoop: false
+        )
+
+        let reachableSession = URLSession(configuration: .ephemeral)
+        defer { reachableSession.invalidateAndCancel() }
+        let (_, reachableResponse) = try await reachableSession.data(from: fixture.loopbackURL)
+        XCTAssertEqual((reachableResponse as? HTTPURLResponse)?.statusCode, 200)
+
+        await fixture.mode.set(.expired)
+        await session.refreshRelayWindowNow()
+
+        XCTAssertEqual(session.state, .failed)
+        XCTAssertNil(session.player.currentItem)
+        XCTAssertNil(session.playerItem)
+        XCTAssertTrue(session.isRelayPlayback)
+        XCTAssertEqual(
+            session.failureMessage,
+            "The relay session ended. Pair with the Mac again to continue."
+        )
+        XCTAssertEqual(session.relayTerminationEvent?.reason, .sessionEnded)
+
+        let closedConfiguration = URLSessionConfiguration.ephemeral
+        closedConfiguration.timeoutIntervalForRequest = 0.25
+        let closedSession = URLSession(configuration: closedConfiguration)
+        defer { closedSession.invalidateAndCancel() }
+        do {
+            _ = try await closedSession.data(from: fixture.loopbackURL)
+            XCTFail("Terminal relay cleanup must close its localhost listener")
+        } catch { }
+    }
+
+    @MainActor
+    func testRelayRefreshFailureBudgetResetsAfterSuccess() async throws {
+        let fixture = try await makeRelayPlaybackFixture(startLoopback: false)
+        let session = MVHEVCPlayerSession()
+        let item = try makePlayableRelayTestItem()
+        session.installRelayPlaybackResources(
+            source: fixture.source,
+            transport: fixture.transport,
+            item: item,
+            mediaItem: relayItem(for: fixture.source),
+            observeItemStatus: false,
+            startRefreshLoop: false
+        )
+
+        await fixture.mode.set(.unreachable)
+        await session.refreshRelayWindowNow()
+        await session.refreshRelayWindowNow()
+        XCTAssertNotEqual(session.state, .failed)
+        XCTAssertTrue(session.player.currentItem === item)
+
+        await fixture.mode.set(.success)
+        await session.refreshRelayWindowNow()
+        await fixture.mode.set(.unreachable)
+        await session.refreshRelayWindowNow()
+        await session.refreshRelayWindowNow()
+        XCTAssertNotEqual(session.state, .failed)
+
+        await session.refreshRelayWindowNow()
+        XCTAssertEqual(session.state, .failed)
+        XCTAssertNil(session.player.currentItem)
+        XCTAssertTrue(session.isRelayPlayback)
+        XCTAssertEqual(session.relayTerminationEvent?.reason, .serverUnreachable)
+    }
+
+    @MainActor
+    func testStaleRelayRefreshCompletionCannotFailFinishedSession() async throws {
+        let sessions = try await makePairedSessions(now: Date())
+        let transport = SuspendingRelayRefreshTransport()
+        let source = try RelayRemotePlaybackSource(
+            session: sessions.client,
+            serverBaseURL: URL(string: "http://relay.local:7431")!
+        )
+        let session = MVHEVCPlayerSession()
+        session.installRelayPlaybackResources(
+            source: source,
+            transport: transport,
+            item: try makePlayableRelayTestItem(),
+            mediaItem: relayItem(for: source),
+            observeItemStatus: false,
+            startRefreshLoop: false
+        )
+
+        let refresh = Task { await session.refreshRelayWindowNow() }
+        await transport.waitUntilRequested()
+        session.finish()
+        await transport.fail(with: .sessionExpired)
+        await refresh.value
+
+        XCTAssertEqual(session.state, .idle)
+        XCTAssertNil(session.failureMessage)
+        XCTAssertNil(session.relayTerminationEvent)
+        XCTAssertFalse(session.isRelayPlayback)
+    }
+
+    @MainActor
+    func testRelayPreparationRejectsInvalidAuthenticatedResponseAndRetainsRetryIdentity() async throws {
+        let sessions = try await makePairedSessions(now: Date())
+        let transport = FakeRelayTransport()
+        await transport.setHandler { request in
+            let body = Data("{}".utf8)
+            return (
+                body,
+                try makeAuthenticatedHTTPResponse(
+                    request,
+                    body: body,
+                    serverSession: sessions.server,
+                    authenticatedBody: Data("different".utf8)
+                )
+            )
+        }
+        let session = MVHEVCPlayerSession()
+
+        await session.prepareRelayPlayback(
+            RelayRemotePlaybackConfiguration(
+                session: sessions.client,
+                serverBaseURL: URL(string: "http://relay.local:7431")!,
+                serverName: "Test Relay",
+                transport: transport
+            )
+        )
+
+        XCTAssertEqual(session.state, .failed)
+        XCTAssertNil(session.player.currentItem)
+        XCTAssertNil(session.playerItem)
+        XCTAssertTrue(session.isRelayPlayback)
+        XCTAssertEqual(session.relayTerminationEvent?.reason, .rejected)
+        XCTAssertEqual(
+            session.relayTerminationEvent?.sessionID,
+            sessions.client.sessionID.rawValue
+        )
+    }
+
+    @MainActor
+    private func makeRelayPlaybackFixture(
+        startLoopback: Bool = true
+    ) async throws -> (
+        source: RelayRemotePlaybackSource,
+        loopbackURL: URL,
+        transport: FakeRelayTransport,
+        mode: RelayRefreshMode
+    ) {
+        let now = Date()
+        let sessions = try await makePairedSessions(now: now)
+        let mode = RelayRefreshMode()
+        let transport = FakeRelayTransport()
+        await transport.setHandler { request in
+            switch await mode.value {
+            case .expired:
+                throw RelayTransportError.sessionExpired
+            case .unreachable:
+                throw URLError(.cannotConnectToHost)
+            case .success:
+                let body: Data
+                if request.url?.path == RelayWireContract.playlistPath {
+                    body = Data("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-ENDLIST\n".utf8)
+                } else {
+                    body = try JSONEncoder().encode(
+                        try RelayPlaylistSnapshot(
+                            earliestPlayableTimeMilliseconds: 0,
+                            totalDurationMilliseconds: 2_000,
+                            isFinalized: false,
+                            segments: [
+                                try RelayPlaylistSegment(
+                                    sequenceNumber: 0,
+                                    startTimeMilliseconds: 0,
+                                    durationMilliseconds: 2_000,
+                                    resourceIdentifier: "segment-000.m4s"
+                                ),
+                            ]
+                        )
+                    )
+                }
+                return (
+                    body,
+                    try makeAuthenticatedHTTPResponse(request, body: body, serverSession: sessions.server)
+                )
+            }
+        }
+        var source = try RelayRemotePlaybackSource(
+            session: sessions.client,
+            serverBaseURL: URL(string: "http://relay.local:7431")!
+        )
+        let loopbackURL: URL
+        if startLoopback {
+            let (asset, _) = try await source.makeAssetAndLoader(transport: transport)
+            loopbackURL = asset.url
+        } else {
+            loopbackURL = URL(string: "http://127.0.0.1")!
+        }
+        return (source, loopbackURL, transport, mode)
+    }
+
+    private func makePlayableRelayTestItem() throws -> AVPlayerItem {
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RelayPlayerSessionTests")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let check = try XCTUnwrap(BuiltInStereoChecks.install(destinationDirectory: destination).first)
+        return AVPlayerItem(url: check.url)
+    }
+
+    private func relayItem(for source: RelayRemotePlaybackSource) -> MediaItem {
+        MediaItem(
+            id: "relay:\(source.session.sessionID.rawValue)",
+            title: "Test Relay",
+            fileName: "live.m3u8",
+            format: .mvHEVC
+        )
+    }
+
     private func makePixelBuffer(width: Int, height: Int) throws -> CVMutablePixelBuffer {
         var attributes = CVPixelBufferCreationAttributes(
             pixelFormatType: CVPixelFormatType(rawValue: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
@@ -705,5 +925,32 @@ final class PlaybackPresentationTests: XCTestCase {
         buffer.withUnsafeBuffer { pixelBuffer in
             CVBufferCopyAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey, nil) != nil
         }
+    }
+}
+
+private actor RelayRefreshMode {
+    enum Value { case success, expired, unreachable }
+    private(set) var value: Value = .success
+    func set(_ value: Value) { self.value = value }
+}
+
+private actor SuspendingRelayRefreshTransport: RelayTransport {
+    private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+        return try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+
+    func waitUntilRequested() async {
+        if continuation != nil { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func fail(with error: RelayTransportError) {
+        continuation?.resume(throwing: error)
+        continuation = nil
     }
 }

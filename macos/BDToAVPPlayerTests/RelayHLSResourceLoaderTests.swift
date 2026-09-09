@@ -3,11 +3,17 @@ import XCTest
 @testable import BDToAVPPlayer
 
 func makePairedSessions(now: Date) async throws -> (client: RelayEstablishedSession, server: RelayEstablishedSession) {
-    let code = RelayPairingCode.random()
-    let server = try RelayServerPairingContext(pairingCode: code, now: now)
-    let attempt = try RelayClientPairingAttempt(challenge: server.challenge, pairingCode: code, now: now)
-    let result = try await server.accept(attempt.request, now: now)
-    return (try attempt.complete(with: result.acceptance, now: now), result.session)
+    let server = try RelayServerPairingContext(now: now)
+    let challenge = try await server.currentChallenge(now: now)
+    let attempt = try RelayClientPairingAttempt(challenge: challenge, now: now)
+    let offer = try await server.accept(attempt.request, now: now)
+    let provisional = try attempt.complete(with: offer.candidate, now: now)
+    try await server.approve(candidateID: offer.candidate.candidateID, now: now)
+    let established = try await server.confirm(provisional.confirmation(decision: .codesMatch), now: now)
+    return (
+        try provisional.complete(with: XCTUnwrap(established.response.acceptance), now: now),
+        try XCTUnwrap(established.session)
+    )
 }
 
 func makePairedClientSession(now: Date) async throws -> RelayEstablishedSession {
@@ -299,5 +305,101 @@ private final class TestNonceSequence: @unchecked Sendable {
             value += 1
             return String(repeating: "a", count: 31) + String(value)
         }
+    }
+}
+
+final class RelayLoopbackHTTPServerTests: XCTestCase {
+    private let playlist = "#EXTM3U\n#EXT-X-MAP:URI=\"/relay/v1/media/init.mp4\"\n#EXTINF:2.000,\n/relay/v1/media/segment-000.m4s\n#EXT-X-ENDLIST\n"
+
+    func testPlaylistRewritingKeepsEveryMediaURLBehindLocalCapability() throws {
+        let data = try RelayLoopbackHTTPServer.rewritePlaylist(Data(playlist.utf8), prefix: "/capability")
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(text.contains("URI=\"/capability/relay/v1/media/init.mp4\""))
+        XCTAssertTrue(text.contains("\n/capability/relay/v1/media/segment-000.m4s\n"))
+        for replacement in ["https://other.test/movie.m4s", "/relay/v1/control/cancel", "/relay/v1/media/%2e%2e/private"] {
+            let invalid = playlist.replacingOccurrences(of: "/relay/v1/media/segment-000.m4s", with: replacement)
+            XCTAssertThrowsError(try RelayLoopbackHTTPServer.rewritePlaylist(Data(invalid.utf8), prefix: "/capability"))
+        }
+        XCTAssertThrowsError(try RelayLoopbackHTTPServer.rewritePlaylist(Data((playlist + "#EXT-X-KEY:METHOD=AES-128,URI=\"https://other.test/key\"\n").utf8), prefix: "/capability"))
+    }
+
+    func testRangesIncludeClosedOpenAndSuffixAndRejectInvalidRequests() throws {
+        let data = Data("0123456789".utf8)
+        for (range, expected) in [("bytes=2-4", "234"), ("bytes=8-", "89"), ("bytes=-3", "789"), ("bytes=8-99", "89")] {
+            let response = try RelayLoopbackHTTPServer.mediaResponse(data: data, contentType: "video/mp4", range: range)
+            XCTAssertEqual(response.statusCode, 206)
+            XCTAssertEqual(response.body, Data(expected.utf8))
+            XCTAssertNotNil(response.headers["content-range"])
+        }
+        for range in ["bytes=10-", "bytes=5-2", "bytes=0-1,3-4", "bytes=-0", "bytes=+1-2", "bytes=0-999999999999999999999"] {
+            let response = try RelayLoopbackHTTPServer.mediaResponse(data: data, contentType: "video/mp4", range: range)
+            XCTAssertEqual(response.statusCode, 416, range)
+            XCTAssertTrue(response.body.isEmpty)
+        }
+    }
+
+    func testLoopbackServesSignedMediaAndRejectsMissingCapabilityAndControlRoutes() async throws {
+        let now = Date()
+        let sessions = try await makePairedSessions(now: now)
+        let transport = FakeRelayTransport()
+        let playlistData = Data(playlist.utf8)
+        await transport.setHandler { request in
+            let body = request.url?.path == RelayWireContract.playlistPath ? playlistData : Data("0123456789".utf8)
+            return (body, try makeAuthenticatedHTTPResponse(request, body: body, serverSession: sessions.server))
+        }
+        var source = try RelayRemotePlaybackSource(session: sessions.client, serverBaseURL: URL(string: "http://relay.local:7431")!)
+        let (asset, _) = try await source.makeAssetAndLoader(transport: transport)
+        defer { source.cancelLoader() }
+        let urlSession = URLSession(configuration: .ephemeral)
+        defer { urlSession.invalidateAndCancel() }
+        let (data, response) = try await urlSession.data(from: asset.url)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let localPrefix = "/" + asset.url.pathComponents[1]
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(localPrefix + RelayWireContract.mediaPathPrefix))
+        let segmentURL = asset.url.deletingLastPathComponent().appendingPathComponent("media/segment-000.m4s")
+        var request = URLRequest(url: segmentURL)
+        request.setValue("bytes=2-4", forHTTPHeaderField: "Range")
+        let (segment, segmentResponse) = try await urlSession.data(for: request)
+        XCTAssertEqual(segment, Data("234".utf8))
+        XCTAssertEqual((segmentResponse as? HTTPURLResponse)?.statusCode, 206)
+        let requests = await transport.allRequests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: RelayWireContract.authenticationHeader) != nil })
+        XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: RelayWireContract.mediaCapabilityHeader) != nil })
+        for path in [RelayWireContract.playlistPath, localPrefix + RelayWireContract.cancelPath, localPrefix + RelayWireContract.playlistSnapshotPath] {
+            var components = URLComponents(url: asset.url, resolvingAgainstBaseURL: false)!
+            components.path = path
+            let (_, denied) = try await urlSession.data(from: components.url!)
+            XCTAssertEqual((denied as? HTTPURLResponse)?.statusCode, 404)
+        }
+        let finalRequests = await transport.allRequests()
+        XCTAssertEqual(finalRequests.count, 2)
+    }
+
+    func testLoopbackNeverServesTamperedUpstreamBytes() async throws {
+        let sessions = try await makePairedSessions(now: Date())
+        let transport = FakeRelayTransport()
+        await transport.setHandler { request in
+            let data = Data("tampered".utf8)
+            return (data, try makeAuthenticatedHTTPResponse(request, body: data, serverSession: sessions.server, authenticatedBody: Data("original".utf8)))
+        }
+        var source = try RelayRemotePlaybackSource(session: sessions.client, serverBaseURL: URL(string: "http://relay.local:7431")!)
+        let (asset, _) = try await source.makeAssetAndLoader(transport: transport)
+        defer { source.cancelLoader() }
+        let (data, response) = try await URLSession.shared.data(from: asset.url)
+        XCTAssertTrue(data.isEmpty)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 503)
+    }
+
+    func testCancellationClosesListener() async throws {
+        let (server, url) = try await RelayLoopbackHTTPServer.start(serverBaseURL: URL(string: "http://relay.local")!) { _ in
+            throw URLError(.cancelled)
+        }
+        server.cancelAllRequests()
+        // Cancellation is queued before any subsequent accepted connection.
+        do {
+            _ = try await URLSession.shared.data(from: url)
+            XCTFail("A cancelled listener must not serve requests")
+        } catch { }
     }
 }

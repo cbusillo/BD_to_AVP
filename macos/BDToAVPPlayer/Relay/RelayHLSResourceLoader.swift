@@ -64,6 +64,8 @@ enum RelayAuthenticatedRequestFactory {
     static func makeRequest(
         baseURL: URL,
         path: String,
+        method: String = "GET",
+        body: Data = Data(),
         signer: any RelayRequestSigning,
         clock: @escaping @Sendable () -> Date,
         nonce: @escaping @Sendable () -> String
@@ -74,14 +76,15 @@ enum RelayAuthenticatedRequestFactory {
         let url = baseURL.appendingPathComponent(path.dropFirst().description)
         let target = url.path + (url.query.map { "?\($0)" } ?? "")
         let signed = try signer.signRelayRequest(
-            method: "GET",
+            method: method,
             requestTarget: target,
-            body: Data(),
+            body: body,
             timestamp: clock(),
             nonce: nonce()
         )
         var request = URLRequest(url: url)
-        request.httpMethod = "GET"
+        request.httpMethod = method
+        request.httpBody = body
         request.setValue(
             try JSONEncoder().encode(signed).base64EncodedString(),
             forHTTPHeaderField: RelayWireContract.authenticationHeader
@@ -177,7 +180,15 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                     clock: clock,
                     nonce: nonce
                 )
+#if BD_TO_AVP_QUALIFICATION
+                let transferStarted = ContinuousClock.now
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_start resource=\(customURL.lastPathComponent)\n".utf8))
+#endif
                 let result = try await transport.data(for: request.request)
+#if BD_TO_AVP_QUALIFICATION
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_received resource=\(customURL.lastPathComponent) status=\(result.1.statusCode) bytes=\(result.0.count) elapsed=\(transferStarted.duration(to: .now))\n".utf8))
+                let verificationStarted = ContinuousClock.now
+#endif
                 try RelayAuthenticatedResponseVerifier.verify(
                     data: result.0,
                     response: result.1,
@@ -185,6 +196,9 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                     signer: signer,
                     now: clock()
                 )
+#if BD_TO_AVP_QUALIFICATION
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_verified resource=\(customURL.lastPathComponent) elapsed=\(verificationStarted.duration(to: .now))\n".utf8))
+#endif
                 switch result.1.statusCode {
                 case 200:
                     return result
@@ -196,6 +210,10 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                     throw RelayTransportError.unexpectedStatusCode(result.1.statusCode)
                 }
             } catch {
+#if BD_TO_AVP_QUALIFICATION
+                let diagnosticError = error as NSError
+                FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_error resource=\(customURL.lastPathComponent) domain=\(diagnosticError.domain) code=\(diagnosticError.code)\n".utf8))
+#endif
                 guard retryCount < maximumTransientRetries, isTransient(error) else {
                     throw error
                 }

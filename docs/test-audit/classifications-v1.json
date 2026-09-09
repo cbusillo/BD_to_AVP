@@ -147,6 +147,7 @@
         "macos/BluRayToVisionProTests/RelayEventHLSFixtureTests.swift",
         "macos/BluRayToVisionProTests/RelayHostTests.swift",
         "macos/BluRayToVisionProTests/RelayNetworkServerTests.swift",
+        "macos/BluRayToVisionProTests/RelaySocketTransportTests.swift",
         "macos/BluRayToVisionProTests/RelaySessionCoreTests.swift",
         "macos/BluRayToVisionProTests/ResolutionMemoryStoreTests.swift",
         "macos/BluRayToVisionProTests/RouteResolutionTests.swift",
@@ -211,7 +212,6 @@
         "macos/BDToAVPPlayerTests/PlayerAppModelTests.swift",
         "macos/BDToAVPPlayerTests/RelayBonjourBrowserTests.swift",
         "macos/BDToAVPPlayerTests/RelayHLSResourceLoaderTests.swift",
-        "macos/BDToAVPPlayerTests/RelayPairingEntryModelTests.swift",
         "macos/BDToAVPPlayerTests/RelayRemotePlaybackSourceTests.swift",
         "macos/BDToAVPPlayerTests/RelaySessionCoordinatorTests.swift",
         "macos/BDToAVPPlayerTests/ResumeStoreTests.swift"

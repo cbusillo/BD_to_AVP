@@ -125,6 +125,24 @@ enum MVHEVCPlayerSessionState: Equatable {
     case failed
 }
 
+enum RelayPlaybackTerminationReason: Equatable {
+    case sessionEnded
+    case serverUnreachable
+    case rejected
+}
+
+struct RelayPlaybackTerminationEvent: Equatable {
+    let id: UUID
+    let sessionID: String
+    let reason: RelayPlaybackTerminationReason
+
+    init(id: UUID = UUID(), sessionID: String, reason: RelayPlaybackTerminationReason) {
+        self.id = id
+        self.sessionID = sessionID
+        self.reason = reason
+    }
+}
+
 @MainActor
 final class MVHEVCPlayerSession: ObservableObject {
     let player = AVPlayer()
@@ -145,6 +163,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var selectedSubtitleID = "off"
     @Published private(set) var isEyeSwapped = false
     @Published private(set) var isChangingEyeOrder = false
+    @Published private(set) var relayTerminationEvent: RelayPlaybackTerminationEvent?
 
     private(set) var playerItem: AVPlayerItem?
 
@@ -152,6 +171,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var remotePlaybackSource: RelayRemotePlaybackSource?
     private var relayTransport: (any RelayTransport)?
     private var relayWindowRefreshTask: Task<Void, Never>?
+    private var consecutiveRelayRefreshFailures = 0
     private var resumeStore: ResumeStore?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlStatusObservation: NSKeyValueObservation?
@@ -259,7 +279,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     var isRelayPlayback: Bool {
-        remotePlaybackSource != nil
+        mediaItem?.id.hasPrefix("relay:") == true
     }
 
     func prepare(
@@ -279,6 +299,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         state = .loading
         failureMessage = nil
         failurePresentation = nil
+        relayTerminationEvent = nil
         relaySeekNotice = nil
         preparationPhase = .openingSource
         currentTime = 0
@@ -418,6 +439,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         state = .loading
         failureMessage = nil
         failurePresentation = nil
+        relayTerminationEvent = nil
         relaySeekNotice = nil
         preparationPhase = .preparingMedia
         currentTime = 0
@@ -435,8 +457,10 @@ final class MVHEVCPlayerSession: ObservableObject {
                 session: configuration.session,
                 serverBaseURL: configuration.serverBaseURL
             )
+            var sourceInstalled = false
+            defer { if !sourceInstalled { source.cancelLoader() } }
             try await source.refreshRetainedWindow(transport: configuration.transport)
-            let (asset, _) = source.makeAssetAndLoader(transport: configuration.transport)
+            let (asset, _) = try await source.makeAssetAndLoader(transport: configuration.transport)
             let item = AVPlayerItem(asset: asset)
             let preparedSelections = try await prepareMediaSelections(for: asset, item: item)
             guard generation == preparationGeneration, !Task.isCancelled else {
@@ -444,14 +468,15 @@ final class MVHEVCPlayerSession: ObservableObject {
                 return
             }
 
-            remotePlaybackSource = source
-            relayTransport = configuration.transport
-            playerItem = item
+            sourceInstalled = true
             packedStereoSource = nil
             configureMediaSelections(preparedSelections)
-            observe(item, generation: generation)
-            player.replaceCurrentItem(with: item)
-            startRelayWindowRefresh(generation: generation)
+            installRelayPlaybackResources(
+                source: source,
+                transport: configuration.transport,
+                item: item,
+                mediaItem: relayItem
+            )
         } catch is CancellationError {
             if generation == preparationGeneration {
                 pendingResume.clear()
@@ -460,7 +485,34 @@ final class MVHEVCPlayerSession: ObservableObject {
             guard generation == preparationGeneration else {
                 return
             }
-            presentFailure(.relayPreparationFailed(Self.playbackFailureMessage(for: error)))
+            terminateRelayPlayback(
+                presentation: .relayPreparationFailed(Self.playbackFailureMessage(for: error)),
+                reason: Self.relayTerminationReason(for: error),
+                emitEvent: true
+            )
+        }
+    }
+
+    func installRelayPlaybackResources(
+        source: RelayRemotePlaybackSource,
+        transport: any RelayTransport,
+        item: AVPlayerItem,
+        mediaItem: MediaItem,
+        observeItemStatus: Bool = true,
+        startRefreshLoop: Bool = true
+    ) {
+        self.mediaItem = mediaItem
+        remotePlaybackSource = source
+        relayTransport = transport
+        playerItem = item
+        state = .loading
+        consecutiveRelayRefreshFailures = 0
+        if observeItemStatus {
+            observe(item, generation: preparationGeneration)
+        }
+        player.replaceCurrentItem(with: item)
+        if startRefreshLoop {
+            startRelayWindowRefresh(generation: preparationGeneration)
         }
     }
 
@@ -750,6 +802,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         state = .idle
         failureMessage = nil
         failurePresentation = nil
+        relayTerminationEvent = nil
         preparationPhase = .openingSource
     }
 
@@ -888,7 +941,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         case .failed:
             let message = Self.playbackFailureMessage(for: item.error)
             if isRelayPlayback {
-                presentFailure(.relayPreparationFailed(message))
+                terminateRelayPlayback(
+                    presentation: .relayPreparationFailed(message),
+                    reason: item.error.map(Self.relayTerminationReason(for:)) ?? .serverUnreachable,
+                    emitEvent: true
+                )
             } else if BuiltInStereoChecks.contains(mediaItem) {
                 presentFailure(.builtInStereoCheckUnavailable(message))
             } else {
@@ -1189,6 +1246,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         relayTransport = nil
         relayWindowRefreshTask?.cancel()
         relayWindowRefreshTask = nil
+        consecutiveRelayRefreshFailures = 0
         relaySeekNotice = nil
         audioGroup = nil
         subtitleGroup = nil
@@ -1417,6 +1475,10 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
     }
 
+    func refreshRelayWindowNow() async {
+        await refreshRelayWindow(generation: preparationGeneration)
+    }
+
     private func refreshRelayWindow(generation: Int) async {
         guard var source = remotePlaybackSource, let relayTransport else {
             return
@@ -1427,13 +1489,106 @@ final class MVHEVCPlayerSession: ObservableObject {
                 return
             }
             remotePlaybackSource = source
+            consecutiveRelayRefreshFailures = 0
             duration = max(duration, source.retainedSeekPolicy.latestAvailableTime)
         } catch RelayTransportError.sessionExpired, RelayTransportError.unpaired {
             guard generation == preparationGeneration else {
                 return
             }
-            presentFailure(.relayPreparationFailed("The relay session ended. Pair with the Mac again to continue."))
-        } catch {}
+            terminateRelayPlayback(
+                presentation: .relayPreparationFailed("The relay session ended. Pair with the Mac again to continue."),
+                reason: .sessionEnded,
+                emitEvent: true
+            )
+        } catch is CancellationError {
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            return
+        } catch {
+            guard generation == preparationGeneration else { return }
+            if Self.isTerminalRelayRejection(error) {
+                terminateRelayPlayback(
+                    presentation: .relayPreparationFailed(Self.playbackFailureMessage(for: error)),
+                    reason: .rejected,
+                    emitEvent: true
+                )
+                return
+            }
+            consecutiveRelayRefreshFailures += 1
+            if consecutiveRelayRefreshFailures >= 3 {
+                terminateRelayPlayback(
+                    presentation: .relayPreparationFailed("The relay server could not be reached. Check the Mac and try again."),
+                    reason: .serverUnreachable,
+                    emitEvent: true
+                )
+            }
+        }
+    }
+
+    func handleRelayCoordinatorState(_ coordinatorState: RelayCoordinatorState) {
+        guard isRelayPlayback else { return }
+        switch coordinatorState {
+        case .idle:
+            finish()
+        case .sessionExpired:
+            terminateRelayPlayback(
+                presentation: .relayPreparationFailed("The relay session ended. Pair with the Mac again to continue."),
+                reason: .sessionEnded,
+                emitEvent: false
+            )
+        case let .failed(message):
+            terminateRelayPlayback(
+                presentation: .relayPreparationFailed(message),
+                reason: .serverUnreachable,
+                emitEvent: false
+            )
+        case .networkUnavailable:
+            terminateRelayPlayback(
+                presentation: .relayPreparationFailed("The network became unavailable. Reconnect and try again."),
+                reason: .serverUnreachable,
+                emitEvent: false
+            )
+        case .discovery, .confirming, .connected, .reconnecting:
+            break
+        }
+    }
+
+    private func terminateRelayPlayback(
+        presentation: PlaybackFailurePresentation,
+        reason: RelayPlaybackTerminationReason,
+        emitEvent: Bool
+    ) {
+        guard isRelayPlayback, state != .failed else { return }
+        let relayItem = mediaItem
+        let sessionID = remotePlaybackSource?.session.sessionID.rawValue
+            ?? relayItem?.id.dropFirst("relay:".count).description
+        preparationGeneration += 1
+        finishCurrentSession(persistResume: false)
+        mediaItem = relayItem
+        presentFailure(presentation)
+        if emitEvent, let sessionID {
+            relayTerminationEvent = RelayPlaybackTerminationEvent(
+                id: UUID(), sessionID: sessionID, reason: reason
+            )
+        }
+    }
+
+    private static func relayTerminationReason(for error: Error) -> RelayPlaybackTerminationReason {
+        if let relayError = error as? RelayTransportError {
+            switch relayError {
+            case .sessionExpired, .unpaired: return .sessionEnded
+            case let .unexpectedStatusCode(status) where (400 ..< 500).contains(status): return .rejected
+            default: break
+            }
+        }
+        if isTerminalRelayRejection(error) { return .rejected }
+        return .serverUnreachable
+    }
+
+    private static func isTerminalRelayRejection(_ error: Error) -> Bool {
+        if error is RelaySessionError || error is DecodingError { return true }
+        guard case let RelayTransportError.unexpectedStatusCode(status) = error else { return false }
+        return (400 ..< 500).contains(status)
     }
 
     private static func sourceFailurePresentation(for error: Error) -> PlaybackFailurePresentation {

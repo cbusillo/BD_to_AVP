@@ -77,6 +77,43 @@ final class RelayNetworkServerTests: XCTestCase {
         XCTAssertEqual(cancellations.connectionCancellationCount, 1)
     }
 
+    func testActiveResponseOutlivesRequestDeadlineThenStallIsCancelled() async throws {
+        let cancellations = RelayNetworkServerCancellationRecorder()
+        let resources = RelayNetworkServerResources(
+            queue: DispatchQueue(label: "com.shinycomputers.bd-to-avp.relay-tests.progress"),
+            listenerCancellation: {}, requestTimeout: 0.2, maximumResponseDuration: 5
+        )
+        let registered = await resources.register(cancellation: { cancellations.recordConnectionCancellation() })
+        let identifier = try XCTUnwrap(registered)
+        for _ in 0..<5 {
+            let canSend = await resources.responseProgress(identifier)
+            XCTAssertTrue(canSend)
+            try await Task.sleep(for: .milliseconds(80))
+        }
+        XCTAssertEqual(cancellations.connectionCancellationCount, 0)
+        let cancelledAfterStall = await waitUntil { cancellations.connectionCancellationCount == 1 }
+        XCTAssertTrue(cancelledAfterStall)
+        let canSendAfterTimeout = await resources.responseProgress(identifier)
+        XCTAssertFalse(canSendAfterTimeout)
+    }
+
+    func testResponseProgressCannotExtendTotalTransferDeadline() async throws {
+        let cancellations = RelayNetworkServerCancellationRecorder()
+        let resources = RelayNetworkServerResources(
+            queue: DispatchQueue(label: "com.shinycomputers.bd-to-avp.relay-tests.response-cap"),
+            listenerCancellation: {}, requestTimeout: 0.2, maximumResponseDuration: 0.3
+        )
+        let registered = await resources.register(cancellation: { cancellations.recordConnectionCancellation() })
+        let identifier = try XCTUnwrap(registered)
+        for _ in 0..<6 {
+            _ = await resources.responseProgress(identifier)
+            try await Task.sleep(for: .milliseconds(80))
+        }
+        XCTAssertEqual(cancellations.connectionCancellationCount, 1)
+        let count = await resources.activeConnectionCount()
+        XCTAssertEqual(count, 0)
+    }
+
     func testConcurrentStopAndNetworkLossAreIdempotent() async throws {
         let fixture = try makeHostFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -101,13 +138,21 @@ final class RelayNetworkServerTests: XCTestCase {
 
     func testLifecycleExpiryTearsDownNetworkResources() async throws {
         let now = RelayNetworkServerTestClock(Date(timeIntervalSince1970: 1_700_000_000))
-        let fixture = try makeHostFixture(challengeTTL: 1, now: { now.value() })
+        let fixture = try makeHostFixture(candidateTTL: 1, maximumCandidates: 1, now: { now.value() })
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let server = try await RelayNetworkServer.start(
             host: fixture.host,
             serviceName: "RelayNetworkServerExpiryTests",
             lifecyclePollInterval: .milliseconds(1)
         )
+        let challenge = try await fixture.pairingContext.currentChallenge(now: now.value())
+        let attempt = try RelayClientPairingAttempt(challenge: challenge, now: now.value())
+        let body = try JSONEncoder().encode(attempt.request)
+        let pairingRequest = Data(
+            "POST \(RelayWireContract.pairingPath) HTTP/1.1\r\ncontent-length: \(body.count)\r\n\r\n".utf8
+        ) + body
+        let pairingResponse = await fixture.host.handle(pairingRequest, peer: .localNetwork)
+        XCTAssertEqual(pairingResponse.statusCode, 201)
 
         now.set(Date(timeIntervalSince1970: 1_700_000_002))
 
@@ -132,6 +177,8 @@ final class RelayNetworkServerTests: XCTestCase {
 
     private func makeHostFixture(
         challengeTTL: TimeInterval = 120,
+        candidateTTL: TimeInterval = 60,
+        maximumCandidates: Int = 3,
         now: @escaping @Sendable () -> Date = { Date() }
     ) throws -> RelayNetworkServerHostFixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -148,9 +195,10 @@ final class RelayNetworkServerTests: XCTestCase {
         segment.m4s
         """.write(to: directory.appendingPathComponent("media.m3u8"), atomically: true, encoding: .utf8)
         let pairingContext = try RelayServerPairingContext(
-            pairingCode: try RelayPairingCode("2345-6789-ABCD-EFGH"),
             now: now(),
-            challengeTTL: challengeTTL
+            challengeTTL: challengeTTL,
+            candidateTTL: candidateTTL,
+            maximumCandidates: maximumCandidates
         )
         let host = try RelayHost(
             pairingContext: pairingContext,
@@ -158,12 +206,13 @@ final class RelayNetworkServerTests: XCTestCase {
             fixture: try RelayEventHLSFixture.load(directory: directory),
             now: now
         )
-        return RelayNetworkServerHostFixture(host: host, directory: directory)
+        return RelayNetworkServerHostFixture(host: host, pairingContext: pairingContext, directory: directory)
     }
 }
 
 private struct RelayNetworkServerHostFixture {
     let host: RelayHost
+    let pairingContext: RelayServerPairingContext
     let directory: URL
 }
 
