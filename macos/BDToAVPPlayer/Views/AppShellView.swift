@@ -10,6 +10,9 @@ struct AppShellView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var preparationTask: Task<Void, Never>?
     @State private var isPlayerLocatorPresented = false
+#if BD_TO_AVP_QUALIFICATION
+    @State private var hasStartedRelayQualification = false
+#endif
 
     var body: some View {
         Group {
@@ -95,6 +98,12 @@ struct AppShellView: View {
             guard let request else { return }
             prepareForPlayback(request.item)
         }
+        .onChange(of: relayCoordinator.state) { _, state in
+            playerSession.handleRelayCoordinatorState(state)
+        }
+        .onChange(of: playerSession.relayTerminationEvent) { _, event in
+            if let event { relayCoordinator.handlePlaybackTermination(event) }
+        }
         .onDisappear {
             preparationTask?.cancel()
         }
@@ -110,6 +119,14 @@ struct AppShellView: View {
         }
         .task {
             await model.bootstrap()
+#if BD_TO_AVP_QUALIFICATION
+            if !hasStartedRelayQualification {
+                hasStartedRelayQualification = true
+                await RelayQualificationDriver.runIfRequested(
+                    coordinator: relayCoordinator, player: playerSession
+                )
+            }
+#endif
         }
     }
 
@@ -143,6 +160,8 @@ struct AppShellView: View {
 
     private func startRelayPlayback() {
         guard let configuration = relayCoordinator.remotePlaybackConfiguration() else {
+            playerSession.finish()
+            finishPlayback()
             return
         }
         preparationTask?.cancel()
@@ -155,7 +174,7 @@ struct AppShellView: View {
         switch relayCoordinator.state {
         case .idle, .sessionExpired, .failed:
             true
-        case .discovery, .pairing, .connected, .reconnecting, .networkUnavailable:
+        case .discovery, .confirming, .connected, .reconnecting, .networkUnavailable:
             false
         }
     }

@@ -25,10 +25,10 @@ which remains the qualification-only validator.
   app's Application Support directory. Library media records omit source
   filesystem URLs, but bookmark blobs necessarily encode the source location so
   the app can regain security-scoped access.
-- The Live Relay panel discovers Macs through Bonjour, fetches a short-lived
-  challenge, accepts the single-use code shown by the Mac app, and starts an
-  authenticated MV-HEVC EVENT-HLS asset without requiring a hostname or cloud
-  service.
+- The Live Relay panel discovers protocol-v3 Macs through Bonjour, fetches a
+  short-lived challenge, compares a large six-digit code with the Mac app, and
+  starts an authenticated MV-HEVC EVENT-HLS asset without requiring a hostname
+  or cloud service.
 
 ## Live Relay
 
@@ -39,12 +39,35 @@ separate media capability. Every protected request binds the actual HTTP method,
 raw request target, body, timestamp, and fresh nonce; replayed, expired,
 reflected, unpaired, and capability-free requests fail closed.
 
-The player rewrites the playlist, initialization map, and media segment URLs to
-an app-owned resource-loader scheme so AVFoundation cannot bypass authenticated
-loading. A previously paired client can reconnect while the session remains
-unexpired. Wrong codes preserve the current challenge until the Mac exhausts
-its bounded attempt budget, while the text field clears the submitted code
-before the network attempt completes.
+The pairing transcript commits the server nonce before the client contribution,
+then derives the numeric-comparison code under a dedicated HKDF domain after
+the nonce is revealed and verified. One provisional candidate is retained for
+five minutes from the pairing request, independently of the discovery challenge;
+Vision Pro's authenticated confirmation and the exact candidate's
+Mac approval are both required before protected routes open. A competing client
+cannot displace the displayed candidate, stale UI approvals are rejected by
+candidate ID, and three rejected candidates require a new relay. The player
+serves the playlist, initialization map, and media segments through a device-only
+HTTP listener bound to `127.0.0.1`, with a random per-playback URL capability.
+Every upstream request is signed and each complete response is authenticated
+before the bridge serves any bytes, including byte-range responses. The bridge
+restricts routes to playback media, bounds concurrent connections, and cancels
+its listener and requests when playback ends. AVFoundation requires HTTP media
+segment loading; supplying fMP4 bytes through a custom-scheme resource loader
+fails with `CoreMediaErrorDomain -12881`.
+An expired comparison clears automatically on Vision Pro. Discovery stops with
+recovery instructions after 15 seconds without a Mac. The Mac offers **Restart
+Relay** using the selected fixture after its ten-minute advertising window ends;
+a comparison already in progress retains its full five minutes.
+A previously established client can reconnect while its session remains
+unexpired.
+
+`uv run python scripts/create_event_hls_mv_hevc_fixture.py` generates the
+deterministic six-second fixture and checks stereo metadata, AAC tracks, and
+actual macOS AVFoundation playback through the production loopback bridge. The
+acceptance helper requires decoded frames and playback through the final
+segment before publishing the fixture. This local gate does not establish
+physical Vision Pro stereo presentation, audio sync, or interaction qualification.
 
 The current local-network transport provides authenticated integrity and replay
 protection, not confidentiality: HTTP media bodies and the short-lived media
@@ -53,11 +76,90 @@ the synthetic/decrypted relay slice. Any adapter carrying content whose threat
 model requires confidentiality must add a separately reviewed encrypted
 transport without weakening the existing request authentication.
 
+The fixture host preserves `#EXT-X-ENDLIST`, so a completed fixture stays
+completed when relayed instead of waiting indefinitely for more live segments.
+The Mac retains a ten-second request deadline, then sends responses in 64 KiB
+chunks with a ten-second progress timeout and a sixty-second total response cap.
+This lets active segment transfers outlive the request deadline while still
+closing stalled clients. The player's loopback request cap remains thirty seconds.
+The Mac listener uses BSD sockets and DNS-SD Bonjour registration. On the physical
+reference setup, identical files transferred in 0.10–0.17 seconds through a
+standard socket server but took 22–44 seconds through the Network-framework
+server, including a minimal reproduction without relay authentication. Waiting
+for peer close and changing TCP options did not eliminate the delay. Authentication,
+LAN peer checks, the sixteen-connection cap, and cancellation remain above the
+socket transport. Shutdown interrupts blocked I/O; descriptor closure is serialized
+after that I/O returns.
+
+Candidate lifetime validation permits a server clock up to five seconds ahead,
+matching the default signed-request skew allowance. The server still expires the
+candidate at five minutes. Without that tolerance, a fast pairing response and
+even a 100 ms clock difference could reject a valid full-length candidate.
+
 The authenticated playlist snapshot supplies the retained window. The player
 refreshes that window during playback, moves the scrubber floor forward when
 history is evicted, and explains when a requested seek is before retained
 history or ahead of produced media. Session expiry and unpaired responses stop
 remote playback and require a fresh pairing.
+
+## Mac-driven relay qualification
+
+A build compiled with `BD_TO_AVP_QUALIFICATION` can perform relay setup without
+headset UI interaction. Build and install the qualification player as described
+in `visionos-sustained-playback-qualification.md`, start a fixture relay on the
+Mac, then launch the player with the exact Bonjour display name:
+
+```sh
+xcrun devicectl device process launch --device "$DEVICE_ID" \
+  --terminate-existing --console \
+  --environment-variables '{"BD_TO_AVP_RELAY_QUALIFICATION_SERVER":"YOUR_MAC_NAME"}' \
+  com.shinycomputers.bd-to-avp.player
+```
+
+The driver uses the production Bonjour browser, pairing coordinator, and relay
+player. It prints `RELAY_QUALIFICATION comparison_code=...` and confirms on
+Vision Pro. Compare the printed code with the Mac's visible code, then approve
+**Codes Match** on the Mac. Only matching confirmation on both sides opens
+media access. The driver waits at most four minutes for Mac approval, prepares
+playback, and reports player state and ten seconds of playback-clock samples.
+If readiness misses thirty seconds, it records a failed startup target and
+continues observing for up to ninety more seconds. It also samples decoded
+pixel buffers once ready; neither later readiness nor frame samples waive the
+startup target or establish physical stereo presentation and audio sync.
+It does not run unless both the compilation condition and explicit server-name
+environment variable are present. Normal builds contain no driver.
+
+Add `BD_TO_AVP_RELAY_TRANSFER_PROBE=1` to the launch environment to download up
+to three retained segments through the authenticated client without AVPlayer.
+This probe disables transient retries and reports transfer and verification
+durations separately. It does not establish playback acceptance.
+
+Add `BD_TO_AVP_RELAY_CONTROL_PROBE=1` instead to check pause, retained backward
+seek, resume, and same-session reconnect after playback observation. The reconnect
+probe injects the network-path notification but performs a real authenticated
+request; it does not physically disconnect Wi-Fi. The probe finishes playback,
+disconnects the coordinator, and checks that the loopback listener is unreachable.
+It requires a fixture at least five seconds long and returns to the library.
+
+This is programmatic device qualification, not UI acceptance or proof of stereo
+presentation or audio sync. The ordinary pairing UI and physical
+presentation still need their own checks. Physical native visionOS XCTest UI
+startup timed out while enabling automation on September 7; simulator UI success
+must not be treated as physical-device automation support.
+
+Relay interruption handling keeps playback ownership separate from pairing.
+Terminal session/authentication failures release the player item, loopback
+listener, observers, and refresh task before showing the error. Three consecutive
+failed snapshot refreshes also release playback resources; successful refreshes
+reset that count. This is a request-count bound, with transport timeouts still
+applying, rather than a promise of three seconds.
+
+A device network outage releases playback resources while retaining the unexpired
+pairing. Once connectivity returns, the coordinator verifies the same session
+with a signed request; use Retry to resume relay playback. If the Mac cancels or
+quits, bounded reconnect attempts end with an honest failure. A session or
+authentication rejection requires pairing again. Failed relay playback keeps its
+relay identity so Retry cannot accidentally enter the local-file flow.
 
 ## Source Access
 

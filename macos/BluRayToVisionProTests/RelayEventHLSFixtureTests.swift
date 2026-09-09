@@ -16,6 +16,34 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         XCTAssertEqual(loaded.segments.map(\.duration), [4, 3.5])
     }
 
+    func testCompletedFixtureRemainsFinalizedWhenHosted() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let playlistURL = fixture.appendingPathComponent("media.m3u8")
+        let playlist = try String(contentsOf: playlistURL, encoding: .utf8)
+        try (playlist + "\n#EXT-X-ENDLIST\n").write(to: playlistURL, atomically: true, encoding: .utf8)
+        let loaded = try RelayEventHLSFixture.load(directory: fixture)
+        XCTAssertTrue(loaded.isFinalized)
+        let host = try RelayHost.start(
+            configuration: try RelayHostConfiguration(fixtureDirectory: fixture), fixture: loaded
+        )
+        let snapshot = try await host.currentPlaylistSnapshot()
+        XCTAssertTrue(snapshot.isFinalized)
+        XCTAssertEqual(snapshot.totalDurationMilliseconds, 7_500)
+    }
+
+    func testRejectsSegmentsFollowingFixtureEndMarker() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let playlistURL = fixture.appendingPathComponent("media.m3u8")
+        let playlist = try String(contentsOf: playlistURL, encoding: .utf8)
+        try (playlist + "\n#EXT-X-ENDLIST\n#EXTINF:4,\nmedia/00001.m4s\n")
+            .write(to: playlistURL, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try RelayEventHLSFixture.load(directory: fixture)) {
+            XCTAssertEqual($0 as? RelayEventHLSFixtureError, .invalidPlaylist)
+        }
+    }
+
     func testRejectsPlaylistWithMissingSegment() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
@@ -74,13 +102,13 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let session = RecordingRelaySession()
-        let controller = RelayHostSessionController(startSession: { _, _, _ in session })
+        let controller = RelayHostSessionController(startSession: { _, _ in session })
 
         await controller.start(directory: fixture)
         XCTAssertEqual(controller.lifecycle, .advertising)
         XCTAssertTrue(controller.isSessionActive)
         XCTAssertEqual(controller.segmentCount, 2)
-        XCTAssertNotNil(controller.formattedPairingCode)
+        XCTAssertNil(controller.pairingCandidate)
 
         await controller.cancel()
         XCTAssertEqual(controller.lifecycle, .cancelled)
@@ -92,7 +120,7 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let session = RecordingRelaySession()
-        let controller = RelayHostSessionController(startSession: { _, _, _ in session })
+        let controller = RelayHostSessionController(startSession: { _, _ in session })
 
         await controller.start(directory: fixture)
         await controller.stop()
@@ -100,6 +128,25 @@ final class RelayEventHLSFixtureTests: XCTestCase {
         XCTAssertEqual(controller.lifecycle, .stopped)
         XCTAssertFalse(controller.isSessionActive)
         XCTAssertEqual(session.stopCount, 1)
+    }
+
+    func testControllerRestartsTheSelectedFixtureWithoutReopeningThePicker() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        var starts = 0
+        let controller = RelayHostSessionController(startSession: { directory, _ in
+            XCTAssertEqual(directory, fixture)
+            starts += 1
+            return RecordingRelaySession()
+        })
+        await controller.start(directory: fixture)
+        await controller.restart()
+        XCTAssertEqual(starts, 1)
+        await controller.stop()
+        await controller.restart()
+        XCTAssertEqual(starts, 2)
+        XCTAssertEqual(controller.lifecycle, .advertising)
+        await controller.stop()
     }
 
     func testControllerLoadsFixtureOnceAndPassesTheSameFixtureToItsSession() async throws {
@@ -114,7 +161,7 @@ final class RelayEventHLSFixtureTests: XCTestCase {
                 loadCount += 1
                 return fixture
             },
-            startSession: { receivedDirectory, received, _ in
+            startSession: { receivedDirectory, received in
                 XCTAssertEqual(receivedDirectory, directory)
                 receivedFixture = received
                 return session
@@ -183,4 +230,10 @@ private final class RecordingRelaySession: RelayHostSessionControlling {
     func stopForAppQuit() async {}
 
     func currentLifecycle() async -> RelayHostLifecycle { .pairing }
+
+    func currentPairingCandidate() async -> RelayPendingPairingCandidate? { nil }
+
+    func approvePairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws {}
+
+    func rejectPairingCandidate(_ candidateID: RelayPairingCandidateIdentifier) async throws {}
 }
