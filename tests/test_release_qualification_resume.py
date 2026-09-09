@@ -6,6 +6,7 @@ import unittest
 from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import Mock, patch
@@ -13,7 +14,7 @@ from unittest.mock import Mock, patch
 from scripts.release_milestone_context import ReleaseMilestoneContext
 from scripts.release_qualification_apply import ApplyOutcome
 from scripts.release_qualification_artifact import ReconciliationBundle
-from scripts.release_qualification_controller import EvidenceBinding
+from scripts.release_qualification_controller import EvidenceBinding, build_status
 from scripts.release_qualification_resume import (
     EXIT_OPERATOR_REQUIRED,
     EXIT_SUCCESS,
@@ -314,7 +315,14 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             )
 
     def test_complete_v031_is_noop_without_github_or_checkpoint(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
+        # Exercise the historical receipt's last valid day, not the real clock.
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch(
+                "scripts.release_qualification_resume.build_status",
+                side_effect=lambda root, tag: build_status(root, tag, as_of=date(2026, 9, 8)),
+            ),
+        ):
             checkpoint = Path(temporary_directory) / "checkpoint.json"
             result = resume_qualification(
                 REPO_ROOT,
@@ -322,12 +330,34 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
                 client=FailOnGitHubAPI(),
                 checkpoint_path=checkpoint,
             )
+            self.assertFalse(checkpoint.exists())
 
         self.assertEqual(result.exit_code, EXIT_SUCCESS)
         self.assertEqual(result.payload["state"], "complete")
         checkpoint_payload = cast(Mapping[str, object], result.payload["checkpoint"])
         self.assertFalse(checkpoint_payload["present"])
-        self.assertFalse(checkpoint.exists())
+
+    def test_expired_v031_requires_operator_without_github_or_checkpoint(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch(
+                "scripts.release_qualification_resume.build_status",
+                side_effect=lambda root, tag: build_status(root, tag, as_of=date(2026, 9, 9)),
+            ),
+        ):
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            result = resume_qualification(
+                REPO_ROOT,
+                "v0.3.1",
+                client=FailOnGitHubAPI(),
+                checkpoint_path=checkpoint,
+            )
+            self.assertFalse(checkpoint.exists())
+
+        self.assertEqual(result.exit_code, EXIT_OPERATOR_REQUIRED)
+        self.assertEqual(result.payload["state"], "manifest_missing")
+        qualification_status = cast(Mapping[str, Any], result.payload["qualification_status"])
+        self.assertIn("clean-machine-signed-update", qualification_status["groups"]["blocking"])
 
     def test_malformed_checked_status_is_reported_as_resume_error(self) -> None:
         with patch(

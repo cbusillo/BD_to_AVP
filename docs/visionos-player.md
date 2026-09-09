@@ -121,11 +121,15 @@ player. It prints `RELAY_QUALIFICATION comparison_code=...` and confirms on
 Vision Pro. Compare the printed code with the Mac's visible code, then approve
 **Codes Match** on the Mac. Only matching confirmation on both sides opens
 media access. The driver waits at most four minutes for Mac approval, prepares
-playback, and reports player state and ten seconds of playback-clock samples.
+playback, and observes the complete finalized fixture (two to thirty seconds).
 If readiness misses thirty seconds, it records a failed startup target and
 continues observing for up to ninety more seconds. It also samples decoded
-pixel buffers once ready; neither later readiness nor frame samples waive the
-startup target or establish physical stereo presentation and audio sync.
+pixel buffers once ready and requires a sample in each two-second interval plus
+a sample within 250 ms of the end. Readiness and first-decoded-frame timing are
+reported separately against the thirty-second startup target. These are sampled
+decode checks, not proof that every frame or both eyes were rendered. Later
+readiness does not waive the startup target; physical presentation still needs
+the wearer report.
 It does not run unless both the compilation condition and explicit server-name
 environment variable are present. Normal builds contain no driver.
 
@@ -146,6 +150,48 @@ presentation or audio sync. The ordinary pairing UI and physical
 presentation still need their own checks. Physical native visionOS XCTest UI
 startup timed out while enabling automation on September 7; simulator UI success
 must not be treated as physical-device automation support.
+
+For a longer wearer acceptance run, generate a separate fixture:
+
+```sh
+BD_TO_AVP_FFMPEG_PATH=/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg \
+BD_TO_AVP_FFPROBE_PATH=/opt/homebrew/opt/ffmpeg-full/bin/ffprobe \
+uv run python scripts/create_event_hls_mv_hevc_fixture.py \
+  ~/Downloads/BDToAVP-Relay-Acceptance --acceptance
+```
+
+Use an FFmpeg build with `drawtext` support; the example selects Homebrew
+`ffmpeg-full`, when installed.
+
+This opt-in profile lasts 24 seconds, fitting the existing twelve-segment relay
+retention limit. The default six-second fixture remains unchanged. The acceptance
+profile adds an elapsed clock, per-eye identity labels, and a small white SYNC
+patch with a simultaneous 100 ms beep every two seconds starting at two seconds.
+The depth geometry stays the same: blue behind, green at screen depth, red in
+front. Check each eye separately for its label, then both eyes for comfortable
+depth; both labels visible together alone do not prove correct eye routing.
+
+First let the automatic timeline probe finish without pausing or seeking. For
+the wearer pass, replay and confirm flash/beep alignment before and after using
+the ordinary pause/resume and backward-seek controls. Record the app commit,
+fixture hashes, device, first-frame time, and the wearer's actual observations.
+Generation decodes all eleven flash/beep pairs and rejects offsets greater than
+one 30 fps frame. Video composition offsets are normalized before fragmentation
+to preserve the source timeline. This file check covers base-view cues; it does
+not establish headset presentation timing or correct eye routing.
+
+Keep actual interruption evidence separate from injected events: test active
+Mac cancellation and app quit, then device-side network interruption/reconnect
+when the wearer is ready. Record listener and player cleanup. Do not change the
+Mac's network settings to run this check. Fixture playback does not prove live
+source child-process cleanup, producer throughput, or full-title playback; those
+remain in #713 and #719.
+
+Set `BD_TO_AVP_RELAY_INTERRUPTION_PROBE=1` alongside the qualification server
+variable to wait after the first decoded frame for an actual external
+interruption. The probe checks failed playback, removal of the player item,
+retained relay retry identity, and an unreachable former loopback URL. It does
+not itself toggle networking or cancel the Mac session.
 
 Relay interruption handling keeps playback ownership separate from pairing.
 Terminal session/authentication failures release the player item, loopback

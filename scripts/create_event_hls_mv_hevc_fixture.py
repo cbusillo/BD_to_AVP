@@ -81,8 +81,13 @@ def _run(
         raise FixtureGenerationError(f"Fixture command could not start: {Path(str(command[0])).name}") from error
 
 
-def source_generator_command(source_path: Path, encoder_path: Path | None = None) -> list[str | Path]:
-    command: list[str | Path] = [DIRECT_FIXTURE_GENERATOR, source_path]
+def source_generator_command(
+    source_path: Path, encoder_path: Path | None = None, *, acceptance: bool = False
+) -> list[str | Path]:
+    command: list[str | Path] = [DIRECT_FIXTURE_GENERATOR]
+    if acceptance:
+        command.append("--acceptance")
+    command.append(source_path)
     if encoder_path is not None:
         command.append(encoder_path)
     return command
@@ -319,6 +324,75 @@ def _assemble_media(fixture_directory: Path, segment_names: Sequence[str]) -> Pa
     return assembled
 
 
+def _check_acceptance_cue_times(video_onsets: Sequence[float], audio_onsets: Sequence[float]) -> None:
+    expected = list(range(2, 24, 2))
+    if len(video_onsets) != len(expected) or len(audio_onsets) != len(expected):
+        raise FixtureGenerationError("Acceptance fixture must contain eleven decoded flash/beep pairs.")
+    for cue, video_time, audio_time in zip(expected, video_onsets, audio_onsets, strict=True):
+        # One 30 fps frame allows edge quantization while rejecting the observed
+        # two-frame composition-offset regression introduced during fragmentation.
+        if max(abs(video_time - cue), abs(audio_time - cue), abs(video_time - audio_time)) > 1 / 30:
+            raise FixtureGenerationError(
+                f"Acceptance cue {cue}s is misaligned: video={video_time:.6f}s, audio={audio_time:.6f}s."
+            )
+
+
+def _validate_acceptance_cues(media_path: Path, ffmpeg_path: Path) -> None:
+    """Decode the base-view sync patch and AAC; this does not prove eye routing."""
+    video = _run(
+        [
+            ffmpeg_path,
+            "-hide_banner",
+            "-copyts",
+            "-i",
+            media_path,
+            "-vf",
+            "crop=160:80:1800:1920,signalstats,metadata=print",
+            "-an",
+            "-sn",
+            "-fps_mode",
+            "passthrough",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+    video_onsets: list[float] = []
+    time = 0.0
+    was_bright = False
+    for line in video.stderr.splitlines():
+        timestamp = re.search(r"pts_time:([0-9.]+)", line)
+        if timestamp:
+            time = float(timestamp.group(1))
+        luminance = re.search(r"lavfi.signalstats.YAVG=([0-9.]+)", line)
+        if luminance:
+            bright = float(luminance.group(1)) >= 200
+            if bright and not was_bright:
+                video_onsets.append(time)
+            was_bright = bright
+    audio = _run(
+        [
+            ffmpeg_path,
+            "-hide_banner",
+            "-copyts",
+            "-i",
+            media_path,
+            "-af",
+            "silencedetect=noise=-35dB:d=0.02",
+            "-vn",
+            "-sn",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+    # silencedetect also closes the trailing silence at EOF; that is not a beep.
+    audio_onsets = [
+        float(value) for value in re.findall(r"silence_end: ([0-9.]+)", audio.stderr) if float(value) < 23.5
+    ]
+    _check_acceptance_cue_times(video_onsets, audio_onsets)
+
+
 def validate_fixture(fixture_directory: Path, *, ffprobe_path: Path, mp4box_path: Path) -> None:
     init_path = fixture_directory / INIT_FILENAME
     playlist_path = fixture_directory / PLAYLIST_FILENAME
@@ -355,7 +429,13 @@ def _validate_avfoundation_playback(fixture_directory: Path) -> None:
         _run([executable, fixture_directory], timeout_seconds=60)
 
 
-def create_fixture(output_directory: Path, *, encoder_path: Path | None = None, overwrite: bool = False) -> None:
+def create_fixture(
+    output_directory: Path,
+    *,
+    encoder_path: Path | None = None,
+    overwrite: bool = False,
+    acceptance: bool = False,
+) -> None:
     output_directory = output_directory.expanduser().resolve()
     if encoder_path is not None:
         encoder_path = encoder_path.expanduser().resolve()
@@ -378,11 +458,18 @@ def create_fixture(output_directory: Path, *, encoder_path: Path | None = None, 
         source_path = temporary_root / "source.mov"
         fixture_directory = temporary_root / "fixture"
         fixture_directory.mkdir()
-        _run(source_generator_command(source_path, encoder_path), environment=environment)
+        _run(source_generator_command(source_path, encoder_path, acceptance=acceptance), environment=environment)
         _validate_media_tracks(_probe_document(ffprobe_path, source_path), require_audio=True)
         _run(hls_packaging_command(mp4box_path, source_path, fixture_directory), environment=environment)
         _write_event_playlist(fixture_directory, _publish_fragments(fixture_directory))
         validate_fixture(fixture_directory, ffprobe_path=ffprobe_path, mp4box_path=mp4box_path)
+        if acceptance:
+            segments = _playlist_segments(fixture_directory / PLAYLIST_FILENAME, fixture_directory)
+            assembled = _assemble_media(fixture_directory, [name for name, _ in segments])
+            try:
+                _validate_acceptance_cues(assembled, ffmpeg_path)
+            finally:
+                assembled.unlink(missing_ok=True)
         if output_directory.exists():
             shutil.rmtree(output_directory)
         fixture_directory.replace(output_directory)
@@ -397,9 +484,14 @@ def main() -> int:
     parser.add_argument(
         "--overwrite", action="store_true", help="Replace an existing fixture directory after validation."
     )
+    parser.add_argument(
+        "--acceptance",
+        action="store_true",
+        help="Generate the opt-in 24-second stereo cue acceptance fixture (default remains six seconds).",
+    )
     args = parser.parse_args()
     try:
-        create_fixture(args.output, encoder_path=args.encoder, overwrite=args.overwrite)
+        create_fixture(args.output, encoder_path=args.encoder, overwrite=args.overwrite, acceptance=args.acceptance)
     except FixtureGenerationError as error:
         parser.error(str(error))
     print(f"Created MV-HEVC EVENT-HLS fixture: {args.output.expanduser().resolve()}")

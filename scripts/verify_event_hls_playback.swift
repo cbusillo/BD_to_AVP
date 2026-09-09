@@ -40,16 +40,26 @@ import Foundation
             guard item.status == .readyToPlay else { throw item.error ?? URLError(.timedOut) }
             item.add(video)
             var decodedFrames = 0
+            var decodedIntervals = Set<Int>()
+            var latestDecodedTime: Double = -.infinity
             let deadline = ContinuousClock.now.advanced(by: .seconds(30))
             while ContinuousClock.now < deadline {
                 try await Task.sleep(for: .milliseconds(50))
                 if item.status == .failed { throw item.error ?? URLError(.cannotDecodeContentData) }
                 let time = player.currentTime()
-                if video.hasNewPixelBuffer(forItemTime: time), video.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) != nil {
+                var displayTime = CMTime.invalid
+                if video.hasNewPixelBuffer(forItemTime: time), video.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime) != nil,
+                   displayTime.seconds.isFinite {
                     decodedFrames += 1
+                    latestDecodedTime = displayTime.seconds
+                    decodedIntervals.insert(Int(displayTime.seconds / 2))
                 }
-                if time.seconds >= duration - 0.25, decodedFrames >= 2 {
-                    print("AVFoundation relay HLS accepted: \(duration)s, \(decodedFrames) decoded frames")
+                // A short audio/container tail must not require a video sample
+                // in a new interval beyond our existing 250 ms end tolerance.
+                let requiredIntervals = Set(0...Int(floor((duration - 0.25) / 2)))
+                if latestDecodedTime >= duration - 0.25,
+                   decodedIntervals.isSuperset(of: requiredIntervals) {
+                    print("AVFoundation relay HLS accepted: \(duration)s, \(decodedFrames) decoded frame samples across \(requiredIntervals.count) two-second intervals; final sample at \(latestDecodedTime)s")
                     return
                 }
             }
