@@ -1,8 +1,20 @@
-# BD-to-AVP 3D Blu-ray Disc to Apple Vision Pro README
+# BD_to_AVP
+
+This repository contains the Mac converter and its companion movie player:
+
+| App | Platform | Purpose |
+| --- | --- | --- |
+| **3D Blu-ray to Vision Pro** | macOS | Convert supported sources into completed spatial movies. |
+| **Shiny 3D Cinema** | visionOS | Choose and play completed movies from Files or a compatible Mac's shared folders. |
+
+See the [player and Movie Sharing guide](docs/visionos-player.md) for the matching
+Mac companion requirements. The repository, CLI, Xcode targets, bundle IDs and
+saved-data paths retain their established `BD_to_AVP`/`BDToAVPPlayer` identities;
+they do not need to match the public app names.
 
 ## Introduction
 
-BD-to-AVP is a macOS app for turning your 3D Blu-ray movies into spatial videos
+The Mac app turns your 3D Blu-ray movies into spatial videos
 you can watch on Apple Vision Pro. Give it a supported 3D Blu-ray disc, disc
 image, or existing video file, choose where the finished video should go, and
 the app prepares a spatial version while preserving the movie's stereoscopic

@@ -477,7 +477,7 @@ private struct PlayerOrnamentView: View {
     private var controlBar: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.mediaItem?.title ?? "BD to AVP Player")
+                Text(session.mediaItem?.title ?? "Shiny 3D Cinema")
                     .font(.headline)
                     .lineLimit(1)
                 Label(session.mediaItem?.format.displayName ?? "MV-HEVC", systemImage: "view.3d")

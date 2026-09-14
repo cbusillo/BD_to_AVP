@@ -112,6 +112,7 @@
     }
   },
   "visionosTestFlight": {
+    "appName": "Shiny 3D Cinema",
     "bundleID": "com.shinycomputers.bd-to-avp.player",
     "appStoreConnectID": "6811956508",
     "internalGroup": "AVP Internal",

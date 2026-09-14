@@ -1,7 +1,7 @@
-# visionOS Player
+# Shiny 3D Cinema
 
-`BDToAVPPlayer` is the standalone visionOS 26 application for browsing and
-playing finalized 3D movies on Apple Vision Pro. It is separate from the macOS
+**Shiny 3D Cinema** (`BDToAVPPlayer` in Xcode) is the standalone visionOS 26
+application for browsing and playing finalized 3D movies on Apple Vision Pro. It is separate from the macOS
 converter and from `SpatialPlaybackProbe`,
 which remains the qualification-only validator.
 
@@ -95,7 +95,17 @@ fixtures or enable sharing silently from repository configuration.
 ## Private internal TestFlight delivery
 
 The visionOS bundle is `com.shinycomputers.bd-to-avp.player`, using team
-`MM5YXC7T6E`. The App Store Connect record is **BD to AVP Player** (6811956508).
+`MM5YXC7T6E`. The App Store Connect record is **Shiny 3D Cinema** (6811956508).
+
+The public app name is separate from its established engineering identity. Keep
+the bundle ID, Xcode target/module, repository and package names, saved-data paths,
+Keychain identities, URL schemes and Bonjour service types stable when changing
+public branding. Update the App Store name, `CFBundleDisplayName`, `CFBundleName`,
+visible UI/permission strings, current beta notes and privacy policy together.
+Changing bundled branding requires a new build number and upload; editing only
+the App Store name does not update an installed binary. See
+[Apple's display-name instructions](https://developer.apple.com/library/archive/qa/qa1823/_index.html).
+
 **AVP Internal** is the owner-only group; automatic distribution remains off.
 The player uses only Apple's built-in cryptographic implementations for pairing
 and authentication; its plist declares no non-exempt encryption. Reassess that

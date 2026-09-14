@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>BD to AVP Player</string>
+	<string>Shiny 3D Cinema</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>Shiny 3D Cinema</string>
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
@@ -35,7 +35,7 @@
 		<string>_bdtoavp-movies._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>BD to AVP Player discovers your Mac and plays movies from folders you share on your local network.</string>
+	<string>Shiny 3D Cinema discovers your Mac and plays movies from folders you share on your local network.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
