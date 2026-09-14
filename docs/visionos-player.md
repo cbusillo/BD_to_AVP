@@ -1,16 +1,17 @@
-# visionOS Player
+# Shiny 3D Cinema
 
-`BDToAVPPlayer` is the standalone visionOS 26 application for browsing and
-playing finalized 3D movies or an explicitly paired live relay on Apple Vision
-Pro. It is separate from the macOS converter and from `SpatialPlaybackProbe`,
+**Shiny 3D Cinema** (`BDToAVPPlayer` in Xcode) is the standalone visionOS 26
+application for browsing and playing finalized 3D movies on Apple Vision Pro. It is separate from the macOS
+converter and from `SpatialPlaybackProbe`,
 which remains the qualification-only validator.
 
 ## Product Scope
 
 - One plain SwiftUI window contains a split-view library, modal movie details,
   and the player.
-- The library presents an **On My Vision Pro** source sidebar and a **Your
-  movies** collection with Posters and Files modes, format filtering, title or
+- The library opens **Mac Movies**, where the wearer chooses a Mac and a completed
+  movie. **On My Vision Pro** opens the local **Your movies** collection with
+  Posters and Files modes, format filtering, title or
   filename sorting, 16:9 source-frame thumbnails, and a typography-first
   fallback when a frame cannot be generated.
 - Playable movies expose a visible direct Play action in both library modes.
@@ -25,12 +26,212 @@ which remains the qualification-only validator.
   app's Application Support directory. Library media records omit source
   filesystem URLs, but bookmark blobs necessarily encode the source location so
   the app can regain security-scoped access.
-- The Live Relay panel discovers protocol-v3 Macs through Bonjour, fetches a
+- Qualification builds also expose a Live Relay panel that discovers protocol-v3
+  Macs through Bonjour, fetches a
   short-lived challenge, compares a large six-digit code with the Mac app, and
   starts an authenticated MV-HEVC EVENT-HLS asset without requiring a hostname
   or cloud service.
 
-## Live Relay
+## Completed movies shared by a Mac
+
+1. Open **Movie Sharing** in the Mac app and **Add Folder…**. Select a folder of
+   completed `.mp4`, `.mov`, or `.m4v` movies, then enable sharing.
+2. Keep the Mac awake with the app open, on the same trusted local network as
+   Vision Pro. Allow Local Network access on both devices.
+3. In **Mac Movies** on Vision Pro, tap **Find Macs** and choose the Mac. Compare the six-digit code
+   with the Mac's Movie Sharing screen and confirm on both devices.
+4. Search and select a movie on Vision Pro. The existing player provides audio
+   and subtitle selection, seeking, stereo presentation, and resume positions.
+
+The folder is configuration, not the playback selection: no movie needs to be
+opened or selected on the Mac. Only MV-HEVC and supported full SBS/OU HEVC stereo
+formats play; other completed movie files show the existing unsupported-format
+message. ISO/BDMV conversion and live decrypted-source streaming are separate work.
+
+Movie sharing advertises `_bdtoavp-movies._tcp` independently of playback. Approved
+folders use security-scoped bookmarks. Scans skip symlinks, hidden files, and package
+contents, and stop after 500 movies, five directory levels, 10,000 entries, or a
+five-second scan budget. An unavailable drive is reported per folder. Refresh
+rescans the folders; folder changes or stopping sharing revoke active sessions.
+
+The Mac identity, approved device public keys, and each Vision Pro connection's
+private key and pinned Mac key live in a nonsynchronizing Keychain item. Access or
+decoding errors never silently reset trust. Reconnection proves possession against
+a fresh challenge; recognizing a public key alone grants no movie access. **Forget**
+removes trust, including when the Mac is offline. Forget on the Mac revokes the
+device's active sessions immediately. A session lasts at most 24 hours.
+
+Each movie has an opaque ID and a metadata revision. Signed requests bind the exact
+revision, 64-bit offset, and count; each response authenticates the request nonce,
+status, and full body before AVFoundation receives bytes. Ranges are at most 1 MiB.
+The host opens files relative to the approved directory descriptor with `openat`
+and `O_NOFOLLOW`, validates regular-file identity and metadata before and after
+reading, and refuses changed sources. Revision checks detect ordinary replacement
+and editing; they are not immutable filesystem snapshots. Resume records include
+the revision so changed files cannot inherit a stale position.
+
+Completed movies use `AVAssetResourceLoaderDelegate` directly. That route supports
+progressive movie files; the EVENT-HLS media-segment restriction described below
+does not apply to these completed files. Loading cancels with playback and bounds
+concurrency and buffered data. HTTP provides authenticated integrity, not media
+confidentiality. This initial private beta is for a trusted LAN; it does not wake
+the Mac or run a background sharing daemon.
+
+### Local development folder
+
+The local repository config can remember the operator's movie folder without
+committing a machine-specific path:
+
+```sh
+git config --local bdtoavp.movieSharingRoot /absolute/path/to/completed-movies
+git config --local --get bdtoavp.movieSharingRoot
+```
+
+This hint is shared by the repository's linked worktrees and is not pushed to
+GitHub. Select that folder through **Add Folder…** in the Mac app to grant access;
+the app retains its own bookmark. Do not copy personal movie files into test
+fixtures or enable sharing silently from repository configuration.
+
+## Private internal TestFlight delivery
+
+The visionOS bundle is `com.shinycomputers.bd-to-avp.player`, using team
+`MM5YXC7T6E`. The App Store Connect record is **Shiny 3D Cinema** (6811956508).
+
+The public app name is separate from its established engineering identity. Keep
+the bundle ID, Xcode target/module, repository and package names, saved-data paths,
+Keychain identities, URL schemes and Bonjour service types stable when changing
+public branding. Update the App Store name, `CFBundleDisplayName`, `CFBundleName`,
+visible UI/permission strings, current beta notes and privacy policy together.
+Changing bundled branding requires a new build number and upload; editing only
+the App Store name does not update an installed binary. See
+[Apple's display-name instructions](https://developer.apple.com/library/archive/qa/qa1823/_index.html).
+
+**AVP Internal** is the owner-only group; automatic distribution remains off.
+The player uses only Apple's built-in cryptographic implementations for pairing
+and authentication; its plist declares no non-exempt encryption. Reassess that
+configuration if cryptographic dependencies or capabilities change.
+
+Use an Xcode release currently accepted by App Store Connect, verified against
+[Apple's release notes](https://developer.apple.com/help/app-store-connect/release-notes/).
+A locally successful archive does not establish upload eligibility. Select that
+installation for these commands with `BD_TO_AVP_XCODE_DEVELOPER_DIR`; this does not
+change the machine's global Xcode selection.
+
+Set and commit `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` for `BDToAVPPlayer`
+in `macos/project.yml`, then build from that clean checkout. Use a higher build
+number than any previously accepted upload. Keep the source commit, Xcode build number, archive and dSYMs,
+export log and IPA SHA256 together with the delivery record.
+
+```sh
+BD_TO_AVP_XCODE_DEVELOPER_DIR=/absolute/path/to/supported/Xcode.app/Contents/Developer
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" /usr/bin/xcodebuild -version
+git rev-parse HEAD
+uv run python scripts/native_app.py generate
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" /usr/bin/xcodebuild archive \
+  -project macos/BluRayToVisionPro.xcodeproj \
+  -scheme BDToAVPPlayer -configuration Release \
+  -destination 'generic/platform=visionOS' \
+  -derivedDataPath build/testflight/DerivedData \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -allowProvisioningUpdates
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -exportPath build/testflight/export-internal \
+  -exportOptionsPlist macos/TestFlightInternalExportOptions.plist \
+  -allowProvisioningUpdates
+```
+
+The export options restrict the build to internal testing. The command-local
+system PATH keeps Apple's copy tools paired with Apple's rsync during export.
+For an authorized upload, copy the export options to the ignored build directory
+and change only `destination` to `upload`, then export the same reviewed archive:
+
+```sh
+cp macos/TestFlightInternalExportOptions.plist build/testflight/ExportOptions-Upload.plist
+/usr/libexec/PlistBuddy -c 'Set :destination upload' build/testflight/ExportOptions-Upload.plist
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -exportPath build/testflight/upload-internal \
+  -exportOptionsPlist build/testflight/ExportOptions-Upload.plist \
+  -allowProvisioningUpdates
+```
+
+Wait for App Store Connect processing and attach the exact build to **AVP
+Internal**. An upload rejected for an unsupported SDK/Xcode requires a new archive
+from an accepted toolchain; retrying the old archive cannot fix it. Do not dispatch
+the Mac Stable/Prerelease workflows for this.
+
+To withdraw a beta, open its build in App Store Connect's TestFlight tab and use
+**Expire Build**, which prevents further tester installation. Record the affected
+version/build and reason, and select a known-good unexpired build for the internal
+group when available. See [Apple's withdrawal procedure](https://developer.apple.com/help/app-store-connect/test-a-beta-version/stop-testing-a-build/).
+
+Publish the compatible Mac companion with the repository's `publish-current`
+command. Keep its stable Current link and the commit-addressed build metadata;
+do not replace the production-signed app in `/Applications`.
+
+Use the internal build for wearer acceptance: install from TestFlight, pair,
+select a completed movie on Vision Pro, verify both eyes and audio, seek forward
+and backward, exercise audio/subtitles and eye order where supported, close and
+resume, then test Mac restart and Forget. Automated builds and decoded-frame
+checks do not establish physical stereo presentation or sustained playback.
+
+## External TestFlight delivery
+
+An internal-only upload cannot be converted to external testing. Increment the
+player's build number, commit the change, and create a fresh archive using the
+supported toolchain and archive command above. Export with
+`macos/TestFlightExternalExportOptions.plist`, which permits external review:
+
+```sh
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -exportPath build/testflight/export-external \
+  -exportOptionsPlist macos/TestFlightExternalExportOptions.plist \
+  -allowProvisioningUpdates
+cp macos/TestFlightExternalExportOptions.plist build/testflight/ExportOptions-External-Upload.plist
+/usr/libexec/PlistBuddy -c 'Set :destination upload' build/testflight/ExportOptions-External-Upload.plist
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -exportPath build/testflight/upload-external \
+  -exportOptionsPlist build/testflight/ExportOptions-External-Upload.plist \
+  -allowProvisioningUpdates
+```
+
+Verify the signed export and keep its archive, symbols, commit, toolchain and
+checksum with the delivery record. In App Store Connect, add the processed build
+to **AVP External**, supply beta description/feedback and App Review contact
+details, privacy policy, and concrete testing notes. Submit it for TestFlight
+App Review. The first external build requires Apple's approval; a successful
+upload alone does not make the build installable by external testers. See
+[Apple's external testing procedure](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers).
+
+Invite only the user-selected audience: specific email addresses or an explicitly
+requested public link. The existing internal group stays separate. Record review
+status, group access and the final invitation mechanism with the exact build.
+
+Reviewers can test the standalone player without an account, Mac, or downloaded
+movie: choose **On My Vision Pro** in the sidebar, then **Start SBS Check** and
+**Start Over-Under Check**. Both bundled synthetic samples are 45 seconds long and
+silent. **Add Movie** opens the system file picker for the reviewer's own supported
+completed movies. Explain separately that **Mac Movies** requires a compatible
+Mac companion, one-time folder approval and pairing on the same trusted LAN.
+Identify how testers obtain that matching companion before advertising Mac
+sharing as ready for their setup; a developer's local Current build is not a
+public Mac release.
+
+The sidebar's **Privacy Policy** link opens the policy applicable to the build.
+Its URL is pinned to the policy's published commit so branch deletion cannot
+break it. Use the same URL in TestFlight metadata. Update the
+[policy](visionos-player-privacy.md) and its link together when data handling
+changes. Apple requires an accessible policy in the app and its metadata under
+[the App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/#privacy).
+
+## Live Relay qualification
 
 Relay sessions are source-agnostic: the wire contract carries session,
 playlist, media, and playback state without MakeMKV-, SSIF-, AACS-, BD+-, or

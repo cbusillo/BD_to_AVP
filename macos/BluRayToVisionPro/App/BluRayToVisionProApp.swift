@@ -43,6 +43,7 @@ struct BluRayToVisionProApp: App {
     @StateObject private var durableQueueStore: ConversionQueueStore
     @StateObject private var queueNotificationCoordinator: PersistentQueueNotificationCoordinator
     @StateObject private var relayHostController: RelayHostSessionController
+    @StateObject private var movieSharingController: MovieSharingController
 
     private let capabilities = AppCapabilities.current
     private let workCoordinator: AppWorkCoordinator
@@ -64,6 +65,7 @@ struct BluRayToVisionProApp: App {
         let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
         let settings = AppSettings()
         let relayHostController = RelayHostSessionController()
+        let movieSharingController = MovieSharingController()
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         let diagnosticConfiguration = DiagnosticServiceConfiguration.configured()
         let diagnosticUploader = diagnosticConfiguration.map {
@@ -92,11 +94,13 @@ struct BluRayToVisionProApp: App {
             delivery: UserNotificationsQueueNotificationDelivery()
         ))
         _relayHostController = StateObject(wrappedValue: relayHostController)
+        _movieSharingController = StateObject(wrappedValue: movieSharingController)
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
         suppressDefaultLaunch = AppDelegate.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments)
         appDelegate.observabilityEventStore = observabilityEventStore
         appDelegate.relayHostController = relayHostController
+        appDelegate.movieSharingController = movieSharingController
     }
 
     var body: some Scene {
@@ -109,6 +113,7 @@ struct BluRayToVisionProApp: App {
                 profileStore: profileStore,
                 resolutionMemoryStore: resolutionMemoryStore,
                 relayHostController: relayHostController,
+                movieSharingController: movieSharingController,
                 capabilities: capabilities
             )
                 .environmentObject(queueNotificationCoordinator)
@@ -118,6 +123,9 @@ struct BluRayToVisionProApp: App {
                         appDelegate.attach(window: window, workCoordinator: workCoordinator)
                     }
                 )
+                .task {
+                    if !suppressDefaultLaunch { await movieSharingController.restoreIfNeeded() }
+                }
                 .onAppear {
                     updater.startIfNeeded()
                     settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)

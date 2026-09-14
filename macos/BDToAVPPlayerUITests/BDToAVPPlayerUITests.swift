@@ -8,6 +8,7 @@ final class BDToAVPPlayerUITests: XCTestCase {
     func testSeededMovieDetailsAndPlaybackFlow() throws {
         let app = XCUIApplication()
         app.launch()
+        app.buttons["source-on-my-vision-pro"].tap()
 
         let movieID = "documents:playerlongfixture.mov"
         let movieTile = app.descendants(matching: .any)
@@ -71,6 +72,7 @@ final class BDToAVPPlayerUITests: XCTestCase {
     func testBuiltInStereoCheckExposesNativeEyeOrderAndDoneActions() throws {
         let app = XCUIApplication()
         app.launch()
+        app.buttons["source-on-my-vision-pro"].tap()
 
         XCTAssertTrue(app.staticTexts["built-in-stereo-checks-title"].waitForExistence(timeout: 10))
 

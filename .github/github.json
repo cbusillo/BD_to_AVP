@@ -111,12 +111,31 @@
       }
     }
   },
+  "visionosTestFlight": {
+    "appName": "Shiny 3D Cinema",
+    "bundleID": "com.shinycomputers.bd-to-avp.player",
+    "appStoreConnectID": "6811956508",
+    "internalGroup": "AVP Internal",
+    "automaticDistribution": false,
+    "exportOptionsPath": "macos/TestFlightInternalExportOptions.plist",
+    "externalExportOptionsPath": "macos/TestFlightExternalExportOptions.plist",
+    "externalGroup": "AVP External",
+    "toolchainEnvironment": "BD_TO_AVP_XCODE_DEVELOPER_DIR",
+    "archiveCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" /usr/bin/xcodebuild archive -project macos/BluRayToVisionPro.xcodeproj -scheme BDToAVPPlayer -configuration Release -destination 'generic/platform=visionOS' -derivedDataPath build/testflight/DerivedData -archivePath build/testflight/BDToAVPPlayer.xcarchive -allowProvisioningUpdates",
+    "exportCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive -archivePath build/testflight/BDToAVPPlayer.xcarchive -exportPath build/testflight/export-internal -exportOptionsPlist macos/TestFlightInternalExportOptions.plist -allowProvisioningUpdates",
+    "uploadCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive -archivePath build/testflight/BDToAVPPlayer.xcarchive -exportPath build/testflight/upload-internal -exportOptionsPlist build/testflight/ExportOptions-Upload.plist -allowProvisioningUpdates",
+    "externalExportCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive -archivePath build/testflight/BDToAVPPlayer.xcarchive -exportPath build/testflight/export-external -exportOptionsPlist macos/TestFlightExternalExportOptions.plist -allowProvisioningUpdates",
+    "externalUploadCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive -archivePath build/testflight/BDToAVPPlayer.xcarchive -exportPath build/testflight/upload-external -exportOptionsPlist build/testflight/ExportOptions-External-Upload.plist -allowProvisioningUpdates"
+  },
   "docs": {
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
     "lockfile": "uv.lock",
     "releaseRoutes": "docs/release-routes.md",
     "releaseProcess": "docs/release-process.md",
+    "visionosTestFlight": "docs/visionos-player.md#private-internal-testflight-delivery",
+    "visionosExternalTestFlight": "docs/visionos-player.md#external-testflight-delivery",
+    "visionosPlayerPrivacy": "docs/visionos-player-privacy.md",
     "releaseEvidenceV2": "docs/release-evidence-v2.md",
     "releaseQualificationPolicy": "docs/release-qualification-policy.md",
     "tier3CleanMachine": "docs/tier3-clean-machine.md",

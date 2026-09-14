@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     weak var workCoordinator: AppWorkCoordinator?
     var observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
     weak var relayHostController: RelayHostSessionController?
+    weak var movieSharingController: MovieSharingController?
     private weak var managedWindow: NSWindow?
     private var originalWindowDelegate: NSWindowDelegate?
     private var allowManagedWindowClose = false
@@ -112,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if allowManagedWindowClose || (!(workCoordinator?.hasActiveWorker ?? false) && !(relayHostController?.isSessionActive ?? false)) {
+        if allowManagedWindowClose || (!(workCoordinator?.hasActiveWorker ?? false) && !(relayHostController?.isSessionActive ?? false) && !(movieSharingController?.isSharing ?? false)) {
             return originalWindowDelegate?.windowShouldClose?(sender) ?? true
         }
         if isStoppingForWindowClose {
@@ -128,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         Task {
             await workCoordinator?.stopForQuit()
             await relayHostController?.stopForAppQuit()
+            await movieSharingController?.stopForAppQuit()
             allowManagedWindowClose = true
             sender.performClose(nil)
         }
@@ -145,10 +147,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         if isStoppingForTermination {
             return .terminateLater
         }
-        guard let workCoordinator, workCoordinator.hasActiveWorker || relayHostController?.isSessionActive == true else {
+        guard let workCoordinator, workCoordinator.hasActiveWorker || relayHostController?.isSessionActive == true || movieSharingController?.isSharing == true else {
             isStoppingForTermination = true
             Task {
                 await relayHostController?.stopForAppQuit()
+                await movieSharingController?.stopForAppQuit()
                 await flushObservabilityStoreWithDeadline()
                 sender.reply(toApplicationShouldTerminate: true)
             }
@@ -165,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         Task {
             await workCoordinator.stopForQuit()
             await relayHostController?.stopForAppQuit()
+            await movieSharingController?.stopForAppQuit()
             await flushObservabilityStoreWithDeadline()
             sender.reply(toApplicationShouldTerminate: true)
         }

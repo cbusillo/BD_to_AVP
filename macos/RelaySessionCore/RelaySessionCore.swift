@@ -672,6 +672,7 @@ public actor RelayServerPairingContext {
 
     private var challenge: RelaySessionChallenge
     private var serverPrivateKeyData: Data
+    private let retainsServerIdentity: Bool
     private var serverNonce: Data
     private let challengeTTLMilliseconds: Int64
     private let candidateTTLMilliseconds: Int64
@@ -684,6 +685,7 @@ public actor RelayServerPairingContext {
     public init(
         sessionID: RelaySessionIdentifier = .random(),
         serverPrivateKeyData: Data? = nil,
+        retainsServerIdentity: Bool = false,
         serverNonce: Data? = nil,
         now: Date = Date(),
         challengeTTL: TimeInterval = 120,
@@ -740,6 +742,7 @@ public actor RelayServerPairingContext {
         self.sessionID = sessionID
         challenge = initialChallenge
         self.serverPrivateKeyData = privateKeyData
+        self.retainsServerIdentity = retainsServerIdentity
         self.serverNonce = committedServerNonce
         self.challengeTTLMilliseconds = challengeTTLMilliseconds
         self.candidateTTLMilliseconds = candidateTTLMilliseconds
@@ -972,7 +975,9 @@ public actor RelayServerPairingContext {
         guard let challengeExpiration = RelayTime.adding(challengeTTLMilliseconds, to: nowUnixMilliseconds) else {
             throw RelaySessionError.invalidTimestamp
         }
-        let privateKey = Curve25519.KeyAgreement.PrivateKey()
+        let privateKey = try retainsServerIdentity
+            ? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: serverPrivateKeyData)
+            : Curve25519.KeyAgreement.PrivateKey()
         let nonce = RelayCrypto.randomBytes(count: RelayCrypto.nonceLength)
         challenge = try RelaySessionChallenge(
             sessionID: sessionID,
