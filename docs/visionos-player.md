@@ -168,6 +168,59 @@ and backward, exercise audio/subtitles and eye order where supported, close and
 resume, then test Mac restart and Forget. Automated builds and decoded-frame
 checks do not establish physical stereo presentation or sustained playback.
 
+## External TestFlight delivery
+
+An internal-only upload cannot be converted to external testing. Increment the
+player's build number, commit the change, and create a fresh archive using the
+supported toolchain and archive command above. Export with
+`macos/TestFlightExternalExportOptions.plist`, which permits external review:
+
+```sh
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -exportPath build/testflight/export-external \
+  -exportOptionsPlist macos/TestFlightExternalExportOptions.plist \
+  -allowProvisioningUpdates
+cp macos/TestFlightExternalExportOptions.plist build/testflight/ExportOptions-External-Upload.plist
+/usr/libexec/PlistBuddy -c 'Set :destination upload' build/testflight/ExportOptions-External-Upload.plist
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -exportPath build/testflight/upload-external \
+  -exportOptionsPlist build/testflight/ExportOptions-External-Upload.plist \
+  -allowProvisioningUpdates
+```
+
+Verify the signed export and keep its archive, symbols, commit, toolchain and
+checksum with the delivery record. In App Store Connect, add the processed build
+to **AVP External**, supply beta description/feedback and App Review contact
+details, privacy policy, and concrete testing notes. Submit it for TestFlight
+App Review. The first external build requires Apple's approval; a successful
+upload alone does not make the build installable by external testers. See
+[Apple's external testing procedure](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers).
+
+Invite only the user-selected audience: specific email addresses or an explicitly
+requested public link. The existing internal group stays separate. Record review
+status, group access and the final invitation mechanism with the exact build.
+
+Reviewers can test the standalone player without an account, Mac, or downloaded
+movie: choose **On My Vision Pro** in the sidebar, then **Start SBS Check** and
+**Start Over-Under Check**. Both bundled synthetic samples are 45 seconds long and
+silent. **Add Movie** opens the system file picker for the reviewer's own supported
+completed movies. Explain separately that **Mac Movies** requires a compatible
+Mac companion, one-time folder approval and pairing on the same trusted LAN.
+Identify how testers obtain that matching companion before advertising Mac
+sharing as ready for their setup; a developer's local Current build is not a
+public Mac release.
+
+The sidebar's **Privacy Policy** link opens the policy applicable to the build.
+Its URL is pinned to the policy's published commit so branch deletion cannot
+break it. Use the same URL in TestFlight metadata. Update the
+[policy](visionos-player-privacy.md) and its link together when data handling
+changes. Apple requires an accessible policy in the app and its metadata under
+[the App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/#privacy).
+
 ## Live Relay qualification
 
 Relay sessions are source-agnostic: the wire contract carries session,

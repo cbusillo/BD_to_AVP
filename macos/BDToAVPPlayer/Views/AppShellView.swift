@@ -47,6 +47,14 @@ struct AppShellView: View {
                             .disabled(!canStartRelayDiscovery)
                         }
 #endif
+                        Section("About") {
+                            if let privacyURL = URL(string: "https://github.com/cbusillo/BD_to_AVP/blob/80b45fa3c1e4f9e579821d68a186ecbc7c85c346/docs/visionos-player-privacy.md") {
+                                Link(destination: privacyURL) {
+                                    Label("Privacy Policy", systemImage: "hand.raised")
+                                }
+                                .accessibilityIdentifier("privacy-policy")
+                            }
+                        }
                     }
                     .listStyle(.sidebar)
                     .navigationTitle("Library")
