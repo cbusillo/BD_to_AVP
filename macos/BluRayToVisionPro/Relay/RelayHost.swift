@@ -78,8 +78,8 @@ struct RelayBonjourAdvertisement: Sendable, Equatable {
     let serviceType: String
     let txtRecord: Data
 
-    init(sessionID: RelaySessionIdentifier) {
-        serviceType = RelayWireContract.bonjourServiceType
+    init(sessionID: RelaySessionIdentifier, serviceType: String = RelayWireContract.bonjourServiceType) {
+        self.serviceType = serviceType
         txtRecord = NetService.data(fromTXTRecord: [
             "sid": Data(sessionID.rawValue.prefix(8).utf8),
             "v": Data(String(RelayWireContract.protocolVersion).utf8),
@@ -87,7 +87,7 @@ struct RelayBonjourAdvertisement: Sendable, Equatable {
     }
 }
 
-actor RelayHost {
+actor RelayHost: RelayNetworkHosting {
     private struct AuthenticatedExchange: Sendable {
         let request: RelayAuthenticatedRequest
         let session: RelayEstablishedSession

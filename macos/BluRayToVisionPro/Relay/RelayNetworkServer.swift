@@ -7,15 +7,26 @@ enum RelayNetworkServerError: Error, Equatable, Sendable {
     case invalidBonjourMetadata
 }
 
+protocol RelayNetworkHosting: Actor {
+    func advertisedBonjourService() async -> RelayBonjourAdvertisement?
+    func needsMoreRequestBytes(_ data: Data) async -> Bool
+    func handle(_ data: Data, peer: RelayHostPeer) async -> RelayHTTPResponse
+    func currentLifecycle() async -> RelayHostLifecycle
+    func stopForAppQuit() async
+    func cancel() async
+    func stop() async
+    func networkLost() async
+}
+
 final class RelayNetworkServer: @unchecked Sendable {
     private static let requestTimeout: TimeInterval = 10
 
-    private let host: RelayHost
+    private let host: any RelayNetworkHosting
     private let resources: RelayNetworkServerResources
     private let lifecyclePollInterval: Duration
 
     private init(
-        host: RelayHost,
+        host: any RelayNetworkHosting,
         listener: RelaySocketListener,
         queue: DispatchQueue,
         lifecyclePollInterval: Duration
@@ -30,7 +41,7 @@ final class RelayNetworkServer: @unchecked Sendable {
     }
 
     static func start(
-        host: RelayHost,
+        host: any RelayNetworkHosting,
         serviceName: String = Host.current().localizedName ?? "BD to AVP",
         queue: DispatchQueue = DispatchQueue(label: "com.shinycomputers.bd-to-avp.relay", qos: .userInitiated),
         lifecyclePollInterval: Duration = .milliseconds(250)
@@ -38,7 +49,7 @@ final class RelayNetworkServer: @unchecked Sendable {
         guard let advertisement = await host.advertisedBonjourService() else {
             throw RelayNetworkServerError.unavailablePairingContext
         }
-        guard advertisement.serviceType == RelayWireContract.bonjourServiceType,
+        guard [RelayWireContract.bonjourServiceType, MovieLibraryContract.serviceType].contains(advertisement.serviceType),
               advertisement.txtRecord.count <= 255
         else {
             throw RelayNetworkServerError.invalidBonjourMetadata

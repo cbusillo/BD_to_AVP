@@ -173,12 +173,12 @@ final class RelayBonjourBrowser: RelayEndpointBrowsing {
     private let resolver = RelayBonjourDescriptorResolver()
     private var discoveryGeneration = 0
 
-    init(queue: DispatchQueue = .global(qos: .utility)) {
+    init(serviceType: String = RelayBonjourBrowser.serviceType, queue: DispatchQueue = .global(qos: .utility)) {
         self.queue = queue
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = true
         browser = NWBrowser(
-            for: .bonjourWithTXTRecord(type: Self.serviceType, domain: nil),
+            for: .bonjourWithTXTRecord(type: serviceType, domain: nil),
             using: parameters
         )
 

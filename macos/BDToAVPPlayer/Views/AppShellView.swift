@@ -9,6 +9,9 @@ struct AppShellView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var preparationTask: Task<Void, Never>?
+    @StateObject private var movieLibrary = MovieLibraryModel()
+    @State private var showsMacMovies = true
+    @State private var sharedPlayback: SharedMoviePlayback?
     @State private var isPlayerLocatorPresented = false
 #if BD_TO_AVP_QUALIFICATION
     @State private var hasStartedRelayQualification = false
@@ -27,9 +30,14 @@ struct AppShellView: View {
                 NavigationSplitView {
                     List {
                         Section("Sources") {
-                            Label("On My Vision Pro", systemImage: "visionpro")
-                                .font(.headline)
+                            Button { showsMacMovies = true } label: {
+                                Label("Mac Movies", systemImage: "desktopcomputer")
+                            }.accessibilityIdentifier("source-mac-movies")
+                            Button { showsMacMovies = false } label: {
+                                Label("On My Vision Pro", systemImage: "visionpro")
+                            }.accessibilityIdentifier("source-on-my-vision-pro")
                         }
+#if BD_TO_AVP_QUALIFICATION
                         Section("Live Relay") {
                             Button {
                                 relayCoordinator.startDiscovery()
@@ -38,6 +46,7 @@ struct AppShellView: View {
                             }
                             .disabled(!canStartRelayDiscovery)
                         }
+#endif
                     }
                     .listStyle(.sidebar)
                     .navigationTitle("Library")
@@ -50,7 +59,11 @@ struct AppShellView: View {
                             )
                             Divider()
                         }
-                        LibraryView(model: model)
+                        if showsMacMovies {
+                            MovieLibraryView(model: movieLibrary, play: startSharedPlayback)
+                        } else {
+                            LibraryView(model: model)
+                        }
                     }
                 }
             }
@@ -131,6 +144,7 @@ struct AppShellView: View {
     }
 
     private func prepareForPlayback(_ item: MediaItem) {
+        sharedPlayback = nil
         preparationTask?.cancel()
         preparationTask = Task {
             await playerSession.prepare(
@@ -141,7 +155,19 @@ struct AppShellView: View {
         }
     }
 
+    private func startSharedPlayback(_ selection: SharedMoviePlayback) {
+        sharedPlayback = selection
+        preparationTask?.cancel()
+        preparationTask = Task {
+            await playerSession.prepare(mediaItem: selection.mediaItem, bookmarkStore: model.bookmarkStore, resumeStore: resumeStore, sharedMovie: selection)
+        }
+    }
+
     private func retryPlayback() {
+        if let sharedPlayback {
+            startSharedPlayback(sharedPlayback)
+            return
+        }
         if playerSession.isRelayPlayback {
             startRelayPlayback()
             return
@@ -156,6 +182,7 @@ struct AppShellView: View {
         preparationTask?.cancel()
         preparationTask = nil
         model.clearPlaybackRequest()
+        sharedPlayback = nil
     }
 
     private func startRelayPlayback() {

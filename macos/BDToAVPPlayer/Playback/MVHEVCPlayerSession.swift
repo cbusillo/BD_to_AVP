@@ -285,7 +285,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     func prepare(
         mediaItem: MediaItem,
         bookmarkStore: BookmarkStore,
-        resumeStore: ResumeStore
+        resumeStore: ResumeStore,
+        sharedMovie: SharedMoviePlayback? = nil
     ) async {
         preparationGeneration += 1
         let generation = preparationGeneration
@@ -316,14 +317,30 @@ final class MVHEVCPlayerSession: ObservableObject {
         qualificationRecorder?.recordPrepare(player: player)
 #endif
 
-        guard mediaItem.format != .unsupported else {
+        guard sharedMovie != nil || mediaItem.format != .unsupported else {
             presentFailure(.unsupported)
             return
         }
 
         let openedLease: SecurityScopedResourceLease
+        let asset: AVURLAsset
+        let makeAsset: () -> AVURLAsset
         do {
-            openedLease = try await bookmarkStore.open(id: mediaItem.id)
+            if let sharedMovie {
+                let loader = try MovieResourceLoader(movie: sharedMovie.movie) { offset, count in
+                    try await sharedMovie.client.bytes(movie: sharedMovie.movie, offset: offset, count: count)
+                }
+                makeAsset = { loader.makeAsset() }
+                asset = makeAsset()
+                openedLease = SecurityScopedResourceLease(url: asset.url, startAccessing: { true }, stopAccessing: {
+                    asset.cancelLoading()
+                    loader.cancel()
+                })
+            } else {
+                openedLease = try await bookmarkStore.open(id: mediaItem.id)
+                makeAsset = { AVURLAsset(url: openedLease.url) }
+                asset = makeAsset()
+            }
         } catch {
             guard generation == preparationGeneration, !Task.isCancelled else {
                 return
@@ -340,12 +357,22 @@ final class MVHEVCPlayerSession: ObservableObject {
         preparationPhase = .preparingMedia
 
         do {
-            let detectedFormat = try await MediaFormatInspector.inspect(url: openedLease.url)
+            let detectedFormat = try await MediaFormatInspector.inspect(asset: asset, fileName: mediaItem.fileName)
             guard generation == preparationGeneration, !Task.isCancelled else {
                 if resourceLease === openedLease {
                     resourceLease = nil
                 }
                 openedLease.close()
+                return
+            }
+            let mediaItem = sharedMovie.map {
+                MediaItem(id: $0.movie.resumeID, title: $0.movie.title, fileName: $0.movie.fileName, format: detectedFormat)
+            } ?? mediaItem
+            self.mediaItem = mediaItem
+            guard detectedFormat != .unsupported else {
+                resourceLease = nil
+                openedLease.close()
+                presentFailure(.unsupported)
                 return
             }
             guard detectedFormat == mediaItem.format else {
@@ -357,7 +384,6 @@ final class MVHEVCPlayerSession: ObservableObject {
                 return
             }
 
-            let asset = AVURLAsset(url: openedLease.url)
             let item = AVPlayerItem(asset: asset)
             async let loadedDuration = asset.load(.duration)
             async let mediaSelections = prepareMediaSelections(for: asset, item: item)
@@ -377,7 +403,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                 )
                 item.seekingWaitsForVideoCompositionRendering = true
                 preparedPackedStereo = PackedStereoSource(
-                    url: openedLease.url,
+                    makeAsset: makeAsset,
                     format: mediaItem.format,
                     duration: preparedDuration,
                     spatialMetadataFallback: spatialMetadataFallback
@@ -715,7 +741,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
             defer { eyeOrderChangeTask = nil }
             do {
-                let replacementAsset = AVURLAsset(url: packedStereoSource.url)
+                let replacementAsset = packedStereoSource.makeAsset()
                 let replacementItem = AVPlayerItem(asset: replacementAsset)
                 async let replacementComposition = PackedStereoComposition.make(
                     asset: replacementAsset,
@@ -1638,7 +1664,7 @@ private struct PreparedMediaSelections {
 }
 
 private struct PackedStereoSource {
-    let url: URL
+    let makeAsset: () -> AVURLAsset
     let format: StereoFormat
     let duration: CMTime
     let spatialMetadataFallback: PackedStereoSpatialMetadata?

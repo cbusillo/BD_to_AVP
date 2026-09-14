@@ -1,16 +1,17 @@
 # visionOS Player
 
 `BDToAVPPlayer` is the standalone visionOS 26 application for browsing and
-playing finalized 3D movies or an explicitly paired live relay on Apple Vision
-Pro. It is separate from the macOS converter and from `SpatialPlaybackProbe`,
+playing finalized 3D movies on Apple Vision Pro. It is separate from the macOS
+converter and from `SpatialPlaybackProbe`,
 which remains the qualification-only validator.
 
 ## Product Scope
 
 - One plain SwiftUI window contains a split-view library, modal movie details,
   and the player.
-- The library presents an **On My Vision Pro** source sidebar and a **Your
-  movies** collection with Posters and Files modes, format filtering, title or
+- The library opens **Mac Movies**, where the wearer chooses a Mac and a completed
+  movie. **On My Vision Pro** opens the local **Your movies** collection with
+  Posters and Files modes, format filtering, title or
   filename sorting, 16:9 source-frame thumbnails, and a typography-first
   fallback when a frame cannot be generated.
 - Playable movies expose a visible direct Play action in both library modes.
@@ -25,12 +26,116 @@ which remains the qualification-only validator.
   app's Application Support directory. Library media records omit source
   filesystem URLs, but bookmark blobs necessarily encode the source location so
   the app can regain security-scoped access.
-- The Live Relay panel discovers protocol-v3 Macs through Bonjour, fetches a
+- Qualification builds also expose a Live Relay panel that discovers protocol-v3
+  Macs through Bonjour, fetches a
   short-lived challenge, compares a large six-digit code with the Mac app, and
   starts an authenticated MV-HEVC EVENT-HLS asset without requiring a hostname
   or cloud service.
 
-## Live Relay
+## Completed movies shared by a Mac
+
+1. Open **Movie Sharing** in the Mac app and **Add Folder…**. Select a folder of
+   completed `.mp4`, `.mov`, or `.m4v` movies, then enable sharing.
+2. Keep the Mac awake with the app open, on the same trusted local network as
+   Vision Pro. Allow Local Network access on both devices.
+3. In **Mac Movies** on Vision Pro, tap **Find Macs** and choose the Mac. Compare the six-digit code
+   with the Mac's Movie Sharing screen and confirm on both devices.
+4. Search and select a movie on Vision Pro. The existing player provides audio
+   and subtitle selection, seeking, stereo presentation, and resume positions.
+
+The folder is configuration, not the playback selection: no movie needs to be
+opened or selected on the Mac. Only MV-HEVC and supported full SBS/OU HEVC stereo
+formats play; other completed movie files show the existing unsupported-format
+message. ISO/BDMV conversion and live decrypted-source streaming are separate work.
+
+Movie sharing advertises `_bdtoavp-movies._tcp` independently of playback. Approved
+folders use security-scoped bookmarks. Scans skip symlinks, hidden files, and package
+contents, and stop after 500 movies, five directory levels, 10,000 entries, or a
+five-second scan budget. An unavailable drive is reported per folder. Refresh
+rescans the folders; folder changes or stopping sharing revoke active sessions.
+
+The Mac identity, approved device public keys, and each Vision Pro connection's
+private key and pinned Mac key live in a nonsynchronizing Keychain item. Access or
+decoding errors never silently reset trust. Reconnection proves possession against
+a fresh challenge; recognizing a public key alone grants no movie access. **Forget**
+removes trust, including when the Mac is offline. Forget on the Mac revokes the
+device's active sessions immediately. A session lasts at most 24 hours.
+
+Each movie has an opaque ID and a metadata revision. Signed requests bind the exact
+revision, 64-bit offset, and count; each response authenticates the request nonce,
+status, and full body before AVFoundation receives bytes. Ranges are at most 1 MiB.
+The host opens files relative to the approved directory descriptor with `openat`
+and `O_NOFOLLOW`, validates regular-file identity and metadata before and after
+reading, and refuses changed sources. Revision checks detect ordinary replacement
+and editing; they are not immutable filesystem snapshots. Resume records include
+the revision so changed files cannot inherit a stale position.
+
+Completed movies use `AVAssetResourceLoaderDelegate` directly. That route supports
+progressive movie files; the EVENT-HLS media-segment restriction described below
+does not apply to these completed files. Loading cancels with playback and bounds
+concurrency and buffered data. HTTP provides authenticated integrity, not media
+confidentiality. This initial private beta is for a trusted LAN; it does not wake
+the Mac or run a background sharing daemon.
+
+### Local development folder
+
+The local repository config can remember the operator's movie folder without
+committing a machine-specific path:
+
+```sh
+git config --local bdtoavp.movieSharingRoot /absolute/path/to/completed-movies
+git config --local --get bdtoavp.movieSharingRoot
+```
+
+This hint is shared by the repository's linked worktrees and is not pushed to
+GitHub. Select that folder through **Add Folder…** in the Mac app to grant access;
+the app retains its own bookmark. Do not copy personal movie files into test
+fixtures or enable sharing silently from repository configuration.
+
+## Private internal TestFlight delivery
+
+The visionOS bundle is `com.shinycomputers.bd-to-avp.player`, using team
+`MM5YXC7T6E`. The App Store Connect record is **BD to AVP Player** (6811956508).
+**AVP Internal** is the owner-only group; automatic distribution remains off.
+The player uses only Apple's built-in cryptographic implementations for pairing
+and authentication; its plist declares no non-exempt encryption. Reassess that
+configuration if cryptographic dependencies or capabilities change.
+
+From a clean task checkout with the desired build number in `macos/project.yml`:
+
+```sh
+uv run python scripts/native_app.py generate
+xcodebuild archive -project macos/BluRayToVisionPro.xcodeproj \
+  -scheme BDToAVPPlayer -configuration Release \
+  -destination 'generic/platform=visionOS' \
+  -derivedDataPath build/testflight/DerivedData \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -allowProvisioningUpdates
+PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -exportPath build/testflight/export-internal \
+  -exportOptionsPlist macos/TestFlightInternalExportOptions.plist \
+  -allowProvisioningUpdates
+```
+
+The export options restrict the build to internal testing. The command-local
+system PATH keeps Apple's copy tools paired with Apple's rsync during export.
+For an authorized upload, copy the export options to the ignored build directory
+and change `destination` to `upload`, then export the same reviewed archive with
+those options. Wait for App Store Connect processing and attach the exact build
+to **AVP Internal**. Do not dispatch the Mac Stable/Prerelease workflows for this.
+
+Publish the compatible Mac companion with the repository's `publish-current`
+command. Keep its stable Current link and the commit-addressed build metadata;
+do not replace the production-signed app in `/Applications`.
+
+Use the internal build for wearer acceptance: install from TestFlight, pair,
+select a completed movie on Vision Pro, verify both eyes and audio, seek forward
+and backward, exercise audio/subtitles and eye order where supported, close and
+resume, then test Mac restart and Forget. Automated builds and decoded-frame
+checks do not establish physical stereo presentation or sustained playback.
+
+## Live Relay qualification
 
 Relay sessions are source-agnostic: the wire contract carries session,
 playlist, media, and playback state without MakeMKV-, SSIF-, AACS-, BD+-, or

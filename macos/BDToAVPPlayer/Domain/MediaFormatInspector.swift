@@ -52,7 +52,10 @@ struct MediaFormatInspector {
     }
 
     static func inspect(url: URL) async throws -> StereoFormat {
-        let asset = AVURLAsset(url: url)
+        try await inspect(asset: AVURLAsset(url: url), fileName: url.lastPathComponent)
+    }
+
+    static func inspect(asset: AVURLAsset, fileName: String) async throws -> StereoFormat {
         let assistant = AVAssetPlaybackAssistant(asset: asset)
         let options = await assistant.playbackConfigurationOptions
         let tracks = try await asset.load(.tracks)
@@ -62,7 +65,7 @@ struct MediaFormatInspector {
         let mediaCharacteristics = try await videoTrack?.load(.mediaCharacteristics) ?? []
         let isHEVC = formatDescriptions.contains { $0.mediaSubType == .hevc }
         let packedStereoFormat = formatDescriptions.lazy.compactMap(packedStereoFormat).first
-            ?? packedStereoFormat(fileName: url.lastPathComponent)
+            ?? packedStereoFormat(fileName: fileName)
 
         return classify(
             Signals(
