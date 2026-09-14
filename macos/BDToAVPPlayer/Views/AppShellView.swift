@@ -13,9 +13,9 @@ struct AppShellView: View {
     @State private var showsMacMovies = true
     @State private var sharedPlayback: SharedMoviePlayback?
     @State private var isPlayerLocatorPresented = false
-#if BD_TO_AVP_QUALIFICATION
+    #if BD_TO_AVP_QUALIFICATION
     @State private var hasStartedRelayQualification = false
-#endif
+    #endif
 
     var body: some View {
         Group {
@@ -30,14 +30,18 @@ struct AppShellView: View {
                 NavigationSplitView {
                     List {
                         Section("Sources") {
-                            Button { showsMacMovies = true } label: {
+                            Button {
+                                showsMacMovies = true
+                            } label: {
                                 Label("Mac Movies", systemImage: "desktopcomputer")
                             }.accessibilityIdentifier("source-mac-movies")
-                            Button { showsMacMovies = false } label: {
+                            Button {
+                                showsMacMovies = false
+                            } label: {
                                 Label("On My Vision Pro", systemImage: "visionpro")
                             }.accessibilityIdentifier("source-on-my-vision-pro")
                         }
-#if BD_TO_AVP_QUALIFICATION
+                        #if BD_TO_AVP_QUALIFICATION
                         Section("Live Relay") {
                             Button {
                                 relayCoordinator.startDiscovery()
@@ -46,9 +50,12 @@ struct AppShellView: View {
                             }
                             .disabled(!canStartRelayDiscovery)
                         }
-#endif
+                        #endif
                         Section("About") {
-                            if let privacyURL = URL(string: "https://github.com/cbusillo/BD_to_AVP/blob/c564646ff5fc80838196ee5bc839cdadf17a3068/docs/visionos-player-privacy.md") {
+                            if let privacyURL = URL(
+                                string:
+                                "https://github.com/cbusillo/BD_to_AVP/blob/c564646ff5fc80838196ee5bc839cdadf17a3068/docs/visionos-player-privacy.md"
+                            ) {
                                 Link(destination: privacyURL) {
                                     Label("Privacy Policy", systemImage: "hand.raised")
                                 }
@@ -56,8 +63,8 @@ struct AppShellView: View {
                             }
                         }
                     }
-                    .listStyle(.sidebar)
-                    .navigationTitle("Library")
+                            .listStyle(.sidebar)
+                            .navigationTitle("Library")
                 } detail: {
                     VStack(spacing: 0) {
                         if relayCoordinator.state != .idle {
@@ -76,27 +83,26 @@ struct AppShellView: View {
                 }
             }
         }
-        .sheet(isPresented: detailsPresented) {
+                .sheet(isPresented: detailsPresented) {
             if let itemID = model.selectedItemID {
                 MediaDetailsView(model: model, itemID: itemID)
             }
         }
-        .alert("Something went wrong", isPresented: errorPresented) {
+                .alert("Something went wrong", isPresented: errorPresented) {
             Button("OK") {
                 model.clearError()
             }
         } message: {
             Text(model.errorMessage ?? "Please try again.")
         }
-        .fileImporter(
+                .fileImporter(
             isPresented: $isPlayerLocatorPresented,
             allowedContentTypes: [.movie],
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result,
                   let url = urls.first,
-                  let item = playerSession.mediaItem
-            else {
+                  let item = playerSession.mediaItem else {
                 return
             }
             preparationTask?.cancel()
@@ -105,7 +111,7 @@ struct AppShellView: View {
                     itemID: item.id,
                     at: url,
                     shouldShowDetails: false
-                ), !Task.isCancelled else {
+                ),    !Task.isCancelled else {
                     return
                 }
                 await playerSession.prepare(
@@ -115,20 +121,24 @@ struct AppShellView: View {
                 )
             }
         }
-        .onChange(of: model.playbackRequest) { _, request in
-            guard let request else { return }
+                .onChange(of: model.playbackRequest) { _, request in
+            guard let request else {
+                return
+            }
             prepareForPlayback(request.item)
         }
-        .onChange(of: relayCoordinator.state) { _, state in
+                .onChange(of: relayCoordinator.state) { _, state in
             playerSession.handleRelayCoordinatorState(state)
         }
-        .onChange(of: playerSession.relayTerminationEvent) { _, event in
-            if let event { relayCoordinator.handlePlaybackTermination(event) }
+                .onChange(of: playerSession.relayTerminationEvent) { _, event in
+            if let event {
+                relayCoordinator.handlePlaybackTermination(event)
+            }
         }
-        .onDisappear {
+                .onDisappear {
             preparationTask?.cancel()
         }
-        .onChange(of: scenePhase, initial: true) { _, phase in
+                .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
                 Task {
                     await model.refreshSourceStatuses()
@@ -138,16 +148,16 @@ struct AppShellView: View {
                 playerSession.applicationBecameInactive()
             }
         }
-        .task {
+                .task {
             await model.bootstrap()
-#if BD_TO_AVP_QUALIFICATION
+            #if BD_TO_AVP_QUALIFICATION
             if !hasStartedRelayQualification {
                 hasStartedRelayQualification = true
                 await RelayQualificationDriver.runIfRequested(
                     coordinator: relayCoordinator, player: playerSession
                 )
             }
-#endif
+            #endif
         }
     }
 
@@ -167,7 +177,9 @@ struct AppShellView: View {
         sharedPlayback = selection
         preparationTask?.cancel()
         preparationTask = Task {
-            await playerSession.prepare(mediaItem: selection.mediaItem, bookmarkStore: model.bookmarkStore, resumeStore: resumeStore, sharedMovie: selection)
+            await playerSession.prepare(
+                mediaItem: selection.mediaItem, bookmarkStore: model.bookmarkStore, resumeStore: resumeStore,
+                sharedMovie: selection)
         }
     }
 
@@ -217,7 +229,11 @@ struct AppShellView: View {
     private var errorPresented: Binding<Bool> {
         Binding(
             get: { model.errorMessage != nil },
-            set: { if !$0 { model.clearError() } }
+            set: {
+                if !$0 {
+                    model.clearError()
+                }
+            }
         )
     }
 
@@ -225,8 +241,8 @@ struct AppShellView: View {
         Binding(
             get: {
                 model.isShowingDetails
-                    && model.selectedItemID != nil
-                    && model.playbackRequest == nil
+                        && model.selectedItemID != nil
+                        && model.playbackRequest == nil
             },
             set: { isPresented in
                 if !isPresented && model.playbackRequest == nil {
