@@ -10,8 +10,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
     override func tearDownWithError() throws {
         guard let bundleIdentifier = ProcessInfo.processInfo.environment["BD_TO_AVP_UI_BUNDLE_IDENTIFIER"],
-              !bundleIdentifier.isEmpty
-        else {
+              !bundleIdentifier.isEmpty else {
             return
         }
         XCUIApplication(bundleIdentifier: bundleIdentifier).terminate()
@@ -19,23 +18,27 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
     func testMissingProfileDocumentIsValidFreshInstallState() throws {
         let syntheticHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: syntheticHome) }
+        defer {
+            try? FileManager.default.removeItem(at: syntheticHome)
+        }
 
         XCTAssertNil(try readProfileSummaryIfPresent(syntheticHome: syntheticHome))
     }
 
     func testSeededProfileDocumentReportsExistingLibrary() throws {
         let syntheticHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: syntheticHome) }
+        defer {
+            try? FileManager.default.removeItem(at: syntheticHome)
+        }
         let profileDirectory = syntheticHome
-            .appendingPathComponent("Library/Application Support/3D Blu-ray to Vision Pro", isDirectory: true)
+        .appendingPathComponent("Library/Application Support/3D Blu-ray to Vision Pro", isDirectory: true)
         try FileManager.default.createDirectory(at: profileDirectory, withIntermediateDirectories: true)
         let profileDocument: [String: Any] = [
             "profiles": [["name": "Seeded Profile"]],
             "version": 6,
         ]
         try JSONSerialization.data(withJSONObject: profileDocument, options: [.sortedKeys])
-            .write(to: profileDirectory.appendingPathComponent("profiles.json"))
+                .write(to: profileDirectory.appendingPathComponent("profiles.json"))
 
         let summary = try XCTUnwrap(readProfileSummaryIfPresent(syntheticHome: syntheticHome))
 
@@ -47,7 +50,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
     func testPriorUpdaterControlsAndReleaseLinks() throws {
         let context = try QualificationContext.load(expectedPhase: "updater")
         let app = try launchInstalledApp(context: context, appearance: .light)
-        defer { app.terminate() }
+        defer {
+            app.terminate()
+        }
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 30))
         openUpdateWindow(in: app)
@@ -55,16 +60,15 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         let updateWindow = app.windows.matching(identifier: "SUUpdateAlert").firstMatch
         XCTAssertTrue(updateWindow.waitForExistence(timeout: 30))
         let identifiedInstallButton = updateWindow.buttons
-            .matching(identifier: "SPUUserUpdateChoiceInstall")
-            .firstMatch
+        .matching(identifier: "SPUUserUpdateChoiceInstall")
+        .firstMatch
         let identifiedInstallButtonExists = identifiedInstallButton.waitForExistence(timeout: 30)
-        let installButton = identifiedInstallButtonExists
-            ? identifiedInstallButton
-            : firstExistingElement(
-                in: updateWindow.buttons,
-                identifiers: ["Install and Relaunch", "Install Update", "Install on Quit"],
-                timeout: 90
-            )
+        let installButton = identifiedInstallButtonExists ? identifiedInstallButton
+                : firstExistingElement(
+            in: updateWindow.buttons,
+            identifiers: ["Install and Relaunch", "Install Update", "Install on Quit"],
+            timeout: 90
+        )
         XCTAssertNotNil(installButton)
         XCTAssertTrue(
             waitForAccessibilityEvidence(context: context, timeout: 30),
@@ -73,9 +77,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
         try attachJSON(
             [
-                "install_action": identifiedInstallButtonExists
-                    ? "SPUUserUpdateChoiceInstall"
-                    : installButton?.label ?? "",
+                "install_action": identifiedInstallButtonExists ? "SPUUserUpdateChoiceInstall": installButton?.label ?? "",
                 "release_notes_url": context.releaseNotesURL,
                 "release_notes_url_observed": false,
                 "schema_version": 1,
@@ -88,15 +90,16 @@ final class InstalledUIAcceptanceTests: XCTestCase {
     func testCandidateMainWindowProfileAndSettings() throws {
         let context = try QualificationContext.load(expectedPhase: "candidate")
         let lightApp = try launchInstalledApp(context: context, appearance: .light)
-        defer { lightApp.terminate() }
+        defer {
+            lightApp.terminate()
+        }
 
         let mainContent = lightApp.descendants(matching: .any)["main-window-content"]
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
 
-        let editAction = lightApp.buttons["edit-conversion-settings"]
-        XCTAssertTrue(editAction.waitForExistence(timeout: 20))
-        XCTAssertTrue(editAction.isEnabled)
-        editAction.click()
+        XCTAssertTrue(lightApp.descendants(matching: .any)["persistent-queue-sidebar"].exists)
+        let sourceURL = try makeSourceFixture(context: context)
+        openSourceSettings(in: lightApp, sourceURL: sourceURL)
 
         let saveAction = lightApp.buttons["save-profile-action"]
         XCTAssertTrue(saveAction.waitForExistence(timeout: 20))
@@ -119,15 +122,27 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(confirmButton.waitForExistence(timeout: 20))
         XCTAssertTrue(confirmButton.isEnabled)
         confirmButton.click()
-        XCTAssertTrue(waitUntil(timeout: 20) { !nameField.exists })
+        XCTAssertTrue(waitUntil(timeout: 20) {
+            !nameField.exists
+        })
 
         let profileSummary = try readProfileSummary(syntheticHome: context.syntheticHome)
         XCTAssertEqual(profileSummary.version, 6)
         XCTAssertEqual(profileSummary.count, profilesBefore + 1)
-        XCTAssertEqual(profileSummary.names.filter { $0 == Self.profileName }.count, 1)
+        XCTAssertEqual(profileSummary.names.filter {
+            $0 == Self.profileName
+        }.count, 1)
         for existingName in profileSummaryBefore?.names ?? [] {
             XCTAssertTrue(profileSummary.names.contains(existingName))
         }
+
+        XCTAssertTrue(waitUntil(timeout: 20) {
+            !saveAction.exists
+        })
+        lightApp.buttons["Cancel"].click()
+        XCTAssertTrue(waitUntil(timeout: 20) {
+            !lightApp.descendants(matching: .any)["source-configuration-sheet"].exists
+        })
 
         let lightWindow = lightApp.windows.firstMatch
         XCTAssertTrue(lightWindow.exists)
@@ -165,7 +180,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
         lightApp.terminate()
         let darkApp = try launchInstalledApp(context: context, appearance: .dark)
-        defer { darkApp.terminate() }
+        defer {
+            darkApp.terminate()
+        }
         XCTAssertTrue(
             darkApp.descendants(matching: .any)["main-window-content"].waitForExistence(timeout: 30)
         )
@@ -188,7 +205,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         ]
         app.launchArguments = QualificationAppearance.light.launchArguments
         app.launch()
-        defer { app.terminate() }
+        defer {
+            app.terminate()
+        }
 
         let mainContent = app.descendants(matching: .any)["main-window-content"]
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
@@ -217,10 +236,66 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         attachScreenshot(window.screenshot(), name: "setup-editor-light.png")
     }
 
-    private func launchInstalledApp(
-        context: QualificationContext,
-        appearance: QualificationAppearance
-    ) throws -> XCUIApplication {
+    private func makeSourceFixture(context: QualificationContext) throws -> URL {
+        let sourceURL = context.syntheticHome.appendingPathComponent("installed-ui-source.m2ts")
+        let generator = Process()
+        generator.executableURL = context.appURL
+        .appendingPathComponent("Contents/Resources/app/bd_to_avp/bin/ffmpeg")
+        generator.arguments = [
+            "-nostdin", "-loglevel", "error", "-f", "lavfi",
+            "-i", "testsrc=size=160x90:rate=24", "-t", "0.25",
+            "-c:v", "mpeg2video", "-f", "mpegts", sourceURL.path,
+        ]
+        generator.standardOutput = FileHandle.nullDevice
+        generator.standardError = FileHandle.nullDevice
+        try generator.run()
+        defer {
+            if generator.isRunning {
+                generator.terminate()
+            }
+        }
+        XCTAssertTrue(waitUntil(timeout: 30) {
+            !generator.isRunning
+        }, "Source fixture generation timed out.")
+        XCTAssertEqual(generator.terminationStatus, 0, "The packaged FFmpeg could not create the source fixture.")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
+        return sourceURL
+    }
+
+    private func openSourceSettings(in app: XCUIApplication, sourceURL: URL) {
+        let sourceMenu = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", "Add Sources")).firstMatch
+        XCTAssertTrue(sourceMenu.waitForExistence(timeout: 20))
+        sourceMenu.click()
+        let configureAction = app.menuItems["Configure Source…"]
+        XCTAssertTrue(configureAction.waitForExistence(timeout: 20))
+        configureAction.click()
+
+        let openAction = app.buttons["Open Source"]
+        XCTAssertTrue(openAction.waitForExistence(timeout: 20))
+        app.typeKey("/", modifierFlags: [])
+        let pathField = app.textFields["PathTextField"]
+        XCTAssertTrue(pathField.waitForExistence(timeout: 20))
+        pathField.typeKey("a", modifierFlags: .command)
+        pathField.typeText(sourceURL.path)
+        pathField.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 20) {
+            openAction.isEnabled
+        })
+        openAction.click()
+
+        let configuration = app.descendants(matching: .any)["source-configuration-sheet"]
+        XCTAssertTrue(configuration.waitForExistence(timeout: 30))
+        let editAction = app.buttons["Edit Settings…"]
+        XCTAssertTrue(editAction.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntil(timeout: 30) {
+            editAction.isEnabled
+        }, "Source inspection did not enable settings.")
+        editAction.click()
+    }
+
+    private func launchInstalledApp(context: QualificationContext,
+                                    appearance: QualificationAppearance) throws -> XCUIApplication {
         let app = XCUIApplication(url: context.appURL)
         app.launchEnvironment = [
             "HOME": context.syntheticHome.path,
@@ -257,11 +332,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["updates-settings-pane"].waitForExistence(timeout: 20))
     }
 
-    private func firstExistingElement(
-        in query: XCUIElementQuery,
-        identifiers: [String],
-        timeout: TimeInterval
-    ) -> XCUIElement? {
+    private func firstExistingElement(in query: XCUIElementQuery,
+                                      identifiers: [String],
+                                      timeout: TimeInterval) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             for identifier in identifiers {
@@ -281,13 +354,10 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         return nil
     }
 
-    private func waitForAccessibilityEvidence(
-        context: QualificationContext,
-        timeout: TimeInterval
-    ) -> Bool {
-        let filename = context.phase == "candidate"
-            ? "accessibility-tree.json"
-            : "updater-accessibility.json"
+    private func waitForAccessibilityEvidence(context: QualificationContext,
+                                              timeout: TimeInterval) -> Bool {
+        let filename = context.phase == "candidate" ? "accessibility-tree.json"
+                : "updater-accessibility.json"
         let evidenceURL = context.outputDirectory.appendingPathComponent(filename)
         return waitUntil(timeout: timeout) {
             FileManager.default.fileExists(atPath: evidenceURL.path)
@@ -411,19 +481,20 @@ private func readProfileSummary(syntheticHome: URL) throws -> ProfileSummary {
 
 private func readProfileSummaryIfPresent(syntheticHome: URL) throws -> ProfileSummary? {
     let profileURL = syntheticHome
-        .appendingPathComponent("Library/Application Support/3D Blu-ray to Vision Pro", isDirectory: true)
-        .appendingPathComponent("profiles.json")
+            .appendingPathComponent("Library/Application Support/3D Blu-ray to Vision Pro", isDirectory: true)
+            .appendingPathComponent("profiles.json")
     guard FileManager.default.fileExists(atPath: profileURL.path) else {
         return nil
     }
     let data = try Data(contentsOf: profileURL)
     guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let version = root["version"] as? Int,
-          let profiles = root["profiles"] as? [[String: Any]]
-    else {
+          let profiles = root["profiles"] as? [[String: Any]] else {
         throw QualificationError.missingProfileDocument
     }
-    let names = profiles.compactMap { $0["name"] as? String }
+    let names = profiles.compactMap {
+        $0["name"] as? String
+    }
     guard names.count == profiles.count else {
         throw QualificationError.missingProfileDocument
     }

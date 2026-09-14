@@ -88,6 +88,14 @@ Developer ID, notarization, signed-DMG, exact-artifact UI, appcast, and
 post-publication gates remain mandatory; production preflight moves fixture and
 packaged-runtime feedback earlier without substituting for release evidence.
 
+The installed-UI fixture starts in the queue workspace, generates a small
+synthetic M2TS with the installed app's FFmpeg, and opens it through **Add
+Sources > Configure Source…**. It waits for source inspection before entering
+**Edit Settings…**, saves a new profile, dismisses source configuration, and
+checks the update controls. The profile document and media fixture live in the
+qualification home. Keep these real UI and persistence checks when navigation
+changes; a missing control must fail qualification rather than skip it.
+
 ## Release Preparation
 
 Every release version and Sparkle build number is committed through a normal
