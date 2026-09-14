@@ -101,17 +101,31 @@ The player uses only Apple's built-in cryptographic implementations for pairing
 and authentication; its plist declares no non-exempt encryption. Reassess that
 configuration if cryptographic dependencies or capabilities change.
 
-From a clean task checkout with the desired build number in `macos/project.yml`:
+Use an Xcode release currently accepted by App Store Connect, verified against
+[Apple's release notes](https://developer.apple.com/help/app-store-connect/release-notes/).
+A locally successful archive does not establish upload eligibility. Select that
+installation for these commands with `BD_TO_AVP_XCODE_DEVELOPER_DIR`; this does not
+change the machine's global Xcode selection.
+
+Set and commit `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` for `BDToAVPPlayer`
+in `macos/project.yml`, then build from that clean checkout. Use a higher build
+number than any previously accepted upload. Keep the source commit, Xcode build number, archive and dSYMs,
+export log and IPA SHA256 together with the delivery record.
 
 ```sh
+BD_TO_AVP_XCODE_DEVELOPER_DIR=/absolute/path/to/supported/Xcode.app/Contents/Developer
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" /usr/bin/xcodebuild -version
+git rev-parse HEAD
 uv run python scripts/native_app.py generate
-xcodebuild archive -project macos/BluRayToVisionPro.xcodeproj \
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" /usr/bin/xcodebuild archive \
+  -project macos/BluRayToVisionPro.xcodeproj \
   -scheme BDToAVPPlayer -configuration Release \
   -destination 'generic/platform=visionOS' \
   -derivedDataPath build/testflight/DerivedData \
   -archivePath build/testflight/BDToAVPPlayer.xcarchive \
   -allowProvisioningUpdates
-PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
   -archivePath build/testflight/BDToAVPPlayer.xcarchive \
   -exportPath build/testflight/export-internal \
   -exportOptionsPlist macos/TestFlightInternalExportOptions.plist \
@@ -121,9 +135,28 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
 The export options restrict the build to internal testing. The command-local
 system PATH keeps Apple's copy tools paired with Apple's rsync during export.
 For an authorized upload, copy the export options to the ignored build directory
-and change `destination` to `upload`, then export the same reviewed archive with
-those options. Wait for App Store Connect processing and attach the exact build
-to **AVP Internal**. Do not dispatch the Mac Stable/Prerelease workflows for this.
+and change only `destination` to `upload`, then export the same reviewed archive:
+
+```sh
+cp macos/TestFlightInternalExportOptions.plist build/testflight/ExportOptions-Upload.plist
+/usr/libexec/PlistBuddy -c 'Set :destination upload' build/testflight/ExportOptions-Upload.plist
+DEVELOPER_DIR="$BD_TO_AVP_XCODE_DEVELOPER_DIR" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive \
+  -archivePath build/testflight/BDToAVPPlayer.xcarchive \
+  -exportPath build/testflight/upload-internal \
+  -exportOptionsPlist build/testflight/ExportOptions-Upload.plist \
+  -allowProvisioningUpdates
+```
+
+Wait for App Store Connect processing and attach the exact build to **AVP
+Internal**. An upload rejected for an unsupported SDK/Xcode requires a new archive
+from an accepted toolchain; retrying the old archive cannot fix it. Do not dispatch
+the Mac Stable/Prerelease workflows for this.
+
+To withdraw a beta, open its build in App Store Connect's TestFlight tab and use
+**Expire Build**, which prevents further tester installation. Record the affected
+version/build and reason, and select a known-good unexpired build for the internal
+group when available. See [Apple's withdrawal procedure](https://developer.apple.com/help/app-store-connect/test-a-beta-version/stop-testing-a-build/).
 
 Publish the compatible Mac companion with the repository's `publish-current`
 command. Keep its stable Current link and the commit-addressed build metadata;
