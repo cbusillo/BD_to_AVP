@@ -1,9 +1,9 @@
 # Test Audit Inventory v1
 
-- Baseline reference: `c670fe0c15445f49a0928bc26f1f699c1a1b8ace`
-- Test files: **170**
+- Baseline reference: `4370bb49ef73e39570e33842809438443b00381e`
+- Test files: **172**
 - Support fixtures: **71**
-- Test cases counted: **2918**
+- Test cases counted: **2930**
 - Classification source: `docs/test-audit/classifications-v1.json`
 
 ## Lanes
@@ -64,7 +64,7 @@ CODE_SIGNING_ALLOWED=NO` | `.github/workflows/ci.yml`, `macos/project.yml` |
 
 ## Disposition Summary
 
-- `accepted-cost`: **55** rows.
+- `accepted-cost`: **57** rows.
 - `valuable`: **186** rows.
 - High-confidence implementation candidates are recorded in the JSON artifact.
 - Non-actionable review observations: **1**.
@@ -146,6 +146,8 @@ Exact-head evidence captured from `257fd21f38e49031b9fa96a733875702313ebd5c`:
 | `macos/BluRayToVisionProTests/JSONLFramerTests.swift` | Swift | `BluRayToVisionProTests` | 3 | `valuable` | macos/BluRayToVisionProTests/JSONLFramerTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | — |
 | `macos/BluRayToVisionProTests/LanguageCatalogTests.swift` | Swift | `BluRayToVisionProTests` | 6 | `valuable` | macos/BluRayToVisionProTests/LanguageCatalogTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | — |
 | `macos/BluRayToVisionProTests/LiveObservabilityStatusTests.swift` | Swift | `BluRayToVisionProTests` | 12 | `accepted-cost` | macos/BluRayToVisionProTests/LiveObservabilityStatusTests.swift covers a CI-executed conversion, diagnostics, preview, or worker boundary with fixtures, process coordination, or environment setup. That setup cost is accepted because no behavioral replacement or removal proof exists. | `ci-macos-app-unit`, `media-hardware-contract` | repository fixture files | filesystem_access (8) |
+| `macos/BluRayToVisionProTests/MovieHTTPTransportTests.swift` | Swift | `BluRayToVisionProTests` | 3 | `accepted-cost` | macos/BluRayToVisionProTests/MovieHTTPTransportTests.swift covers a CI-executed conversion, diagnostics, preview, or worker boundary with fixtures, process coordination, or environment setup. That setup cost is accepted because no behavioral replacement or removal proof exists. | `ci-macos-app-unit`, `media-hardware-contract` | network access | network_access (2) |
+| `macos/BluRayToVisionProTests/MovieLibraryTests.swift` | Swift | `BluRayToVisionProTests` | 9 | `accepted-cost` | macos/BluRayToVisionProTests/MovieLibraryTests.swift covers a CI-executed conversion, diagnostics, preview, or worker boundary with fixtures, process coordination, or environment setup. That setup cost is accepted because no behavioral replacement or removal proof exists. | `ci-macos-app-unit`, `media-hardware-contract` | network access; visionOS simulator or physical Apple Vision Pro, depending on evidence | filesystem_access (11), polling_or_waiting (3), network_access (1), hardware_or_media (1) |
 | `macos/BluRayToVisionProTests/ObservabilityEventStoreTests.swift` | Swift | `BluRayToVisionProTests` | 12 | `accepted-cost` | macos/BluRayToVisionProTests/ObservabilityEventStoreTests.swift covers a CI-executed conversion, diagnostics, preview, or worker boundary with fixtures, process coordination, or environment setup. That setup cost is accepted because no behavioral replacement or removal proof exists. | `ci-macos-app-unit`, `media-hardware-contract` | repository fixture files | filesystem_access (46), external_process (1), polling_or_waiting (1) |
 | `macos/BluRayToVisionProTests/ObservabilityEventTests.swift` | Swift | `BluRayToVisionProTests` | 6 | `valuable` | macos/BluRayToVisionProTests/ObservabilityEventTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | repository fixture files | filesystem_access (3) |
 | `macos/BluRayToVisionProTests/OffPeakScheduleStoreTests.swift` | Swift | `BluRayToVisionProTests` | 8 | `valuable` | macos/BluRayToVisionProTests/OffPeakScheduleStoreTests.swift runs in the maintained macOS app unit target and asserts an application behavior or explicit model/render contract. The inventory found no concrete duplicate or obsolete-contract evidence. | `ci-macos-app-unit` | — | filesystem_access (5) |

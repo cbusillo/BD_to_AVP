@@ -173,6 +173,8 @@
         "macos/BluRayToVisionProTests/DiagnosticBundleTests.swift",
         "macos/BluRayToVisionProTests/DiagnosticReportClientTests.swift",
         "macos/BluRayToVisionProTests/LiveObservabilityStatusTests.swift",
+        "macos/BluRayToVisionProTests/MovieHTTPTransportTests.swift",
+        "macos/BluRayToVisionProTests/MovieLibraryTests.swift",
         "macos/BluRayToVisionProTests/ObservabilityEventStoreTests.swift",
         "macos/BluRayToVisionProTests/PreviewPresentationSmokeTests.swift",
         "macos/BluRayToVisionProTests/PreviewViewModelTests.swift",
