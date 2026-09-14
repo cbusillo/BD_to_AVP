@@ -1,8 +1,8 @@
-# BD to AVP Player Privacy Policy
+# Shiny 3D Cinema Privacy Policy
 
 Last updated: September 14, 2026
 
-BD to AVP Player is a movie player for Apple Vision Pro provided by Shiny
+Shiny 3D Cinema is a movie player for Apple Vision Pro provided by Shiny
 Computers Leasing LLC. This policy covers the Vision Pro player.
 
 ## Your movies and library
