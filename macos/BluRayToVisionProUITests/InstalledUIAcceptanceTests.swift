@@ -6,6 +6,24 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        let phase = ProcessInfo.processInfo.environment["BD_TO_AVP_UI_PHASE"]
+        guard phase == "candidate" || phase == "updater" else {
+            return
+        }
+        addUIInterruptionMonitor(withDescription: "Dismiss optional app permission dialogs") { element in
+            let message = element.staticTexts.allElementsBoundByIndex.map {
+                ($0.value as? String) ?? $0.label
+            }.joined(separator: " ")
+            guard message.contains("3D Blu-ray to Vision Pro"),
+                  element.buttons["Allow"].firstMatch.exists,
+                  let decline = ["Don’t Allow", "Don't Allow"].map({
+                      element.buttons[$0].firstMatch
+                  }).first(where: { $0.exists }) else {
+                return false
+            }
+            decline.click()
+            return true
+        }
     }
 
     override func tearDownWithError() throws {
@@ -98,7 +116,8 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
 
         XCTAssertTrue(lightApp.descendants(matching: .any)["persistent-queue-sidebar"].exists)
-        let sourceURL = try makeSourceFixture(context: context)
+        let sourceURL = context.syntheticHome.appendingPathComponent("installed-ui-source.m2ts")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path), "The runner did not provide the source fixture.")
         openSourceSettings(in: lightApp, sourceURL: sourceURL)
 
         let saveAction = lightApp.buttons["save-profile-action"]
@@ -139,7 +158,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 20) {
             !saveAction.exists
         })
-        lightApp.buttons["Cancel"].click()
+        lightApp.windows.firstMatch.buttons["Cancel"].firstMatch.click()
         XCTAssertTrue(waitUntil(timeout: 20) {
             !lightApp.descendants(matching: .any)["source-configuration-sheet"].exists
         })
@@ -236,42 +255,17 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         attachScreenshot(window.screenshot(), name: "setup-editor-light.png")
     }
 
-    private func makeSourceFixture(context: QualificationContext) throws -> URL {
-        let sourceURL = context.syntheticHome.appendingPathComponent("installed-ui-source.m2ts")
-        let generator = Process()
-        generator.executableURL = context.appURL
-        .appendingPathComponent("Contents/Resources/app/bd_to_avp/bin/ffmpeg")
-        generator.arguments = [
-            "-nostdin", "-loglevel", "error", "-f", "lavfi",
-            "-i", "testsrc=size=160x90:rate=24", "-t", "0.25",
-            "-c:v", "mpeg2video", "-f", "mpegts", sourceURL.path,
-        ]
-        generator.standardOutput = FileHandle.nullDevice
-        generator.standardError = FileHandle.nullDevice
-        try generator.run()
-        defer {
-            if generator.isRunning {
-                generator.terminate()
-            }
-        }
-        XCTAssertTrue(waitUntil(timeout: 30) {
-            !generator.isRunning
-        }, "Source fixture generation timed out.")
-        XCTAssertEqual(generator.terminationStatus, 0, "The packaged FFmpeg could not create the source fixture.")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
-        return sourceURL
-    }
-
     private func openSourceSettings(in app: XCUIApplication, sourceURL: URL) {
-        let sourceMenu = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == %@", "Add Sources")).firstMatch
+        let sourceMenu = app.menuButtons["add-sources-menu"]
         XCTAssertTrue(sourceMenu.waitForExistence(timeout: 20))
         sourceMenu.click()
         let configureAction = app.menuItems["Configure Source…"]
         XCTAssertTrue(configureAction.waitForExistence(timeout: 20))
         configureAction.click()
 
-        let openAction = app.buttons["Open Source"]
+        let sourcePanel = app.dialogs["open-panel"]
+        XCTAssertTrue(sourcePanel.waitForExistence(timeout: 20))
+        let openAction = sourcePanel.buttons["OKButton"]
         XCTAssertTrue(openAction.waitForExistence(timeout: 20))
         app.typeKey("/", modifierFlags: [])
         let pathField = app.textFields["PathTextField"]

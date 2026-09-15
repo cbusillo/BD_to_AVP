@@ -88,13 +88,23 @@ Developer ID, notarization, signed-DMG, exact-artifact UI, appcast, and
 post-publication gates remain mandatory; production preflight moves fixture and
 packaged-runtime feedback earlier without substituting for release evidence.
 
-The installed-UI fixture starts in the queue workspace, generates a small
-synthetic M2TS with the installed app's FFmpeg, and opens it through **Add
-Sources > Configure Source…**. It waits for source inspection before entering
+The release runner generates a small synthetic M2TS with the installed app's
+FFmpeg before launching XCTest, retaining bounded command diagnostics on failure.
+The installed-UI test starts in the queue workspace and opens that fixture through
+**Add Sources > Configure Source…**. It waits for source inspection before entering
 **Edit Settings…**, saves a new profile, dismisses source configuration, and
 checks the update controls. The profile document and media fixture live in the
 qualification home. Keep these real UI and persistence checks when navigation
 changes; a missing control must fail qualification rather than skip it.
+The test scopes the file picker action to its dialog so the duplicate Touch Bar
+action cannot make the lookup ambiguous. It dismisses optional permission
+prompts for this app during profile and updater checks; local-network permission
+and playback still need their separate device qualification.
+
+Normal CI runs the same installed-UI check against its packaged app and retains
+the report, screenshots, and failure diagnostics for seven days. This catches
+navigation and fixture regressions in a pull request. It does not replace the
+separate Production Preflight on the exact protected-main commit.
 
 ## Release Preparation
 
