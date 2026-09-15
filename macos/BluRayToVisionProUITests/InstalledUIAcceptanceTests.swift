@@ -238,8 +238,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
     }
 
     private func openSourceSettings(in app: XCUIApplication, sourceURL: URL) {
-        let sourceMenu = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == %@", "Add Sources")).firstMatch
+        let sourceMenu = app.menuButtons["add-sources-menu"]
         XCTAssertTrue(sourceMenu.waitForExistence(timeout: 20))
         sourceMenu.click()
         let configureAction = app.menuItems["Configure Source…"]

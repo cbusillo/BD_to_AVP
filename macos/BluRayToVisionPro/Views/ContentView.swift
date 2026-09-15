@@ -604,6 +604,8 @@ struct ContentView: View {
         } label: {
             Label("Add Sources", systemImage: "plus")
         }
+        .accessibilityIdentifier("add-sources-menu")
+        .accessibilityLabel("Add Sources")
         .help("Add a physical disc, disc image, Blu-ray folder, source folder, MKV, or transport stream to the queue")
         .disabled(!canSelectSource)
     }
