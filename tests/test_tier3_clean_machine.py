@@ -574,6 +574,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             (repo / "macos").mkdir(parents=True)
             app_path = root / "Applications" / APP_NAME
             synthetic_home = root / "Synthetic Home"
+            synthetic_home.mkdir()
             for phase, (test_name, evidence_name) in expected_tests.items():
                 with self.subTest(phase=phase):
                     output_directory = root / f"Evidence {phase}"
@@ -586,6 +587,8 @@ class Tier3CleanMachineTests(unittest.TestCase):
                     ) -> subprocess.CompletedProcess[str]:
                         captured_commands.append(list(command))
                         self.assertNotIn("env", kwargs)
+                        if Path(command[0]).name == "ffmpeg":
+                            Path(command[-1]).write_bytes(b"synthetic source")
                         return subprocess.CompletedProcess(command, 0, "", "")
 
                     def extract_attachments(
@@ -656,12 +659,12 @@ class Tier3CleanMachineTests(unittest.TestCase):
                             release_notes_url=release_notes_url,
                         )
 
-                    self.assertEqual(len(captured_commands), 1)
+                    self.assertEqual(len(captured_commands), 2 if phase == "candidate" else 1)
                     finish_collector.assert_called_once_with(collector)
                     if phase == "updater":
                         updater_evidence = json.loads((output_directory / evidence_name).read_text(encoding="utf-8"))
                         self.assertIs(updater_evidence["release_notes_url_observed"], True)
-                    command = captured_commands[0]
+                    command = captured_commands[-1]
                     expected_settings = {
                         "BD_TO_AVP_UI_APP_PATH": str(app_path),
                         "BD_TO_AVP_UI_BUNDLE_IDENTIFIER": BUNDLE_IDENTIFIER,
@@ -704,6 +707,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 ),
                 patch.object(MacOSOperations, "_finish_accessibility_collector"),
                 patch.object(MacOSOperations, "_extract_ui_attachments"),
+                patch.object(MacOSOperations, "_create_ui_source_fixture"),
             ):
                 with self.assertRaisesRegex(
                     CleanMachineError,
@@ -717,6 +721,60 @@ class Tier3CleanMachineTests(unittest.TestCase):
                         output_directory=root / "Evidence",
                         release_notes_url=RELEASES_URL,
                     )
+
+    def test_source_fixture_failure_stops_before_ui_launch_and_retains_stderr(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with (
+                patch(
+                    "scripts.tier3_clean_machine.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], 255, "", "fixture generation failed"),
+                ) as run,
+                patch.object(MacOSOperations, "_start_accessibility_collector") as start_collector,
+            ):
+                with self.assertRaisesRegex(CleanMachineError, "(?s)stderr.*fixture generation failed"):
+                    operations.collect_ui_evidence(
+                        repo=root,
+                        phase="candidate",
+                        app_path=root / APP_NAME,
+                        synthetic_home=root,
+                        output_directory=root / "Evidence",
+                        release_notes_url=RELEASES_URL,
+                    )
+            start_collector.assert_not_called()
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(Path(run.call_args.args[0][0]).name, "ffmpeg")
+
+    def test_source_fixture_rejects_missing_or_empty_output(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            for empty_output in (False, True):
+                with self.subTest(empty_output=empty_output):
+
+                    def run(
+                        command: Any, empty_output: bool = empty_output, **_kwargs: Any
+                    ) -> subprocess.CompletedProcess[str]:
+                        if empty_output:
+                            Path(command[-1]).touch()
+                        return subprocess.CompletedProcess(command, 0, "", "")
+
+                    with patch.object(MacOSOperations, "_run", side_effect=run):
+                        with self.assertRaisesRegex(CleanMachineError, "fixture was not generated"):
+                            operations._create_ui_source_fixture(app_path=root / APP_NAME, synthetic_home=root)
+
+    def test_source_fixture_does_not_overwrite_existing_input(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "installed-ui-source.m2ts"
+            source.write_bytes(b"existing source")
+            with patch.object(MacOSOperations, "_run") as run:
+                with self.assertRaisesRegex(CleanMachineError, "must not already exist"):
+                    operations._create_ui_source_fixture(app_path=root / APP_NAME, synthetic_home=root)
+            run.assert_not_called()
+            self.assertEqual(source.read_bytes(), b"existing source")
 
     def test_stop_accessibility_collector_reaps_an_already_exited_process(self) -> None:
         collector = Mock()

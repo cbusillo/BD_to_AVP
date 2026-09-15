@@ -18,7 +18,7 @@ permissions:
 jobs:
   validate:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Check out repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -176,6 +176,36 @@ jobs:
           BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: https://diagnostics.shinycomputers.com
           DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
         run: uv run python scripts/native_app.py package
+
+      - name: Installed Mac UI smoke
+        id: installed-ui
+        timeout-minutes: 10
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.pre_signing_ui \
+            --app "macos/build/package/3D Blu-ray to Vision Pro.app" \
+            --dmg "$RUNNER_TEMP/ci-installed-ui.dmg" \
+            --qualification-root "$RUNNER_TEMP/ci-installed-ui" \
+            --evidence-directory "$RUNNER_TEMP/ci-installed-ui-evidence" \
+            --output-report "$RUNNER_TEMP/ci-installed-ui-report.json" \
+            --failure-diagnostics-directory "$RUNNER_TEMP/ci-installed-ui-diagnostics" \
+            --source-sha "$(git rev-parse HEAD)" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Retain installed Mac UI evidence
+        if: always() && steps.installed-ui.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-installed-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ci-installed-ui-report.json
+            ${{ runner.temp }}/ci-installed-ui-evidence
+            ${{ runner.temp }}/ci-installed-ui-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Import smoke
         run: >-

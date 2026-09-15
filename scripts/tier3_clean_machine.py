@@ -1154,6 +1154,34 @@ class MacOSOperations:
         except CleanMachineError as error:
             raise _sparkle_script_failure(error, action_pressed=False) from error
 
+    def _create_ui_source_fixture(self, *, app_path: Path, synthetic_home: Path) -> Path:
+        source = synthetic_home / "installed-ui-source.m2ts"
+        if source.exists() or source.is_symlink():
+            raise CleanMachineError("Installed UI source fixture must not already exist.")
+        self._run(
+            [
+                str(app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ffmpeg"),
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x90:rate=24",
+                "-t",
+                "0.25",
+                "-c:v",
+                "mpeg2video",
+                "-f",
+                "mpegts",
+                str(source),
+            ],
+            timeout=30,
+        )
+        if not source.is_file() or source.stat().st_size == 0:
+            raise CleanMachineError("Installed UI source fixture was not generated.")
+        return source
+
     def collect_ui_evidence(
         self,
         *,
@@ -1172,6 +1200,8 @@ class MacOSOperations:
             test_name = test_names[phase]
         except KeyError as error:
             raise CleanMachineError(f"Unsupported installed UI phase: {phase}") from error
+        if phase == "candidate":
+            self._create_ui_source_fixture(app_path=app_path, synthetic_home=synthetic_home)
         output_directory.mkdir(parents=True, exist_ok=True)
         derived_data = output_directory.parent / f"InstalledUIDerivedData-{phase}"
         result_bundle = output_directory.parent / f"InstalledUI-{phase}.xcresult"

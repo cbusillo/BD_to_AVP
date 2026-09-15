@@ -98,7 +98,8 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
 
         XCTAssertTrue(lightApp.descendants(matching: .any)["persistent-queue-sidebar"].exists)
-        let sourceURL = try makeSourceFixture(context: context)
+        let sourceURL = context.syntheticHome.appendingPathComponent("installed-ui-source.m2ts")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path), "The runner did not provide the source fixture.")
         openSourceSettings(in: lightApp, sourceURL: sourceURL)
 
         let saveAction = lightApp.buttons["save-profile-action"]
@@ -234,32 +235,6 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(sheet.exists)
         XCTAssertGreaterThanOrEqual(sheet.frame.width, 640)
         attachScreenshot(window.screenshot(), name: "setup-editor-light.png")
-    }
-
-    private func makeSourceFixture(context: QualificationContext) throws -> URL {
-        let sourceURL = context.syntheticHome.appendingPathComponent("installed-ui-source.m2ts")
-        let generator = Process()
-        generator.executableURL = context.appURL
-        .appendingPathComponent("Contents/Resources/app/bd_to_avp/bin/ffmpeg")
-        generator.arguments = [
-            "-nostdin", "-loglevel", "error", "-f", "lavfi",
-            "-i", "testsrc=size=160x90:rate=24", "-t", "0.25",
-            "-c:v", "mpeg2video", "-f", "mpegts", sourceURL.path,
-        ]
-        generator.standardOutput = FileHandle.nullDevice
-        generator.standardError = FileHandle.nullDevice
-        try generator.run()
-        defer {
-            if generator.isRunning {
-                generator.terminate()
-            }
-        }
-        XCTAssertTrue(waitUntil(timeout: 30) {
-            !generator.isRunning
-        }, "Source fixture generation timed out.")
-        XCTAssertEqual(generator.terminationStatus, 0, "The packaged FFmpeg could not create the source fixture.")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
-        return sourceURL
     }
 
     private func openSourceSettings(in app: XCUIApplication, sourceURL: URL) {
