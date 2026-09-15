@@ -2717,7 +2717,7 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 8,
+          "occurrences": 9,
           "signal": "environment_dependent"
         },
         {
@@ -2725,7 +2725,7 @@
           "signal": "filesystem_access"
         },
         {
-          "occurrences": 41,
+          "occurrences": 42,
           "signal": "polling_or_waiting"
         },
         {
@@ -2733,7 +2733,7 @@
           "signal": "ui_or_accessibility"
         },
         {
-          "occurrences": 2,
+          "occurrences": 3,
           "signal": "hardware_or_media"
         },
         {

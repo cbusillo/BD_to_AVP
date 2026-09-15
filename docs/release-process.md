@@ -96,6 +96,10 @@ The installed-UI test starts in the queue workspace and opens that fixture throu
 checks the update controls. The profile document and media fixture live in the
 qualification home. Keep these real UI and persistence checks when navigation
 changes; a missing control must fail qualification rather than skip it.
+The test scopes the file picker action to its dialog so the duplicate Touch Bar
+action cannot make the lookup ambiguous. It dismisses optional permission
+prompts for this app during profile and updater checks; local-network permission
+and playback still need their separate device qualification.
 
 Normal CI runs the same installed-UI check against its packaged app and retains
 the report, screenshots, and failure diagnostics for seven days. This catches

@@ -6,6 +6,24 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        let phase = ProcessInfo.processInfo.environment["BD_TO_AVP_UI_PHASE"]
+        guard phase == "candidate" || phase == "updater" else {
+            return
+        }
+        addUIInterruptionMonitor(withDescription: "Dismiss optional app permission dialogs") { element in
+            let message = element.staticTexts.allElementsBoundByIndex.map {
+                ($0.value as? String) ?? $0.label
+            }.joined(separator: " ")
+            guard message.contains("3D Blu-ray to Vision Pro"),
+                  element.buttons["Allow"].firstMatch.exists,
+                  let decline = ["Don’t Allow", "Don't Allow"].map({
+                      element.buttons[$0].firstMatch
+                  }).first(where: { $0.exists }) else {
+                return false
+            }
+            decline.click()
+            return true
+        }
     }
 
     override func tearDownWithError() throws {
@@ -140,7 +158,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 20) {
             !saveAction.exists
         })
-        lightApp.buttons["Cancel"].click()
+        lightApp.windows.firstMatch.buttons["Cancel"].firstMatch.click()
         XCTAssertTrue(waitUntil(timeout: 20) {
             !lightApp.descendants(matching: .any)["source-configuration-sheet"].exists
         })
@@ -245,7 +263,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(configureAction.waitForExistence(timeout: 20))
         configureAction.click()
 
-        let openAction = app.buttons["Open Source"]
+        let sourcePanel = app.dialogs["open-panel"]
+        XCTAssertTrue(sourcePanel.waitForExistence(timeout: 20))
+        let openAction = sourcePanel.buttons["OKButton"]
         XCTAssertTrue(openAction.waitForExistence(timeout: 20))
         app.typeKey("/", modifierFlags: [])
         let pathField = app.textFields["PathTextField"]
