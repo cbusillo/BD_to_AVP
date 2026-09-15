@@ -22,8 +22,9 @@ unpublished signed attempt whose draft `374538590` was deleted through the
 authorized immutable-disposition path; its tag and build are permanently
 non-reusable. Beta `0.3.2b7` build `169` and RC `0.3.2rc1` build `170` are
 published, immutable, and fully qualified. Stable `0.3.2` build `171` is
-published and immutable. Issue #659 owns prepared successor Beta `0.3.3b1`
-build `172`; Prerelease dispatch, signing approval, and publication remain
+published and immutable. Beta `0.3.3b1` build `172` is also published and
+qualified. Issue #741 owns prepared successor Beta `0.3.3b2` build `173`;
+Prerelease dispatch, signing approval, and publication remain
 separately authorized. Run-bound signing approval remains a separate
 authorization boundary.
 
@@ -504,15 +505,18 @@ zero blocking cases and 15 completed cases. Its immutable publication and
 qualification contract is recorded in
 [the 0.3.2 RC 1 cut packet](0.3.2-rc.1-cut-packet.md).
 
-Beta `0.3.3b1` is prepared as public tag and title `v0.3.3-beta.1` with global
-build `172`. Published Stable `0.3.2` build `171` is the immediate global
-predecessor and immutable Stable update and release-note base. The Beta item is
-eligible only on the Beta and Alpha update routes and is published through the
-Prerelease workflow. Failed builds `165` and `166` and
-cancelled build `168` remain burned. No Prerelease dispatch, signing approval,
-tag, release, draft, appcast, PyPI, or Homebrew mutation is authorized by this
-preparation. The preparation contract is recorded in
-[the 0.3.3 Beta 1 cut packet](0.3.3-beta.1-cut-packet.md).
+Beta `0.3.3b1`, public tag `v0.3.3-beta.1`, is published and qualified at global
+build `172`. Its checked release receipt and Release Evidence v2 bundle remain
+immutable. It is the selected updater source for prepared Beta `0.3.3b2`, public
+tag and title `v0.3.3-beta.2`, build `173`. Stable `0.3.2` build `171` remains the
+prior Stable history and evidence base.
+
+Beta 2 adds Movie Sharing to the full Mac app for Shiny 3D Cinema. Its item is
+eligible on the Beta and Alpha update routes through the Prerelease workflow.
+Failed builds `165` and `166` and cancelled build `168` remain burned. The
+candidate identity, passing Production Preflight and signing boundary are in
+[the 0.3.3 Beta 2 cut packet](0.3.3-beta.2-cut-packet.md); installation and pairing
+instructions are in the [Movie Sharing beta quick start](movie-sharing-beta.md).
 
 ## Historical Boundaries
 
