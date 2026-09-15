@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "4370bb49ef73e39570e33842809438443b00381e",
+    "sha": "b4d77dd9148a3856e0fb302fc10e47039a294be9",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -2721,15 +2721,19 @@
           "signal": "environment_dependent"
         },
         {
-          "occurrences": 16,
+          "occurrences": 19,
           "signal": "filesystem_access"
         },
         {
-          "occurrences": 32,
+          "occurrences": 1,
+          "signal": "external_process"
+        },
+        {
+          "occurrences": 42,
           "signal": "polling_or_waiting"
         },
         {
-          "occurrences": 12,
+          "occurrences": 13,
           "signal": "ui_or_accessibility"
         },
         {
