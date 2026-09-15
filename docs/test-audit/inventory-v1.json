@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "14beec4a5c212b22d52e0ed2ce4fedb3c14c9420",
+    "sha": "c87e3c8222efb9405691dfb924ef6b72acfa2563",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -4732,7 +4732,7 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 72,
+          "occurrences": 73,
           "signal": "filesystem_access"
         },
         {
