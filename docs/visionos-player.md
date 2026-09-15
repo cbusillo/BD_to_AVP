@@ -34,6 +34,9 @@ which remains the qualification-only validator.
 
 ## Completed movies shared by a Mac
 
+For installation and a first playback check, use the
+[Movie Sharing beta quick start](movie-sharing-beta.md).
+
 1. Open **Movie Sharing** in the Mac app and **Add Folder…**. Select a folder of
    completed `.mp4`, `.mov`, or `.m4v` movies, then enable sharing.
 2. Keep the Mac awake with the app open, on the same trusted local network as
@@ -218,11 +221,12 @@ Reviewers can test the standalone player without an account, Mac, or downloaded
 movie: choose **On My Vision Pro** in the sidebar, then **Start SBS Check** and
 **Start Over-Under Check**. Both bundled synthetic samples are 45 seconds long and
 silent. **Add Movie** opens the system file picker for the reviewer's own supported
-completed movies. Explain separately that **Mac Movies** requires a compatible
-Mac companion, one-time folder approval and pairing on the same trusted LAN.
-Identify how testers obtain that matching companion before advertising Mac
-sharing as ready for their setup; a developer's local Current build is not a
-public Mac release.
+completed movies. **Mac Movies** requires the full **3D Blu-ray to Vision Pro**
+Mac app with Movie Sharing, one-time folder approval and pairing on the same
+trusted LAN. The [beta quick start](movie-sharing-beta.md) explains installation,
+the Beta updater route and the initial stereo checks. Include the matching
+signed Mac release link in TestFlight's beta description and review notes once
+it is published; a developer's local Current build is not a public Mac release.
 
 The sidebar's **Privacy Policy** link opens the policy applicable to the build.
 Its URL is pinned to the policy's published commit so branch deletion cannot

@@ -1,14 +1,15 @@
 # BD_to_AVP
 
-This repository contains the Mac converter and its companion movie player:
+This repository contains the full Mac converter and the Vision Pro movie player:
 
 | App | Platform | Purpose |
 | --- | --- | --- |
-| **3D Blu-ray to Vision Pro** | macOS | Convert supported sources into completed spatial movies. |
+| **3D Blu-ray to Vision Pro** | macOS | Convert supported sources into spatial movies and share completed movies with a paired headset. |
 | **Shiny 3D Cinema** | visionOS | Choose and play completed movies from Files or a compatible Mac's shared folders. |
 
-See the [player and Movie Sharing guide](docs/visionos-player.md) for the matching
-Mac companion requirements. The repository, CLI, Xcode targets, bundle IDs and
+Use the [Movie Sharing beta quick start](docs/movie-sharing-beta.md) to install
+both apps, share a folder and pair the headset. The [player guide](docs/visionos-player.md)
+covers supported formats and developer workflows. The repository, CLI, Xcode targets, bundle IDs and
 saved-data paths retain their established `BD_to_AVP`/`BDToAVPPlayer` identities;
 they do not need to match the public app names.
 
