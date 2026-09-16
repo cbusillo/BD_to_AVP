@@ -26,6 +26,7 @@ final class ActivityDrawerRenderTests: XCTestCase {
                 notice: notice, supportsWaiting: true, keepWaiting: {}, stop: {}
             )
             .frame(width: 980, height: 120)
+            .background(Color(nsColor: .windowBackgroundColor))
             .preferredColorScheme(.light)
             let hostingView = NSHostingView(rootView: content)
             hostingView.appearance = NSAppearance(named: .aqua)
