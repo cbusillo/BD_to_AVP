@@ -15,6 +15,7 @@ from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import WorkerOperationError, start_live_source
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
+    PROTOCOL_VERSION,
     JobSpec,
     LiveSourceOptions,
     WorkerActivityReporter,
@@ -99,7 +100,7 @@ def live_options(
 
 def live_request(source: Path, destination: Path) -> dict[str, object]:
     return {
-        "protocol_version": 12,
+        "protocol_version": PROTOCOL_VERSION,
         "type": "job.start",
         "job_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         "operation": "start_live_source",

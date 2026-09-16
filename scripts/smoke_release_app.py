@@ -25,7 +25,7 @@ DEFAULT_APP_PATHS = [
 APP_RESOURCE_APP_PATH = Path("Contents/Resources/app")
 APP_BIN_PATH = APP_RESOURCE_APP_PATH / "bd_to_avp" / "bin"
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
-EXPECTED_WORKER_PROTOCOL_VERSION = 12
+EXPECTED_WORKER_PROTOCOL_VERSION = 13
 PREVIEW_PRESENTATION_SMOKE_ARGUMENT = "--preview-presentation-smoke"
 WORKER_CANCELLATION_SMOKE_ARGUMENT = "--worker-cancellation-smoke"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 20
@@ -513,7 +513,7 @@ import time
 if os.getpgrp() != os.getpid():
     os.setsid()
 
-request = json.loads(sys.stdin.read())
+request = json.loads(sys.stdin.readline())
 job_id = request["job_id"]
 workspace = pathlib.Path(os.environ["BD_TO_AVP_CANCELLATION_SMOKE_WORKSPACE"])
 marker = pathlib.Path(os.environ["BD_TO_AVP_CANCELLATION_SMOKE_MARKER"])
@@ -541,7 +541,7 @@ def cancel_worker(_signum, _frame):
     child.wait()
     marker.write_text("reaped", encoding="utf-8")
     print(json.dumps({
-        "protocol_version": 12,
+        "protocol_version": 13,
         "type": "job.cancelled",
         "job_id": job_id,
         "sequence": 1,
@@ -551,7 +551,7 @@ def cancel_worker(_signum, _frame):
 
 signal.signal(signal.SIGTERM, cancel_worker)
 print(json.dumps({
-    "protocol_version": 12,
+    "protocol_version": 13,
     "type": "worker.ready",
     "job_id": job_id,
     "sequence": 0,

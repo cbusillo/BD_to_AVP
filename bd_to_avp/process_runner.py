@@ -30,7 +30,7 @@ from bd_to_avp.observability import (
     ObservabilityText,
     ObservabilityTool,
 )
-from bd_to_avp.runtime import RunContext
+from bd_to_avp.runtime import MAX_WAIT_GRANTS, WAIT_GRANT_SECONDS, ProcessControlChannel, RunContext, WaitCommand
 
 DEFAULT_CAPTURE_LIMIT_BYTES = 16 * 1024 * 1024
 DEFAULT_TAIL_LIMIT_BYTES = 64 * 1024
@@ -558,6 +558,171 @@ class _ArtifactState:
     observed_at: float | None = None
     last_progress_at: float | None = None
     resolver_failed: bool = False
+    exists: bool = False
+
+
+@dataclass
+class _ProgressSummary:
+    latest: ObservabilityProgress | None = None
+    updated_at: float | None = None
+    changed_at: float | None = None
+    updates: int = 0
+    repeated_updates: int = 0
+
+    def record(self, progress: ObservabilityProgress | None, now: float) -> None:
+        if progress is None:
+            return
+        self.updates += 1
+        self.updated_at = now
+        if progress == self.latest:
+            self.repeated_updates += 1
+        else:
+            self.latest = progress
+            self.changed_at = now
+            self.repeated_updates = 0
+
+    def payload(self, now: float) -> dict[str, object]:
+        result: dict[str, object] = {"updates": self.updates, "repeated_updates": self.repeated_updates}
+        for name, value in (("updated_at", self.updated_at), ("changed_at", self.changed_at)):
+            if value is not None:
+                result[name.replace("_at", "_age_seconds")] = max(0, int(now - value))
+        if self.latest is not None:
+            for name in ("fraction", "completed_units", "total_units"):
+                value = getattr(self.latest, name)
+                if value is not None:
+                    result[name] = value
+        return result
+
+
+class _ArtifactWatchdog:
+    """Runner-owned stall episodes; log traffic never advances these clocks."""
+
+    def __init__(
+        self,
+        timeout_seconds: float,
+        tool_run_id: str,
+        tool: str,
+        controls: ProcessControlChannel | None,
+        snapshot: Callable[[float], dict[str, object]],
+        monotonic_clock: Callable[[], float] | None = None,
+    ) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.warning_seconds = timeout_seconds / 2
+        self.tool_run_id = tool_run_id
+        self.tool = tool
+        self.controls = controls
+        self.snapshot = snapshot
+        self._clock = monotonic_clock
+        self.episode_id: str | None = None
+        self.grants_used = 0
+        self._hard_cap = 0.0
+        self._deadline = 0.0
+        self._timed_out = False
+        self._ended = False
+
+    def poll(
+        self,
+        progress_times: tuple[float, ...],
+        now: float,
+        commands: list[WaitCommand],
+        *,
+        cancelled: bool = False,
+        active: bool = True,
+        cancellation_check: Callable[[], bool] = lambda: False,
+        active_check: Callable[[], bool] = lambda: True,
+    ) -> bool:
+        now = self._clock() if self._clock is not None else now
+        cancelled = cancelled or cancellation_check()
+        active = active and active_check()
+        if cancelled or not active or self._ended or self._timed_out:
+            code = "cancelled" if cancelled else "deadline_elapsed" if self._timed_out else "run_ended"
+            for command in commands:
+                self._complete(command, False, code)
+            self.finish(now)
+            return self._timed_out
+
+        warning = any(now - progress_at >= self.warning_seconds for progress_at in progress_times)
+        if not warning and self.episode_id is not None:
+            self._emit("recovered", now)
+            self.episode_id = None
+            self.grants_used = 0
+        normal_deadline = min(progress_times) + self.timeout_seconds
+        if warning and self.episode_id is None:
+            self.episode_id = str(uuid4())
+            self._hard_cap = normal_deadline + MAX_WAIT_GRANTS * WAIT_GRANT_SECONDS
+            self._deadline = normal_deadline
+            self._emit("stalled", now)
+        # Partial recovery may move the normal deadline, but never resets the
+        # shared grant budget while any watched output remains stalled.
+        self._deadline = normal_deadline + self.grants_used * WAIT_GRANT_SECONDS
+        if self.grants_used:
+            self._deadline = min(self._deadline, self._hard_cap)
+
+        for command in commands:
+            # A probe or earlier event write may have blocked since this poll
+            # began. Neither can manufacture a fresh extension window.
+            now = self._clock() if self._clock is not None else now
+            if cancellation_check():
+                self._complete(command, False, "cancelled")
+                self.finish(now)
+            elif self._ended or not active_check():
+                self._complete(command, False, "run_ended")
+                self.finish(now)
+            elif self.episode_id is None:
+                self._complete(command, False, "not_stalled")
+            elif command.stall_episode_id != self.episode_id:
+                self._complete(command, False, "stale_episode")
+            elif self.grants_used >= MAX_WAIT_GRANTS or self._deadline + WAIT_GRANT_SECONDS > self._hard_cap:
+                self._complete(command, False, "grant_limit")
+            elif command.received_at >= self._deadline:
+                self._complete(command, False, "deadline_elapsed")
+            elif now >= self._deadline + WAIT_GRANT_SECONDS:
+                self._complete(command, False, "extension_window_elapsed")
+            else:
+                self._deadline += WAIT_GRANT_SECONDS
+                self.grants_used += 1
+                # Only this runner can apply a deadline before acknowledging it.
+                self._complete(command, True, "extended")
+                self._emit("extended", now)
+
+        now = self._clock() if self._clock is not None else now
+        if cancellation_check() or not active_check():
+            self.finish(now)
+        if not self._ended and now >= self._deadline:
+            self._timed_out = True
+            self._emit("timed_out", now)
+        return self._timed_out
+
+    def finish(self, now: float) -> None:
+        if not self._ended and not self._timed_out:
+            self._emit("ended", now)
+        self._ended = True
+
+    def _complete(self, command: WaitCommand, accepted: bool, code: str) -> None:
+        assert self.controls is not None
+        self.controls.complete_command(command, accepted=accepted, code=code, grants_used=self.grants_used)
+
+    def _emit(self, state: str, now: float) -> None:
+        if self.controls is None or self.episode_id is None:
+            return
+        self.controls.emit_stall(
+            {
+                "tool_run_id": self.tool_run_id,
+                "stall_episode_id": self.episode_id,
+                "tool": self.tool,
+                "state": state,
+                "can_extend": (
+                    state in {"stalled", "extended"}
+                    and self.grants_used < MAX_WAIT_GRANTS
+                    and self._deadline + WAIT_GRANT_SECONDS <= self._hard_cap
+                    and now < self._deadline
+                ),
+                "grants_used": self.grants_used,
+                "max_grants": MAX_WAIT_GRANTS,
+                "grant_seconds": WAIT_GRANT_SECONDS,
+                **self.snapshot(now),
+            }
+        )
 
 
 class ChildProcessRunner:
@@ -604,7 +769,11 @@ class ChildProcessRunner:
         try:
             process = subprocess.Popen(
                 [os.fspath(argument) for argument in spec.argv],
-                stdin=spec.stdin,
+                stdin=(
+                    subprocess.DEVNULL
+                    if spec.stdin is None and run_context is not None and run_context.process_controls is not None
+                    else spec.stdin
+                ),
                 stdout=spec.stdout,
                 stderr=subprocess.STDOUT if spec.merge_stderr else subprocess.PIPE,
                 env=dict(spec.env) if spec.env is not None else None,
@@ -657,6 +826,27 @@ class ChildProcessRunner:
         closed_streams: set[ProcessStream] = set()
         framers = {stream: _LineFramer(spec.line_limit_bytes) for stream in expected_streams}
         artifact_states = [_ArtifactState(path=probe.path, last_progress_at=started_at) for probe in spec.artifacts]
+        progress_summary = _ProgressSummary()
+        controls = run_context.process_controls if run_context is not None else None
+        watchdog: _ArtifactWatchdog | None = None
+        if spec.artifact_no_growth_timeout_seconds is not None:
+            watchdog = _ArtifactWatchdog(
+                spec.artifact_no_growth_timeout_seconds,
+                tool_run_id,
+                spec.tool_id,
+                controls,
+                lambda observed_at: self._stall_snapshot(
+                    spec, artifact_states, progress_summary, stream_states, expected_streams, started_at, observed_at
+                ),
+                monotonic_clock=self._monotonic_clock,
+            )
+            if controls is not None:
+                controls.register_run(tool_run_id)
+
+        def tracked_progress_parser(stream: ProcessStream, line: str) -> ObservabilityProgress | None:
+            progress = progress_parser(stream, line) if progress_parser is not None else None
+            progress_summary.record(progress, self._monotonic_clock())
+            return progress
 
         pending_error: BaseException | None = None
         failure_code: str | None = None
@@ -694,7 +884,7 @@ class ChildProcessRunner:
                                 process_context,
                                 emitter,
                                 line_handler,
-                                progress_parser,
+                                tracked_progress_parser,
                             )
                     except KeyboardInterrupt as error:
                         keyboard_interrupt = error
@@ -713,7 +903,7 @@ class ChildProcessRunner:
                                     process_context,
                                     emitter,
                                     line_handler,
-                                    progress_parser,
+                                    tracked_progress_parser,
                                 )
                         except KeyboardInterrupt as error:
                             keyboard_interrupt = error
@@ -831,7 +1021,8 @@ class ChildProcessRunner:
                     )
                     last_activity_event_at = now
 
-                if spec.artifacts and now - last_artifact_event_at >= spec.artifact_interval_seconds:
+                commands = controls.take_commands(tool_run_id) if controls is not None and watchdog is not None else []
+                if spec.artifacts and (now - last_artifact_event_at >= spec.artifact_interval_seconds or commands):
                     self._emit_artifacts(
                         spec,
                         artifact_states,
@@ -841,22 +1032,45 @@ class ChildProcessRunner:
                         now=now,
                     )
                     last_artifact_event_at = now
-                    stalled_artifact_roles = (
-                        [
+                    if (
+                        watchdog is not None
+                        and watchdog.poll(
+                            tuple(
+                                item.last_progress_at if item.last_progress_at is not None else started_at
+                                for item in artifact_states
+                            ),
+                            now,
+                            commands,
+                            cancelled=cancelled or self._is_cancelled(run_context, cancellation_event),
+                            active=pending_error is None and returncode is None,
+                            cancellation_check=lambda: self._is_cancelled(run_context, cancellation_event),
+                            active_check=lambda: process.poll() is None,
+                        )
+                        and pending_error is None
+                        and not cancelled
+                        and returncode is None
+                    ):
+                        observed_at = self._monotonic_clock()
+                        stalled_artifact_roles = [
                             probe.role
                             for probe, artifact_state in zip(spec.artifacts, artifact_states, strict=True)
-                            if artifact_state.last_progress_at is not None
-                            and now - artifact_state.last_progress_at >= spec.artifact_no_growth_timeout_seconds
+                            if observed_at
+                            - (
+                                artifact_state.last_progress_at
+                                if artifact_state.last_progress_at is not None
+                                else started_at
+                            )
+                            >= watchdog.warning_seconds
                         ]
-                        if spec.artifact_no_growth_timeout_seconds is not None
-                        else []
-                    )
-                    if pending_error is None and returncode is None and stalled_artifact_roles:
-                        pending_error = ProcessArtifactNoProgressError(
-                            f"{spec.display_name} produced no artifact growth for "
+                        timeout_message = (
+                            f"{spec.display_name} exhausted its bounded artifact wait window "
+                            f"after {watchdog.grants_used} wait grants: {', '.join(stalled_artifact_roles)}"
+                            if watchdog.grants_used
+                            else f"{spec.display_name} produced no artifact growth for "
                             f"{spec.artifact_no_growth_timeout_seconds:g} seconds: "
                             f"{', '.join(stalled_artifact_roles)}"
                         )
+                        pending_error = ProcessArtifactNoProgressError(timeout_message)
                         failure_code = "artifact_no_growth"
 
                 if (
@@ -920,6 +1134,12 @@ class ChildProcessRunner:
             self._close_process_streams(process)
             for reader in readers:
                 reader.join(timeout=1.0)
+            if watchdog is not None:
+                try:
+                    watchdog.finish(self._monotonic_clock())
+                finally:
+                    if controls is not None:
+                        controls.unregister_run(tool_run_id)
 
         elapsed_ms = max(0, int((self._monotonic_clock() - started_at) * 1000))
         stdout_snapshot = stream_states[ProcessStream.STDOUT].snapshot()
@@ -1243,6 +1463,7 @@ class ChildProcessRunner:
                 artifact_state.observed_at = None
                 artifact_state.last_progress_at = now
             if path is None:
+                artifact_state.exists = False
                 artifact = ObservabilityArtifact(role=probe.role, state="missing")
                 emitter.emit(
                     "tool.artifact",
@@ -1253,12 +1474,14 @@ class ChildProcessRunner:
             try:
                 status = path.stat()
             except OSError:
+                artifact_state.exists = False
                 artifact = ObservabilityArtifact(
                     role=probe.role,
                     state="missing",
                     location=self._artifact_location(path),
                 )
             else:
+                artifact_state.exists = True
                 growth = None
                 previous_size = artifact_state.size_bytes
                 previous_modified_at_ns = artifact_state.modified_at_ns
@@ -1293,6 +1516,40 @@ class ChildProcessRunner:
                 context=context,
                 data=ObservabilityData(artifact=artifact),
             )
+
+    @classmethod
+    def _stall_snapshot(
+        cls,
+        spec: ProcessSpec,
+        artifact_states: list[_ArtifactState],
+        progress: _ProgressSummary,
+        stream_states: dict[ProcessStream, _StreamState],
+        streams: set[ProcessStream],
+        started_at: float,
+        now: float,
+    ) -> dict[str, object]:
+        artifacts: list[dict[str, object]] = []
+        warning_seconds = (spec.artifact_no_growth_timeout_seconds or 120) / 2
+        for probe, artifact in list(zip(spec.artifacts, artifact_states, strict=True))[:16]:
+            progress_at = artifact.last_progress_at if artifact.last_progress_at is not None else started_at
+            age = max(0, now - progress_at)
+            value: dict[str, object] = {
+                "role": probe.role,
+                "state": "missing" if not artifact.exists else "stalled" if age >= warning_seconds else "growing",
+                "no_progress_age_seconds": int(age),
+            }
+            if artifact.size_bytes is not None:
+                value["size_bytes"] = artifact.size_bytes
+            artifacts.append(value)
+        return {
+            "artifacts": artifacts,
+            "artifacts_omitted": max(0, len(artifact_states) - len(artifacts)),
+            "tool_progress": {
+                **progress.payload(now),
+                "last_output_age_seconds": cls._last_output_age_seconds(stream_states, streams, started_at, now),
+                "output_bytes": sum(stream_states[stream].snapshot().total_bytes for stream in streams),
+            },
+        }
 
     @staticmethod
     def _artifact_location(path: Path) -> ObservabilityText | None:

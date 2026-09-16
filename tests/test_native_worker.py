@@ -380,7 +380,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_source")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v13.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -602,7 +602,7 @@ class JobSpecTests(unittest.TestCase):
             JobSpec.from_json_line(json.dumps(request))
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v13.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -613,7 +613,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v13.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -623,7 +623,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.preview.duration_seconds if job.preview else None, 60)
 
     def test_parses_shared_swift_generated_route_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_generated_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_generated_v13.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -633,7 +633,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertTrue(job.job.keep_files if job.job else False)
 
     def test_parses_shared_swift_existing_artifact_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_existing_artifact_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_existing_artifact_v13.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -641,7 +641,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.job.start_stage if job.job else None, 6)
 
     def test_parses_shared_swift_existing_artifact_upscale_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_existing_artifact_upscale_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_existing_artifact_upscale_v13.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -1011,7 +1011,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
             ],
         )
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v13.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -1033,7 +1033,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
             action="keep_source_default_audio",
         )
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_language_fallback_warning_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_language_fallback_warning_v13.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -1045,7 +1045,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
         activity.stage_started("configure", "Preparing conversion settings")
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v13.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -1393,7 +1393,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v12.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v13.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
