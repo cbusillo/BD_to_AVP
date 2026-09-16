@@ -417,10 +417,7 @@ final class ConversionViewModelTests: XCTestCase {
             try await viewModel.captureDiagnosticBundle(in: outputDirectory)
         }
 
-        let deadline = Date().addingTimeInterval(2)
-        while !archiveWriter.hasStarted, Date() < deadline {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await fulfillment(of: [archiveWriter.startedExpectation], timeout: 30)
         XCTAssertTrue(archiveWriter.hasStarted)
 
         captureTask.cancel()
@@ -6064,6 +6061,10 @@ private final class BlockingDiagnosticArchiveWriter: @unchecked Sendable {
     private var started = false
     private var cancelled = false
 
+    /// Signals that `write` has begun, so callers wait on the event itself rather than racing a
+    /// wall-clock deadline that a loaded machine can miss.
+    let startedExpectation = XCTestExpectation(description: "Diagnostic archive write started")
+
     var hasStarted: Bool {
         lock.withLock { started }
     }
@@ -6076,6 +6077,7 @@ private final class BlockingDiagnosticArchiveWriter: @unchecked Sendable {
         _ = data
         _ = url
         lock.withLock { started = true }
+        startedExpectation.fulfill()
         while !Task.isCancelled {
             Thread.sleep(forTimeInterval: 0.005)
         }
