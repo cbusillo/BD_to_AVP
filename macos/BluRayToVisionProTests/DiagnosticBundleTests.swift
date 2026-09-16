@@ -190,6 +190,46 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(snapshot.droppedBytes, escaped.serializedByteCount)
     }
 
+    func testStallDecisionsSurviveNoisyProgressWithinTheExistingHistoryLimit() {
+        var history = DiagnosticEventHistory(maximumEntries: 4, maximumBytes: 16 * 1_024)
+        history.append(diagnosticEvent(message: "first stalled attempt", name: "tool.stall"))
+        history.append(diagnosticEvent(message: "wait acknowledged", name: "control.result"))
+        for index in 0..<20 {
+            history.append(diagnosticEvent(message: "progress \(index)"))
+        }
+        let snapshot = history.snapshot()
+        XCTAssertEqual(snapshot.entries.map(\.message), [
+            "first stalled attempt", "wait acknowledged", "progress 18", "progress 19",
+        ])
+        XCTAssertEqual(snapshot.totalRecordedEntries, 22)
+        XCTAssertEqual(snapshot.droppedEntries, 18)
+    }
+
+    func testStallHistoryKeepsOnlyTheMostRecent32Decisions() {
+        var history = DiagnosticEventHistory(maximumEntries: 64, maximumBytes: 128 * 1_024)
+        for index in 0..<50 {
+            history.append(diagnosticEvent(message: "stall \(index)", name: "tool.stall"))
+            history.append(diagnosticEvent(message: "progress \(index)"))
+        }
+        let snapshot = history.snapshot()
+        let retained = snapshot.entries.filter { $0.name == "tool.stall" }
+        XCTAssertEqual(retained.count, 32)
+        XCTAssertEqual(retained.first?.message, "stall 18")
+        XCTAssertEqual(retained.last?.message, "stall 49")
+        XCTAssertEqual(snapshot.entries.count, 64)
+        XCTAssertEqual(snapshot.totalRecordedEntries, 100)
+    }
+
+    func testStallPriorityCannotExceedTheDiagnosticByteBudget() {
+        let stall = diagnosticEvent(message: String(repeating: "x", count: 4_096), name: "tool.stall")
+        var history = DiagnosticEventHistory(maximumEntries: 64, maximumBytes: stall.serializedByteCount - 1)
+        history.append(stall)
+        let snapshot = history.snapshot()
+        XCTAssertTrue(snapshot.entries.isEmpty)
+        XCTAssertEqual(snapshot.droppedBytes, stall.serializedByteCount)
+        XCTAssertEqual(snapshot.droppedEntries, 1)
+    }
+
     func testSerializedByteCountMatchesJSONEncoderForLineSeparators() {
         let separatorMsg = "\u{2028}\u{2029}"
         let asciiMsg = "ab"
@@ -1704,11 +1744,11 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual((manifest["worker"] as? [String: Any])?["active"] as? Bool, true)
     }
 
-    private func diagnosticEvent(message: String) -> DiagnosticEventRecord {
+    private func diagnosticEvent(message: String, name: String = "log") -> DiagnosticEventRecord {
         DiagnosticEventRecord(
             recordedAt: fixedDate,
             source: "worker",
-            name: "log",
+            name: name,
             jobID: nil,
             sequence: 1,
             phase: "processing",
