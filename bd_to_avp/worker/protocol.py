@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Mapping, Sequence, TextIO
+from typing import Any, Callable, Mapping, Sequence, TextIO
 from uuid import UUID
 
 from bd_to_avp.modules.audio_mode import AudioMode
@@ -1633,7 +1633,12 @@ class WorkerEventTransportError(OSError):
 
 class WorkerEventEmitter:
     def __init__(
-        self, output: TextIO, job_id: str, *, write_timeout_seconds: float = EVENT_WRITE_TIMEOUT_SECONDS
+        self,
+        output: TextIO,
+        job_id: str,
+        *,
+        write_timeout_seconds: float = EVENT_WRITE_TIMEOUT_SECONDS,
+        on_transport_failure: Callable[[], None] | None = None,
     ) -> None:
         if not math.isfinite(write_timeout_seconds) or write_timeout_seconds <= 0:
             raise ValueError("event write timeout must be finite and positive")
@@ -1649,6 +1654,7 @@ class WorkerEventEmitter:
         self._sequence = -1
         self._terminal_emitted = False
         self._transport_failed = False
+        self._on_transport_failure = on_transport_failure
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
 
@@ -1702,7 +1708,12 @@ class WorkerEventEmitter:
 
     def _mark_transport_failed(self) -> None:
         with self._lock:
+            first_failure = not self._transport_failed
             self._transport_failed = True
+        if first_failure and self._on_transport_failure is not None:
+            # Notification only: no state lock or synchronous descendant wait.
+            # The owner sets stop signals and performs cleanup on its own thread.
+            self._on_transport_failure()
 
     def _write_record(self, record: str, deadline: float) -> None:
         if self._descriptor is None:

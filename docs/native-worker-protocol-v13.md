@@ -145,6 +145,12 @@ Event state remains readable while output waits. A partial record, closed pipe,
 or exhausted transport budget makes the stream unusable: no subsequent record
 or terminal event is appended to a partial JSON prefix. The worker still reaps
 its descendants and closes its independent resources, then reports exit 74.
+The first transport failure also notifies the process owner outside event state
+locks, sets the shared cancellation signal, and starts its existing asynchronous
+descendant cleanup. This applies equally to heartbeat, control-reader, and
+observability output: swallowing a background sink error cannot leave a healthy
+conversion running without a usable event stream. A separate failure marker
+keeps this stop classified as transport exit 74, rather than user cancellation.
 This is a protocol-delivery failure, not `artifact_no_growth` or an automatic
 media retry. Completed output files remain the operation's result, but delivery
 of that result or of a terminal event cannot be claimed when the host refuses
