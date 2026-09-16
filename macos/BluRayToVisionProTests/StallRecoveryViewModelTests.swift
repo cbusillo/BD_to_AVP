@@ -121,7 +121,7 @@ private final class StallWorkerFixture: WorkerProcessRunning, @unchecked Sendabl
         let captured = lock.withLock {
             let current = sequence
             sequence += 1
-            return (command, handler, current)
+            return (self.command, self.handler, current)
         }
         let command = try XCTUnwrap(captured.0)
         let handler = try XCTUnwrap(captured.1)
