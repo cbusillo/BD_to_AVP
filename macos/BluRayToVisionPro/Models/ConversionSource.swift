@@ -164,7 +164,27 @@ enum DiscSourceDetector {
         paths.contains(where: fileManager.isExecutableFile(atPath:))
     }
 
+    /// A disc that is mounted but whose contents could not be listed.
+    ///
+    /// macOS asks for approval before an app may read a removable volume. Until that approval is
+    /// granted the disc mounts and appears in Finder, yet listing it fails, so these volumes are
+    /// reported instead of being dropped silently.
+    struct InsertedDiscScan: Equatable {
+        var discs: [ConversionSource] = []
+        var unreadableVolumes: [URL] = []
+    }
+
+    enum VolumeProbeResult: Equatable {
+        case bluRay(URL)
+        case notBluRay
+        case unreadable
+    }
+
     static func insertedDiscs(fileManager: FileManager = .default) -> [ConversionSource] {
+        scanInsertedDiscs(fileManager: fileManager).discs
+    }
+
+    static func scanInsertedDiscs(fileManager: FileManager = .default) -> InsertedDiscScan {
         let volumeKeys: [URLResourceKey] = [.volumeNameKey, .isVolumeKey, .volumeIsLocalKey]
         let volumes = fileManager.mountedVolumeURLs(
             includingResourceValuesForKeys: volumeKeys,
@@ -172,7 +192,7 @@ enum DiscSourceDetector {
         )?.filter { volumeURL in
             (try? volumeURL.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal) != false
         } ?? []
-        return insertedDiscs(in: volumes, fileManager: fileManager)
+        return scanInsertedDiscs(in: volumes, fileManager: fileManager)
     }
 
     static func insertedDiscs(
@@ -180,22 +200,40 @@ enum DiscSourceDetector {
         fileManager: FileManager = .default,
         devicePathResolver: (URL) -> String? = physicalDevicePath(for:)
     ) -> [ConversionSource] {
-        volumes.compactMap { volumeURL in
-            guard let devicePath = devicePathResolver(volumeURL),
-                  isBluRayFolder(volumeURL, fileManager: fileManager)
-            else {
-                return nil
+        scanInsertedDiscs(in: volumes, fileManager: fileManager, devicePathResolver: devicePathResolver).discs
+    }
+
+    static func scanInsertedDiscs(
+        in volumes: [URL],
+        fileManager: FileManager = .default,
+        devicePathResolver: (URL) -> String? = physicalDevicePath(for:)
+    ) -> InsertedDiscScan {
+        var scan = InsertedDiscScan()
+        for volumeURL in volumes {
+            guard let devicePath = devicePathResolver(volumeURL) else {
+                continue
             }
-            let values = try? volumeURL.resourceValues(forKeys: [.volumeNameKey])
-            return ConversionSource(
-                kind: .physicalDisc,
-                url: volumeURL,
-                displayName: values?.volumeName ?? volumeURL.lastPathComponent,
-                workerSourcePath: devicePath,
-                mediaIdentifier: mediaIdentifier(for: volumeURL, fileManager: fileManager)
-            )
+            switch probeVolume(volumeURL, fileManager: fileManager) {
+            case .notBluRay:
+                continue
+            case .unreadable:
+                scan.unreadableVolumes.append(volumeURL)
+            case .bluRay:
+                let values = try? volumeURL.resourceValues(forKeys: [.volumeNameKey])
+                scan.discs.append(
+                    ConversionSource(
+                        kind: .physicalDisc,
+                        url: volumeURL,
+                        displayName: values?.volumeName ?? volumeURL.lastPathComponent,
+                        workerSourcePath: devicePath,
+                        mediaIdentifier: mediaIdentifier(for: volumeURL, fileManager: fileManager)
+                    )
+                )
+            }
         }
-        .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        scan.discs.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        scan.unreadableVolumes.sort { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+        return scan
     }
 
     static func isCurrentPhysicalDisc(
@@ -252,26 +290,49 @@ enum DiscSourceDetector {
     }
 
     static func bluRayRoot(for url: URL, fileManager: FileManager = .default) -> URL? {
+        guard case let .bluRay(rootURL) = probeVolume(url, fileManager: fileManager) else {
+            return nil
+        }
+        return rootURL
+    }
+
+    /// Classifies a folder or volume, keeping "no disc structure here" distinct from "this exists
+    /// but its contents cannot be listed". The caller needs that difference to explain why a
+    /// mounted disc produced no source.
+    static func probeVolume(_ url: URL, fileManager: FileManager = .default) -> VolumeProbeResult {
         let normalizedURL = url.standardizedFileURL
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: normalizedURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return nil
+            return .notBluRay
         }
         if normalizedURL.lastPathComponent.caseInsensitiveCompare("BDMV") == .orderedSame {
-            return normalizedURL.deletingLastPathComponent()
+            return .bluRay(normalizedURL.deletingLastPathComponent())
         }
-        guard let children = try? fileManager.contentsOfDirectory(
-            at: normalizedURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ),
-            children.contains(where: { childURL in
-                childURL.lastPathComponent.caseInsensitiveCompare("BDMV") == .orderedSame
-                    && (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-            })
-        else {
-            return nil
+        let children: [URL]
+        do {
+            children = try fileManager.contentsOfDirectory(
+                at: normalizedURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            return isPermissionError(error) ? .unreadable : .notBluRay
         }
-        return normalizedURL
+        let containsDiscFolder = children.contains { childURL in
+            childURL.lastPathComponent.caseInsensitiveCompare("BDMV") == .orderedSame
+                && (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+        return containsDiscFolder ? .bluRay(normalizedURL) : .notBluRay
+    }
+
+    static func isPermissionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain {
+            return nsError.code == NSFileReadNoPermissionError || nsError.code == NSFileWriteNoPermissionError
+        }
+        if nsError.domain == NSPOSIXErrorDomain {
+            return nsError.code == Int(EPERM) || nsError.code == Int(EACCES)
+        }
+        return false
     }
 }

@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var options: ConversionOptions
     @State private var destinationURL: URL
     @State private var insertedDiscs: [ConversionSource] = []
+    @State private var unreadableDiscVolumes: [URL] = []
     @State private var isShowingActivity = false
     @State private var isDropTargeted = false
     @State private var queueAdmissionNoticeMessage: String?
@@ -578,8 +579,21 @@ struct ContentView: View {
     private var sourceMenu: some View {
         Menu {
             if insertedDiscs.isEmpty {
-                Button("No Inserted Disc Detected") {}
-                    .disabled(true)
+                if unreadableDiscVolumes.isEmpty {
+                    Button("No Inserted Disc Detected") {}
+                        .disabled(true)
+                } else {
+                    Button("Disc Found, but It Cannot Be Read") {}
+                        .disabled(true)
+                    Button("Allow Access to Discs…") {
+                        if let settingsURL = URL(
+                            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_RemovableVolumes"
+                        ) {
+                            NSWorkspace.shared.open(settingsURL)
+                        }
+                    }
+                    .help("Grant access to removable volumes in Privacy & Security, then refresh.")
+                }
             } else {
                 ForEach(insertedDiscs, id: \.url) { disc in
                     Button("Add \(disc.displayName) to Queue") {
@@ -1026,10 +1040,12 @@ struct ContentView: View {
         }
         isRefreshingDiscs = true
         Task { @MainActor in
-            let refreshedDiscs = await Task.detached(priority: .utility) {
-                DiscSourceDetector.insertedDiscs()
+            let scan = await Task.detached(priority: .utility) {
+                DiscSourceDetector.scanInsertedDiscs()
             }.value
+            let refreshedDiscs = scan.discs
             insertedDiscs = refreshedDiscs
+            unreadableDiscVolumes = scan.unreadableVolumes
             isRefreshingDiscs = false
             guard !viewModel.hasActiveWork,
                   let selectedSource = viewModel.source,

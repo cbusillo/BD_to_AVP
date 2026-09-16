@@ -135,14 +135,19 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(WORKER_PROTOCOL_VERSION, PROTOCOL_VERSION)
 
     def test_uses_production_identity(self) -> None:
+        # Version and build move every release, so assert the packaging constants agree with
+        # pyproject.toml rather than restating literals that must be edited on every bump.
+        with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
+            pyproject = tomllib.load(handle)
+
         self.assertEqual(PROJECT_PATH.name, "BluRayToVisionPro.xcodeproj")
         self.assertEqual(SCHEME, "BluRayToVisionPro")
         self.assertEqual(NATIVE_PACKAGE_CONFIGURATION, "Release")
         self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
-        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.3b2")
-        self.assertEqual(NATIVE_BUILD_VERSION, "173")
+        self.assertEqual(NATIVE_SHORT_VERSION, str(pyproject["project"]["version"]))
+        self.assertEqual(NATIVE_BUILD_VERSION, str(pyproject["tool"]["bd_to_avp"]["build_version"]))
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
         self.assertEqual(MV_HEVC_ENCODER_NAME, "mv-hevc-encoder")
 

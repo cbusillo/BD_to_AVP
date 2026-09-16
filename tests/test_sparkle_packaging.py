@@ -2,6 +2,7 @@ import io
 import plistlib
 import tarfile
 import tempfile
+import tomllib
 import unittest
 
 from pathlib import Path
@@ -381,8 +382,12 @@ class SparkleBundleTests(unittest.TestCase):
 
     def test_repository_public_key_matches_app_metadata(self) -> None:
         info = sparkle_bundle.load_expected_info()
+        # The build number changes every release; assert the bundle metadata agrees with its
+        # source in pyproject.toml instead of pinning the current value.
+        with sparkle_bundle.PYPROJECT_PATH.open("rb") as handle:
+            pyproject = tomllib.load(handle)
 
-        self.assertEqual(info["CFBundleVersion"], "173")
+        self.assertEqual(info["CFBundleVersion"], str(pyproject["tool"]["bd_to_avp"]["build_version"]))
         self.assertEqual(info["SUPublicEDKey"], sparkle_bundle.PUBLIC_KEY_PATH.read_text().strip())
 
 

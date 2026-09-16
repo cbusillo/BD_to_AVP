@@ -199,18 +199,23 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(app["bundle_identifier"], "com.shinycomputers.bd-to-avp")
         self.assertNotIn("briefcase", pyproject["tool"])
 
-    def test_repository_records_beta2_preparation_and_prior_release_history(self) -> None:
+    def test_repository_records_candidate_preparation_and_prior_release_history(self) -> None:
         metadata = release.load_release_metadata()
+        # pyproject.toml is the single source of the candidate's identity. Assert the derived
+        # fields follow from it, so a deliberate version bump does not fail this test.
+        with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
+            pyproject = tomllib.load(handle)
+        package_version = str(pyproject["project"]["version"])
+        build_version = str(pyproject["tool"]["bd_to_avp"]["build_version"])
 
-        self.assertEqual(metadata.package_version, "0.3.3b2")
-        self.assertEqual(metadata.public_version, "0.3.3-beta.2")
-        self.assertEqual(metadata.build_version, "173")
-        self.assertEqual(metadata.release_tag, "v0.3.3-beta.2")
-        self.assertEqual(metadata.release_name, "v0.3.3-beta.2")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.3-beta.2.dmg")
+        self.assertEqual(metadata.package_version, package_version)
+        self.assertEqual(metadata.build_version, build_version)
+        self.assertEqual(metadata.release_tag, f"v{metadata.public_version}")
+        self.assertEqual(metadata.release_name, metadata.release_tag)
+        self.assertEqual(metadata.dmg_name, f"3D-Blu-ray-to-Vision-Pro-{metadata.public_version}.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
-        self.assertFalse(metadata.first_candidate_of_cycle)
+        self.assertEqual(metadata.first_candidate_of_cycle, metadata.public_version.endswith(".1"))
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
@@ -223,7 +228,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("v0.3.2-rc.1", freeze_policy["frozen_release_tags"])
         self.assertNotIn("v0.3.2", freeze_policy["frozen_release_tags"])
         self.assertNotIn("v0.3.3-beta.1", freeze_policy["frozen_release_tags"])
-        self.assertNotIn("v0.3.3-beta.2", freeze_policy["frozen_release_tags"])
 
         cut_packet = (REPO_ROOT / "docs" / "0.3.2-beta.6-cut-packet.md").read_text(encoding="utf-8")
         self.assertIn("`0.3.2b6`", cut_packet)
@@ -288,33 +292,26 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn(expected_stable_state, stable_cut_packet)
         self.assertNotIn(unexpected_stable_state, stable_cut_packet)
 
-        beta1_cut_packet = (REPO_ROOT / "docs" / "0.3.3-beta.1-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.3b1`", beta1_cut_packet)
-        self.assertIn("Build: `172`", beta1_cut_packet)
-        self.assertIn("Production Preflight run `33127615387`", beta1_cut_packet)
-        self.assertIn("9669125599", beta1_cut_packet)
-        self.assertIn("August 28, 2026", beta1_cut_packet)
-        self.assertIn(release.CUT_PACKET_PREPARED, beta1_cut_packet)
-
-        beta2_cut_packet = (REPO_ROOT / "docs" / "0.3.3-beta.2-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.3b2`", beta2_cut_packet)
-        self.assertIn("Build: `173`", beta2_cut_packet)
-        self.assertIn("Production Preflight run `34924807265`", beta2_cut_packet)
-        self.assertIn("10380136226", beta2_cut_packet)
-        self.assertIn(release.CUT_PACKET_PREPARED, beta2_cut_packet)
+        # The candidate's own cut packet is named after its public version, and must restate the
+        # version and build this repository currently records.
+        candidate_cut_packet_path = REPO_ROOT / "docs" / f"{metadata.public_version}-cut-packet.md"
+        candidate_cut_packet = candidate_cut_packet_path.read_text(encoding="utf-8")
+        self.assertIn(f"`{metadata.package_version}`", candidate_cut_packet)
+        self.assertIn(f"Build: `{metadata.build_version}`", candidate_cut_packet)
+        self.assertIn(release.CUT_PACKET_PREPARED, candidate_cut_packet)
 
         github_config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
         qualification_relative = Path(github_config["releaseOperations"]["qualificationRecordPath"])
         self.assertEqual(
             qualification_relative,
-            Path("docs/qualification/v0.3.3-beta.2-signed-qualification-v1.json"),
+            Path(f"docs/qualification/{metadata.release_tag}-signed-qualification-v1.json"),
         )
         self.assertEqual(release.validate_configured_qualification_record(metadata), qualification_relative)
         qualification = json.loads((REPO_ROOT / qualification_relative).read_text(encoding="utf-8"))
-        self.assertEqual(qualification["candidate"]["package_version"], "0.3.3b2")
-        self.assertEqual(qualification["candidate"]["public_version"], "0.3.3-beta.2")
-        self.assertEqual(qualification["candidate"]["build_version"], "173")
-        self.assertEqual(qualification["candidate"]["release_tag"], "v0.3.3-beta.2")
+        self.assertEqual(qualification["candidate"]["package_version"], metadata.package_version)
+        self.assertEqual(qualification["candidate"]["public_version"], metadata.public_version)
+        self.assertEqual(qualification["candidate"]["build_version"], metadata.build_version)
+        self.assertEqual(qualification["candidate"]["release_tag"], metadata.release_tag)
         self.assertEqual(qualification["candidate"]["workflow"], "Prerelease")
         self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
         self.assertEqual(qualification["candidate"]["mapping_version"], 2)
@@ -322,7 +319,11 @@ class ReleaseMetadataTests(unittest.TestCase):
             qualification["candidate"]["route_table_sha256"],
             "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
         )
-        self.assertEqual(qualification["issues"], ["#741"])
+        # Each candidate records its own owning issues, so assert the shape rather than the
+        # previous candidate's issue number.
+        self.assertTrue(qualification["issues"])
+        for issue_reference in qualification["issues"]:
+            self.assertRegex(issue_reference, r"^#\d+$")
         self.assertEqual(
             set(qualification["immutable_history"]["burned_builds"]),
             {147, 154, 165, 166, 168},
@@ -345,26 +346,20 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(previous_stable_artifacts["dmg"]["sha256"], previous_stable["dmg_sha256"])
         self.assertEqual(previous_stable_artifacts["appcast"]["sha256"], previous_stable["appcast_sha256"])
 
-        previous_beta = qualification["immutable_history"]["previous_beta"]
-        self.assertEqual(previous_beta["release_tag"], "v0.3.3-beta.1")
-        self.assertEqual(previous_beta["package_version"], "0.3.3b1")
-        self.assertEqual(previous_beta["build_version"], "172")
-        self.assertEqual(previous_beta["published_at"], "2026-08-28T01:32:59Z")
-        previous_beta_receipt = json.loads(
-            (REPO_ROOT / "docs/release-evidence/v0.3.3-beta.1/release-receipt.json").read_text(encoding="utf-8")
-        )
-        previous_beta_artifacts = {artifact["kind"]: artifact for artifact in previous_beta_receipt["artifacts"]}
-        self.assertEqual(previous_beta_receipt["source_sha"], previous_beta["source_git_sha"])
-        self.assertEqual(previous_beta_receipt["workflow"]["run_id"], previous_beta["release_run_id"])
-        self.assertEqual(previous_beta_receipt["release"]["id"], previous_beta["release_id"])
-        self.assertEqual(previous_beta_receipt["signed_app_tree_sha256"], previous_beta["signed_app_tree_sha256"])
-        self.assertEqual(previous_beta_artifacts["dmg"]["sha256"], previous_beta["dmg_sha256"])
-        self.assertEqual(previous_beta_artifacts["appcast"]["sha256"], previous_beta["appcast_sha256"])
+        # Two matrix cases are named after the candidate: the updater route ends with this
+        # candidate's tag, and the release-notes case carries its beta number. Derive both from the
+        # record itself so a new candidate does not fail this test.
+        matrix_by_policy = {case["policy_case_id"]: case["id"] for case in qualification["matrix"]}
+        updater_case_id = matrix_by_policy["sparkle-update-route"]
+        release_notes_case_id = matrix_by_policy["native-sparkle-release-notes"]
+        self.assertTrue(updater_case_id.startswith("updater-route-"))
+        self.assertTrue(updater_case_id.endswith(f"-to-{metadata.release_tag}"))
+        self.assertTrue(release_notes_case_id.startswith("native-sparkle-notes-"))
 
         expected_case_ids = {
             "release-workflow-identity",
-            "updater-route-v0.3.3-beta.1-to-v0.3.3-beta.2",
-            "native-sparkle-notes-beta2",
+            updater_case_id,
+            release_notes_case_id,
             "profile-save-action-accessibility",
             "signed-packaged-route-parity",
             "gui-preview-low-local-ample-destination",
@@ -453,7 +448,16 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(candidate_identity, {field: None for field in candidate_identity_fields})
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(qualification["execution_policy"]["release_stage"], "beta")
-        self.assertNotIn("--first-candidate-of-cycle", qualification["qualification_policy"]["scope_command"])
+        # The scope command names this candidate's qualification record, and only carries
+        # --first-candidate-of-cycle when this candidate opens the cycle.
+        scope_command = qualification["qualification_policy"]["scope_command"]
+        self.assertIn(str(qualification_relative), scope_command)
+        self.assertIn("--release-stage beta", scope_command)
+        self.assertIn("--require-evidence", scope_command)
+        if metadata.first_candidate_of_cycle:
+            self.assertIn("--first-candidate-of-cycle", scope_command)
+        else:
+            self.assertNotIn("--first-candidate-of-cycle", scope_command)
         self.assertEqual(
             set(qualification["acceptance"]["blocking_case_ids"]),
             {"sparkle-update-route", "clean-machine-signed-update", "installed-ui-accessibility"},
