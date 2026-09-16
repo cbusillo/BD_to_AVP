@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from scripts.release import ReleaseError, parse_build_version, parse_release_tag, parse_release_version
-from scripts.release_evidence import effective_successful_workflow_run_id
+from scripts.release_evidence import (
+    ReleaseEvidenceError,
+    effective_successful_workflow_run_id,
+    render_published_cut_packet,
+)
 from scripts.release_qualification_manifest import (
     MANIFEST_NAME,
     ReleaseQualificationManifestError,
@@ -1938,21 +1942,147 @@ def discover_terminal_v2_qualification(
     expected_branch = f"automation/release-evidence-{release_tag}"
     if head_branch != expected_branch:
         raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
-    bundle_prefix = f"docs/release-evidence/{release_tag}/"
-    unexpected_paths = sorted(
-        path for path in changed_paths if path != RELEASE_V2_INDEX_PATH and not path.startswith(bundle_prefix)
-    )
-    if unexpected_paths:
-        raise ReleaseMilestoneContextError(
-            "Terminal v2 release evidence may change only its exact release bundle and index-v2.json: "
-            f"{unexpected_paths!r}."
-        )
+    validate_terminal_v2_diff(repo_root, release_tag, base_sha, changed_paths)
     if RELEASE_V2_INDEX_PATH not in changed_paths:
         raise ReleaseMilestoneContextError("Terminal v2 release evidence must update index-v2.json.")
     result = qualified_v2_verifier(repo_root, release_tag, base_sha)
     if result.get("class") != "v2-qualified":
         raise ReleaseMilestoneContextError("Terminal v2 release evidence must have class 'v2-qualified'.")
     return release_tag
+
+
+def validate_terminal_v2_diff(repo_root: Path, release_tag: str, base_sha: str, changed_paths: Sequence[str]) -> None:
+    """Admit the exact bundle and the maintained producers' compatibility records."""
+    bundle_prefix = f"docs/release-evidence/{release_tag}/"
+    qualification_paths = {
+        f"docs/qualification/{release_tag}-signed-qualification-v1.json",
+    }
+    try:
+        release_stage = parse_release_tag(release_tag, allow_legacy_rc=False).stage
+    except ReleaseError as error:
+        raise ReleaseMilestoneContextError(f"Compatibility release tag is invalid: {error}") from error
+    if release_stage == "stable":
+        qualification_paths.add(f"docs/qualification/{release_tag}-stable-signed-qualification-v1.json")
+    receipt_copies = {
+        f"docs/qualification/{release_tag}-{case}-v1.json": f"{bundle_prefix}{case}-receipt.json"
+        for case in ("clean-machine-signed-update", "installed-ui-accessibility")
+    }
+    live_path = f"docs/qualification/{release_tag}-live-qualification-v1.json"
+    receipt_copies[live_path] = f"{bundle_prefix}live-qualification-v1.json"
+    receipt_paths = set(receipt_copies)
+    cut_packet = f"docs/{release_tag.removeprefix('v')}-cut-packet.md"
+    compatibility_paths = {
+        EVIDENCE_INDEX_PATH,
+        RELEASE_LEDGER_PATH,
+        cut_packet,
+        *qualification_paths,
+        *receipt_paths,
+    }
+    unexpected = sorted(
+        path
+        for path in changed_paths
+        if path != RELEASE_V2_INDEX_PATH and path not in compatibility_paths and not path.startswith(bundle_prefix)
+    )
+    if unexpected:
+        raise ReleaseMilestoneContextError(
+            f"Evidence branch changes files outside the exact release bundle and compatibility records: {unexpected!r}."
+        )
+    if not compatibility_paths.intersection(changed_paths):
+        return
+
+    for relative in compatibility_paths.intersection(changed_paths):
+        checked = repo_root / relative
+        if checked.is_symlink() or not checked.is_file() or not checked.resolve().is_relative_to(repo_root.resolve()):
+            raise ReleaseMilestoneContextError("Compatibility outputs must remain regular checked files.")
+
+    manifest = resolve_milestone_manifest_context(repo_root, repo_root / bundle_prefix / "qualification-manifest.json")
+    if manifest.release_tag != release_tag:
+        raise ReleaseMilestoneContextError("Compatibility records must bind the requested release tag.")
+    if RELEASE_LEDGER_PATH in changed_paths:
+        _validate_append_only_release_ledger(repo_root, base_sha=base_sha, release_tag=release_tag)
+    indexed_references: set[str] = set()
+    if EVIDENCE_INDEX_PATH in changed_paths:
+        baseline = _load_json_at_revision(repo_root, base_sha, EVIDENCE_INDEX_PATH, "base qualification evidence")
+        current = _load_json(repo_root / EVIDENCE_INDEX_PATH, "qualification evidence")
+        if {key: value for key, value in baseline.items() if key != "receipts"} != {
+            key: value for key, value in current.items() if key != "receipts"
+        }:
+            raise ReleaseMilestoneContextError("Compatibility evidence index metadata may not change.")
+        appended = _validate_append_only_evidence_index(repo_root, base_sha=base_sha)
+        for record in appended:
+            reference = _string(record.get("reference"), "compatibility receipt reference")
+            case_id = _string(record.get("case_id"), "compatibility receipt case ID")
+            expected_cases = {
+                f"{bundle_prefix}release-receipt.json": {"release-workflow-identity", "signed-packaged-route-parity"},
+                f"{bundle_prefix}signed-artifact-ui-receipt.json": {"profile-save-action-accessibility"},
+                f"docs/qualification/{release_tag}-clean-machine-signed-update-v1.json": {
+                    "clean-machine-signed-update"
+                },
+                f"docs/qualification/{release_tag}-installed-ui-accessibility-v1.json": {"installed-ui-accessibility"},
+                live_path: {"sparkle-update-route"},
+            }
+            if case_id not in expected_cases.get(reference, set()):
+                raise ReleaseMilestoneContextError("Compatibility receipt case identity does not match its reference.")
+            if (
+                record.get("source_sha") != manifest.candidate_sha
+                or record.get("status") != "accepted"
+                or re.fullmatch(
+                    rf"{re.escape(release_tag)}:{re.escape(case_id)}(?::[1-9][0-9]*)?",
+                    _string(record.get("receipt_id"), "compatibility receipt ID"),
+                )
+                is None
+            ):
+                raise ReleaseMilestoneContextError("Appended compatibility receipts must belong to this release.")
+            path, _ = _repository_path(repo_root, reference, "compatibility receipt reference")
+            if path.is_symlink() or not path.resolve().is_relative_to(repo_root.resolve()):
+                raise ReleaseMilestoneContextError("Compatibility receipts must be regular checked files.")
+            if hashlib.sha256(path.read_bytes()).hexdigest() != record.get("sha256"):
+                raise ReleaseMilestoneContextError("Compatibility receipt digest does not match its checked file.")
+            indexed_references.add(reference)
+    if receipt_paths.intersection(changed_paths) - indexed_references:
+        raise ReleaseMilestoneContextError("Changed compatibility receipts must have new accepted index records.")
+    for relative in receipt_paths.intersection(changed_paths):
+        if _tracked_at_revision(repo_root, base_sha, Path(relative)):
+            raise ReleaseMilestoneContextError("Compatibility receipts must be new; accepted files cannot be replaced.")
+        expected = (repo_root / receipt_copies[relative]).read_bytes()
+        if relative == live_path:
+            live = dict(_load_json(repo_root / receipt_copies[relative], "archived live qualification"))
+            cases = _sequence(live.get("cases"), "archived live qualification cases")
+            if len(cases) != 1:
+                raise ReleaseMilestoneContextError("Archived live qualification must describe exactly one case.")
+            case = dict(_mapping(cases[0], "archived live qualification case"))
+            observations = dict(_mapping(case.get("observations"), "archived live qualification observations"))
+            observations["qualification_receipt_reference"] = (
+                f"docs/qualification/{release_tag}-clean-machine-signed-update-v1.json"
+            )
+            live["cases"] = [{**case, "observations": observations}]
+            expected = (json.dumps(live, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
+        if (repo_root / relative).read_bytes() != expected:
+            raise ReleaseMilestoneContextError("Compatibility receipt must match its validated archived receipt.")
+    for qualification_relative in qualification_paths.intersection(changed_paths):
+        if (repo_root / qualification_relative).read_bytes() != (
+            repo_root / bundle_prefix / "qualification-record.json"
+        ).read_bytes():
+            raise ReleaseMilestoneContextError("Compatibility qualification must match the immutable snapshot.")
+    if cut_packet in changed_paths:
+        baseline_text = subprocess.run(
+            ["git", "show", f"{base_sha}:{cut_packet}"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        if baseline_text.returncode != 0:
+            raise ReleaseMilestoneContextError("Published cut packet requires its prepared protected-main baseline.")
+        receipt = _load_json(repo_root / bundle_prefix / "release-receipt.json", "release receipt")
+        publication = _load_json(repo_root / bundle_prefix / "publication-record.json", "publication record")
+        try:
+            expected_text = render_published_cut_packet(baseline_text.stdout, receipt, publication)
+        except ReleaseEvidenceError as error:
+            raise ReleaseMilestoneContextError(f"Cut packet publication rendering failed: {error}") from error
+        if (repo_root / cut_packet).read_text(encoding="utf-8") != expected_text:
+            raise ReleaseMilestoneContextError("Cut packet must match the maintained publication renderer.")
 
 
 def discover_milestone_receipt(

@@ -20,16 +20,17 @@ from scripts.release_evidence_v2 import (
     ReleaseEvidenceV2Error,
     check_index_v2,
     evidence_ref_for_tag,
+    materialized_revision,
     sanitize_release_tag,
     verify_tag,
     verify_write_once_history,
 )
+from scripts.release_milestone_context import ReleaseMilestoneContextError, validate_terminal_v2_diff
 from scripts.release_receipt import EXPECTED_REPOSITORY
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAIN_BRANCH = "main"
-INDEX_PATH = "docs/release-evidence/index-v2.json"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 GIT_TIMEOUT_SECONDS = 60
@@ -262,12 +263,11 @@ def _verify_docs_only_diff(repo_root: Path, main_sha: str, evidence_sha: str, re
         "list evidence branch changes",
     ).splitlines()
     bundle_prefix = f"docs/release-evidence/{release_tag}/"
-    allowed = {INDEX_PATH}
-    unexpected = sorted(path for path in changed if path not in allowed and not path.startswith(bundle_prefix))
-    if unexpected:
-        raise ReleaseEvidenceReconciliationError(
-            f"Evidence branch changes files outside the exact release bundle: {', '.join(unexpected)}."
-        )
+    try:
+        with materialized_revision(repo_root, evidence_sha) as materialized:
+            validate_terminal_v2_diff(materialized, release_tag, main_sha, changed)
+    except (OSError, ReleaseMilestoneContextError, ReleaseEvidenceV2Error) as error:
+        raise ReleaseEvidenceReconciliationError(f"Evidence diff validation failed: {error}") from error
     if not any(path.startswith(bundle_prefix) for path in changed):
         raise ReleaseEvidenceReconciliationError("Evidence branch does not change the requested release bundle.")
 
