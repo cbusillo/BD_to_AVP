@@ -1191,6 +1191,89 @@ def _requires_unpublished_candidate_recovery(repo_root: Path, base_candidate: Ma
     )
 
 
+def _require_base_candidate_matches_receipt(
+    base_candidate: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    label: str,
+) -> None:
+    release = _mapping(receipt.get("release"), f"{label} release")
+    versions = _mapping(receipt.get("versions"), f"{label} versions")
+    workflow = _mapping(receipt.get("workflow"), f"{label} workflow")
+    artifacts = [
+        _mapping(item, f"{label} artifact") for item in _sequence(receipt.get("artifacts"), f"{label} artifacts")
+    ]
+    dmg_artifacts = [item for item in artifacts if item.get("kind") == "dmg"]
+    if len(dmg_artifacts) != 1:
+        raise ReleaseMilestoneContextError(f"{label.capitalize()} must contain exactly one DMG artifact.")
+    expected_base_candidate = {
+        "package_version": versions.get("package"),
+        "public_version": versions.get("public"),
+        "build_version": versions.get("build"),
+        "release_tag": release.get("tag"),
+        "dmg_name": dmg_artifacts[0].get("name"),
+        "workflow": workflow.get("name"),
+    }
+    for field, expected in expected_base_candidate.items():
+        if base_candidate.get(field) != expected:
+            raise ReleaseMilestoneContextError(
+                f"{label.capitalize()} does not match base qualification candidate.{field}."
+            )
+
+
+def _tracked_at_revision(repo_root: Path, revision: str, relative_path: Path) -> bool:
+    tracked = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}:{relative_path.as_posix()}"],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    return tracked.returncode == 0
+
+
+def _has_terminal_v2_predecessor(repo_root: Path, *, base_sha: str, base_candidate: Mapping[str, Any]) -> bool:
+    # Terminal v2 evidence returns the live record to its preregistered null identity, so an all-null base
+    # candidate is a published predecessor when protected main already tracks its qualification-v2 bundle.
+    release_tag = _string(base_candidate.get("release_tag"), "base qualification candidate release tag")
+    if (repo_root / FAILED_ATTEMPT_ROOT / release_tag / CANCELLED_ATTEMPT_RECORD_NAME).is_file():
+        return False
+    if any(field not in base_candidate or base_candidate[field] is not None for field in IMMUTABLE_CANDIDATE_FIELDS):
+        return False
+    return _tracked_at_revision(repo_root, base_sha, RELEASE_EVIDENCE_ROOT / release_tag / "qualification-v2.json")
+
+
+def _validate_terminal_v2_predecessor(
+    repo_root: Path,
+    *,
+    base_sha: str,
+    base_candidate: Mapping[str, Any],
+    qualified_v2_verifier: QualifiedV2Verifier,
+) -> None:
+    release_tag = _string(base_candidate.get("release_tag"), "base qualification candidate release tag")
+    evidence_root = RELEASE_EVIDENCE_ROOT / release_tag
+    receipt_relative = evidence_root / "release-receipt.json"
+    for relative_path, description in (
+        (evidence_root / "qualification-v2.json", "Terminal v2 predecessor qualification"),
+        (receipt_relative, "Terminal v2 predecessor release receipt"),
+    ):
+        if not _tracked_at_revision(repo_root, base_sha, relative_path):
+            raise ReleaseMilestoneContextError(f"{description} must be tracked on protected main.")
+        changed = subprocess.run(
+            ["git", "diff", "--quiet", base_sha, "--", relative_path.as_posix()],
+            cwd=repo_root,
+            check=False,
+        )
+        if changed.returncode != 0:
+            raise ReleaseMilestoneContextError(f"{description} must remain immutable.")
+    result = qualified_v2_verifier(repo_root, release_tag, base_sha)
+    if result.get("release_tag") != release_tag or result.get("class") != "v2-qualified":
+        raise ReleaseMilestoneContextError("Terminal v2 predecessor evidence must have class 'v2-qualified'.")
+    try:
+        receipt, _receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
+    except ReleaseReceiptError as error:
+        raise ReleaseMilestoneContextError(f"Terminal v2 predecessor release receipt is invalid: {error}") from error
+    _require_base_candidate_matches_receipt(base_candidate, receipt, "terminal v2 predecessor receipt")
+
+
 def _validate_prepublication_candidate_transition(
     repo_root: Path,
     *,
@@ -1198,6 +1281,7 @@ def _validate_prepublication_candidate_transition(
     qualification: Mapping[str, Any],
     candidate: Mapping[str, Any],
     published_prior_receipt: Mapping[str, Any] | None = None,
+    qualified_v2_verifier: QualifiedV2Verifier | None = None,
 ) -> None:
     base_config = _load_json_at_revision(
         repo_root,
@@ -1235,29 +1319,14 @@ def _validate_prepublication_candidate_transition(
                 "Published prior receipt carry-forward requires every base immutable candidate field "
                 "to be explicit null."
             )
-        release = _mapping(published_prior_receipt.get("release"), "published prior receipt release")
-        versions = _mapping(published_prior_receipt.get("versions"), "published prior receipt versions")
-        workflow = _mapping(published_prior_receipt.get("workflow"), "published prior receipt workflow")
-        artifacts = [
-            _mapping(item, "published prior receipt artifact")
-            for item in _sequence(published_prior_receipt.get("artifacts"), "published prior receipt artifacts")
-        ]
-        dmg_artifacts = [item for item in artifacts if item.get("kind") == "dmg"]
-        if len(dmg_artifacts) != 1:
-            raise ReleaseMilestoneContextError("Published prior receipt must contain exactly one DMG artifact.")
-        expected_base_candidate = {
-            "package_version": versions.get("package"),
-            "public_version": versions.get("public"),
-            "build_version": versions.get("build"),
-            "release_tag": release.get("tag"),
-            "dmg_name": dmg_artifacts[0].get("name"),
-            "workflow": workflow.get("name"),
-        }
-        for field, expected in expected_base_candidate.items():
-            if base_candidate.get(field) != expected:
-                raise ReleaseMilestoneContextError(
-                    f"Published prior receipt does not match base qualification candidate.{field}."
-                )
+        _require_base_candidate_matches_receipt(base_candidate, published_prior_receipt, "published prior receipt")
+    elif _has_terminal_v2_predecessor(repo_root, base_sha=base_sha, base_candidate=base_candidate):
+        _validate_terminal_v2_predecessor(
+            repo_root,
+            base_sha=base_sha,
+            base_candidate=base_candidate,
+            qualified_v2_verifier=qualified_v2_verifier or verify_qualified_v2_bundle,
+        )
     elif _requires_unpublished_candidate_recovery(repo_root, base_candidate):
         failed_build = _validate_failed_unpublished_candidate(
             repo_root,
@@ -1896,6 +1965,7 @@ def discover_milestone_receipt(
     head_repo: str,
     base_branch: str,
     published_receipt_verifier: PublishedReceiptVerifier = verify_published_release_receipt,
+    qualified_v2_verifier: QualifiedV2Verifier | None = None,
 ) -> Path | None:
     if base_repo != EXPECTED_REPOSITORY or head_repo != EXPECTED_REPOSITORY or base_branch != EXPECTED_BASE_BRANCH:
         raise ReleaseMilestoneContextError(
@@ -2068,6 +2138,7 @@ def discover_milestone_receipt(
                 base_sha=base_sha,
                 qualification=qualification,
                 candidate=candidate,
+                qualified_v2_verifier=qualified_v2_verifier,
             )
             unbound_candidate = True
         appended_receipts: list[Mapping[str, Any]] = []

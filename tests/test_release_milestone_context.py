@@ -566,6 +566,127 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         return base_sha, head_sha
 
     @staticmethod
+    def prepare_terminal_v2_predecessor_transition(
+        root: Path,
+        *,
+        include_v2_bundle: bool = True,
+        receipt_build_version: str = "162",
+    ) -> tuple[str, str]:
+        release_tag = "v0.3.1-beta.1"
+        immutable_fields = (
+            "source_git_sha",
+            "release_run_id",
+            "release_id",
+            "dmg_sha256",
+            "appcast_sha256",
+            "signed_app_tree_sha256",
+        )
+        base_qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+        base_qualification = json.loads(base_qualification_path.read_text(encoding="utf-8"))
+        base_qualification["status"] = "preregistered_pending_exact_candidate"
+        base_qualification["candidate"].update(
+            {
+                "package_version": "0.3.1b1",
+                "public_version": "0.3.1-beta.1",
+                "build_version": "162",
+                "release_tag": release_tag,
+                "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.1.dmg",
+                "workflow": "Prerelease",
+            }
+        )
+        for field in immutable_fields:
+            base_qualification["candidate"][field] = None
+        base_qualification_path.write_text(json.dumps(base_qualification) + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", base_qualification_path], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "prepare published beta"], cwd=root, check=True)
+        source_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        subprocess.run(["git", "tag", release_tag, source_sha], cwd=root, check=True)
+
+        # Terminal v2 evidence lands on main before the successor is prepared, leaving the live record null.
+        evidence_root = root / "docs/release-evidence" / release_tag
+        evidence_root.mkdir(parents=True)
+        receipt_path = evidence_root / "release-receipt.json"
+        receipt = build_receipt(
+            {
+                "release_route": "prerelease",
+                "source_sha": source_sha,
+                "workflow_actor": "shiny-code-bot",
+                "workflow_run_id": 22222,
+                "workflow_run_attempt": 1,
+                "package_version": "0.3.1b1",
+                "public_version": "0.3.1-beta.1",
+                "build_version": receipt_build_version,
+                "release_tag": release_tag,
+                "release_name": release_tag,
+                "release_id": 33333,
+                "release_created_at": "2026-08-21T01:00:00Z",
+                "prerelease": True,
+                "make_latest": False,
+                "signed_app_tree_sha256": APP_TREE_SHA256,
+                "artifacts": [
+                    {
+                        "kind": "dmg",
+                        "name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.1.dmg",
+                        "sha256": DMG_SHA256,
+                        "size_bytes": 1000,
+                        "asset_id": 1,
+                    },
+                    {
+                        "kind": "checksum",
+                        "name": "SHA256SUMS",
+                        "sha256": CHECKSUM_SHA256,
+                        "size_bytes": 100,
+                        "asset_id": 2,
+                    },
+                    {
+                        "kind": "appcast",
+                        "name": "appcast.xml",
+                        "sha256": APPCAST_SHA256,
+                        "size_bytes": 500,
+                        "asset_id": 3,
+                    },
+                ],
+            }
+        )
+        write_receipt(receipt, receipt_path)
+        evidence_paths = [receipt_path]
+        if include_v2_bundle:
+            v2_path = evidence_root / "qualification-v2.json"
+            v2_path.write_text("{}\n", encoding="utf-8")
+            evidence_paths.append(v2_path)
+        subprocess.run(["git", "add", *evidence_paths], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "record terminal v2 evidence"], cwd=root, check=True)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+        next_qualification = json.loads(json.dumps(base_qualification))
+        next_qualification["candidate"].update(
+            {
+                "package_version": "0.3.1b2",
+                "public_version": "0.3.1-beta.2",
+                "build_version": "163",
+                "release_tag": "v0.3.1-beta.2",
+                "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.2.dmg",
+            }
+        )
+        next_qualification["immutable_history"] = {"burned_builds": []}
+        next_path = root / "docs/qualification/v0.3.1-beta.2-signed-qualification-v1.json"
+        next_path.write_text(json.dumps(next_qualification) + "\n", encoding="utf-8")
+        config_path = root / ".github/github.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["releaseOperations"]["qualificationRecordPath"] = next_path.relative_to(root).as_posix()
+        config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", next_path, config_path], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "prepare successor after terminal v2 beta"], cwd=root, check=True)
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        return base_sha, head_sha
+
+    @staticmethod
     def append_beta_change_scoped_evidence(
         root: Path,
         *,
@@ -1563,6 +1684,81 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             )
 
         self.assertIsNone(discovered)
+
+    def discover_terminal_v2_successor(
+        self,
+        root: Path,
+        base_sha: str,
+        head_sha: str,
+        verifier,
+    ) -> Path | None:
+        return discover_milestone_receipt(
+            root,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            head_branch="prepare/v0.3.1-beta.2",
+            base_repo="cbusillo/BD_to_AVP",
+            head_repo="cbusillo/BD_to_AVP",
+            base_branch="main",
+            qualified_v2_verifier=verifier,
+        )
+
+    def test_allows_terminal_v2_published_predecessor_to_advance(self) -> None:
+        verified: list[tuple[str, str]] = []
+
+        def verify(_root: Path, release_tag: str, base_sha: str) -> Mapping[str, object]:
+            verified.append((release_tag, base_sha))
+            return {"class": "v2-qualified", "release_tag": release_tag}
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_terminal_v2_predecessor_transition(root)
+
+            discovered = self.discover_terminal_v2_successor(root, base_sha, head_sha, verify)
+
+        self.assertIsNone(discovered)
+        self.assertEqual(verified, [("v0.3.1-beta.1", base_sha)])
+
+    def test_rejects_terminal_v2_predecessor_that_is_not_qualified(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_terminal_v2_predecessor_transition(root)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "class 'v2-qualified'"):
+                self.discover_terminal_v2_successor(
+                    root,
+                    base_sha,
+                    head_sha,
+                    lambda _root, release_tag, _base: {"class": "v2-captured", "release_tag": release_tag},
+                )
+
+    def test_rejects_terminal_v2_predecessor_receipt_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_terminal_v2_predecessor_transition(root, receipt_build_version="161")
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, r"candidate\.build_version"):
+                self.discover_terminal_v2_successor(
+                    root,
+                    base_sha,
+                    head_sha,
+                    lambda _root, release_tag, _base: {"class": "v2-qualified", "release_tag": release_tag},
+                )
+
+    def test_null_predecessor_without_v2_bundle_still_requires_failed_attempt_record(self) -> None:
+        def unexpected_verifier(_root: Path, _release_tag: str, _base_sha: str) -> Mapping[str, object]:
+            raise AssertionError("The v2 verifier must not run without a tracked qualification-v2 bundle.")
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_terminal_v2_predecessor_transition(root, include_v2_bundle=False)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "failed release-attempt record"):
+                self.discover_terminal_v2_successor(root, base_sha, head_sha, unexpected_verifier)
 
     def test_allows_generated_v2_index_with_published_prior_receipt_carry_forward(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
