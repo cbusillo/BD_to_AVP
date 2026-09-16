@@ -23,7 +23,9 @@
       "subtitle-partial-output-diagnostics"
     ],
     "signing_started": false,
-    "release_identity_created": false
+    "release_identity_created": false,
+    "report_sha256": "4fa74dd5e6d2385634c79bee4f5cda8009e8c6424bbfd0d09ceb444a916e8d64",
+    "command": "uv run python -m scripts.qualify_release_scope --qualification docs/qualification/v0.3.3-beta.2-signed-qualification-v1.json --candidate-sha 722cb5d646053cb155aefb42ee5fbf375f2dfdda --evidence docs/qualification/release-evidence-v1.json --release-stage beta --workflow-phase preparation --require-evidence"
   },
   "packaged_candidate": {
     "app_tree_sha256": "4813e4259419e583d911a34dae2ec3e6b28d84edbba0c99f6e242b6707363ef8",
@@ -33,26 +35,30 @@
     "package_command": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py package",
     "preview_presentation_smoke": "passed",
     "signing": "ad_hoc_local",
-    "worker_cancellation_smoke": "passed"
+    "worker_cancellation_smoke": "passed",
+    "signature_verification": "codesign -dv reports Signature=adhoc and no TeamIdentifier",
+    "worker_protocol_smoke": "passed"
   },
   "evidence_source_semantics": {
     "developer_id_or_notarization_claimed": false,
     "index_source": "signed_artifact_receipt",
     "meaning": "Change-scoped evidence from the exact locally packaged, code-signed app tree; production Developer ID signing remains owned by the guarded release run.",
-    "project_precedent": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json"
+    "project_precedent": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json"
   },
   "validation": {
     "native_tests": {
       "command": "uv run python scripts/native_app.py test",
       "passed": 669,
       "failed": 0,
-      "log_sha256": "a55370e5e4cf115dc81a046572f0d3ce157896c3bc4b56e956dedaab30e79737"
+      "log_sha256": "a55370e5e4cf115dc81a046572f0d3ce157896c3bc4b56e956dedaab30e79737",
+      "skipped": 0
     },
     "focused_python_tests": {
       "command": "uv run python -m unittest tests.test_process_preflight tests.test_subtitles tests.test_vendor_pgsrip_edge_cases tests.test_vendor_pgsrip_cli",
       "passed": 99,
       "failed": 0,
-      "log_sha256": "a22f90b45129bce96105c4835819a40fbd6703dc667c268e72c53d8b5182f79d"
+      "log_sha256": "a22f90b45129bce96105c4835819a40fbd6703dc667c268e72c53d8b5182f79d",
+      "skipped": 0
     },
     "packaged_app": {
       "exit_code": 0,
@@ -100,18 +106,19 @@
     {
       "case_id": "network-generated-final-output",
       "observations": {
-        "destination_snapshot_preserved_through_queue_execution": true,
-        "generated_mv_hevc_route_resolution_preserved": true,
-        "packaged_worker_and_final_output_regression_suite": "passed"
+        "destination_snapshots_preserved_in_batch_preparation": true,
+        "generated_route_job_spec_matches_shared_worker_fixture": true,
+        "final_output_move_returns_destination_path": true,
+        "packaged_worker_protocol_smoke": "passed"
       },
       "proof": [
-        "macos/BluRayToVisionProTests/ConversionQueueStoreTests.swift",
-        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift",
-        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift",
-        "scripts/native_app.py:packaged worker smoke"
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testBatchPreparationSnapshotsProfileDestinationAndOptionsPerItem",
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testGeneratedRouteJobSpecMatchesSharedV12WorkerFixture",
+        "tests/test_process_preflight.py:test_output_move_returns_final_output_path",
+        "scripts/native_app.py:smoke_packaged_worker"
       ],
       "scope": {
-        "current_change_review": "Beta 2 changes preserve destination snapshots, generated-route resolution, and worker output publication boundaries. Fresh regression tests and package smoke checks cover the exact candidate; no mounted-network media conversion was rerun.",
+        "current_change_review": "Fresh native and Python regressions verify destination snapshots, generated-route job construction, and the final-output move path on the exact candidate. Packaged worker smoke verifies the embedded worker protocol. No mounted-network media conversion was rerun.",
         "mounted_network_conversion_rerun": false,
         "prior_real_network_evidence": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json",
         "qualification_kind": "exact_candidate_change_scoped_regression"
@@ -122,15 +129,16 @@
       "case_id": "overwrite-and-conversion-cancel",
       "observations": {
         "existing_output_rejected_before_workspace_mutation": true,
-        "owned_partial_outputs_removed_after_cancellation": true,
         "resumed_and_unowned_workspaces_preserved": true,
-        "view_model_stop_transitions_to_stopping": true
+        "view_model_stop_transitions_to_stopping": true,
+        "owned_workspaces_removed_after_cancellation": true
       },
       "proof": [
         "tests/test_process_preflight.py:test_existing_output_aborts_before_workspace_mutation",
         "tests/test_process_preflight.py:test_cancelled_conversion_cleans_owned_workspaces",
         "tests/test_process_preflight.py:test_cancelled_conversion_preserves_unowned_workspaces",
-        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testStopActiveWorkerCancelsConversionAndTransitionsToStopping"
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testStopActiveWorkerCancelsConversionAndTransitionsToStopping",
+        "tests/test_process_preflight.py:test_resumed_cancellation_preserves_existing_workspaces"
       ],
       "status": "passed"
     },
@@ -143,9 +151,12 @@
         "usable_peer_subtitles_preserved": true
       },
       "proof": [
-        "tests/test_subtitles.py",
-        "tests/test_vendor_pgsrip_edge_cases.py",
-        "tests/test_vendor_pgsrip_cli.py"
+        "tests/test_vendor_pgsrip_edge_cases.py:test_rle_exceeding_declared_bounds_raises_value_error",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_decode_rle_image_max_pixels_parameter_raises_on_overflow",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_generate_image_returns_none_for_malformed_rle",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_create_items_skips_malformed_item_and_keeps_good_ones",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_skips_unknown_segment_and_continues",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_truncated_segment_is_ignored"
       ],
       "status": "passed"
     },
@@ -159,9 +170,13 @@
         "successful_outcome_distinguished": true
       },
       "proof": [
-        "tests/test_subtitles.py",
-        "tests/test_vendor_pgsrip_edge_cases.py",
-        "tests/test_vendor_pgsrip_cli.py"
+        "tests/test_subtitles.py:test_completed_event_emitted_after_successful_rip",
+        "tests/test_subtitles.py:test_partial_warning_emitted_when_empty_srts_produced",
+        "tests/test_subtitles.py:test_partial_warning_emitted_when_ripper_skips_a_selected_track",
+        "tests/test_subtitles.py:test_empty_output_emits_failure_before_strict_error",
+        "tests/test_subtitles.py:test_postprocess_error_closes_started_event_with_failure",
+        "tests/test_subtitles.py:test_keyboard_interrupt_closes_started_event_as_cancelled",
+        "tests/test_subtitles.py:test_no_partial_warning_when_all_tracks_succeed"
       ],
       "status": "passed"
     }
