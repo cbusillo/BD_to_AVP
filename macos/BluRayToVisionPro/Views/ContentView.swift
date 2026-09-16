@@ -121,6 +121,16 @@ struct ContentView: View {
 
     @ViewBuilder
     private var noticeContent: some View {
+        ForEach(viewModel.stallRecovery.notices) { notice in
+            StallRecoveryNotice(
+                notice: notice,
+                supportsWaiting: viewModel.stallRecovery.supportsWaiting,
+                keepWaiting: {
+                    viewModel.keepWaiting(toolRunID: notice.id, episodeID: notice.stall.stallEpisodeID)
+                },
+                stop: viewModel.stopActiveWorker
+            )
+        }
         if let migrationNoticeMessage = profileStore.migrationNoticeMessage {
             Label(migrationNoticeMessage, systemImage: "exclamationmark.triangle.fill")
                 .font(.callout)

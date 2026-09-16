@@ -988,7 +988,7 @@ final class DiagnosticSessionRecorder {
             operation: event.payload.operation ?? context(for: event.jobID)?.operation,
             activeMode: activeMode,
             stage: event.payload.stage ?? observabilityEvent?.context.stage?.id,
-            tool: observabilityEvent?.context.tool?.id,
+            tool: event.payload.stall?.tool ?? observabilityEvent?.context.tool?.id,
             processState: observabilityEvent.flatMap {
                 LiveObservabilityStatus.processState(for: $0)?.rawValue
             },
@@ -1019,7 +1019,9 @@ final class DiagnosticSessionRecorder {
                 ?? event.payload.error?.message
                 ?? event.payload.decision?.prompt
                 ?? (observabilityTextIsOmitted ? nil : observabilityEvent?.data.message?.value),
-            details: event.payload.error?.details
+            details: event.payload.stall?.diagnosticDetails
+                ?? event.payload.controlResult?.diagnosticDetails
+                ?? event.payload.error?.details
                 ?? event.payload.decision?.details
                 ?? (observabilityTextIsOmitted ? nil : observabilityEvent?.data.detail?.value),
             level: event.payload.level ?? observabilityEvent?.severity,

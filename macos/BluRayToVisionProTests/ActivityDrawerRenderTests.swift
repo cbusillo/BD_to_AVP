@@ -5,6 +5,40 @@ import XCTest
 
 @MainActor
 final class ActivityDrawerRenderTests: XCTestCase {
+    func testStallNoticeRendersWithoutTechnicalDetails() throws {
+        let stall = WorkerStallEvent(
+            toolRunID: UUID(), stallEpisodeID: UUID(), tool: "mv_hevc_encoder", state: .stalled,
+            canExtend: true, grantsUsed: 0, maxGrants: 2, grantSeconds: 120,
+            artifacts: [], artifactsOmitted: 0, toolProgress: nil
+        )
+        let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("build/stall-controls")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for pending in [false, true] {
+            var notice = StallRecoveryState.Notice(jobID: UUID(), stall: stall)
+            if pending {
+                notice.pendingCommand = WorkerWaitCommand(
+                    commandID: UUID(), jobID: notice.jobID,
+                    toolRunID: stall.toolRunID, stallEpisodeID: stall.stallEpisodeID
+                )
+            }
+            let content = StallRecoveryNotice(
+                notice: notice, supportsWaiting: true, keepWaiting: {}, stop: {}
+            )
+            .frame(width: 980, height: 120)
+            .preferredColorScheme(.light)
+            let hostingView = NSHostingView(rootView: content)
+            hostingView.appearance = NSAppearance(named: .aqua)
+            hostingView.frame = NSRect(x: 0, y: 0, width: 980, height: 120)
+            hostingView.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+            hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+            let image = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            XCTAssertGreaterThan(image.count, 1_000)
+            try image.write(to: output.appendingPathComponent(pending ? "stall-pending.png" : "stall-notice.png"))
+        }
+    }
+
     func testActivityDrawerRendersBoundedHistory() throws {
         let jobID = UUID(uuidString: "B78EE8D6-9740-40F9-B6F1-103C67287EC4")!
         var state = WorkerLifecycleState()

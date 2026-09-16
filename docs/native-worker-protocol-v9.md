@@ -1,7 +1,7 @@
 # Native Worker Protocol v9
 
 > This historical protocol is superseded by
-> [Native Worker Protocol v12](native-worker-protocol-v12.md).
+> [Native Worker Protocol v13](native-worker-protocol-v13.md).
 
 Protocol v9 adds an explicit audio-language selection field. The native app
 defaults built-in and new profile options to preferred-only English, while an

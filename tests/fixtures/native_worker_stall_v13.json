@@ -1,0 +1,34 @@
+{
+  "protocol_version": 13,
+  "type": "tool.stall",
+  "job_id": "c1ebce77-0460-462b-bd7e-8498c0355267",
+  "sequence": 4,
+  "payload": {
+    "tool_run_id": "ce342bf4-ac4f-4a6e-a920-3616a9b68693",
+    "stall_episode_id": "09329f41-4707-4086-9a61-bc4131e67790",
+    "tool": "mv_hevc_encoder",
+    "state": "stalled",
+    "can_extend": true,
+    "grants_used": 0,
+    "max_grants": 2,
+    "grant_seconds": 120,
+    "artifacts": [
+      {
+        "role": "stereo_video_output",
+        "state": "stalled",
+        "size_bytes": 4831838208,
+        "no_progress_age_seconds": 60
+      }
+    ],
+    "artifacts_omitted": 0,
+    "tool_progress": {
+      "updates": 4,
+      "repeated_updates": 3,
+      "updated_age_seconds": 2,
+      "changed_age_seconds": 61,
+      "completed_units": 129479,
+      "last_output_age_seconds": 2,
+      "output_bytes": 1024
+    }
+  }
+}

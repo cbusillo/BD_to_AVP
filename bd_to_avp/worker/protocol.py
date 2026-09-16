@@ -23,7 +23,7 @@ from bd_to_avp.modules.video_quality_defaults import (
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.runtime import RunContext
 
-PROTOCOL_VERSION = 12
+PROTOCOL_VERSION = 13
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -95,6 +95,8 @@ class WorkerEventType(StrEnum):
     WARNING = "warning"
     ARTIFACT_READY = "artifact.ready"
     OBSERVABILITY = "observability"
+    TOOL_STALL = "tool.stall"
+    CONTROL_RESULT = "control.result"
     JOB_COMPLETED = "job.completed"
     JOB_FAILED = "job.failed"
     JOB_CANCELLED = "job.cancelled"

@@ -108,11 +108,13 @@ protocol WorkerProcessRunning: AnyObject {
         onEvent: @escaping (WorkerEvent) async throws -> Void
     ) async throws -> WorkerRunResult
     func cancel()
+    func sendControl(_ command: WorkerWaitCommand) async throws
     func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot
 }
 
 extension WorkerProcessRunning {
     func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot { .empty }
+    func sendControl(_ command: WorkerWaitCommand) async throws { throw WorkerControlError.unavailable }
 }
 
 final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
@@ -130,6 +132,9 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     private let stateLock = NSLock()
     private var activeProcess: Process?
     private var activeProcessGroupID: pid_t?
+    private var activeJobID: UUID?
+    private var activeControlWriter: WorkerControlWriter?
+    private var supportsWaiting = false
     private var activeDiagnosticBuffer: BoundedDiagnosticTextBuffer?
     private var lastDiagnosticSnapshot = WorkerProcessDiagnosticSnapshot.empty
     private var cancellationRequested = false
@@ -183,7 +188,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             exitWaiter.complete(with: terminatedProcess.terminationStatus)
         }
 
-        guard register(process, diagnosticBuffer: diagnosticBuffer) else {
+        guard register(process, jobID: job.jobID, diagnosticBuffer: diagnosticBuffer) else {
             throw WorkerClientError.alreadyRunning
         }
         defer {
@@ -213,8 +218,24 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         do {
             var requestData = try JSONEncoder().encode(job)
             requestData.append(0x0A)
-            try standardInput.fileHandleForWriting.write(contentsOf: requestData)
-            try standardInput.fileHandleForWriting.close()
+            let request = requestData
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                Self.ioQueue.async {
+                    do {
+                        try standardInput.fileHandleForWriting.write(contentsOf: request)
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            let writer = try WorkerControlWriter(handle: standardInput.fileHandleForWriting)
+            let retainWriter = stateLock.withLock {
+                guard activeProcess === process, !cancellationRequested else { return false }
+                activeControlWriter = writer
+                return true
+            }
+            if !retainWriter { writer.close() }
         } catch {
             cancel()
             let exitStatus = await processExitStatus
@@ -274,8 +295,9 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     func cancel() {
         let target = stateLock.withLock {
             cancellationRequested = true
-            return (activeProcess, activeProcessGroupID)
+            return (activeProcess, activeProcessGroupID, activeControlWriter)
         }
+        target.2?.close()
         guard let process = target.0, process.isRunning else {
             return
         }
@@ -322,8 +344,20 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         }
     }
 
+    func sendControl(_ command: WorkerWaitCommand) async throws {
+        let writer = stateLock.withLock {
+            guard activeJobID == command.jobID, supportsWaiting, !cancellationRequested else {
+                return Optional<WorkerControlWriter>.none
+            }
+            return activeControlWriter
+        }
+        guard let writer else { throw WorkerControlError.unavailable }
+        try await writer.send(command)
+    }
+
     private func register(
         _ process: Process,
+        jobID: UUID,
         diagnosticBuffer: BoundedDiagnosticTextBuffer
     ) -> Bool {
         stateLock.withLock {
@@ -331,6 +365,8 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                 return false
             }
             activeProcess = process
+            activeJobID = jobID
+            supportsWaiting = false
             activeProcessGroupID = nil
             activeDiagnosticBuffer = diagnosticBuffer
             lastDiagnosticSnapshot = .empty
@@ -339,9 +375,9 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     }
 
     private func clear(_ process: Process) {
-        stateLock.withLock {
+        let writer = stateLock.withLock {
             guard activeProcess === process else {
-                return
+                return Optional<WorkerControlWriter>.none
             }
             lastDiagnosticSnapshot = WorkerProcessDiagnosticSnapshot(
                 isRunning: false,
@@ -351,10 +387,16 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                 toolOutput: activeDiagnosticBuffer?.snapshot() ?? .empty
             )
             activeProcess = nil
+            activeJobID = nil
+            supportsWaiting = false
+            let writer = activeControlWriter
+            activeControlWriter = nil
             activeProcessGroupID = nil
             activeDiagnosticBuffer = nil
             cancellationRequested = false
+            return writer
         }
+        writer?.close()
     }
 
     private func processDiagnosticSnapshot(
@@ -372,12 +414,13 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         }
     }
 
-    private func recordProcessGroup(_ processGroupID: pid_t, process: Process) {
+    private func recordProcessGroup(_ processGroupID: pid_t, process: Process, capabilities: [String]?) {
         stateLock.withLock {
             guard activeProcess === process else {
                 return
             }
             activeProcessGroupID = processGroupID
+            supportsWaiting = capabilities?.contains("keep_waiting_v1") == true
         }
     }
 
@@ -436,13 +479,18 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                             received: event.payload.processGroupID
                         )
                     }
-                    recordProcessGroup(processGroupID, process: process)
+                    recordProcessGroup(processGroupID, process: process, capabilities: event.payload.controlCapabilities)
                 } else if event.type == .workerReady {
                     throw WorkerStreamError.duplicateWorkerReady
                 }
                 expectedSequence += 1
                 if event.type.isTerminal {
                     terminalEvent = event
+                    let writer = stateLock.withLock {
+                        supportsWaiting = false
+                        return activeControlWriter
+                    }
+                    writer?.close()
                 }
                 try await onEvent(event)
             }

@@ -1,7 +1,7 @@
 # Native Worker Protocol v11
 
 > Historical contract. The native app and bundled worker now use
-> [Native Worker Protocol v12](native-worker-protocol-v12.md).
+> [Native Worker Protocol v13](native-worker-protocol-v13.md).
 
 Protocol v11 carries route-aware video quality intent and the concrete settings
 needed for deterministic pre-input fallback. The native app and bundled Python

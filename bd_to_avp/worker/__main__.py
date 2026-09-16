@@ -12,9 +12,9 @@ from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.runtime import CancellationToken, ObservabilityStream, RunContext
 from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, run_operation
 from bd_to_avp.worker.diagnostics import WorkerDiagnosticRelay
+from bd_to_avp.worker.controls import CONTROL_CAPABILITY, WorkerControls, WorkerInputReader
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
-    MAX_REQUEST_BYTES,
     ZERO_JOB_ID,
     JobSpec,
     WorkerActivityReporter,
@@ -61,24 +61,23 @@ def run_worker(
     owner.install_signal_handlers()
 
     emitter: WorkerEventEmitter | None = None
+    input_reader: WorkerInputReader | None = None
+    controls: WorkerControls | None = None
 
     try:
-        request_line = input_stream.readline(MAX_REQUEST_BYTES + 1)
-        job = JobSpec.from_json_line(request_line)
-        if input_stream.read(1):
-            raise WorkerProtocolError(
-                "multiple_requests",
-                "The worker accepts exactly one request per process.",
-                job_id=job.job_id,
-            )
+        input_reader = WorkerInputReader(input_stream)
+        job = JobSpec.from_json_line(input_reader.read_job_line(owner.check_cancelled))
         emitter = WorkerEventEmitter(output_stream, job.job_id)
         emitter.emit(
             WorkerEventType.WORKER_READY,
             {
                 "worker_version": config.app.code_version,
                 "process_group_id": process_group_id,
+                "control_capabilities": [CONTROL_CAPABILITY],
             },
         )
+        controls = WorkerControls(job.job_id, emitter)
+        input_reader.set_control_handler(controls.receive_line)
         emitter.emit(WorkerEventType.JOB_STARTED, {"operation": job.operation.value})
         diagnostic_relay = WorkerDiagnosticRelay(diagnostic_stream)
         run_context = RunContext(
@@ -89,6 +88,7 @@ def run_worker(
             ),
             cancellation=CancellationToken(owner.cancellation_event),
             diagnostic_observer=diagnostic_relay.emit,
+            process_controls=controls,
         )
         activity = WorkerActivityReporter(emitter, run_context)
         if job.operation.value == "inspect_source":
@@ -104,6 +104,8 @@ def run_worker(
         try:
             result = operation_runner(job, owner, activity)
         finally:
+            input_reader.close()
+            controls.close()
             diagnostic_snapshot = diagnostic_relay.close()
             if not emitter.terminal_emitted and (
                 diagnostic_snapshot.dropped_bytes > 0
@@ -180,6 +182,10 @@ def run_worker(
             )
         return 1
     finally:
+        if input_reader is not None:
+            input_reader.close()
+        if controls is not None:
+            controls.close()
         owner.terminate_descendants()
 
 

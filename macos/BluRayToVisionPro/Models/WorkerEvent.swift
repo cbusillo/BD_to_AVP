@@ -207,6 +207,8 @@ enum WorkerEventType: String, Decodable, Equatable {
     case warning
     case artifactReady = "artifact.ready"
     case observability
+    case toolStall = "tool.stall"
+    case controlResult = "control.result"
     case jobCompleted = "job.completed"
     case jobFailed = "job.failed"
     case jobCancelled = "job.cancelled"
@@ -477,6 +479,9 @@ struct WorkerEventPayload: Decodable, Equatable {
     let decision: WorkerDecision?
     let observabilityEvent: ObservabilityEvent?
     let videoRoute: VideoRouteReport?
+    let controlCapabilities: [String]?
+    let stall: WorkerStallEvent?
+    let controlResult: WorkerControlResult?
 
     init(
         workerVersion: String? = nil,
@@ -497,7 +502,10 @@ struct WorkerEventPayload: Decodable, Equatable {
         error: WorkerFailure? = nil,
         decision: WorkerDecision? = nil,
         observabilityEvent: ObservabilityEvent? = nil,
-        videoRoute: VideoRouteReport? = nil
+        videoRoute: VideoRouteReport? = nil,
+        controlCapabilities: [String]? = nil,
+        stall: WorkerStallEvent? = nil,
+        controlResult: WorkerControlResult? = nil
     ) {
         self.workerVersion = workerVersion
         self.processGroupID = processGroupID
@@ -518,6 +526,9 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.decision = decision
         self.observabilityEvent = observabilityEvent
         self.videoRoute = videoRoute
+        self.controlCapabilities = controlCapabilities
+        self.stall = stall
+        self.controlResult = controlResult
     }
 
     init(from decoder: Decoder) throws {
@@ -546,6 +557,9 @@ struct WorkerEventPayload: Decodable, Equatable {
         decision = try container.decodeIfPresent(WorkerDecision.self, forKey: .decision)
         observabilityEvent = try container.decodeIfPresent(ObservabilityEvent.self, forKey: .observabilityEvent)
         videoRoute = try container.decodeIfPresent(VideoRouteReport.self, forKey: .videoRoute)
+        controlCapabilities = try container.decodeIfPresent([String].self, forKey: .controlCapabilities)
+        stall = container.contains(.canExtend) ? try WorkerStallEvent(from: decoder) : nil
+        controlResult = container.contains(.accepted) ? try WorkerControlResult(from: decoder) : nil
     }
 
     var warningCode: String? { warning?.code }
@@ -577,6 +591,9 @@ struct WorkerEventPayload: Decodable, Equatable {
         case decision
         case observabilityEvent = "event"
         case videoRoute = "video_route"
+        case controlCapabilities = "control_capabilities"
+        case canExtend = "can_extend"
+        case accepted
     }
 }
 

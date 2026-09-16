@@ -4,7 +4,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, Protocol
 from uuid import uuid4
 
 from bd_to_avp.observability import (
@@ -21,6 +21,33 @@ from bd_to_avp.observability import (
 
 
 DiagnosticObserver = Callable[[str, bytes], object]
+WAIT_GRANT_SECONDS = 120
+MAX_WAIT_GRANTS = 2
+
+
+@dataclass(frozen=True)
+class WaitCommand:
+    command_id: str
+    job_id: str
+    tool_run_id: str
+    stall_episode_id: str
+    received_at: float
+
+
+class ProcessControlChannel(Protocol):
+    """Reliable worker transport; only the owning runner decides a command."""
+
+    def register_run(self, tool_run_id: str) -> None: ...
+
+    def take_commands(self, tool_run_id: str) -> list[WaitCommand]: ...
+
+    def complete_command(
+        self, command: WaitCommand, *, accepted: bool, code: str, grants_used: int | None = None
+    ) -> None: ...
+
+    def emit_stall(self, payload: Mapping[str, object]) -> None: ...
+
+    def unregister_run(self, tool_run_id: str) -> None: ...
 
 
 class CancellationToken:
@@ -121,6 +148,7 @@ class RunContext:
     observability: ObservabilityStream
     cancellation: CancellationToken = field(default_factory=CancellationToken)
     diagnostic_observer: DiagnosticObserver | None = field(default=None, compare=False, repr=False)
+    process_controls: ProcessControlChannel | None = field(default=None, compare=False, repr=False)
 
     def emit(self, kind: str, **kwargs: Any) -> ObservabilityEvent | None:
         return self.observability.emit(kind, **kwargs)

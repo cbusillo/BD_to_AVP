@@ -57,6 +57,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var source: ConversionSource?
     @Published private(set) var state = WorkerLifecycleState()
     @Published private(set) var liveObservabilityStatus = LiveObservabilityStatus.empty
+    @Published private(set) var stallRecovery = StallRecoveryState()
     @Published private(set) var batchQueue: SourceFolderQueueState?
     @Published private(set) var queueItems: [ConversionQueueItem] = []
     @Published private(set) var persistentQueueItems: [PersistentQueueItem] = []
@@ -1340,6 +1341,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         persistentQueueControlsActive = false
         if hasActiveWorker {
             state.requestStop()
+            stallRecovery = StallRecoveryState()
             recordDiagnosticWorkflow(name: "cancel.requested", mode: activeRunMode, jobID: state.jobID)
             client?.cancel()
 
@@ -1685,8 +1687,29 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         return destinationPath == sourcePath || destinationPath.hasPrefix(sourcePrefix)
     }
 
+    func keepWaiting(toolRunID: UUID, episodeID: UUID) {
+        guard state.phase.isRunning, state.phase != .stopping, let client,
+              let command = stallRecovery.requestWait(toolRunID: toolRunID, episodeID: episodeID) else { return }
+        recordDiagnosticWorkflow(name: "stall.wait_requested", jobID: command.jobID)
+        Task { [weak self] in
+            do {
+                try await client.sendControl(command)
+            } catch {
+                guard let self else { return }
+                self.stallRecovery.writeFailed(command)
+                self.recordDiagnosticWorkflow(name: "stall.wait_write_failed", jobID: command.jobID)
+            }
+        }
+    }
+
     private func receive(_ event: WorkerEvent) throws {
         let recordedAt = diagnosticClock()
+        if event.type == .workerReady, event.jobID == state.jobID {
+            stallRecovery.begin(jobID: event.jobID)
+        }
+        if state.phase != .stopping {
+            stallRecovery.receive(event)
+        }
         if let observabilityEvent = event.payload.observabilityEvent {
             observabilityEventStore.append(observabilityEvent)
             liveObservabilityStatus.receive(observabilityEvent, receivedAt: recordedAt)
@@ -1801,6 +1824,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func clearActiveWorker(runDeferredActions: Bool = true) {
+        stallRecovery = StallRecoveryState()
         client = nil
         runTask = nil
         if runDeferredActions {

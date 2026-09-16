@@ -245,8 +245,17 @@ struct WorkerLifecycleState: Equatable {
                 ? "Live source replay is ready."
                 : "Preview artifact is ready."
             appendActivity(activityMessage)
-        case .observability:
+        case .observability, .controlResult:
             break
+        case .toolStall:
+            guard let stall = event.payload.stall else {
+                throw WorkerLifecycleError.missingPayload(event: event.type)
+            }
+            if stall.state == .stalled {
+                appendActivity("Video output has stopped advancing.", severity: .warning)
+            } else if stall.state == .recovered {
+                appendActivity("Video output is advancing again.")
+            }
         case .jobCompleted:
             switch operationKind {
             case .inspection:
