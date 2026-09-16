@@ -395,7 +395,7 @@ def _verification_reader(
 
 
 @contextmanager
-def _materialized_revision(repo_root: Path, revision: str) -> Iterator[Path]:
+def materialized_revision(repo_root: Path, revision: str) -> Iterator[Path]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         worktree = Path(temporary_directory) / "revision"
         _git_run(
@@ -2143,7 +2143,7 @@ def _legacy_class(reader: _BundleReader, release_tag: str) -> str:
     if not reader.worktree:
         if reader.revision is None:
             raise ReleaseEvidenceV2Error("Verification revision is missing.")
-        with _materialized_revision(reader.repo_root, reader.revision) as materialized_root:
+        with materialized_revision(reader.repo_root, reader.revision) as materialized_root:
             return _legacy_class(_BundleReader(materialized_root, None, True), release_tag)
     bundle = f"{EVIDENCE_ROOT}/{release_tag}"
     if reader.exists(f"{bundle}/failed-post-publication-qualification-v1.json"):

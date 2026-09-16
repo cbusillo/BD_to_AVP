@@ -221,6 +221,18 @@ refuses stale branches, a moved `main`, non-evidence diffs, stale
 `v2-qualified`, and a durable `v2-failed` disposition. The standard offline v2
 verifier and write-once history check run against the immutable evidence SHA.
 
+The terminal CI gate and operator preflight share the same file-scope check.
+Alongside the exact release bundle and `index-v2.json`, it admits the capture
+workflow and qualification controller's compatibility outputs: the release's
+cut packet, signed qualification snapshot and three qualification receipts,
+plus append-only updates to the qualification evidence index and release ledger.
+These records must bind the checked manifest and candidate; receipt references
+and digests are verified, and the rolling qualification must match its archived
+snapshot. Unrelated documents and another release's compatibility files remain
+outside the allowed scope. Operator preflight validates the fetched evidence
+revision in a temporary checkout, so local uncommitted files cannot substitute
+for the proposed evidence.
+
 It also refuses another open PR to `main`, a canonical evidence PR from a fork
 or with a different head SHA, or an author other than the active local `gh`
 operator. An existing exact PR is adopted without another write, making retry
