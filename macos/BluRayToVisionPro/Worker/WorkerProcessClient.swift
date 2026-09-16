@@ -10,6 +10,9 @@ enum WorkerClientError: Error, LocalizedError {
     case unexpectedExit(exitStatus: Int32, diagnostics: String)
 
     var errorDescription: String? {
+        if processExitStatus == 74 {
+            return "The app stopped receiving progress updates. Try again or send diagnostics."
+        }
         switch self {
         case .alreadyRunning:
             return "Another activity is already in progress."

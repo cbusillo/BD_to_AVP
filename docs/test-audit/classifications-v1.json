@@ -361,6 +361,7 @@
         "tests/test_native_worker.py",
         "tests/test_observability.py",
         "tests/test_worker_controls.py",
+        "tests/test_worker_transport.py",
         "tests/test_observability_migration.py",
         "tests/test_preflight.py",
         "tests/test_preview.py",

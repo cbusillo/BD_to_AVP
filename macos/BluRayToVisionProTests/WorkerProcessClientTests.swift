@@ -488,6 +488,28 @@ final class WorkerProcessClientTests: XCTestCase {
         XCTAssertEqual(receivedResult?.accepted, true)
     }
 
+    func testExplainsProtocolDeliveryFailureAndRetainsExitEvidence() async throws {
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        sys.stderr.write("Worker event output could not deliver a complete record\\n")
+        sys.exit(74)
+        """)
+        do {
+            _ = try await client.run(job: WorkerJobSpec(
+                sourceURL: URL(fileURLWithPath: "/tmp/movie.mkv"), jobID: jobID
+            )) { _ in }
+            XCTFail("A delivery failure must not claim completion")
+        } catch let error as WorkerClientError {
+            XCTAssertEqual(error.processExitStatus, 74)
+            XCTAssertEqual(
+                error.errorDescription,
+                "The app stopped receiving progress updates. Try again or send diagnostics."
+            )
+            XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("Exit status: 74"))
+            XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("complete record"))
+        }
+    }
+
     private func readyEvent() -> String {
         """
         print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"worker_version": "test", "process_group_id": os.getpid()}}), flush=True)

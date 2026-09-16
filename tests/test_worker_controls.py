@@ -15,6 +15,7 @@ from uuid import uuid4
 from bd_to_avp.observability import ObservabilityEmitter, ObservabilityProgress
 from bd_to_avp.process_runner import (
     ChildProcessRunner,
+    ProcessArtifactNoProgressError,
     ProcessArtifactProbe,
     ProcessPipelineRunner,
     ProcessPipelineStage,
@@ -482,6 +483,33 @@ class WorkerInputFramingTests(unittest.TestCase):
 
 
 class WorkerControlProcessTests(unittest.TestCase):
+    def test_unattended_timeout_does_not_name_sibling_below_timeout_age(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            left = Path(directory) / "left.mov"
+            right = Path(directory) / "right.mov"
+            started = time.monotonic()
+            script = (
+                "import pathlib,sys,time; left,right=map(pathlib.Path,sys.argv[1:]); "
+                "left.write_bytes(b'video'); right.write_bytes(b'video'); "
+                "time.sleep(.3); right.write_bytes(b'later progress'); time.sleep(5)"
+            )
+            with self.assertRaises(ProcessArtifactNoProgressError) as raised:
+                ChildProcessRunner(monotonic_clock=lambda: (time.monotonic() - started) * 120).run(
+                    ProcessSpec(
+                        argv=(sys.executable, "-c", script, left, right),
+                        tool_id="ffmpeg",
+                        display_name="encoder",
+                        artifacts=(
+                            ProcessArtifactProbe("left_eye", path=left),
+                            ProcessArtifactProbe("right_eye", path=right),
+                        ),
+                        artifact_no_growth_timeout_seconds=120,
+                        artifact_interval_seconds=2,
+                    )
+                )
+            self.assertIn("120 seconds: left_eye", str(raised.exception))
+            self.assertNotIn("right_eye", str(raised.exception))
+
     def test_live_controls_isolate_inherited_stdin_and_preserve_media_pipeline(self) -> None:
         harness = ControlHarness()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER), process_controls=harness.controls)

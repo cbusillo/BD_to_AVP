@@ -1051,24 +1051,29 @@ class ChildProcessRunner:
                         and returncode is None
                     ):
                         observed_at = self._monotonic_clock()
-                        stalled_artifact_roles = [
-                            probe.role
-                            for probe, artifact_state in zip(spec.artifacts, artifact_states, strict=True)
-                            if observed_at
-                            - (
-                                artifact_state.last_progress_at
-                                if artifact_state.last_progress_at is not None
-                                else started_at
+                        artifact_ages = [
+                            (
+                                probe.role,
+                                max(
+                                    0.0,
+                                    observed_at
+                                    - (
+                                        artifact_state.last_progress_at
+                                        if artifact_state.last_progress_at is not None
+                                        else started_at
+                                    ),
+                                ),
                             )
-                            >= watchdog.warning_seconds
+                            for probe, artifact_state in zip(spec.artifacts, artifact_states, strict=True)
                         ]
                         timeout_message = (
                             f"{spec.display_name} exhausted its bounded artifact wait window "
-                            f"after {watchdog.grants_used} wait grants: {', '.join(stalled_artifact_roles)}"
+                            f"after {watchdog.grants_used} wait grants. Output inactivity: "
+                            + ", ".join(f"{role}={int(age)}s" for role, age in artifact_ages)
                             if watchdog.grants_used
                             else f"{spec.display_name} produced no artifact growth for "
                             f"{spec.artifact_no_growth_timeout_seconds:g} seconds: "
-                            f"{', '.join(stalled_artifact_roles)}"
+                            + ", ".join(role for role, age in artifact_ages if age >= watchdog.timeout_seconds)
                         )
                         pending_error = ProcessArtifactNoProgressError(timeout_message)
                         failure_code = "artifact_no_growth"
