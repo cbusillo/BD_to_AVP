@@ -11,9 +11,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
             return
         }
         addUIInterruptionMonitor(withDescription: "Dismiss optional app permission dialogs") { element in
-            let message = element.staticTexts.allElementsBoundByIndex.map {
-                ($0.value as? String) ?? $0.label
-            }.joined(separator: " ")
+            let message = Self.dialogMessage(element)
             guard message.contains("3D Blu-ray to Vision Pro"),
                   element.buttons["Allow"].firstMatch.exists,
                   let decline = ["Don’t Allow", "Don't Allow"].map({
@@ -24,6 +22,25 @@ final class InstalledUIAcceptanceTests: XCTestCase {
             decline.click()
             return true
         }
+        // Hosted runners intermittently crash system services such as RealityKeyboard, and the crash report dialog
+        // takes keyboard focus from the open panel. A crash of this app must still fail qualification.
+        addUIInterruptionMonitor(withDescription: "Ignore crash reports from unrelated system services") { element in
+            let message = Self.dialogMessage(element)
+            let ignore = element.buttons["Ignore"].firstMatch
+            guard message.contains("quit unexpectedly"),
+                  !message.contains("3D Blu-ray to Vision Pro"),
+                  ignore.exists else {
+                return false
+            }
+            ignore.click()
+            return true
+        }
+    }
+
+    private static func dialogMessage(_ element: XCUIElement) -> String {
+        element.staticTexts.allElementsBoundByIndex.map {
+            ($0.value as? String) ?? $0.label
+        }.joined(separator: " ")
     }
 
     override func tearDownWithError() throws {
