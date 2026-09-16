@@ -47,12 +47,14 @@ the worker transport sequence without changing lifecycle progress, and projects
 their stable kind, stage, severity, message, detail, and failure fields into the
 existing bounded diagnostic history. Unsupported schemas, secret privacy, and
 oversized text fail decoding rather than falling back to unredacted strings.
-For multi-artifact stages such as `create_left_right_files`, the live status view
-retains the current left-eye and right-eye artifact samples separately. A quiet
-helper process with recently growing artifacts is therefore classified as active
-work rather than as an immediate stall. The technical-details panel reserves the
-stall warning for runs that have neither recent tool output nor recent expected
-artifact growth.
+For concurrent pipelines, live status retains process and artifact samples by
+tool-run identity, including separate left-eye and right-eye outputs. A sibling
+tool's heartbeat cannot erase the encoder's samples or reset its terminal state.
+A known output that stops advancing takes precedence over recurring tool logs;
+repeated statistics alone do not prove video progress. Quiet tools with recently
+growing output remain active. New jobs, stages, and completed-attempt restarts
+clear prior state. This presentation logic does not change the worker's timeout,
+automatic retry, or cancellation behavior.
 
 Worker conversion stages pass the same `RunContext` and cancellation token into
 every child-tool wrapper. Canonical child-process events therefore retain the

@@ -3,6 +3,207 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class LiveObservabilityStatusTests: XCTestCase {
+    func testToollessEventDoesNotTakeFocusOrPreventAttemptReset() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        var status = LiveObservabilityStatus.empty
+        status.receive(
+            try makeEvent(kind: "tool.completed", toolRunID: "old-run", process: ["pid": 42, "exit_code": 0]),
+            receivedAt: now
+        )
+        let noTool = try makeEvent(kind: "stage.progress", toolID: nil, toolRunID: nil)
+        status.receive(noTool, receivedAt: now.addingTimeInterval(1))
+        XCTAssertEqual(status.toolRunID, "old-run")
+        XCTAssertEqual(status.processState, .completed)
+
+        status.receive(
+            try makeEvent(kind: "tool.started", toolRunID: "new-run", process: ["pid": 43], activityAge: 0),
+            receivedAt: now.addingTimeInterval(2)
+        )
+        status.receive(
+            try makeEvent(kind: "tool.heartbeat", toolRunID: "old-run", process: ["pid": 42], activityAge: 80),
+            receivedAt: now.addingTimeInterval(3)
+        )
+
+        XCTAssertEqual(status.toolRunID, "new-run")
+        XCTAssertFalse(status.isStalled(at: now.addingTimeInterval(3)))
+    }
+
+    func testRetiredAttemptCannotBecomeStalledAfterNewAttemptCompletes() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        var status = LiveObservabilityStatus.empty
+        let events = [
+            try makeEvent(kind: "tool.completed", toolRunID: "old-run", process: ["pid": 42, "exit_code": 0]),
+            try makeEvent(kind: "tool.started", toolRunID: "new-run", process: ["pid": 43], activityAge: 0),
+            try makeEvent(kind: "tool.heartbeat", toolRunID: "old-run", process: ["pid": 42], activityAge: 80),
+            try makeEvent(kind: "tool.completed", toolRunID: "new-run", process: ["pid": 43, "exit_code": 0]),
+        ]
+        for (offset, event) in events.enumerated() {
+            status.receive(event, receivedAt: now.addingTimeInterval(Double(offset)))
+        }
+
+        XCTAssertEqual(status.processState, .completed)
+        XCTAssertFalse(status.isStalled(at: now.addingTimeInterval(200)))
+    }
+
+    func testToollessStageTransitionRetiresEarlierToolState() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        var status = LiveObservabilityStatus.empty
+        let events = [
+            try makeEvent(kind: "tool.heartbeat", stageID: "encode", toolRunID: "old-run",
+                          process: ["pid": 42], activityAge: 80),
+            try makeEvent(kind: "stage.progress", stageID: "mux_output", toolID: nil, toolRunID: nil),
+            try makeEvent(kind: "tool.started", stageID: "mux_output", toolRunID: "new-run",
+                          process: ["pid": 43], activityAge: 0),
+            try makeEvent(kind: "tool.heartbeat", stageID: "encode", toolRunID: "old-run",
+                          process: ["pid": 42], activityAge: 80),
+        ]
+        for (offset, event) in events.enumerated() {
+            status.receive(event, receivedAt: now.addingTimeInterval(Double(offset)))
+            if offset == 1 {
+                XCTAssertEqual(status.stageID, "mux_output")
+                XCTAssertNil(status.toolRunID)
+                XCTAssertTrue(status.hasDetails)
+            }
+        }
+
+        XCTAssertEqual(status.stageID, "mux_output")
+        XCTAssertEqual(status.toolRunID, "new-run")
+        XCTAssertFalse(status.isStalled(at: now.addingTimeInterval(3)))
+    }
+
+    func testRepeatedToolOutputDoesNotHideFrozenEncodedVideo() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        var status = LiveObservabilityStatus.empty
+        status.receive(
+            try makeEvent(
+                kind: "tool.artifact",
+                toolID: "mv_hevc_encoder",
+                toolRunID: "encoder-run",
+                process: ["pid": 42],
+                activityAge: 0,
+                artifact: [
+                    "role": "stereo_video_output",
+                    "state": "growing",
+                    "size_bytes": 4_831_838_208,
+                    "modification_age_seconds": 75,
+                    "growth_bytes_per_second": 0,
+                ]
+            ),
+            receivedAt: now
+        )
+
+        XCTAssertTrue(status.isStalled(at: now))
+    }
+
+    func testSiblingPipelineHeartbeatPreservesFrozenEncoderArtifact() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        var status = LiveObservabilityStatus.empty
+        status.receive(
+            try makeEvent(
+                kind: "tool.artifact",
+                toolID: "mv_hevc_encoder",
+                toolRunID: "encoder-run",
+                process: ["pid": 42],
+                activityAge: 75,
+                artifact: [
+                    "role": "stereo_video_output",
+                    "state": "growing",
+                    "modification_age_seconds": 75,
+                    "growth_bytes_per_second": 0,
+                ]
+            ),
+            receivedAt: now
+        )
+        for kind in ["tool.started", "tool.heartbeat"] {
+            status.receive(
+                try makeEvent(
+                    kind: kind,
+                    toolID: "ffmpeg",
+                    toolRunID: "normalizer-run",
+                    process: ["pid": 43],
+                    activityAge: 0
+                ),
+                receivedAt: now.addingTimeInterval(1)
+            )
+        }
+
+        XCTAssertEqual(status.artifacts.map(\.role), ["stereo_video_output"])
+        XCTAssertTrue(status.isStalled(at: now.addingTimeInterval(1)))
+    }
+
+    func testSiblingActivityCannotResurrectFailedEncoder() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        var status = LiveObservabilityStatus.empty
+        status.receive(
+            try makeEvent(
+                kind: "tool.failed",
+                toolID: "mv_hevc_encoder",
+                toolRunID: "encoder-run",
+                process: ["pid": 42, "exit_code": 1]
+            ),
+            receivedAt: now
+        )
+        status.receive(
+            try makeEvent(
+                kind: "tool.heartbeat",
+                toolID: "ffmpeg",
+                toolRunID: "normalizer-run",
+                process: ["pid": 43],
+                activityAge: 0
+            ),
+            receivedAt: now.addingTimeInterval(1)
+        )
+        status.receive(
+            try makeEvent(
+                kind: "tool.heartbeat",
+                toolID: "mv_hevc_encoder",
+                toolRunID: "encoder-run",
+                process: ["pid": 42],
+                activityAge: 0
+            ),
+            receivedAt: now.addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(status.toolRunID, "encoder-run")
+        XCTAssertEqual(status.processState, .failed)
+    }
+
+    func testNewStageDoesNotRetainPreviousStageStall() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        var status = LiveObservabilityStatus.empty
+        status.receive(
+            try makeEvent(
+                kind: "tool.artifact",
+                stageID: "encode",
+                toolID: "mv_hevc_encoder",
+                toolRunID: "encoder-run",
+                process: ["pid": 42],
+                activityAge: 75,
+                artifact: [
+                    "role": "stereo_video_output",
+                    "state": "growing",
+                    "modification_age_seconds": 75,
+                    "growth_bytes_per_second": 0,
+                ]
+            ),
+            receivedAt: now
+        )
+        status.receive(
+            try makeEvent(
+                kind: "tool.started",
+                stageID: "mux_output",
+                toolID: "ffmpeg",
+                toolRunID: "mux-run",
+                process: ["pid": 43],
+                activityAge: 0
+            ),
+            receivedAt: now.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(status.artifacts.isEmpty)
+        XCTAssertFalse(status.isStalled(at: now.addingTimeInterval(1)))
+    }
+
     func testReducerProjectsPathFreeLiveToolAndArtifactState() throws {
         let event = try makeEvent(
             kind: "tool.artifact",
@@ -220,7 +421,7 @@ final class LiveObservabilityStatusTests: XCTestCase {
         XCTAssertEqual(status.artifactGrowthBytesPerSecond, 524_288)
     }
 
-    func testToolRunChangeResetsArtifactSnapshotState() throws {
+    func testNewAttemptAfterCompletedToolResetsArtifactSnapshotState() throws {
         let receivedAt = Date(timeIntervalSince1970: 100)
         var status = LiveObservabilityStatus.empty
         status.receive(
@@ -235,6 +436,15 @@ final class LiveObservabilityStatusTests: XCTestCase {
                 ]
             ),
             receivedAt: receivedAt
+        )
+        status.receive(
+            try makeEvent(
+                kind: "tool.completed",
+                toolID: "ffmpeg",
+                toolRunID: "run-a",
+                process: ["pid": 42, "exit_code": 0]
+            ),
+            receivedAt: receivedAt.addingTimeInterval(0.5)
         )
         status.receive(
             try makeEvent(
@@ -388,8 +598,8 @@ final class LiveObservabilityStatusTests: XCTestCase {
     private func makeEvent(
         kind: String,
         stageID: String = "encode",
-        toolID: String = "ffmpeg",
-        toolRunID: String = "tool-run-1",
+        toolID: String? = "ffmpeg",
+        toolRunID: String? = "tool-run-1",
         process: [String: Any]? = nil,
         activityAge: Int64? = nil,
         artifact: [String: Any]? = nil
@@ -400,7 +610,13 @@ final class LiveObservabilityStatusTests: XCTestCase {
         fixture["kind"] = kind
         var context = try XCTUnwrap(fixture["context"] as? [String: Any])
         context["stage"] = ["id": stageID]
-        context["tool"] = ["id": toolID, "run_id": toolRunID]
+        if let toolID {
+            var tool: [String: Any] = ["id": toolID]
+            tool["run_id"] = toolRunID
+            context["tool"] = tool
+        } else {
+            context["tool"] = nil
+        }
         context["process"] = process
         fixture["context"] = context
         var data = try XCTUnwrap(fixture["data"] as? [String: Any])
