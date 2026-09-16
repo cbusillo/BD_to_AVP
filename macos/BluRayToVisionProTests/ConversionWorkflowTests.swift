@@ -896,6 +896,54 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertFalse(fileManager.didProbeDirectory)
     }
 
+    func testInsertedDiscScanReportsVolumeThatCannotBeListed() {
+        let volumeURL = URL(fileURLWithPath: "/Volumes/Feature", isDirectory: true)
+        let fileManager = UnreadableDirectoryFileManager()
+
+        let scan = DiscSourceDetector.scanInsertedDiscs(
+            in: [volumeURL],
+            fileManager: fileManager,
+            devicePathResolver: { _ in "/dev/disk9" }
+        )
+
+        XCTAssertEqual(scan, DiscSourceDetector.InsertedDiscScan(discs: [], unreadableVolumes: [volumeURL]))
+        XCTAssertEqual(
+            DiscSourceDetector.probeVolume(volumeURL, fileManager: fileManager),
+            .unreadable
+        )
+    }
+
+    func testInsertedDiscScanTreatsOrdinaryVolumeAsNotADisc() {
+        let volumeURL = URL(fileURLWithPath: "/Volumes/Backup", isDirectory: true)
+        let fileManager = EmptyDirectoryFileManager()
+
+        let scan = DiscSourceDetector.scanInsertedDiscs(
+            in: [volumeURL],
+            fileManager: fileManager,
+            devicePathResolver: { _ in "/dev/disk9" }
+        )
+
+        XCTAssertEqual(scan, DiscSourceDetector.InsertedDiscScan())
+    }
+
+    func testInsertedDiscScanReturnsDiscForReadableVolume() throws {
+        try withTemporaryDirectory { volumeURL in
+            try FileManager.default.createDirectory(
+                at: volumeURL.appendingPathComponent("BDMV", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+
+            let scan = DiscSourceDetector.scanInsertedDiscs(
+                in: [volumeURL],
+                devicePathResolver: { _ in "/dev/disk9" }
+            )
+
+            XCTAssertTrue(scan.unreadableVolumes.isEmpty)
+            XCTAssertEqual(scan.discs.count, 1)
+            XCTAssertEqual(scan.discs.first?.workerSourcePath, "/dev/disk9")
+        }
+    }
+
     func testCurrentCapabilitiesStayHonest() {
         XCTAssertTrue(AppCapabilities.current.conversionAvailable)
         XCTAssertEqual(
@@ -2067,5 +2115,37 @@ private final class DirectoryProbeRecordingFileManager: FileManager, @unchecked 
     override func fileExists(atPath path: String, isDirectory: UnsafeMutablePointer<ObjCBool>?) -> Bool {
         didProbeDirectory = true
         return false
+    }
+}
+
+/// Stands in for a mounted volume the app has not been granted permission to read.
+private final class UnreadableDirectoryFileManager: FileManager, @unchecked Sendable {
+    override func fileExists(atPath path: String, isDirectory: UnsafeMutablePointer<ObjCBool>?) -> Bool {
+        isDirectory?.pointee = true
+        return true
+    }
+
+    override func contentsOfDirectory(
+        at url: URL,
+        includingPropertiesForKeys keys: [URLResourceKey]?,
+        options mask: FileManager.DirectoryEnumerationOptions = []
+    ) throws -> [URL] {
+        throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)
+    }
+}
+
+/// Stands in for a readable volume that simply holds no disc structure.
+private final class EmptyDirectoryFileManager: FileManager, @unchecked Sendable {
+    override func fileExists(atPath path: String, isDirectory: UnsafeMutablePointer<ObjCBool>?) -> Bool {
+        isDirectory?.pointee = true
+        return true
+    }
+
+    override func contentsOfDirectory(
+        at url: URL,
+        includingPropertiesForKeys keys: [URLResourceKey]?,
+        options mask: FileManager.DirectoryEnumerationOptions = []
+    ) throws -> [URL] {
+        []
     }
 }
