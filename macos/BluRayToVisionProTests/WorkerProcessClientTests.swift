@@ -489,24 +489,27 @@ final class WorkerProcessClientTests: XCTestCase {
     }
 
     func testExplainsProtocolDeliveryFailureAndRetainsExitEvidence() async throws {
-        let client = fixtureClient(body: """
-        \(readyEvent())
-        sys.stderr.write("Worker event output could not deliver a complete record\\n")
-        sys.exit(74)
-        """)
-        do {
-            _ = try await client.run(job: WorkerJobSpec(
-                sourceURL: URL(fileURLWithPath: "/tmp/movie.mkv"), jobID: jobID
-            )) { _ in }
-            XCTFail("A delivery failure must not claim completion")
-        } catch let error as WorkerClientError {
-            XCTAssertEqual(error.processExitStatus, 74)
-            XCTAssertEqual(
-                error.errorDescription,
-                "The app stopped receiving progress updates. Try again or send diagnostics."
-            )
-            XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("Exit status: 74"))
-            XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("complete record"))
+        for partialRecord in ["", "sys.stdout.write('{\"protocol_version\":'); sys.stdout.flush()"] {
+            let client = fixtureClient(body: """
+            \(readyEvent())
+            \(partialRecord)
+            sys.stderr.write("Worker event output could not deliver a complete record\\n")
+            sys.exit(74)
+            """)
+            do {
+                _ = try await client.run(job: WorkerJobSpec(
+                    sourceURL: URL(fileURLWithPath: "/tmp/movie.mkv"), jobID: jobID
+                )) { _ in }
+                XCTFail("A delivery failure must not claim completion")
+            } catch let error as WorkerClientError {
+                XCTAssertEqual(error.processExitStatus, 74)
+                XCTAssertEqual(
+                    error.errorDescription,
+                    "The app stopped receiving progress updates. Try again or send diagnostics."
+                )
+                XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("Exit status: 74"))
+                XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("complete record"))
+            }
         }
     }
 
