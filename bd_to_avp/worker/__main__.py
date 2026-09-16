@@ -15,10 +15,12 @@ from bd_to_avp.worker.diagnostics import WorkerDiagnosticRelay
 from bd_to_avp.worker.controls import CONTROL_CAPABILITY, WorkerControls, WorkerInputReader
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
+    EVENT_WRITE_TIMEOUT_SECONDS,
     ZERO_JOB_ID,
     JobSpec,
     WorkerActivityReporter,
     WorkerEventEmitter,
+    WorkerEventTransportError,
     WorkerEventType,
     WorkerObservabilitySink,
     WorkerOperation,
@@ -28,6 +30,7 @@ from bd_to_avp.worker.protocol import (
 
 OperationRunner = Callable[[JobSpec, WorkerProcessOwner, WorkerActivityReporter], dict[str, object]]
 APPLE_VISION_OCR_SMOKE_ARGUMENT = "--smoke-apple-vision-ocr"
+TRANSPORT_FAILURE_EXIT_CODE = 74
 
 
 def run_smoke_command(
@@ -55,6 +58,37 @@ def run_worker(
     establish_session: bool = True,
     heartbeat_interval: float = 1.0,
     operation_runner: OperationRunner = run_operation,
+    isolate_process_stdin: bool = False,
+    event_write_timeout_seconds: float = EVENT_WRITE_TIMEOUT_SECONDS,
+) -> int:
+    try:
+        return _run_worker(
+            input_stream,
+            output_stream,
+            diagnostic_stream,
+            establish_session=establish_session,
+            heartbeat_interval=heartbeat_interval,
+            operation_runner=operation_runner,
+            isolate_process_stdin=isolate_process_stdin,
+            event_write_timeout_seconds=event_write_timeout_seconds,
+        )
+    except WorkerEventTransportError:
+        # A partial record makes subsequent JSONL unsafe. Cleanup already ran;
+        # the host must treat this exit as missing protocol delivery, not a
+        # media stall or a claim that a terminal event was received.
+        return TRANSPORT_FAILURE_EXIT_CODE
+
+
+def _run_worker(
+    input_stream: TextIO,
+    output_stream: TextIO,
+    diagnostic_stream: TextIO,
+    *,
+    establish_session: bool,
+    heartbeat_interval: float,
+    operation_runner: OperationRunner,
+    isolate_process_stdin: bool,
+    event_write_timeout_seconds: float,
 ) -> int:
     owner = WorkerProcessOwner()
     process_group_id = owner.establish_session() if establish_session else 0
@@ -63,11 +97,22 @@ def run_worker(
     emitter: WorkerEventEmitter | None = None
     input_reader: WorkerInputReader | None = None
     controls: WorkerControls | None = None
+    diagnostic_relay: WorkerDiagnosticRelay | None = None
+    heartbeat_stop: threading.Event | None = None
+    heartbeat_thread: threading.Thread | None = None
+    cleanup_done = False
+
+    def cleanup() -> None:
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        _close_worker_resources(owner, input_reader, controls, diagnostic_relay, heartbeat_stop, heartbeat_thread)
 
     try:
-        input_reader = WorkerInputReader(input_stream)
+        input_reader = WorkerInputReader(input_stream, isolate_process_stdin=isolate_process_stdin)
         job = JobSpec.from_json_line(input_reader.read_job_line(owner.check_cancelled))
-        emitter = WorkerEventEmitter(output_stream, job.job_id)
+        emitter = WorkerEventEmitter(output_stream, job.job_id, write_timeout_seconds=event_write_timeout_seconds)
         emitter.emit(
             WorkerEventType.WORKER_READY,
             {
@@ -104,9 +149,8 @@ def run_worker(
         try:
             result = operation_runner(job, owner, activity)
         finally:
-            input_reader.close()
-            controls.close()
-            diagnostic_snapshot = diagnostic_relay.close()
+            cleanup()
+            diagnostic_snapshot = diagnostic_relay.snapshot()
             if not emitter.terminal_emitted and (
                 diagnostic_snapshot.dropped_bytes > 0
                 or diagnostic_snapshot.failure_count > 0
@@ -120,8 +164,6 @@ def run_worker(
                     pending_bytes=diagnostic_snapshot.pending_bytes,
                     relay_failures=diagnostic_snapshot.failure_count,
                 )
-            heartbeat_stop.set()
-            heartbeat_thread.join(timeout=max(heartbeat_interval * 2, 0.2))
 
         if job.operation is not WorkerOperation.START_LIVE_SOURCE:
             owner.check_cancelled()
@@ -133,7 +175,9 @@ def run_worker(
         emitter.emit(WorkerEventType.JOB_COMPLETED, {result_key: result})
         return 0
     except WorkerProtocolError as error:
-        emitter = emitter or WorkerEventEmitter(output_stream, error.job_id or ZERO_JOB_ID)
+        emitter = emitter or WorkerEventEmitter(
+            output_stream, error.job_id or ZERO_JOB_ID, write_timeout_seconds=event_write_timeout_seconds
+        )
         emitter.fail(error.code, error.message)
         return 2
     except WorkerCancelled:
@@ -172,6 +216,8 @@ def run_worker(
                 retryable=error.retryable,
             )
         return 1
+    except WorkerEventTransportError:
+        raise
     except Exception as error:
         traceback.print_exc(file=diagnostic_stream)
         if emitter is not None and not emitter.terminal_emitted:
@@ -182,11 +228,42 @@ def run_worker(
             )
         return 1
     finally:
-        if input_reader is not None:
-            input_reader.close()
-        if controls is not None:
-            controls.close()
-        owner.terminate_descendants()
+        cleanup()
+
+
+def _close_worker_resources(
+    owner: WorkerProcessOwner,
+    input_reader: WorkerInputReader | None,
+    controls: WorkerControls | None,
+    diagnostics: WorkerDiagnosticRelay | None,
+    heartbeat_stop: threading.Event | None,
+    heartbeat_thread: threading.Thread | None,
+) -> None:
+    # Descendants are reaped before protocol output can wait for the host.
+    # Every independent cleanup is attempted even if another one fails.
+    closing: list[Callable[[], object]] = [owner.terminate_descendants]
+    if heartbeat_stop is not None:
+        closing.append(heartbeat_stop.set)
+    if heartbeat_thread is not None:
+        closing.append(lambda: heartbeat_thread.join(timeout=0.2))
+    if input_reader is not None:
+        closing.append(input_reader.close)
+    if controls is not None:
+        closing.append(controls.close)
+    if diagnostics is not None:
+        closing.append(diagnostics.close)
+    first_error: Exception | None = None
+    for close in closing:
+        try:
+            close()
+        except WorkerEventTransportError:
+            # The emitter retains the failed transport state. A later terminal
+            # attempt fails promptly and the outer wrapper reports exit 74.
+            continue
+        except Exception as error:
+            first_error = first_error or error
+    if first_error is not None:
+        raise first_error
 
 
 def _emit_heartbeats(
@@ -202,7 +279,7 @@ def _emit_heartbeats(
             return
         try:
             activity.emit_heartbeat(int(time.monotonic() - started_at))
-        except RuntimeError:
+        except (RuntimeError, WorkerEventTransportError):
             return
 
 
@@ -210,7 +287,7 @@ def main() -> None:
     smoke_result = run_smoke_command(sys.argv[1:], sys.stdout)
     if smoke_result is not None:
         raise SystemExit(smoke_result)
-    raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr))
+    raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, isolate_process_stdin=True))
 
 
 if __name__ == "__main__":

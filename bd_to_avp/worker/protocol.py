@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import io
 import math
+import os
+import select
 import threading
+import time
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -27,6 +31,8 @@ PROTOCOL_VERSION = 13
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
+EVENT_WRITE_TIMEOUT_SECONDS = 10.0
+EVENT_WRITE_CHUNK_BYTES = 512
 ZERO_JOB_ID = str(UUID(int=0))
 
 
@@ -1621,42 +1627,108 @@ class WorkerActivityReporter:
         return progress
 
 
+class WorkerEventTransportError(OSError):
+    """The protocol stream can no longer deliver a complete ordered record."""
+
+
 class WorkerEventEmitter:
-    def __init__(self, output: TextIO, job_id: str) -> None:
+    def __init__(
+        self, output: TextIO, job_id: str, *, write_timeout_seconds: float = EVENT_WRITE_TIMEOUT_SECONDS
+    ) -> None:
+        if not math.isfinite(write_timeout_seconds) or write_timeout_seconds <= 0:
+            raise ValueError("event write timeout must be finite and positive")
         self._output = output
+        try:
+            self._descriptor: int | None = output.fileno()
+        except (AttributeError, OSError, ValueError):
+            if type(output) is not io.StringIO:
+                raise ValueError("Worker event output requires a file descriptor or finite StringIO") from None
+            self._descriptor = None
         self._job_id = job_id
+        self.write_timeout_seconds = write_timeout_seconds
         self._sequence = -1
         self._terminal_emitted = False
+        self._transport_failed = False
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
 
     @property
     def terminal_emitted(self) -> bool:
         with self._lock:
             return self._terminal_emitted
 
-    def emit(self, event_type: WorkerEventType, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        with self._lock:
-            if self._terminal_emitted:
-                raise RuntimeError("Cannot emit an event after a terminal worker event.")
-
-            next_sequence = self._sequence + 1
-            event = {
-                "protocol_version": PROTOCOL_VERSION,
-                "type": event_type.value,
-                "job_id": self._job_id,
-                "sequence": next_sequence,
-                "payload": dict(payload or {}),
-            }
+    def emit(
+        self,
+        event_type: WorkerEventType,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
+        deadline = min(
+            deadline if deadline is not None else float("inf"), time.monotonic() + self.write_timeout_seconds
+        )
+        if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            self._mark_transport_failed()
+            raise WorkerEventTransportError("Worker event transport remained busy")
+        try:
+            with self._lock:
+                if self._transport_failed:
+                    raise WorkerEventTransportError("Worker event transport is unavailable")
+                if self._terminal_emitted:
+                    raise RuntimeError("Cannot emit an event after a terminal worker event.")
+                next_sequence = self._sequence + 1
+                event = {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "type": event_type.value,
+                    "job_id": self._job_id,
+                    "sequence": next_sequence,
+                    "payload": dict(payload or {}),
+                }
             encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
             if len(encoded.encode("utf-8")) > MAX_EVENT_BYTES:
                 raise RuntimeError("Worker event exceeded the size limit.")
-
-            self._output.write(encoded + "\n")
-            self._output.flush()
-            self._sequence = next_sequence
-            if event_type.is_terminal:
-                self._terminal_emitted = True
+            try:
+                self._write_record(encoded + "\n", deadline)
+            except (OSError, ValueError) as error:
+                self._mark_transport_failed()
+                raise WorkerEventTransportError("Worker event transport did not deliver a complete record") from error
+            with self._lock:
+                self._sequence = next_sequence
+                if event_type.is_terminal:
+                    self._terminal_emitted = True
             return event
+        finally:
+            self._write_lock.release()
+
+    def _mark_transport_failed(self) -> None:
+        with self._lock:
+            self._transport_failed = True
+
+    def _write_record(self, record: str, deadline: float) -> None:
+        if self._descriptor is None:
+            self._output.write(record)
+            return
+        descriptor = self._descriptor
+        was_blocking = os.get_blocking(descriptor)
+        try:
+            os.set_blocking(descriptor, False)
+            pending = memoryview(record.encode("utf-8"))
+            while pending:
+                with self._lock:
+                    if self._transport_failed:
+                        raise WorkerEventTransportError("Worker event transport is unavailable")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([], [descriptor], [], max(0.0, remaining))[1]:
+                    raise TimeoutError("Worker event pipe remained full")
+                try:
+                    written = os.write(descriptor, pending[:EVENT_WRITE_CHUNK_BYTES])
+                except (BlockingIOError, InterruptedError):
+                    continue
+                if written <= 0:
+                    raise BrokenPipeError("Worker event pipe closed")
+                pending = pending[written:]
+        finally:
+            os.set_blocking(descriptor, was_blocking)
 
     def fail(
         self,

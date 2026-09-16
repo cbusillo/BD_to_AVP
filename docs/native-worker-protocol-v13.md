@@ -29,11 +29,21 @@ The host enables Keep Waiting only after this capability and a current
 nonmodal; unattended jobs retain the existing timeout and automatic retry.
 
 EOF disables incoming controls without cancelling the job. The reader uses a
-duplicated descriptor and readiness waits, so job completion stops it even if
-the host keeps input open. It does not close the host's descriptor. In-memory
-StringIO provides the finite test equivalent; arbitrary blocking TextIO objects
-are unsupported. Child processes receive DEVNULL for otherwise inherited worker
-stdin. Explicit media-pipeline stdin and explicit file inputs are preserved.
+duplicated descriptor and readiness waits, so keeping input open cannot hold a
+read call past job completion. A delayed custom handler cannot turn its bounded
+join into a cleanup exception: `close()` reports whether the reader stopped,
+and the stopped reader dispatches no further records. Cleanup independently
+reaps descendants, stops heartbeats and input, settles controls, and closes the
+diagnostic relay. No control state lock is held across protocol output.
+
+The real worker entrypoint duplicates its original stdin and replaces process
+fd 0 with DEVNULL. All children with inherited stdin therefore see EOF, including
+calls without RunContext/controls and direct subprocess calls. The reader keeps
+the original control pipe. This process-level change is explicitly enabled only
+for the worker's actual `sys.stdin`, not for arbitrary caller/test descriptors.
+Explicit media-pipeline stdin and explicit file inputs are preserved. In-memory
+StringIO provides the finite test equivalent; arbitrary blocking TextIO inputs
+are unsupported.
 
 ## Keep Waiting command
 
@@ -52,6 +62,12 @@ These are the exact allowed fields. All four identities are UUID strings. The
 worker assigns `tool_run_id` and `stall_episode_id`; the host generates a new
 command ID for each deliberate action. The caller cannot choose a duration.
 Stop continues to use the existing cancellation signals and ownership path.
+
+Host control frames are at most 512 bytes, serialized on a background queue,
+and written with one nonblocking `Darwin.write` call with `F_SETNOSIGPIPE`.
+EAGAIN/EPIPE fail promptly without retry. An unexpected partial write closes the
+control channel so a later command cannot combine with its prefix. The initial
+JobSpec retains the existing throwing `FileHandle` write off the main thread.
 
 The runner applies at most two fixed 120-second grants per episode. Real
 artifact progress includes the existing size growth, advancing modification
@@ -121,6 +137,19 @@ old grant outcome cannot become a new apparent deadline. The UI clears pending
 actions on recovery, terminal events, retry, or transport failure and never
 redirects an old action to a new attempt.
 
+Worker event output allows up to 10 seconds for each complete ordered record,
+including waiting for another writer. Nonblocking pipe writes and a monotonic
+deadline tolerate ordinary temporary backpressure while bounding a permanently
+full pipe. A shutdown batch of control rejections shares one 10-second budget.
+Event state remains readable while output waits. A partial record, closed pipe,
+or exhausted transport budget makes the stream unusable: no subsequent record
+or terminal event is appended to a partial JSON prefix. The worker still reaps
+its descendants and closes its independent resources, then reports exit 74.
+This is a protocol-delivery failure, not `artifact_no_growth` or an automatic
+media retry. Completed output files remain the operation's result, but delivery
+of that result or of a terminal event cannot be claimed when the host refuses
+to read stdout. Finite StringIO remains the synchronous test equivalent.
+
 ## Stall and diagnostic event
 
 `tool.stall` also uses the ordinary worker envelope. Its payload has:
@@ -154,6 +183,11 @@ recover, the watchdog expires, or an active stalled run ends. Successful
 finalization detected by process exit does not create a new recovery offer.
 The direct route watches the final MV-HEVC encoder's output; the generated route
 watches all outputs on its final ffmpeg stage.
+
+Unattended timeout messages name only outputs whose inactivity reached the full
+watchdog duration. When an acknowledged grant's hard cap expires, the message
+reports each watched output's actual inactivity; it does not imply that a
+sibling output has been frozen for the full timeout.
 
 This protocol does not repair media or remux an MKV. A remux recovery route
 requires a reproducing source and validation that MVC/3D video, audio, and

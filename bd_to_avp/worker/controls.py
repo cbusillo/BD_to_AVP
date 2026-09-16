@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import select
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -92,37 +93,41 @@ class WorkerControls:
             return
         command = WaitCommand(**identifiers, received_at=self._clock())
         with self._lock:
-            if self._closed:
-                return
-            previous = self._decisions.get(command.command_id)
-            if previous is not None:
-                if (
-                    previous.command.job_id != command.job_id
-                    or previous.command.tool_run_id != command.tool_run_id
-                    or previous.command.stall_episode_id != command.stall_episode_id
-                ):
-                    self._emit_result(self._outcome(command, False, "command_conflict"))
-                elif previous.outcome is not None:
-                    self._emit_result({**previous.outcome, "duplicate": True})
-                # An identical pending submission shares the original decision.
-                return
-            if len(self._decisions) >= self._ledger_limit:
-                self._emit_result(self._outcome(command, False, "ledger_full"))
-                return
-            decision = _Decision(command)
-            self._decisions[command.command_id] = decision
-            code = None
-            if command.job_id != self._job_id:
-                code = "wrong_job"
-            elif command.tool_run_id not in self._runs:
-                code = "inactive_run"
-            elif sum(len(commands) for commands in self._runs.values()) >= self._queue_limit:
-                code = "queue_full"
-            if code is not None:
-                decision.outcome = self._outcome(command, False, code)
-                self._emit_result(decision.outcome)
-            else:
-                self._runs[command.tool_run_id].append(command)
+            outcome = self._submit_command_locked(command)
+        if outcome is not None:
+            self._emit_result(outcome)
+
+    def _submit_command_locked(self, command: WaitCommand) -> dict[str, object] | None:
+        if self._closed:
+            return None
+        previous = self._decisions.get(command.command_id)
+        if previous is not None:
+            if (
+                previous.command.job_id != command.job_id
+                or previous.command.tool_run_id != command.tool_run_id
+                or previous.command.stall_episode_id != command.stall_episode_id
+            ):
+                return self._outcome(command, False, "command_conflict")
+            if previous.outcome is not None:
+                return {**previous.outcome, "duplicate": True}
+            # An identical pending submission shares the original decision.
+            return None
+        if len(self._decisions) >= self._ledger_limit:
+            return self._outcome(command, False, "ledger_full")
+        decision = _Decision(command)
+        self._decisions[command.command_id] = decision
+        code = None
+        if command.job_id != self._job_id:
+            code = "wrong_job"
+        elif command.tool_run_id not in self._runs:
+            code = "inactive_run"
+        elif sum(len(commands) for commands in self._runs.values()) >= self._queue_limit:
+            code = "queue_full"
+        if code is not None:
+            decision.outcome = self._outcome(command, False, code)
+        else:
+            self._runs[command.tool_run_id].append(command)
+        return decision.outcome
 
     def complete_command(
         self, command: WaitCommand, *, accepted: bool, code: str, grants_used: int | None = None
@@ -137,22 +142,24 @@ class WorkerControls:
             if accepted:
                 outcome["grant_seconds"] = WAIT_GRANT_SECONDS
             decision.outcome = outcome
-            # This is deliberately the reliable worker event transport, not the
-            # best-effort diagnostic/observability queue.
-            self._emit_result(outcome)
+        # Never hold a control state lock across protocol output/backpressure.
+        self._emit_result(outcome)
 
     def emit_stall(self, payload: Mapping[str, object]) -> None:
         self._emitter.emit(WorkerEventType.TOOL_STALL, payload)
 
     def unregister_run(self, tool_run_id: str) -> None:
+        outcomes = []
         with self._lock:
             self._runs.pop(tool_run_id, None)
             for decision in self._decisions.values():
                 if decision.command.tool_run_id == tool_run_id and decision.outcome is None:
                     decision.outcome = self._outcome(decision.command, False, "inactive_run")
-                    self._emit_result(decision.outcome)
+                    outcomes.append(decision.outcome)
+        self._emit_results(outcomes)
 
     def close(self) -> None:
+        outcomes = []
         with self._lock:
             if self._closed:
                 return
@@ -162,20 +169,22 @@ class WorkerControls:
             for decision in self._decisions.values():
                 if decision.outcome is None:
                     decision.outcome = self._outcome(decision.command, False, "job_ended")
-                    self._emit_result(decision.outcome)
+                    outcomes.append(decision.outcome)
             self._runs.clear()
+        self._emit_results(outcomes)
 
     def _reject_invalid(self, code: str, identifiers: Mapping[str, str] | None = None) -> None:
         with self._lock:
-            if not self._closed:
-                self._emit_result(
-                    {
-                        **{key: value for key, value in (identifiers or {}).items() if key != "job_id"},
-                        "accepted": False,
-                        "code": code,
-                        "duplicate": False,
-                    }
-                )
+            if self._closed:
+                return
+        self._emit_result(
+            {
+                **{key: value for key, value in (identifiers or {}).items() if key != "job_id"},
+                "accepted": False,
+                "code": code,
+                "duplicate": False,
+            }
+        )
 
     @staticmethod
     def _identifiers(raw: object) -> dict[str, str]:
@@ -202,8 +211,19 @@ class WorkerControls:
             "duplicate": False,
         }
 
-    def _emit_result(self, payload: Mapping[str, object]) -> None:
-        self._emitter.emit(WorkerEventType.CONTROL_RESULT, payload)
+    def _emit_results(self, outcomes: list[dict[str, object]]) -> None:
+        deadline = time.monotonic() + self._emitter.write_timeout_seconds
+        for outcome in outcomes:
+            self._emit_result(outcome, deadline=deadline)
+
+    def _emit_result(self, payload: Mapping[str, object], *, deadline: float | None = None) -> None:
+        try:
+            self._emitter.emit(WorkerEventType.CONTROL_RESULT, payload, deadline=deadline)
+        except RuntimeError:
+            with self._lock:
+                closed = self._closed
+            if not (closed and self._emitter.terminal_emitted):
+                raise
 
 
 class WorkerInputReader:
@@ -214,12 +234,22 @@ class WorkerInputReader:
     arbitrary blocking TextIO implementations are intentionally unsupported.
     """
 
-    def __init__(self, stream: TextIO) -> None:
+    def __init__(self, stream: TextIO, *, isolate_process_stdin: bool = False) -> None:
+        if isolate_process_stdin and (stream is not sys.stdin or stream.fileno() != 0):
+            raise WorkerProtocolError("invalid_input_stream", "Only the worker entrypoint may isolate process stdin.")
         self._memory = stream if isinstance(stream, io.StringIO) else None
         self._descriptor: int | None = None
         if self._memory is None:
             try:
                 self._descriptor = os.dup(stream.fileno())
+                if isolate_process_stdin:
+                    try:
+                        with open(os.devnull, "rb") as empty_input:
+                            os.dup2(empty_input.fileno(), 0)
+                    except OSError:
+                        os.close(self._descriptor)
+                        self._descriptor = None
+                        raise
             except (OSError, ValueError, io.UnsupportedOperation) as error:
                 raise WorkerProtocolError("invalid_input_stream", "Worker input requires a file descriptor.") from error
         self._stop = threading.Event()
@@ -249,12 +279,11 @@ class WorkerInputReader:
         self._handler = handler
         self._handler_ready.set()
 
-    def close(self) -> None:
+    def close(self) -> bool:
         self._stop.set()
         self._handler_ready.set()
         self._thread.join(timeout=0.5)
-        if self._thread.is_alive():
-            raise RuntimeError("Worker input reader did not stop")
+        return not self._thread.is_alive()
 
     def _read(self) -> None:
         pending = bytearray()
@@ -291,7 +320,7 @@ class WorkerInputReader:
                         while not self._handler_ready.wait(0.05):
                             if self._stop.is_set():
                                 return
-                    elif self._handler is not None and (pending or discarding):
+                    elif self._handler is not None and not self._stop.is_set() and (pending or discarding):
                         self._handler(None if discarding else bytes(pending))
                     pending.clear()
                     discarding = False
