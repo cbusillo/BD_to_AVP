@@ -56,6 +56,22 @@ growing output remain active. New jobs, stages, and completed-attempt restarts
 clear prior state. This presentation logic does not change the worker's timeout,
 automatic retry, or cancellation behavior.
 
+The ordinary conversion view also shows a nonmodal warning after a watched
+video output has not advanced for 60 seconds. **Keep Waiting (2 min)** requests
+one of at most two additional intervals for that same running attempt and
+stall episode. The notice confirms the extension only after the worker applies
+it; **Stop** uses the existing cancellation path. Without a response, the
+120-second watchdog and automatic retry policy continue normally. The warning
+clears when the watched outputs recover or the attempt ends.
+
+[Worker protocol v13](native-worker-protocol-v13.md) records output roles,
+sizes and no-progress ages, changing versus repeated tool statistics, and wait
+decisions without adding media filenames or raw commands. Support reports keep
+up to 32 recent stall/control decisions inside the existing event and byte
+limits, so ordinary progress chatter cannot immediately evict them. These
+controls and diagnostics do not establish that a source MKV is damaged or
+provide a remux repair.
+
 Worker conversion stages pass the same `RunContext` and cancellation token into
 every child-tool wrapper. Canonical child-process events therefore retain the
 active stage identifier across preflight, preview preparation, probing, MVC/AV1
