@@ -120,6 +120,7 @@ raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=
                         child.kill()
                         child.wait(timeout=2)
                     except psutil.NoSuchProcess:
+                        # The worker is expected to have reaped the child before fallback cleanup.
                         pass
 
     def test_slow_draining_pipe_delivers_complete_ordered_records(self) -> None:
@@ -338,6 +339,7 @@ raise SystemExit(result)
                         child.kill()
                         child.wait(timeout=2)
                     except psutil.NoSuchProcess:
+                        # A child already reaped by worker cleanup needs no additional termination.
                         pass
 
     def test_owned_worker_stdin_isolated_for_all_child_routes_with_live_controls(self) -> None:

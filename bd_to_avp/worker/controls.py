@@ -197,6 +197,7 @@ class WorkerControls:
                 try:
                     result[key] = str(UUID(value))
                 except ValueError:
+                    # Omit malformed IDs so receive_line rejects the incomplete identity set.
                     pass
         return result
 

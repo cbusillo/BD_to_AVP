@@ -37,17 +37,22 @@ class WaitCommand:
 class ProcessControlChannel(Protocol):
     """Reliable worker transport; only the owning runner decides a command."""
 
-    def register_run(self, tool_run_id: str) -> None: ...
+    def register_run(self, tool_run_id: str) -> None:
+        """Begin accepting commands for an owned tool run."""
 
-    def take_commands(self, tool_run_id: str) -> list[WaitCommand]: ...
+    def take_commands(self, tool_run_id: str) -> list[WaitCommand]:
+        """Transfer queued commands to the owning runner for a decision."""
 
     def complete_command(
         self, command: WaitCommand, *, accepted: bool, code: str, grants_used: int | None = None
-    ) -> None: ...
+    ) -> None:
+        """Record and acknowledge the runner's applied or rejected decision."""
 
-    def emit_stall(self, payload: Mapping[str, object]) -> None: ...
+    def emit_stall(self, payload: Mapping[str, object]) -> None:
+        """Publish a bounded snapshot of the current stall episode."""
 
-    def unregister_run(self, tool_run_id: str) -> None: ...
+    def unregister_run(self, tool_run_id: str) -> None:
+        """Retire a tool run and reject its remaining undecided commands."""
 
 
 class CancellationToken:
