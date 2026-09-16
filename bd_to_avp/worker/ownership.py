@@ -17,9 +17,10 @@ class WorkerCancelled(Exception):
 class WorkerProcessOwner:
     def __init__(self) -> None:
         self.cancellation_event = threading.Event()
+        self.transport_failure_event = threading.Event()
         self._cleanup_lock = threading.Lock()
-        self._signal_cleanup_lock = threading.Lock()
-        self._signal_cleanup_started = False
+        self._asynchronous_cleanup_lock = threading.Lock()
+        self._asynchronous_cleanup_started = False
 
     def establish_session(self) -> int:
         if os.getpgrp() != os.getpid():
@@ -31,11 +32,18 @@ class WorkerProcessOwner:
         signal.signal(signal.SIGINT, self._handle_signal)
 
     def _handle_signal(self, _signum: int, _frame: FrameType | None) -> None:
+        self._request_asynchronous_stop()
+
+    def notify_transport_failure(self) -> None:
+        self.transport_failure_event.set()
+        self._request_asynchronous_stop()
+
+    def _request_asynchronous_stop(self) -> None:
         self.cancellation_event.set()
-        with self._signal_cleanup_lock:
-            if self._signal_cleanup_started:
+        with self._asynchronous_cleanup_lock:
+            if self._asynchronous_cleanup_started:
                 return
-            self._signal_cleanup_started = True
+            self._asynchronous_cleanup_started = True
         threading.Thread(
             target=self.terminate_descendants,
             kwargs={"timeout": 0.5},

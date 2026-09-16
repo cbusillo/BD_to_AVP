@@ -112,7 +112,12 @@ def _run_worker(
     try:
         input_reader = WorkerInputReader(input_stream, isolate_process_stdin=isolate_process_stdin)
         job = JobSpec.from_json_line(input_reader.read_job_line(owner.check_cancelled))
-        emitter = WorkerEventEmitter(output_stream, job.job_id, write_timeout_seconds=event_write_timeout_seconds)
+        emitter = WorkerEventEmitter(
+            output_stream,
+            job.job_id,
+            write_timeout_seconds=event_write_timeout_seconds,
+            on_transport_failure=owner.notify_transport_failure,
+        )
         emitter.emit(
             WorkerEventType.WORKER_READY,
             {
@@ -165,6 +170,8 @@ def _run_worker(
                     relay_failures=diagnostic_snapshot.failure_count,
                 )
 
+        if owner.transport_failure_event.is_set():
+            raise WorkerEventTransportError("Worker event transport failed")
         if job.operation is not WorkerOperation.START_LIVE_SOURCE:
             owner.check_cancelled()
         result_key = {
@@ -176,12 +183,17 @@ def _run_worker(
         return 0
     except WorkerProtocolError as error:
         emitter = emitter or WorkerEventEmitter(
-            output_stream, error.job_id or ZERO_JOB_ID, write_timeout_seconds=event_write_timeout_seconds
+            output_stream,
+            error.job_id or ZERO_JOB_ID,
+            write_timeout_seconds=event_write_timeout_seconds,
+            on_transport_failure=owner.notify_transport_failure,
         )
         emitter.fail(error.code, error.message)
         return 2
     except WorkerCancelled:
         owner.terminate_descendants()
+        if owner.transport_failure_event.is_set():
+            raise WorkerEventTransportError("Worker event transport failed") from None
         if emitter is not None and not emitter.terminal_emitted:
             emitter.emit(
                 WorkerEventType.JOB_CANCELLED,
@@ -200,6 +212,8 @@ def _run_worker(
             emitter.emit(WorkerEventType.JOB_DECISION_REQUIRED, {"decision": decision})
         return 3
     except WorkerOperationError as error:
+        if owner.transport_failure_event.is_set():
+            raise WorkerEventTransportError("Worker event transport failed") from error
         if owner.cancellation_event.is_set():
             owner.terminate_descendants()
             if emitter is not None and not emitter.terminal_emitted:
@@ -219,6 +233,8 @@ def _run_worker(
     except WorkerEventTransportError:
         raise
     except Exception as error:
+        if owner.transport_failure_event.is_set():
+            raise WorkerEventTransportError("Worker event transport failed") from error
         traceback.print_exc(file=diagnostic_stream)
         if emitter is not None and not emitter.terminal_emitted:
             emitter.fail(

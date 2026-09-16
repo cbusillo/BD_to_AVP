@@ -41,6 +41,87 @@ def fill_pipe(descriptor: int) -> None:
 
 
 class WorkerEventTransportTests(unittest.TestCase):
+    def test_heartbeat_transport_failure_stops_healthy_running_child(self) -> None:
+        self._assert_background_failure_stops_worker("heartbeat")
+
+    def test_control_reader_transport_failure_stops_healthy_running_child(self) -> None:
+        self._assert_background_failure_stops_worker("control")
+
+    def _assert_background_failure_stops_worker(self, origin: str) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child.pid"
+            growing_output = Path(directory) / "growing.mov"
+            script = """
+import pathlib, sys
+from bd_to_avp.process_runner import ChildProcessRunner, ProcessArtifactProbe, ProcessCancelled, ProcessSpec
+from bd_to_avp.worker.__main__ import run_worker
+child_code = (
+    'import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); '
+    'output=open(sys.argv[2], "ab", buffering=0)\\n'
+    'while True: output.write(b"x"*4096); time.sleep(.01)\\n'
+)
+def operation(job, owner, activity):
+    # All operation output is silent. Only the real heartbeat or control reader
+    # can fail the worker transport while this child continues healthy growth.
+    try:
+        ChildProcessRunner().run(
+            ProcessSpec(argv=(sys.executable, '-c', child_code, sys.argv[1], sys.argv[2]),
+                        tool_id='healthy-fixture', display_name='healthy fixture',
+                        artifacts=(ProcessArtifactProbe('video', path=pathlib.Path(sys.argv[2])),),
+                        artifact_no_growth_timeout_seconds=120, artifact_interval_seconds=.05),
+            cancellation_event=owner.cancellation_event)
+    except ProcessCancelled:
+        owner.check_cancelled()
+        raise
+    return {'name': 'fixture'}
+raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=operation,
+                            isolate_process_stdin=True, event_write_timeout_seconds=.2,
+                            heartbeat_interval=.001 if sys.argv[3]=='heartbeat' else 30))
+"""
+            process = subprocess.Popen(
+                [sys.executable, "-c", script, str(marker), str(growing_output), origin],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert process.stdin is not None
+                process.stdin.write(request_line(Path("/tmp/movie.mkv")))
+                process.stdin.flush()
+                deadline = time.monotonic() + 2
+                while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(marker.exists())
+                if origin == "control":
+                    # Compact invalid records fill only the outgoing pipe. The
+                    # host keeps both pipes open and deliberately does not read.
+                    process.stdin.write("\n" * 4096)
+                    process.stdin.flush()
+                self.assertEqual(process.wait(timeout=4), TRANSPORT_FAILURE_EXIT_CODE)
+                self.assertGreater(growing_output.stat().st_size, 4096)
+                self.assertFalse(psutil.pid_exists(int(marker.read_text())))
+                assert process.stdout is not None and process.stderr is not None
+                delivered = process.stdout.read()
+                self.assertNotIn("artifact_no_growth", delivered)
+                self.assertNotIn('"type":"job.cancelled"', delivered)
+                self.assertNotIn('"type":"job.completed"', delivered)
+                self.assertEqual(process.stderr.read(), "")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=2)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+                if marker.exists():
+                    try:
+                        child = psutil.Process(int(marker.read_text()))
+                        child.kill()
+                        child.wait(timeout=2)
+                    except psutil.NoSuchProcess:
+                        pass
+
     def test_slow_draining_pipe_delivers_complete_ordered_records(self) -> None:
         read_fd, write_fd = os.pipe()
         fill_pipe(write_fd)
@@ -75,9 +156,15 @@ class WorkerEventTransportTests(unittest.TestCase):
         read_fd, write_fd = os.pipe()
         fill_pipe(write_fd)
         errors = []
+        failure_notifications = []
         entered = threading.Event()
         with os.fdopen(write_fd, "w") as output:
-            emitter = WorkerEventEmitter(output, str(uuid4()), write_timeout_seconds=0.2)
+            emitter = WorkerEventEmitter(
+                output,
+                str(uuid4()),
+                write_timeout_seconds=0.2,
+                on_transport_failure=lambda: failure_notifications.append(True),
+            )
             controls = WorkerControls(str(uuid4()), emitter)
             run_id = str(uuid4())
             controls.register_run(run_id)
@@ -104,6 +191,7 @@ class WorkerEventTransportTests(unittest.TestCase):
             os.read(read_fd, 65536)
             with self.assertRaises(WorkerEventTransportError):
                 emitter.emit(WorkerEventType.JOB_COMPLETED)
+            self.assertEqual(failure_notifications, [True])
             os.set_blocking(read_fd, False)
             with self.assertRaises(BlockingIOError):
                 os.read(read_fd, 1)
