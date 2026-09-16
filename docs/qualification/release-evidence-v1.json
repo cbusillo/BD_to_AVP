@@ -891,6 +891,46 @@
       "source_sha": "619479750b2d6be88fc1173b01226908509eae0f",
       "status": "accepted",
       "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-09-16T20:25:33Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.3-beta.2:clean-machine-signed-update:35145803188",
+      "reference": "docs/qualification/v0.3.3-beta.2-clean-machine-signed-update-v1.json",
+      "sha256": "60bd6980c16ba2172a3cb4e0fb622c799ff86b6ca3f88d223162f511c2b8f9b7",
+      "source": "tier3_automation_receipt",
+      "source_sha": "619479750b2d6be88fc1173b01226908509eae0f",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-09-16T20:25:33Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.3-beta.2:installed-ui-accessibility:35145803188",
+      "reference": "docs/qualification/v0.3.3-beta.2-installed-ui-accessibility-v1.json",
+      "sha256": "624f61d7ef7ca9fb9042d0db65ebee15884f5f3cecfb5c67e177fba4ce7bee65",
+      "source": "tier3_automation_receipt",
+      "source_sha": "619479750b2d6be88fc1173b01226908509eae0f",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-09-16T20:25:33Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.3-beta.2:profile-save-action-accessibility:35140273939",
+      "reference": "docs/release-evidence/v0.3.3-beta.2/signed-artifact-ui-receipt.json",
+      "sha256": "beb4aedd35562dfb4b980745c78330d41a5e3a2c79098e874d1949e6d7d12d37",
+      "source": "signed_artifact_receipt",
+      "source_sha": "619479750b2d6be88fc1173b01226908509eae0f",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-09-16T20:25:33Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.3-beta.2:sparkle-update-route:35145803188",
+      "reference": "docs/qualification/v0.3.3-beta.2-live-qualification-v1.json",
+      "sha256": "c55cf0a262f3f40a04b2ce9e867799f868dcf1437136f14c6d3bbef239c40e03",
+      "source": "signed_artifact_receipt",
+      "source_sha": "619479750b2d6be88fc1173b01226908509eae0f",
+      "status": "accepted"
     }
   ],
   "schema_version": 1
