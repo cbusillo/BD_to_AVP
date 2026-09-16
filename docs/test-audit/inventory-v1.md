@@ -1,9 +1,9 @@
 # Test Audit Inventory v1
 
-- Baseline reference: `fa8e837ba33c69f9157bf3542911bce9e9f868fe`
-- Test files: **177**
+- Baseline reference: `8eb6c245b3324032e29be0080c58092b105ca87a`
+- Test files: **178**
 - Support fixtures: **84**
-- Test cases counted: **3010**
+- Test cases counted: **3021**
 - Classification source: `docs/test-audit/classifications-v1.json`
 
 ## Lanes
@@ -65,7 +65,7 @@ CODE_SIGNING_ALLOWED=NO` | `.github/workflows/ci.yml`, `macos/project.yml` |
 ## Disposition Summary
 
 - `accepted-cost`: **60** rows.
-- `valuable`: **201** rows.
+- `valuable`: **202** rows.
 - High-confidence implementation candidates are recorded in the JSON artifact.
 - Non-actionable review observations: **1**.
 - Milestone #10 disposition: Close after final review if the exact-head isolation sweep and broad gates remain green.
@@ -251,7 +251,8 @@ Exact-head evidence captured from `257fd21f38e49031b9fa96a733875702313ebd5c`:
 | `tests/test_real_mvc_public_evidence.py` | Python | `python-unittest-discovery` | 7 | `accepted-cost` | tests/test_real_mvc_public_evidence.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | — | filesystem_access (1), external_process (5) |
 | `tests/test_real_mvc_qualification_segment.py` | Python | `python-unittest-discovery` | 5 | `accepted-cost` | tests/test_real_mvc_qualification_segment.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | — | filesystem_access (2) |
 | `tests/test_reassess_real_mvc_feature.py` | Python | `python-unittest-discovery` | 2 | `accepted-cost` | tests/test_reassess_real_mvc_feature.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | — | — |
-| `tests/test_release.py` | Python | `python-unittest-discovery` | 67 | `valuable` | tests/test_release.py protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change. | `ci-python-discovery`, `release-security-contract` | network access; real-media or SSIF/ISO fixture may be required | filesystem_access (73), external_process (8), network_access (4), ui_or_accessibility (6), hardware_or_media (9) |
+| `tests/test_release.py` | Python | `python-unittest-discovery` | 67 | `valuable` | tests/test_release.py protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change. | `ci-python-discovery`, `release-security-contract` | network access; real-media or SSIF/ISO fixture may be required | filesystem_access (74), external_process (8), network_access (4), ui_or_accessibility (6), hardware_or_media (9) |
+| `tests/test_release_evidence_compatibility.py` | Python | `python-unittest-discovery` | 11 | `valuable` | tests/test_release_evidence_compatibility.py protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change. | `ci-python-discovery`, `release-security-contract` | — | filesystem_access (20), external_process (2) |
 | `tests/test_release_evidence_orphan_audit.py` | Python | `python-unittest-discovery` | 20 | `valuable` | tests/test_release_evidence_orphan_audit.py protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change. | `ci-python-discovery`, `release-security-contract` | real-media or SSIF/ISO fixture may be required | filesystem_access (14) |
 | `tests/test_release_evidence_reconcile.py` | Python | `python-unittest-discovery` | 14 | `valuable` | tests/test_release_evidence_reconcile.py protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change. | `ci-python-discovery`, `release-security-contract` | network access | environment_dependent (2), filesystem_access (21), external_process (5), network_access (6) |
 | `tests/test_release_evidence_v2.py` | Python | `python-unittest-discovery` | 29 | `valuable` | tests/test_release_evidence_v2.py protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change. | `ci-python-discovery`, `release-security-contract` | — | filesystem_access (108), external_process (4), ui_or_accessibility (15), hardware_or_media (3) |

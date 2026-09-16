@@ -298,7 +298,15 @@ class ReleaseMetadataTests(unittest.TestCase):
         candidate_cut_packet = candidate_cut_packet_path.read_text(encoding="utf-8")
         self.assertIn(f"`{metadata.package_version}`", candidate_cut_packet)
         self.assertIn(f"Build: `{metadata.build_version}`", candidate_cut_packet)
-        self.assertIn(release.CUT_PACKET_PREPARED, candidate_cut_packet)
+        candidate_receipt = REPO_ROOT / "docs" / "release-evidence" / metadata.release_tag / "release-receipt.json"
+        expected_candidate_state = (
+            release.CUT_PACKET_PUBLISHED if candidate_receipt.is_file() else release.CUT_PACKET_PREPARED
+        )
+        unexpected_candidate_state = (
+            release.CUT_PACKET_PREPARED if candidate_receipt.is_file() else release.CUT_PACKET_PUBLISHED
+        )
+        self.assertIn(expected_candidate_state, candidate_cut_packet)
+        self.assertNotIn(unexpected_candidate_state, candidate_cut_packet)
 
         github_config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
         qualification_relative = Path(github_config["releaseOperations"]["qualificationRecordPath"])
@@ -432,7 +440,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         candidate_identity = {field: qualification["candidate"][field] for field in candidate_identity_fields}
         terminal_v2_path = receipt_path.with_name("qualification-v2.json")
-        if receipt_path.exists() and not terminal_v2_path.exists():
+        if receipt_path.exists():
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             artifacts_by_kind = {artifact["kind"]: artifact for artifact in receipt["artifacts"]}
             expected_candidate_identity = {
@@ -443,7 +451,15 @@ class ReleaseMetadataTests(unittest.TestCase):
                 "release_id": receipt["release"]["id"],
                 "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
             }
-            self.assertEqual(candidate_identity, expected_candidate_identity)
+            if terminal_v2_path.is_file():
+                # V2 may retain the original preregistration or the publisher's exact
+                # compatibility copy. A partial or mismatched publication identity is invalid.
+                self.assertIn(
+                    candidate_identity,
+                    (expected_candidate_identity, {field: None for field in candidate_identity_fields}),
+                )
+            else:
+                self.assertEqual(candidate_identity, expected_candidate_identity)
         else:
             self.assertEqual(candidate_identity, {field: None for field in candidate_identity_fields})
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")

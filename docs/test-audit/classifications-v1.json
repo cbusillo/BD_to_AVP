@@ -258,6 +258,7 @@
         "tests/test_qualify_release_scope.py",
         "tests/test_qualify_visionos_sustained_playback.py",
         "tests/test_release.py",
+        "tests/test_release_evidence_compatibility.py",
         "tests/test_release_evidence_orphan_audit.py",
         "tests/test_release_evidence_reconcile.py",
         "tests/test_release_evidence_v2.py",

@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "fa8e837ba33c69f9157bf3542911bce9e9f868fe",
+    "sha": "8eb6c245b3324032e29be0080c58092b105ca87a",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -442,22 +442,22 @@
       "BluRayToVisionProUITests": 1,
       "SpatialPlaybackProbeTests": 1,
       "SpatialPlaybackProbeUITests": 1,
-      "python-unittest-discovery": 111,
+      "python-unittest-discovery": 112,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2977,
+    "ci_test_case_count": 2988,
     "classification_counts": {
       "accepted-cost": 60,
-      "valuable": 201
+      "valuable": 202
     },
     "language_file_counts": {
-      "Python": 111,
+      "Python": 112,
       "Swift": 65,
       "TypeScript": 1
     },
     "support_fixture_count": 84,
-    "test_case_count": 3010,
-    "test_file_count": 177,
+    "test_case_count": 3021,
+    "test_file_count": 178,
     "unmapped_test_file_count": 0
   },
   "support_fixtures": [
@@ -4962,7 +4962,7 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 73,
+          "occurrences": 74,
           "signal": "filesystem_access"
         },
         {
@@ -4983,6 +4983,33 @@
         }
       ],
       "test_case_count": 67
+    },
+    {
+      "bundle": "python-unittest-discovery",
+      "classification": "valuable",
+      "classification_cohort": "python-release-security-workflow-contracts",
+      "classification_evidence_ids": [
+        "ci-python-discovery",
+        "release-security-contract"
+      ],
+      "classification_rationale": "tests/test_release_evidence_compatibility.py protects a release, signing, recovery, policy, packaging, or workflow contract. Exact operational values remain intentional until concrete regression or mutation evidence supports a change.",
+      "lane_ids": [
+        "ci.python.unittest"
+      ],
+      "language": "Python",
+      "path": "tests/test_release_evidence_compatibility.py",
+      "special_requirements": [],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 20,
+          "signal": "filesystem_access"
+        },
+        {
+          "occurrences": 2,
+          "signal": "external_process"
+        }
+      ],
+      "test_case_count": 11
     },
     {
       "bundle": "python-unittest-discovery",

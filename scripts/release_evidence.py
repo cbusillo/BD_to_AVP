@@ -721,6 +721,11 @@ def _update_cut_packet(repo_root: Path, receipt: Mapping[str, Any], publication:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
         raise ReleaseEvidenceError(f"Unable to read release cut packet at {path}: {error}") from error
+    _atomic_write_text(path, render_published_cut_packet(text, receipt, publication))
+    return path
+
+
+def render_published_cut_packet(text: str, receipt: Mapping[str, Any], publication: Mapping[str, Any]) -> str:
     if CUT_PACKET_PREPARED in text:
         text = text.replace(CUT_PACKET_PREPARED, CUT_PACKET_PUBLISHED, 1)
     elif CUT_PACKET_RECOVERY_PENDING in text:
@@ -747,8 +752,7 @@ def _update_cut_packet(repo_root: Path, receipt: Mapping[str, Any], publication:
         text = prefix + block
     else:
         text = text.rstrip() + block
-    _atomic_write_text(path, text.rstrip() + "\n")
-    return path
+    return text.rstrip() + "\n"
 
 
 def reconcile(
