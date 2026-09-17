@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "qualification_id": "v0.3.3-beta.3-change-scoped-evidence-v1",
+  "recorded_at": "2026-09-17T04:08:41.997392Z",
+  "source": {
+    "build_version": "174",
+    "package_version": "0.3.3b3",
+    "public_version": "0.3.3-beta.3",
+    "release_tag": "v0.3.3-beta.3",
+    "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca"
+  },
+  "failed_preparation_run": {
+    "execution": "local_preparation_classification",
+    "candidate_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
+    "workflow_phase": "preparation",
+    "exit_code": 2,
+    "blocking_case_ids": [
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "subtitle-partial-output-diagnostics"
+    ],
+    "signing_started": false,
+    "release_identity_created": false,
+    "report_sha256": "c32b6fd772208e1ddcb0a25b9caf89075a0b9c3f978369d8dee7301b7d1dc154",
+    "command": "uv run python -m scripts.qualify_release_scope --qualification docs/qualification/v0.3.3-beta.3-signed-qualification-v1.json --candidate-sha 244365d0a51497d64d87d63e5961be732f5bafca --evidence docs/qualification/release-evidence-v1.json --release-stage beta --workflow-phase preparation --require-evidence"
+  },
+  "packaged_candidate": {
+    "app_tree_sha256": "d56a59f6f5a25bfa30faa632cbe1672dd8256ec73753712721a4eceb2279dd7e",
+    "architecture": "arm64",
+    "bundle_identifier": "com.shinycomputers.bd-to-avp",
+    "codesign_verification": "passed",
+    "package_command": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py package",
+    "preview_presentation_smoke": "passed",
+    "signing": "ad_hoc_local",
+    "worker_cancellation_smoke": "passed",
+    "signature_verification": "codesign -dv reports Signature=adhoc and no TeamIdentifier",
+    "worker_protocol_smoke": "passed",
+    "support_diagnostics_endpoint": "https://diagnostics.shinycomputers.com"
+  },
+  "evidence_source_semantics": {
+    "developer_id_or_notarization_claimed": false,
+    "index_source": "signed_artifact_receipt",
+    "meaning": "Change-scoped evidence from the exact locally packaged, code-signed app tree; production Developer ID signing remains owned by the guarded release run.",
+    "project_precedent": "docs/qualification/v0.3.3-beta.2-change-scoped-evidence-v1.json"
+  },
+  "validation": {
+    "native_tests": {
+      "command": "uv run python scripts/native_app.py test",
+      "passed": 698,
+      "failed": 0,
+      "skipped": 0,
+      "log_sha256": "4252c3e63231929ebf6a506d435a01c729b0d8bdf0caafd2c22f33d77a50e971"
+    },
+    "focused_python_tests": {
+      "command": "uv run python -m unittest tests.test_preview tests.test_storage_capacity tests.test_process_preflight tests.test_subtitles tests.test_process_runner tests.test_worker_controls tests.test_worker_transport tests.test_worker_diagnostics tests.test_native_worker tests.test_support_diagnostics",
+      "passed": 330,
+      "failed": 0,
+      "skipped": 0,
+      "log_sha256": "d80ab15be955d5a92389f093a975c0d7ef098e20c19d99380c18d28a87ccd2d2"
+    },
+    "packaged_app": {
+      "exit_code": 0,
+      "log_sha256": "48102a2ed491d1dfea069f1f762c196fd1e696a117e04b504b707e038fad1b6d"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "gui-preview-low-local-ample-destination",
+      "observations": {
+        "destination_workspace_selected_for_disc_image_preview": true,
+        "destination_workspace_selected_for_bluray_folder_preview": true,
+        "sufficient_destination_capacity_allows_preview": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDiscImagePreviewUsesSelectedDestinationWorkspace",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testBluRayFolderPreviewUsesSelectedDestinationAndTitle"
+      ],
+      "status": "passed",
+      "scope": {
+        "qualification_kind": "exact_candidate_change_scoped_regression",
+        "capacity_readings": "controlled_test_fixtures",
+        "physical_low_disk_condition_forced": false,
+        "prior_accepted_evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"
+      }
+    },
+    {
+      "case_id": "gui-preview-cancel-cleanup",
+      "observations": {
+        "cancelled_preview_removes_partial_workspace": true,
+        "owned_worker_and_descendant_processes_reaped": true,
+        "packaged_worker_cancellation_smoke": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCancelledPreviewRemovesPartialWorkspace",
+        "macos/BluRayToVisionProTests/WorkerProcessClientTests.swift:testCancellationAllowsWorkerToReapSeparateSessionChild",
+        "scripts/native_app.py:packaged worker cancellation smoke"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "gui-preview-failure-cleanup",
+      "observations": {
+        "destination_workspace_failure_is_actionable": true,
+        "empty_owned_destination_root_removed": true,
+        "transient_cleanup_failure_retried": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspacePreparationFailureIsActionable",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspaceCleanupRemovesEmptyHiddenRoot",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCleanupRetriesTransientRemovalFailure"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "capacity-known-low",
+      "observations": {
+        "known_low_capacity_blocks_before_worker_launch": true,
+        "partial_workspace_is_not_created": true,
+        "support_diagnostic_evidence_is_available": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testKnownLowDestinationCapacityBlocksBeforeWorkerLaunch",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCapacityAssessmentBlocksOnlyTrustworthyLowReading"
+      ],
+      "status": "passed",
+      "scope": {
+        "qualification_kind": "exact_candidate_change_scoped_regression",
+        "capacity_readings": "controlled_test_fixtures",
+        "physical_low_disk_condition_forced": false,
+        "prior_accepted_evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"
+      }
+    },
+    {
+      "case_id": "capacity-unknown-and-conflicting",
+      "observations": {
+        "conflicting_capacity_warns_without_blocking": true,
+        "unknown_capacity_warns_without_blocking": true,
+        "worker_launch_remains_available": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testUnknownAndConflictingDestinationCapacityWarnWithoutBlocking",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCapacityAssessmentBlocksOnlyTrustworthyLowReading"
+      ],
+      "status": "passed",
+      "scope": {
+        "qualification_kind": "exact_candidate_change_scoped_regression",
+        "capacity_readings": "controlled_test_fixtures",
+        "physical_low_disk_condition_forced": false,
+        "prior_accepted_evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"
+      }
+    },
+    {
+      "case_id": "network-generated-final-output",
+      "observations": {
+        "destination_snapshots_preserved_in_batch_preparation": true,
+        "generated_route_job_spec_matches_shared_worker_fixture": true,
+        "final_output_move_returns_destination_path": true,
+        "packaged_worker_protocol_smoke": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testBatchPreparationSnapshotsProfileDestinationAndOptionsPerItem",
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testGeneratedRouteJobSpecMatchesSharedV12WorkerFixture",
+        "tests/test_process_preflight.py:test_output_move_returns_final_output_path",
+        "scripts/native_app.py:smoke_packaged_worker"
+      ],
+      "scope": {
+        "current_change_review": "Fresh native and Python regressions verify destination snapshots, generated-route job construction, and the final-output move path on the exact candidate. Packaged worker smoke verifies the embedded worker protocol. No mounted-network media conversion was rerun.",
+        "mounted_network_conversion_rerun": false,
+        "prior_real_network_evidence": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json",
+        "qualification_kind": "exact_candidate_change_scoped_regression"
+      },
+      "status": "passed"
+    },
+    {
+      "case_id": "overwrite-and-conversion-cancel",
+      "observations": {
+        "existing_output_rejected_before_workspace_mutation": true,
+        "resumed_and_unowned_workspaces_preserved": true,
+        "view_model_stop_transitions_to_stopping": true,
+        "owned_workspaces_removed_after_cancellation": true
+      },
+      "proof": [
+        "tests/test_process_preflight.py:test_existing_output_aborts_before_workspace_mutation",
+        "tests/test_process_preflight.py:test_cancelled_conversion_cleans_owned_workspaces",
+        "tests/test_process_preflight.py:test_cancelled_conversion_preserves_unowned_workspaces",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testStopActiveWorkerCancelsConversionAndTransitionsToStopping",
+        "tests/test_process_preflight.py:test_resumed_cancellation_preserves_existing_workspaces"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "subtitle-partial-output-diagnostics",
+      "observations": {
+        "aggregate_track_counts_recorded": true,
+        "cancelled_outcome_distinguished": true,
+        "failed_outcome_distinguished": true,
+        "partial_outcome_distinguished": true,
+        "successful_outcome_distinguished": true
+      },
+      "proof": [
+        "tests/test_subtitles.py:test_completed_event_emitted_after_successful_rip",
+        "tests/test_subtitles.py:test_partial_warning_emitted_when_empty_srts_produced",
+        "tests/test_subtitles.py:test_partial_warning_emitted_when_ripper_skips_a_selected_track",
+        "tests/test_subtitles.py:test_empty_output_emits_failure_before_strict_error",
+        "tests/test_subtitles.py:test_postprocess_error_closes_started_event_with_failure",
+        "tests/test_subtitles.py:test_keyboard_interrupt_closes_started_event_as_cancelled",
+        "tests/test_subtitles.py:test_no_partial_warning_when_all_tracks_succeed"
+      ],
+      "status": "passed"
+    }
+  ],
+  "privacy": {
+    "diagnostic_tokens_recorded": false,
+    "private_hostnames_recorded": false,
+    "private_media_identifiers_recorded": false,
+    "private_paths_recorded": false
+  },
+  "acceptance": {
+    "blocking_case_ids": [],
+    "failed_case_count": 0,
+    "passed": true,
+    "passed_case_count": 8
+  },
+  "result": "accepted_public_safe_summary"
+}
