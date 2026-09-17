@@ -10,7 +10,6 @@ import unittest
 
 from pathlib import Path
 
-from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts import embedded_python, release
 from scripts.beta3_recovery_evidence import BETA3_RECOVERY_EVIDENCE_PATH, Beta3RecoveryEvidenceError
 from scripts.production_identity import PRODUCTION_SPARKLE_PUBLIC_KEY
@@ -322,7 +321,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(qualification["candidate"]["build_version"], metadata.build_version)
         self.assertEqual(qualification["candidate"]["release_tag"], metadata.release_tag)
         self.assertEqual(qualification["candidate"]["workflow"], "Prerelease")
-        self.assertEqual(qualification["candidate"]["worker_protocol_version"], PROTOCOL_VERSION)
+        # Keep the candidate's protocol pinned after publication, even when development advances.
+        self.assertEqual(qualification["candidate"]["worker_protocol_version"], 13)
         self.assertEqual(qualification["candidate"]["mapping_version"], 2)
         self.assertEqual(
             qualification["candidate"]["route_table_sha256"],
