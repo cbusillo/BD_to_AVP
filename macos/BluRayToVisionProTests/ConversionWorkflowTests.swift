@@ -1847,7 +1847,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_v12.json")
+            with: sharedFixtureData(named: "native_worker_convert_v13.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -1870,7 +1870,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_generated_v12.json")
+            with: sharedFixtureData(named: "native_worker_convert_generated_v13.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -1893,7 +1893,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_existing_artifact_v12.json")
+            with: sharedFixtureData(named: "native_worker_convert_existing_artifact_v13.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -1918,7 +1918,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_existing_artifact_upscale_v12.json")
+            with: sharedFixtureData(named: "native_worker_convert_existing_artifact_upscale_v13.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -1977,7 +1977,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_preview_v12.json")
+            with: sharedFixtureData(named: "native_worker_preview_v13.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -2057,7 +2057,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v12.json")
+            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v13.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)

@@ -47,12 +47,30 @@ the worker transport sequence without changing lifecycle progress, and projects
 their stable kind, stage, severity, message, detail, and failure fields into the
 existing bounded diagnostic history. Unsupported schemas, secret privacy, and
 oversized text fail decoding rather than falling back to unredacted strings.
-For multi-artifact stages such as `create_left_right_files`, the live status view
-retains the current left-eye and right-eye artifact samples separately. A quiet
-helper process with recently growing artifacts is therefore classified as active
-work rather than as an immediate stall. The technical-details panel reserves the
-stall warning for runs that have neither recent tool output nor recent expected
-artifact growth.
+For concurrent pipelines, live status retains process and artifact samples by
+tool-run identity, including separate left-eye and right-eye outputs. A sibling
+tool's heartbeat cannot erase the encoder's samples or reset its terminal state.
+A known output that stops advancing takes precedence over recurring tool logs;
+repeated statistics alone do not prove video progress. Quiet tools with recently
+growing output remain active. New jobs, stages, and completed-attempt restarts
+clear prior state. This presentation logic does not change the worker's timeout,
+automatic retry, or cancellation behavior.
+
+The ordinary conversion view also shows a nonmodal warning after a watched
+video output has not advanced for 60 seconds. **Keep Waiting (2 min)** requests
+one of at most two additional intervals for that same running attempt and
+stall episode. The notice confirms the extension only after the worker applies
+it; **Stop** uses the existing cancellation path. Without a response, the
+120-second watchdog and automatic retry policy continue normally. The warning
+clears when the watched outputs recover or the attempt ends.
+
+[Worker protocol v13](native-worker-protocol-v13.md) records output roles,
+sizes and no-progress ages, changing versus repeated tool statistics, and wait
+decisions without adding media filenames or raw commands. Support reports keep
+up to 32 recent stall/control decisions inside the existing event and byte
+limits, so ordinary progress chatter cannot immediately evict them. These
+controls and diagnostics do not establish that a source MKV is damaged or
+provide a remux repair.
 
 Worker conversion stages pass the same `RunContext` and cancellation token into
 every child-tool wrapper. Canonical child-process events therefore retain the

@@ -1,0 +1,16 @@
+{
+  "protocol_version": 13,
+  "type": "control.result",
+  "job_id": "c1ebce77-0460-462b-bd7e-8498c0355267",
+  "sequence": 5,
+  "payload": {
+    "command_id": "2335b435-bdf4-47d2-b47b-c6bbcb063349",
+    "tool_run_id": "ce342bf4-ac4f-4a6e-a920-3616a9b68693",
+    "stall_episode_id": "09329f41-4707-4086-9a61-bc4131e67790",
+    "accepted": true,
+    "code": "extended",
+    "duplicate": false,
+    "grants_used": 1,
+    "grant_seconds": 120
+  }
+}

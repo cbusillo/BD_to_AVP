@@ -367,8 +367,14 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
                 throw WorkerLifecycleError.missingPayload(event: event.type)
             }
             try accept(artifact)
-        case .observability:
+        case .observability, .controlResult:
             break
+        case .toolStall:
+            if event.payload.stall?.state == .stalled {
+                activityMessage = "Video output has stopped advancing."
+            } else if event.payload.stall?.state == .recovered {
+                activityMessage = "Video output is advancing again."
+            }
         case .jobCompleted, .jobFailed, .jobCancelled, .jobDecisionRequired:
             break
         }
@@ -439,7 +445,8 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
             phase = .failed
             stageMessage = "Preview Failed"
             clearActiveWorker(preserveDirectory: false)
-        case .workerReady, .jobStarted, .stageStarted, .heartbeat, .log, .warning, .artifactReady, .observability:
+        case .workerReady, .jobStarted, .stageStarted, .heartbeat, .log, .warning, .artifactReady, .observability,
+             .toolStall, .controlResult:
             failTransport("The preview engine returned an invalid terminal event.")
         }
         diagnosticRecorder.recordWorkflow(

@@ -777,8 +777,12 @@ struct DiagnosticEventHistorySnapshot: Equatable, Sendable {
 }
 
 struct DiagnosticEventHistory {
+    private static let stallEventNames: Set<String> = [
+        "tool.stall", "control.result", "stall.wait_requested", "stall.wait_write_failed",
+    ]
     private let maximumEntries: Int
     private let maximumBytes: Int
+    private let maximumStallEntries: Int
     private var entries: [DiagnosticEventRecord] = []
     private var retainedBytes = 0
     private var droppedEntries = 0
@@ -788,17 +792,28 @@ struct DiagnosticEventHistory {
         precondition(maximumEntries > 0 && maximumBytes > 0)
         self.maximumEntries = maximumEntries
         self.maximumBytes = maximumBytes
+        maximumStallEntries = min(32, max(1, maximumEntries / 2))
     }
 
     mutating func append(_ entry: DiagnosticEventRecord) {
         entries.append(entry)
         retainedBytes += entry.serializedByteCount
-        while entries.count > maximumEntries || retainedBytes > maximumBytes {
-            let removed = entries.removeFirst()
-            retainedBytes -= removed.serializedByteCount
-            droppedEntries += 1
-            droppedBytes += removed.serializedByteCount
+        if Self.stallEventNames.contains(entry.name),
+           entries.filter({ Self.stallEventNames.contains($0.name) }).count > maximumStallEntries,
+           let oldestStall = entries.firstIndex(where: { Self.stallEventNames.contains($0.name) }) {
+            removeEntry(at: oldestStall)
         }
+        while entries.count > maximumEntries || retainedBytes > maximumBytes {
+            let oldestOrdinary = entries.firstIndex { !Self.stallEventNames.contains($0.name) }
+            removeEntry(at: oldestOrdinary ?? 0)
+        }
+    }
+
+    private mutating func removeEntry(at index: Int) {
+        let removed = entries.remove(at: index)
+        retainedBytes -= removed.serializedByteCount
+        droppedEntries += 1
+        droppedBytes += removed.serializedByteCount
     }
 
     func snapshot() -> DiagnosticEventHistorySnapshot {
@@ -988,7 +1003,7 @@ final class DiagnosticSessionRecorder {
             operation: event.payload.operation ?? context(for: event.jobID)?.operation,
             activeMode: activeMode,
             stage: event.payload.stage ?? observabilityEvent?.context.stage?.id,
-            tool: observabilityEvent?.context.tool?.id,
+            tool: event.payload.stall?.tool ?? observabilityEvent?.context.tool?.id,
             processState: observabilityEvent.flatMap {
                 LiveObservabilityStatus.processState(for: $0)?.rawValue
             },
@@ -1019,7 +1034,9 @@ final class DiagnosticSessionRecorder {
                 ?? event.payload.error?.message
                 ?? event.payload.decision?.prompt
                 ?? (observabilityTextIsOmitted ? nil : observabilityEvent?.data.message?.value),
-            details: event.payload.error?.details
+            details: event.payload.stall?.diagnosticDetails
+                ?? event.payload.controlResult?.diagnosticDetails
+                ?? event.payload.error?.details
                 ?? event.payload.decision?.details
                 ?? (observabilityTextIsOmitted ? nil : observabilityEvent?.data.detail?.value),
             level: event.payload.level ?? observabilityEvent?.severity,

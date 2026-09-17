@@ -451,6 +451,68 @@ final class WorkerProcessClientTests: XCTestCase {
         }
     }
 
+    func testSendsControlWhileJobInputStaysOpenAndRejectsAfterTerminal() async throws {
+        let command = WorkerWaitCommand(
+            commandID: UUID(), jobID: jobID, toolRunID: UUID(), stallEpisodeID: UUID()
+        )
+        let client = fixtureClient(body: """
+        print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"process_group_id": os.getpid(), "control_capabilities": ["keep_waiting_v1"]}}), flush=True)
+        command = json.loads(sys.stdin.readline())
+        assert command["job_id"] == job_id
+        assert command["type"] == "job.keep_waiting"
+        payload = {key: command[key] for key in ["command_id", "tool_run_id", "stall_episode_id"]}
+        payload.update(accepted=True, code="extended", duplicate=False, grants_used=1, grant_seconds=120)
+        print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "control.result", "job_id": job_id, "sequence": 1, "payload": payload}), flush=True)
+        print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.cancelled", "job_id": job_id, "sequence": 2, "payload": {}}), flush=True)
+        assert sys.stdin.read() == ""
+        """)
+        var receivedResult: WorkerControlResult?
+        _ = try await client.run(job: WorkerJobSpec(
+            sourceURL: URL(fileURLWithPath: "/tmp/movie.mkv"), jobID: jobID
+        )) { event in
+            switch event.type {
+            case .workerReady:
+                try await client.sendControl(command)
+            case .controlResult:
+                receivedResult = event.payload.controlResult
+            case .jobCancelled:
+                do {
+                    try await client.sendControl(command)
+                    XCTFail("Terminal worker must reject further controls")
+                } catch {}
+            default:
+                break
+            }
+        }
+        XCTAssertEqual(receivedResult?.commandID, command.commandID)
+        XCTAssertEqual(receivedResult?.accepted, true)
+    }
+
+    func testExplainsProtocolDeliveryFailureAndRetainsExitEvidence() async throws {
+        for partialRecord in ["", "sys.stdout.write('{\"protocol_version\":'); sys.stdout.flush()"] {
+            let client = fixtureClient(body: """
+            \(readyEvent())
+            \(partialRecord)
+            sys.stderr.write("Worker event output could not deliver a complete record\\n")
+            sys.exit(74)
+            """)
+            do {
+                _ = try await client.run(job: WorkerJobSpec(
+                    sourceURL: URL(fileURLWithPath: "/tmp/movie.mkv"), jobID: jobID
+                )) { _ in }
+                XCTFail("A delivery failure must not claim completion")
+            } catch let error as WorkerClientError {
+                XCTAssertEqual(error.processExitStatus, 74)
+                XCTAssertEqual(
+                    error.errorDescription,
+                    "The app stopped receiving progress updates. Try again or send diagnostics."
+                )
+                XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("Exit status: 74"))
+                XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("complete record"))
+            }
+        }
+    }
+
     private func readyEvent() -> String {
         """
         print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"worker_version": "test", "process_group_id": os.getpid()}}), flush=True)
@@ -484,7 +546,7 @@ final class WorkerProcessClientTests: XCTestCase {
 
         if os.getpgrp() != os.getpid():
             os.setsid()
-        request = json.loads(sys.stdin.read())
+        request = json.loads(sys.stdin.readline())
         job_id = request["job_id"]
         \(body)
         """
