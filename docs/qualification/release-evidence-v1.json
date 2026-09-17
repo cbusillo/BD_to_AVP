@@ -937,7 +937,7 @@
       "case_id": "gui-preview-low-local-ample-destination",
       "receipt_id": "v0.3.3-beta.3:gui-preview-low-local-ample-destination:244365d",
       "reference": "docs/qualification/v0.3.3-beta.3-change-scoped-evidence-v1.json",
-      "sha256": "9fc99131239374637928647c56b5f7dc6254f40741111599cfe1fbb586afdda6",
+      "sha256": "5c5dab81e7ed62acb11bedca0f97a37c12a024e6b1b0e8ff3244afcd72a23a0e",
       "source": "signed_artifact_receipt",
       "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
       "status": "accepted"
@@ -947,7 +947,7 @@
       "case_id": "gui-preview-cancel-cleanup",
       "receipt_id": "v0.3.3-beta.3:gui-preview-cancel-cleanup:244365d",
       "reference": "docs/qualification/v0.3.3-beta.3-change-scoped-evidence-v1.json",
-      "sha256": "9fc99131239374637928647c56b5f7dc6254f40741111599cfe1fbb586afdda6",
+      "sha256": "5c5dab81e7ed62acb11bedca0f97a37c12a024e6b1b0e8ff3244afcd72a23a0e",
       "source": "signed_artifact_receipt",
       "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
       "status": "accepted"
@@ -957,7 +957,7 @@
       "case_id": "gui-preview-failure-cleanup",
       "receipt_id": "v0.3.3-beta.3:gui-preview-failure-cleanup:244365d",
       "reference": "docs/qualification/v0.3.3-beta.3-change-scoped-evidence-v1.json",
-      "sha256": "9fc99131239374637928647c56b5f7dc6254f40741111599cfe1fbb586afdda6",
+      "sha256": "5c5dab81e7ed62acb11bedca0f97a37c12a024e6b1b0e8ff3244afcd72a23a0e",
       "source": "signed_artifact_receipt",
       "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
       "status": "accepted"
@@ -967,7 +967,7 @@
       "case_id": "capacity-known-low",
       "receipt_id": "v0.3.3-beta.3:capacity-known-low:244365d",
       "reference": "docs/qualification/v0.3.3-beta.3-change-scoped-evidence-v1.json",
-      "sha256": "9fc99131239374637928647c56b5f7dc6254f40741111599cfe1fbb586afdda6",
+      "sha256": "5c5dab81e7ed62acb11bedca0f97a37c12a024e6b1b0e8ff3244afcd72a23a0e",
       "source": "signed_artifact_receipt",
       "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
       "status": "accepted"
@@ -977,7 +977,7 @@
       "case_id": "capacity-unknown-and-conflicting",
       "receipt_id": "v0.3.3-beta.3:capacity-unknown-and-conflicting:244365d",
       "reference": "docs/qualification/v0.3.3-beta.3-change-scoped-evidence-v1.json",
-      "sha256": "9fc99131239374637928647c56b5f7dc6254f40741111599cfe1fbb586afdda6",
+      "sha256": "5c5dab81e7ed62acb11bedca0f97a37c12a024e6b1b0e8ff3244afcd72a23a0e",
       "source": "signed_artifact_receipt",
       "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
       "status": "accepted"
@@ -987,7 +987,7 @@
       "case_id": "network-generated-final-output",
       "receipt_id": "v0.3.3-beta.3:network-generated-final-output:244365d",
       "reference": "docs/qualification/v0.3.3-beta.3-change-scoped-evidence-v1.json",
-      "sha256": "9fc99131239374637928647c56b5f7dc6254f40741111599cfe1fbb586afdda6",
+      "sha256": "5c5dab81e7ed62acb11bedca0f97a37c12a024e6b1b0e8ff3244afcd72a23a0e",
       "source": "signed_artifact_receipt",
       "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
       "status": "accepted"
@@ -997,7 +997,7 @@
       "case_id": "overwrite-and-conversion-cancel",
       "receipt_id": "v0.3.3-beta.3:overwrite-and-conversion-cancel:244365d",
       "reference": "docs/qualification/v0.3.3-beta.3-change-scoped-evidence-v1.json",
-      "sha256": "9fc99131239374637928647c56b5f7dc6254f40741111599cfe1fbb586afdda6",
+      "sha256": "5c5dab81e7ed62acb11bedca0f97a37c12a024e6b1b0e8ff3244afcd72a23a0e",
       "source": "signed_artifact_receipt",
       "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
       "status": "accepted"
@@ -1007,7 +1007,7 @@
       "case_id": "subtitle-partial-output-diagnostics",
       "receipt_id": "v0.3.3-beta.3:subtitle-partial-output-diagnostics:244365d",
       "reference": "docs/qualification/v0.3.3-beta.3-change-scoped-evidence-v1.json",
-      "sha256": "9fc99131239374637928647c56b5f7dc6254f40741111599cfe1fbb586afdda6",
+      "sha256": "5c5dab81e7ed62acb11bedca0f97a37c12a024e6b1b0e8ff3244afcd72a23a0e",
       "source": "signed_artifact_receipt",
       "source_sha": "244365d0a51497d64d87d63e5961be732f5bafca",
       "status": "accepted"

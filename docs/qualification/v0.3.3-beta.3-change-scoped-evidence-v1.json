@@ -39,7 +39,8 @@
     "signing": "ad_hoc_local",
     "worker_cancellation_smoke": "passed",
     "signature_verification": "codesign -dv reports Signature=adhoc and no TeamIdentifier",
-    "worker_protocol_smoke": "passed"
+    "worker_protocol_smoke": "passed",
+    "support_diagnostics_endpoint": "https://diagnostics.shinycomputers.com"
   },
   "evidence_source_semantics": {
     "developer_id_or_notarization_claimed": false,
@@ -79,7 +80,13 @@
         "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDiscImagePreviewUsesSelectedDestinationWorkspace",
         "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testBluRayFolderPreviewUsesSelectedDestinationAndTitle"
       ],
-      "status": "passed"
+      "status": "passed",
+      "scope": {
+        "qualification_kind": "exact_candidate_change_scoped_regression",
+        "capacity_readings": "controlled_test_fixtures",
+        "physical_low_disk_condition_forced": false,
+        "prior_accepted_evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"
+      }
     },
     {
       "case_id": "gui-preview-cancel-cleanup",
@@ -120,7 +127,13 @@
         "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testKnownLowDestinationCapacityBlocksBeforeWorkerLaunch",
         "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCapacityAssessmentBlocksOnlyTrustworthyLowReading"
       ],
-      "status": "passed"
+      "status": "passed",
+      "scope": {
+        "qualification_kind": "exact_candidate_change_scoped_regression",
+        "capacity_readings": "controlled_test_fixtures",
+        "physical_low_disk_condition_forced": false,
+        "prior_accepted_evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"
+      }
     },
     {
       "case_id": "capacity-unknown-and-conflicting",
@@ -133,7 +146,13 @@
         "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testUnknownAndConflictingDestinationCapacityWarnWithoutBlocking",
         "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCapacityAssessmentBlocksOnlyTrustworthyLowReading"
       ],
-      "status": "passed"
+      "status": "passed",
+      "scope": {
+        "qualification_kind": "exact_candidate_change_scoped_regression",
+        "capacity_readings": "controlled_test_fixtures",
+        "physical_low_disk_condition_forced": false,
+        "prior_accepted_evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"
+      }
     },
     {
       "case_id": "network-generated-final-output",
