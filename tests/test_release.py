@@ -321,7 +321,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(qualification["candidate"]["build_version"], metadata.build_version)
         self.assertEqual(qualification["candidate"]["release_tag"], metadata.release_tag)
         self.assertEqual(qualification["candidate"]["workflow"], "Prerelease")
-        self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
+        # Keep the candidate's protocol pinned after publication, even when development advances.
+        self.assertEqual(qualification["candidate"]["worker_protocol_version"], 13)
         self.assertEqual(qualification["candidate"]["mapping_version"], 2)
         self.assertEqual(
             qualification["candidate"]["route_table_sha256"],
