@@ -31,6 +31,67 @@ from bd_to_avp.presentation import cli_message
 from bd_to_avp.runtime import RunContext
 
 
+EDGE264_SKIPPED_NAL_PATTERN = re.compile(r"^edge264: skipped corrupt NAL unit after output frame (\d+)$")
+EDGE264_SKIPPED_TOTAL_PATTERN = re.compile(r"^edge264: skipped (\d+) corrupt NAL unit\(s\)")
+
+
+class Edge264DamageCollector:
+    """Collect the damaged-source positions edge264 reports while it conceals them."""
+
+    def __init__(self) -> None:
+        self.frame_indexes: list[int] = []
+        self.skipped_count = 0
+
+    def reset(self) -> None:
+        self.frame_indexes.clear()
+        self.skipped_count = 0
+
+    def handle_line(self, _stream: object, line: str) -> None:
+        # A raising line handler terminates the child, so only match and record.
+        position = EDGE264_SKIPPED_NAL_PATTERN.match(line)
+        if position:
+            self.frame_indexes.append(int(position.group(1)))
+            self.skipped_count = max(self.skipped_count, len(self.frame_indexes))
+            return
+        total = EDGE264_SKIPPED_TOTAL_PATTERN.match(line)
+        if total:
+            self.skipped_count = max(self.skipped_count, int(total.group(1)))
+
+    def source_positions_seconds(self, frame_rate: str) -> list[float]:
+        try:
+            frames_per_second = Fraction(frame_rate)
+        except (ValueError, ZeroDivisionError):
+            return []
+        if frames_per_second <= 0:
+            return []
+        start_seconds = config.preview_range.start_seconds if config.preview_range else 0.0
+        return [start_seconds + float(frame_index / frames_per_second) for frame_index in self.frame_indexes]
+
+
+def format_source_position(seconds: float) -> str:
+    total_seconds = int(seconds)
+    return f"{total_seconds // 3600}:{total_seconds % 3600 // 60:02d}:{total_seconds % 60:02d}"
+
+
+def build_damaged_source_warning(damage_collector: Edge264DamageCollector, frame_rate: str) -> str | None:
+    if damage_collector.skipped_count <= 0:
+        return None
+    # Nearby skips belong to one visible glitch, so list distinct places to inspect.
+    positions: list[float] = []
+    for seconds in damage_collector.source_positions_seconds(frame_rate):
+        if not positions or seconds - positions[-1] >= 2:
+            positions.append(seconds)
+    shown = ", ".join(format_source_position(seconds) for seconds in positions[:5])
+    if len(positions) > 5:
+        shown += f" and {len(positions) - 5} more"
+    where = f" around {shown}" if shown else ""
+    return (
+        f"The source has damaged 3D video{where}. The affected right-eye frames were filled in from the "
+        "left eye, so you may see a brief glitch there. Check that part of the movie; rip the disc again "
+        "if it bothers you."
+    )
+
+
 def has_native_mvc_splitter() -> bool:
     if not config.EDGE264_TEST_PATH.is_file():
         return False
@@ -348,6 +409,7 @@ def split_mvc_to_stereo_native(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> tuple[Path, Path]:
     ffmpeg_command = generate_native_mvc_ffmpeg_command(left_output_path, right_output_path, disc_info, crop_params)
     run_native_mvc_encoding(
@@ -357,6 +419,7 @@ def split_mvc_to_stereo_native(
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=observability_context,
+        damage_collector=damage_collector,
     )
     return left_output_path, right_output_path
 
@@ -370,6 +433,7 @@ def encode_mvc_to_av1_sbs_native(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> Path:
     ffmpeg_command = generate_native_mvc_av1_command(output_path, disc_info, crop_params)
     run_native_mvc_encoding(
@@ -379,6 +443,7 @@ def encode_mvc_to_av1_sbs_native(
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=observability_context,
+        damage_collector=damage_collector,
     )
     return output_path
 
@@ -391,6 +456,7 @@ def run_native_mvc_encoding(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> None:
     stream_from_container = should_stream_mvc_from_container(video_input_path)
     producer_command = generate_mvc_annex_b_stream_command(video_input_path) if stream_from_container else None
@@ -407,6 +473,7 @@ def run_native_mvc_encoding(
                 run_context=run_context,
                 cancellation_event=cancellation_event,
                 observability_context=observability_context,
+                damage_collector=damage_collector,
             )
         except (ProcessArtifactNoProgressError, subprocess.CalledProcessError) as error:
             retry_after_stall = isinstance(error, ProcessArtifactNoProgressError)
@@ -435,6 +502,7 @@ def run_native_mvc_encoding(
                 run_context=run_context,
                 cancellation_event=cancellation_event,
                 observability_context=observability_context,
+                damage_collector=damage_collector,
             )
     except ProcessArtifactNoProgressError as error:
         raise NativeMvcSplitError(build_native_splitter_stall_message(error)) from error
@@ -456,6 +524,7 @@ def run_direct_mv_hevc_encoding(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> None:
     stream_from_container = should_stream_mvc_from_container(video_input_path)
     producer_command = generate_mvc_annex_b_stream_command(video_input_path) if stream_from_container else None
@@ -473,6 +542,7 @@ def run_direct_mv_hevc_encoding(
                 run_context=run_context,
                 cancellation_event=cancellation_event,
                 observability_context=observability_context,
+                damage_collector=damage_collector,
             )
         except (ProcessArtifactNoProgressError, subprocess.CalledProcessError) as error:
             retry_after_crash = isinstance(error, subprocess.CalledProcessError) and native_splitter_died_by_signal(
@@ -497,6 +567,7 @@ def run_direct_mv_hevc_encoding(
                 run_context=run_context,
                 cancellation_event=cancellation_event,
                 observability_context=observability_context,
+                damage_collector=damage_collector,
             )
     except ProcessArtifactNoProgressError as error:
         raise NativeMvcSplitError(build_direct_mv_hevc_stall_message(error)) from error
@@ -520,7 +591,10 @@ def run_direct_mv_hevc_attempt(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> None:
+    if damage_collector is not None:
+        damage_collector.reset()
     splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=single_threaded)
     attempt_name = "single-threaded" if single_threaded else "multi-threaded"
     cli_message(f"Running direct MVC to MV-HEVC encode ({attempt_name}).", run_context=run_context)
@@ -558,7 +632,8 @@ def run_direct_mv_hevc_attempt(
                     env=os.environ.copy(),
                     event_context=event_context,
                     capture_overflow=CaptureOverflowPolicy.TRUNCATE,
-                )
+                ),
+                line_handler=damage_collector.handle_line if damage_collector else None,
             ),
             ProcessPipelineStage(
                 ProcessSpec(
@@ -664,7 +739,10 @@ def run_native_mvc_split_attempt(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> None:
+    if damage_collector is not None:
+        damage_collector.reset()
     splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=single_threaded)
     attempt_name = "single-threaded" if single_threaded else "multi-threaded"
     cli_message(f"Running native MVC split and encode ({attempt_name}).", run_context=run_context)
@@ -703,7 +781,8 @@ def run_native_mvc_split_attempt(
                     env=os.environ.copy(),
                     event_context=event_context,
                     capture_overflow=CaptureOverflowPolicy.TRUNCATE,
-                )
+                ),
+                line_handler=damage_collector.handle_line if damage_collector else None,
             ),
             ProcessPipelineStage(
                 ProcessSpec(
@@ -841,6 +920,7 @@ def split_mvc_to_stereo(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> tuple[Path, Path]:
     if can_use_native_mvc_splitter(disc_info):
         result = split_mvc_to_stereo_native(
@@ -852,6 +932,7 @@ def split_mvc_to_stereo(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            damage_collector=damage_collector,
         )
         if not config.keep_files:
             if not should_stream_mvc_from_container(video_input_path):
@@ -870,6 +951,7 @@ def encode_mvc_to_av1_sbs(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> Path:
     if can_use_native_mvc_splitter(disc_info):
         result = encode_mvc_to_av1_sbs_native(
@@ -880,6 +962,7 @@ def encode_mvc_to_av1_sbs(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            damage_collector=damage_collector,
         )
         if not config.keep_files:
             if not should_stream_mvc_from_container(video_input_path):
@@ -1405,6 +1488,7 @@ def create_left_right_files(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> tuple[Path, Path]:
     left_eye_output_path = output_folder / f"{disc_info.name}_left_movie.mov"
     right_eye_output_path = output_folder / f"{disc_info.name}_right_movie.mov"
@@ -1418,6 +1502,7 @@ def create_left_right_files(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            damage_collector=damage_collector,
         )
 
     return left_eye_output_path, right_eye_output_path
@@ -1432,6 +1517,7 @@ def create_av1_sbs_file(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> Path:
     output_path = output_folder / f"{disc_info.name}_AV1-SBS-unmarked.mp4"
     if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
@@ -1443,6 +1529,7 @@ def create_av1_sbs_file(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            damage_collector=damage_collector,
         )
     return output_path
 
@@ -1546,6 +1633,7 @@ def create_direct_mv_hevc_file(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> Path:
     output_stem = f"{disc_info.name}_MV-HEVC"
     if upscale_mode is not None:
@@ -1571,6 +1659,7 @@ def create_direct_mv_hevc_file(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            damage_collector=damage_collector,
         )
         if not config.keep_files and not should_stream_mvc_from_container(mvc_video):
             mvc_video.unlink(missing_ok=True)

@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from bd_to_avp.modules import video
 from bd_to_avp.modules.disc import DiscInfo
+from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.process_runner import (
     ProcessArtifactNoProgressError,
@@ -188,6 +189,7 @@ class NativeMvcSelectionTests(unittest.TestCase):
             run_context=None,
             cancellation_event=None,
             observability_context=None,
+            damage_collector=None,
         )
 
     def test_split_uses_native_helper_for_mts_sources_when_present(self) -> None:
@@ -734,6 +736,67 @@ class DirectMVHEVCPipelineTests(unittest.TestCase):
             self.assertEqual(output_path, output_folder / "Sample_MV-HEVC Upscaled.mov")
             self.assertEqual(encode.call_args.args[1], output_path)
             self.assertIn("--upscale-mode", encode.call_args.args[3])
+
+
+class Edge264DamageCollectorTests(unittest.TestCase):
+    def test_collects_skipped_positions_and_converts_them_to_source_time(self) -> None:
+        collector = video.Edge264DamageCollector()
+        collector.handle_line(None, "edge264: skipped corrupt NAL unit after output frame 129479")
+        collector.handle_line(None, "frame=129500 fps= 47 unrelated progress")
+        collector.handle_line(None, "edge264: skipped 1 corrupt NAL unit(s); output may show brief artefacts")
+
+        self.assertEqual(collector.frame_indexes, [129479])
+        self.assertEqual(collector.skipped_count, 1)
+        with patch.object(video.config, "preview_range", None):
+            message = video.build_damaged_source_warning(collector, "24000/1001")
+
+        self.assertIsNotNone(message)
+        self.assertIn("around 1:30:00.", message or "")
+
+    def test_preview_offset_and_nearby_skips_share_one_position(self) -> None:
+        collector = video.Edge264DamageCollector()
+        for frame_index in (24, 30, 2400):
+            collector.handle_line(None, f"edge264: skipped corrupt NAL unit after output frame {frame_index}")
+        preview_range = PreviewRange(start_seconds=600.0, duration_seconds=120.0, source_duration_seconds=7200.0)
+
+        with patch.object(video.config, "preview_range", preview_range):
+            message = video.build_damaged_source_warning(collector, "24")
+
+        self.assertIn("around 0:10:01, 0:11:40.", message or "")
+
+    def test_total_without_positions_still_warns_and_clean_decode_does_not(self) -> None:
+        collector = video.Edge264DamageCollector()
+        self.assertIsNone(video.build_damaged_source_warning(collector, "24000/1001"))
+
+        collector.handle_line(None, "edge264: skipped 40 corrupt NAL unit(s); output may show brief artefacts")
+        message = video.build_damaged_source_warning(collector, "not-a-rate")
+
+        self.assertEqual(collector.skipped_count, 40)
+        self.assertIn("The source has damaged 3D video.", message or "")
+
+    def test_attempts_reset_the_collector_and_observe_only_the_splitter(self) -> None:
+        collector = video.Edge264DamageCollector()
+        collector.handle_line(None, "edge264: skipped corrupt NAL unit after output frame 7")
+        with (
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch.object(video.ProcessPipelineRunner, "run", return_value=direct_pipeline_success(False)) as run,
+        ):
+            video.run_direct_mv_hevc_attempt(
+                Path("movie.264"),
+                Path("Sample_MV-HEVC.mov"),
+                ["ffmpeg", "normalize"],
+                [Path("mv-hevc-encoder"), "--output", Path("Sample_MV-HEVC.mov")],
+                producer_command=None,
+                single_threaded=True,
+                damage_collector=collector,
+            )
+
+        stages = run.call_args.args[0]
+        self.assertEqual(collector.frame_indexes, [])
+        self.assertEqual(
+            [stage.line_handler is not None for stage in stages],
+            [True, False, False],
+        )
 
 
 def process_result(tool_id: str) -> ProcessResult:
