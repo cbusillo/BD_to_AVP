@@ -233,6 +233,11 @@ class ReleaseOperatorGuardTests(unittest.TestCase):
                 self.assertNotEqual(self.run_guard(**overrides), 0)
 
 
+# Post-publication qualification compiles a test helper on the macOS release that
+# the qualification policy names; it builds nothing that ships.
+QUALIFICATION_ONLY_WORKFLOWS = {"milestone-qualification.yml"}
+
+
 class ToolchainAgreementTests(unittest.TestCase):
     """One Xcode toolchain builds everything that ships; the tests do not care which one."""
 
@@ -243,6 +248,8 @@ class ToolchainAgreementTests(unittest.TestCase):
         )
         declared = {("bundled edge264", provenance["xcode_version"], provenance["xcode_build_version"])}
         for workflow_name, workflow in load_workflows().items():
+            if workflow_name in QUALIFICATION_ONLY_WORKFLOWS:
+                continue
             environment = workflow.get("env") or {}
             if "XCODE_VERSION" in environment:
                 declared.add(
@@ -252,6 +259,25 @@ class ToolchainAgreementTests(unittest.TestCase):
                 self.assertEqual(selected, provenance["xcode_version"], workflow_name)
         self.assertGreater(len(declared), 1)
         self.assertEqual(len({(version, build) for _, version, build in declared}), 1, sorted(declared))
+
+    def test_post_publication_qualification_runs_on_a_macos_release_the_policy_allows(self) -> None:
+        repository = WORKFLOW_DIRECTORY.parents[1]
+        policy = json.loads(
+            (repository / "docs/qualification/release-qualification-policy-v1.json").read_text(encoding="utf-8")
+        )
+        allowed = {
+            str(major)
+            for case in policy["cases"]
+            for major in (case.get("environment") or {}).get("macos_major_versions", [])
+        }
+        self.assertTrue(allowed)
+        for workflow_name in QUALIFICATION_ONLY_WORKFLOWS:
+            for job_name, job in load_workflows()[workflow_name]["jobs"].items():
+                scripts = "\n".join(str(step.get("run", "")) for step in job.get("steps", []))
+                checked = set(re.findall(r'sw_vers -productVersion \| cut -d\. -f1\)" = "(\d+)"', scripts))
+                with self.subTest(workflow=workflow_name, job=job_name):
+                    self.assertTrue(checked)
+                    self.assertLessEqual(checked, allowed)
 
     def test_no_job_runs_on_a_self_hosted_runner(self) -> None:
         for workflow_name, workflow in load_workflows().items():
