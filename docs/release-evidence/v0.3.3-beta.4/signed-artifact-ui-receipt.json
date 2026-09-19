@@ -1,0 +1,55 @@
+{
+  "candidate_sha": "32ad56270e1dc2afe682f35323c6487d309e2df4",
+  "case_id": "profile-save-action-accessibility",
+  "dmg": {
+    "asset_id": 575100335,
+    "name": "3D-Blu-ray-to-Vision-Pro-0.3.3-beta.4.dmg",
+    "sha256": "ef4755a2075632412bf0fa5fd1179dce81b3f7161b3f8d8876fa26b2beec20e7",
+    "size_bytes": 168436146
+  },
+  "evidence": [
+    {
+      "kind": "accessibility-tree",
+      "sha256": "12dbf2a7d4ed51452a31b15026b65e5e6b2f26063cc80a8d354e06665ed3da25"
+    },
+    {
+      "kind": "screenshot-dark",
+      "sha256": "b046c8292bda2060b9e4dbf9da8466091fbae2d6207c8b6a8c2973d2c67c43dd"
+    },
+    {
+      "kind": "screenshot-light",
+      "sha256": "406cec1d93bfe88269e37cdfe8732f14f04444b282391e06ee7f10c57e9cbbe8"
+    },
+    {
+      "kind": "ui-result",
+      "sha256": "8ae87c4b99520f8d2db7698d1be856b6c32a0152d875eff88c7830692b22b9e8"
+    }
+  ],
+  "policy_id": "release-qualification-policy-v1",
+  "receipt_sha256": "813eaecff39b45d208215674e190b907492fb47d92819d8d924fce14b79baad5",
+  "receipt_type": "bd-to-avp-signed-artifact-ui",
+  "release": {
+    "id": 392138345,
+    "tag": "v0.3.3-beta.4"
+  },
+  "release_receipt": {
+    "asset_id": 575103605,
+    "file_sha256": "7a424e158aed2a66e4de84b6a621c8b5df136eac7d0b92ce950678655ea50266",
+    "receipt_sha256": "e133e73c06c98d6c736544ea9935c457c33c05be5e95e3b0a92ff7b392ef92ed"
+  },
+  "schema_version": 1,
+  "signed_app_tree_sha256": "270ffc10bcd62796a35ee188f6cc2ef3368f70e94d597c97139477373c44b684",
+  "source": "signed_artifact_receipt",
+  "status": "passed",
+  "test_selector": "BluRayToVisionProUITests/InstalledUIAcceptanceTests/testCandidateMainWindowProfileAndSettings",
+  "versions": {
+    "build": "175",
+    "package": "0.3.3b4",
+    "public": "0.3.3-beta.4"
+  },
+  "workflow": {
+    "job": "signed-artifact-ui",
+    "run_attempt": 1,
+    "run_id": 35431319669
+  }
+}

@@ -1,7 +1,7 @@
 {
   "legacy_index": {
     "path": "docs/release-evidence/index-v1.json",
-    "sha256": "19eee839edf2d22c042f15191d6373a9e25eb4fb49a08e2f99541c90affe38f2"
+    "sha256": "a136559de2e6c9c54d47baba937ca243aa3476df86636255d5e852cc499c74a7"
   },
   "releases": [
     {
@@ -337,6 +337,40 @@
         }
       ],
       "release_tag": "v0.3.3-beta.3"
+    },
+    {
+      "evidence_class": "v2-captured",
+      "files": [
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.4/capture-v2.json",
+          "sha256": "a5e045411f20ddcbff576f1f8ebb1c00aefffc9fbfeabe908ba4c6d9948013d7"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.4/publication-record.json",
+          "sha256": "f9c36b3e08551e1a3a25f3a13a509fed3ffd8185bf3a231265d0226af7082ff0"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.4/qualification-manifest.json",
+          "sha256": "62d82ca4cba96d8d3778c004e1950b02b8007587d197779f370bac9bc25fc55a"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.4/qualification-record.json",
+          "sha256": "93b60623466ef2d9f452c546bf107a385b5ce8f9e52aab898b84d1a2a5b7e1fc"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.4/release-receipt.json",
+          "sha256": "7a424e158aed2a66e4de84b6a621c8b5df136eac7d0b92ce950678655ea50266"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.4/signed-artifact-ui-receipt.json",
+          "sha256": "0ef16507b28f0d6dbca77f686c800186fe6bae29ef5b9e0d2c738ccca3a1040b"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.4/signed-artifact-ui.zip",
+          "sha256": "5634bce505f2f0ed754d61a57ae25b066d183773ad1ee3e1fbf32dddf2ce741b"
+        }
+      ],
+      "release_tag": "v0.3.3-beta.4"
     }
   ],
   "schema_version": 2
