@@ -242,7 +242,8 @@ class Edge264PinUpdateTests(unittest.TestCase):
             git(upstream, "init", "--quiet")
             commits = {}
             # Version order, not creation or alphabetical order, decides "latest".
-            for tag in ("v2026.10.02", "v2026.9.30"):
+            # A same-day re-release ("-2") must outrank the release it follows.
+            for tag in ("v2026.10.02", "v2026.9.30", "v2026.10.02-2"):
                 git(upstream, "commit", "--quiet", "--allow-empty", "-m", tag)
                 git(upstream, "tag", "--annotate", "-m", tag, tag)
                 commits[tag] = git(upstream, "rev-parse", "HEAD")
@@ -250,12 +251,31 @@ class Edge264PinUpdateTests(unittest.TestCase):
             git(upstream, "tag", "lightweight")
             head = git(upstream, "rev-parse", "HEAD")
 
-            self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "latest"), commits["v2026.10.02"])
+            self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "latest"), commits["v2026.10.02-2"])
+            self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "v2026.10.02"), commits["v2026.10.02"])
             self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "v2026.9.30"), commits["v2026.9.30"])
             self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "lightweight"), head)
             self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "f" * 40), "f" * 40)
             with self.assertRaisesRegex(RuntimeError, "no tag matching"):
                 build_edge264_macos.resolve_revision(str(upstream), "v1")
+
+    def test_latest_refuses_a_commit_that_does_not_descend_from_the_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            upstream = Path(temp_dir) / "upstream"
+            upstream.mkdir()
+            git(upstream, "init", "--quiet", "--initial-branch", "main")
+            git(upstream, "commit", "--quiet", "--allow-empty", "-m", "older")
+            older = git(upstream, "rev-parse", "HEAD")
+            git(upstream, "commit", "--quiet", "--allow-empty", "-m", "pinned")
+            pinned = git(upstream, "rev-parse", "HEAD")
+            provenance = build_edge264_macos.load_provenance(REPO_ROOT / build_edge264_macos.PROVENANCE_RELATIVE_PATH)
+            downgrade = build_edge264_macos.dataclasses.replace(provenance, repository=str(upstream), revision=older)
+
+            # The ancestry check runs on a real clone, before anything is built.
+            with self.assertRaisesRegex(RuntimeError, "does not descend from the pinned"):
+                build_edge264_macos.build_edge264(
+                    Path(temp_dir) / "edge264_test", downgrade, verify=False, must_descend_from=pinned
+                )
 
     def test_writing_the_loaded_manifest_reproduces_the_committed_file(self) -> None:
         committed = REPO_ROOT / build_edge264_macos.PROVENANCE_RELATIVE_PATH
