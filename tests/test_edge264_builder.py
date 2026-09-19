@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -301,6 +302,69 @@ class Edge264UpstreamWatchTests(unittest.TestCase):
     def test_a_stale_pin_opens_one_issue_and_never_a_second(self) -> None:
         self.assertEqual(self.run_watch(pending="a" * 40, open_issue=""), ["list", "create"])
         self.assertEqual(self.run_watch(pending="a" * 40, open_issue="12"), ["list"])
+
+
+class Edge264UpdateBranchTests(unittest.TestCase):
+    """Run the update workflow's push step against a throwaway repository and remote."""
+
+    def run_push(self, change_pin: bool) -> tuple[str, str]:
+        workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/update-edge264.yml").read_text(encoding="utf-8"))
+        (step,) = [
+            step for job in workflow["jobs"].values() for step in job["steps"] if "git push" in step.get("run", "")
+        ]
+        manifest = build_edge264_macos.PROVENANCE_RELATIVE_PATH
+        with tempfile.TemporaryDirectory() as temp_dir:
+            remote = Path(temp_dir) / "remote.git"
+            checkout = Path(temp_dir) / "checkout"
+            subprocess.run(["git", "init", "--quiet", "--bare", str(remote)], check=True)
+            subprocess.run(["git", "init", "--quiet", "--initial-branch", "main", str(checkout)], check=True)
+            (checkout / manifest).parent.mkdir(parents=True)
+            (checkout / manifest).write_text(json.dumps({"revision": "a" * 40}), encoding="utf-8")
+            (checkout / "bd_to_avp/bin").mkdir(parents=True)
+            (checkout / "bd_to_avp/bin/edge264_test").write_bytes(b"old")
+            (checkout / "bd_to_avp/bin/edge264_test").chmod(0o755)
+            git(checkout, "add", "--all")
+            git(checkout, "commit", "--quiet", "-m", "pinned")
+            git(checkout, "remote", "add", "origin", str(remote))
+            if change_pin:
+                # Artifact downloads do not keep the executable bit.
+                (checkout / manifest).write_text(json.dumps({"revision": "b" * 40}), encoding="utf-8")
+                (checkout / "bd_to_avp/bin/edge264_test").write_bytes(b"new")
+                (checkout / "bd_to_avp/bin/edge264_test").chmod(0o644)
+            summary = Path(temp_dir) / "summary"
+            subprocess.run(
+                ["/bin/bash", "-e", "-c", step["run"]],
+                env={
+                    **os.environ,
+                    **step["env"],
+                    "REQUESTED": "latest",
+                    "GITHUB_STEP_SUMMARY": str(summary),
+                    "GITHUB_SERVER_URL": "https://example.invalid",
+                    "GITHUB_REPOSITORY": "owner/repository",
+                },
+                cwd=checkout,
+                check=True,
+                capture_output=True,
+            )
+            pushed = subprocess.run(
+                ["git", "-C", str(remote), "ls-tree", "-r", step["env"]["BRANCH"]],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            return pushed, summary.read_text(encoding="utf-8")
+
+    def test_a_new_pin_is_pushed_with_both_files_and_an_executable_decoder(self) -> None:
+        pushed, summary = self.run_push(change_pin=True)
+
+        self.assertRegex(pushed, r"(?m)^100755 blob \S+\tbd_to_avp/bin/edge264_test$")
+        self.assertIn(str(build_edge264_macos.PROVENANCE_RELATIVE_PATH), pushed)
+        self.assertIn("b" * 40, summary)
+
+    def test_an_unchanged_pin_pushes_nothing(self) -> None:
+        pushed, _ = self.run_push(change_pin=False)
+
+        self.assertEqual(pushed, "")
 
 
 if __name__ == "__main__":
