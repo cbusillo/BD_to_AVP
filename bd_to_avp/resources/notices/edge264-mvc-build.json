@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/jens-duttke/edge264-mvc.git",
-  "revision": "9780d4cbf7e39218e2663d6bfd8606c39a8f21a4",
+  "revision": "a81f37c76837c4e5f325643c2399833ed529973b",
   "platform": "macOS arm64",
   "minimum_macos": "14.0",
   "xcode_version": "27.0",
@@ -8,5 +8,5 @@
   "sdk_version": "27.0",
   "architecture_flags": "-arch arm64",
   "linkage": "static",
-  "unsigned_sha256": "bb9ded98dc0a95715cba9cf9f2f46aa7fdfc922a874ea75d7fd233a75212dfb8"
+  "unsigned_sha256": "38e428fdc446272d5c09a8d426f8c9b3bc2a00e582e16f92099f74b32b166f4b"
 }
