@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -76,6 +77,28 @@ def load_provenance(path: Path) -> BuildProvenance:
     return BuildProvenance(**{field: data[field] for field in required_fields})
 
 
+def write_provenance(path: Path, provenance: BuildProvenance) -> None:
+    path.write_text(json.dumps(dataclasses.asdict(provenance), indent=2) + "\n", encoding="utf-8")
+
+
+def resolve_revision(repository: str, revision: str) -> str:
+    """Return the commit a tag, "latest" (the highest version tag) or a full commit SHA names."""
+    if re.fullmatch(r"[0-9a-f]{40}", revision):
+        return revision
+    pattern = "refs/tags/v*" if revision == "latest" else f"refs/tags/{revision}"
+    listing = subprocess.check_output(
+        ["git", "ls-remote", "--tags", "--sort=-v:refname", repository, pattern, f"{pattern}^{{}}"],
+        text=True,
+    )
+    tags = [line.split("\t") for line in listing.splitlines()]
+    if not tags:
+        raise RuntimeError(f"edge264 repository has no tag matching {revision}")
+    newest = tags[0][1].removesuffix("^{}")
+    # An annotated tag lists the tag object and, with ^{}, the commit it points at.
+    commits = {name: commit for commit, name in tags if name.removesuffix("^{}") == newest}
+    return commits.get(f"{newest}^{{}}", commits[newest])
+
+
 def verify_toolchain(provenance: BuildProvenance) -> None:
     xcode_version = subprocess.check_output(["xcodebuild", "-version"], text=True).splitlines()
     expected_xcode_version = [
@@ -110,7 +133,7 @@ def make_command(provenance: BuildProvenance, target: str) -> list[str]:
     ]
 
 
-def build_edge264(output_path: Path, provenance: BuildProvenance) -> str:
+def build_edge264(output_path: Path, provenance: BuildProvenance, *, verify: bool = True) -> str:
     with tempfile.TemporaryDirectory(prefix="edge264-mvc-build-") as temp_dir:
         checkout = Path(temp_dir) / "edge264-mvc"
         run(["git", "clone", "--filter=blob:none", provenance.repository, str(checkout)])
@@ -131,7 +154,10 @@ def build_edge264(output_path: Path, provenance: BuildProvenance) -> str:
         architecture = subprocess.check_output(["file", str(built_binary)], text=True)
         if "arm64" not in architecture:
             raise RuntimeError("edge264_test is not an arm64 executable")
-        built_sha256 = verify_checksum(built_binary, provenance.unsigned_sha256, "unsigned edge264_test")
+        if verify:
+            built_sha256 = verify_checksum(built_binary, provenance.unsigned_sha256, "unsigned edge264_test")
+        else:
+            built_sha256 = sha256(built_binary)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(built_binary, output_path)
@@ -148,10 +174,40 @@ def main() -> int:
         default=Path("bd_to_avp/bin/edge264_test"),
         help="Destination for the statically linked splitter executable.",
     )
+    parser.add_argument(
+        "--update",
+        metavar="REVISION",
+        help='Move the pin: build this tag, full commit SHA or "latest" (the highest version tag), '
+        "then write the binary and record the revision and checksum in the provenance manifest.",
+    )
+    parser.add_argument(
+        "--repository",
+        help="With --update, also move the pin to this repository URL.",
+    )
+    parser.add_argument(
+        "--pending-update",
+        action="store_true",
+        help='Print the commit "latest" names if the pin is behind it, without building.',
+    )
     args = parser.parse_args()
+    if args.repository and not args.update:
+        parser.error("--repository requires --update")
 
     repository_root = Path(__file__).resolve().parents[1]
-    provenance = load_provenance(repository_root / PROVENANCE_RELATIVE_PATH)
+    provenance_path = repository_root / PROVENANCE_RELATIVE_PATH
+    provenance = load_provenance(provenance_path)
+    if args.pending_update:
+        latest = resolve_revision(provenance.repository, "latest")
+        if latest != provenance.revision:
+            print(latest)
+        return 0
+    if args.update:
+        repository = args.repository or provenance.repository
+        provenance = dataclasses.replace(
+            provenance,
+            repository=repository,
+            revision=resolve_revision(repository, args.update),
+        )
     if provenance.platform != "macOS arm64":
         raise RuntimeError(f"unsupported edge264 build platform: {provenance.platform}")
     if platform.system() != "Darwin" or platform.machine() != "arm64":
@@ -159,7 +215,10 @@ def main() -> int:
     verify_toolchain(provenance)
 
     output_path = args.output.resolve()
-    built_sha256 = build_edge264(output_path, provenance)
+    built_sha256 = build_edge264(output_path, provenance, verify=not args.update)
+    if args.update:
+        write_provenance(provenance_path, dataclasses.replace(provenance, unsigned_sha256=built_sha256))
+        print(f"Pinned {provenance.repository} at {provenance.revision}")
 
     print(f"Wrote {output_path}")
     print(f"Unsigned SHA-256: {built_sha256}")

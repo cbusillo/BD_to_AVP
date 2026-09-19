@@ -1,0 +1,93 @@
+---
+name: Update edge264 Pin
+
+"on":
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Upstream tag or full commit SHA to pin; "latest" is the highest version tag
+        required: true
+        default: latest
+
+concurrency:
+  group: update-edge264
+  cancel-in-progress: false
+
+jobs:
+  # Build the candidate with the release toolchain. This job compiles and runs
+  # upstream code (make check), so it holds read-only permissions.
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build and pin edge264
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+          EDGE264_REVISION: ${{ inputs.revision }}
+        run: uv run python scripts/build_edge264_macos.py --update "$EDGE264_REVISION"
+
+      - name: Upload pinned decoder
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: edge264-pin
+          path: |
+            bd_to_avp/bin/edge264_test
+            bd_to_avp/resources/notices/edge264-mvc-build.json
+          retention-days: 1
+
+  # Open the pull request from the built files. This job holds write tokens but
+  # never runs the candidate; CI on the pull request rebuilds it byte for byte.
+  create-pr:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download pinned decoder
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: edge264-pin
+          path: bd_to_avp/
+
+      - name: Restore the executable bit
+        run: chmod 755 bd_to_avp/bin/edge264_test
+
+      - name: Read the pinned revision
+        id: pin
+        run: |
+          echo "revision=$(jq -r .revision bd_to_avp/resources/notices/edge264-mvc-build.json)" >> "$GITHUB_OUTPUT"
+          echo "repository=$(jq -r .repository bd_to_avp/resources/notices/edge264-mvc-build.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Create update pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          branch: automation/update-edge264
+          delete-branch: true
+          title: Update bundled edge264 to ${{ steps.pin.outputs.revision }}
+          commit-message: Update bundled edge264 to ${{ steps.pin.outputs.revision }}
+          body: |
+            Moves the bundled MVC decoder to `${{ steps.pin.outputs.revision }}` of ${{ steps.pin.outputs.repository }} (requested: `${{ inputs.revision }}`).
+
+            The workflow built it with the release toolchain, ran upstream's `make check`, checked linkage, deployment target, SDK and architecture, and recorded the revision and unsigned SHA-256. CI on this pull request rebuilds the decoder and compares it byte for byte.
+
+            Pull requests opened by a workflow do not start CI on their own: close and reopen this one to run it.
