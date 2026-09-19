@@ -524,7 +524,7 @@ def _lane_definitions(
                 ),
                 "underlying_scheme": "BluRayToVisionPro",
                 "test_targets": macos_scheme["test_targets"],
-                "requirements": ["Xcode 26.5", "macOS 26"],
+                "requirements": ["pinned Xcode", "macOS"],
             }
         )
     player_scheme = project["schemes"].get("BDToAVPPlayer", {})
@@ -536,9 +536,8 @@ def _lane_definitions(
             and "BDToAVPPlayer" in command
             and "generic/platform=visionOS Simulator" in command
             and "CODE_SIGNING_ALLOWED=NO" in command
-            and 'DEVELOPER_DIR="/Applications/Xcode_26.5.app/Contents/Developer"' in command
+            and "DEVELOPER_DIR=" in command
             and "xcodebuild -version" in command
-            and '"Xcode 26.5"' in command
         ),
         None,
     )
@@ -555,7 +554,7 @@ def _lane_definitions(
                 "underlying_scheme": "BDToAVPPlayer",
                 "test_targets": player_scheme["test_targets"],
                 "requirements": [
-                    "Xcode 26.5",
+                    "pinned Xcode",
                     "generic visionOS Simulator build destination",
                     "available visionOS runtime and Apple Vision Pro simulator device type for unit execution",
                     "CODE_SIGNING_ALLOWED=NO",

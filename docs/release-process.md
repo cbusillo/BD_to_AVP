@@ -545,8 +545,8 @@ builder stages the embedded Python engine; the workflow filename remains the
 Stable/PyPI identity. The Xcode `Release` configuration owns the production name, bundle
 identifier, macOS 26 deployment target, and Sparkle metadata.
 
-The signing job runs on GitHub's Apple-Silicon `macos-26` image, selects Xcode
-26.5 build `17F42`, and installs XcodeGen 2.45.4 from its digest-pinned release
+The signing job runs on GitHub's Apple-Silicon `xcode-27` image, selects the Xcode
+pinned by `XCODE_VERSION` and `XCODE_BUILD_VERSION` in the workflow, and installs XcodeGen 2.45.4 from its digest-pinned release
 artifact. It uses the reviewed `macos-signing` environment, an ephemeral
 keychain, Developer ID signing, and notarization for both the app and DMG. The
 artifact must then pass a separate fresh-runner macOS 26 compatibility job

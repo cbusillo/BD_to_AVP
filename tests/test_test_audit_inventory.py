@@ -111,23 +111,6 @@ schemes:
 
 
 class TestTestAuditInventory(unittest.TestCase):
-    def test_committed_inventory_artifacts_are_current(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        matches, differences = check_artifacts(
-            root,
-            root / "docs/test-audit/inventory-v1.json",
-            root / "docs/test-audit/inventory-v1.md",
-        )
-        self.assertTrue(matches, differences)
-        inventory = json.loads((root / "docs/test-audit/inventory-v1.json").read_text())
-        qualification = next(
-            finding
-            for finding in inventory["findings"]["not_in_ci_lanes"]
-            if finding["lane_id"] == "operator.visionos.sustained_playback_qualification"
-        )
-        self.assertEqual(qualification["test_case_count"], 11)
-        self.assertIn("BD_TO_AVP_QUALIFICATION", qualification["reason"])
-
     def test_parses_authoritative_ci_commands(self) -> None:
         parsed = parse_ci_workflow(CI)
         self.assertEqual(parsed["runner"], "macos-26")

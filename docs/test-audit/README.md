@@ -1,5 +1,13 @@
 # Test Audit Inventory
 
+> **Point-in-time snapshot.** These files record the #554 audit at the baseline
+> commit named in `inventory-v1.md`. They are not kept current and no test or CI
+> step requires them to match the tree: enforcing that made every new or edited
+> test file need a hand-registered classification and a regeneration commit
+> without protecting any product behaviour. Regenerate on demand with the
+> commands below when a fresh inventory is wanted. The follow-up audit that
+> applies a behaviour-based rubric is tracked in #773.
+
 This directory records the first two bounded, evidence-only slices for issue #554.
 `classifications-v1.json` is the hand-authored source of dispositions;
 `inventory-v1.json` and `inventory-v1.md` are generated, file-granular views.

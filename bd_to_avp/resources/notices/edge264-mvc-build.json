@@ -3,10 +3,10 @@
   "revision": "531996e1c7277a3f05cef4f63808475ebf91b14c",
   "platform": "macOS arm64",
   "minimum_macos": "14.0",
-  "xcode_version": "26.5",
-  "xcode_build_version": "17F42",
-  "sdk_version": "26.5",
+  "xcode_version": "27.0",
+  "xcode_build_version": "27A266a",
+  "sdk_version": "27.0",
   "architecture_flags": "-arch arm64",
   "linkage": "static",
-  "unsigned_sha256": "20538cc8f6c89973fe645b1ad51b30d40529f20cce3a43e53c8d77ccfcb1f6e6"
+  "unsigned_sha256": "f7b7123c893255148a1c7cad32ae4233d71601e6c8c03b0b7ec51ee85fbc75d2"
 }

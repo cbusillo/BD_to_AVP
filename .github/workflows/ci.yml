@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 40
     steps:
       - name: Check out repo
@@ -49,7 +49,7 @@ jobs:
 
       - name: Rebuild bundled edge264 with release toolchain
         env:
-          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
         run: |
           uv run python scripts/build_edge264_macos.py --output "$RUNNER_TEMP/edge264_test"
           cmp bd_to_avp/bin/edge264_test "$RUNNER_TEMP/edge264_test"
@@ -116,13 +116,13 @@ jobs:
 
       - name: Build and conditionally test BDToAVPPlayer visionOS bundle
         env:
-          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
         run: |
           set -euo pipefail
           cd macos
-          export DEVELOPER_DIR="/Applications/Xcode_26.5.app/Contents/Developer"
+          export DEVELOPER_DIR="/Applications/Xcode_27.0.app/Contents/Developer"
           test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
-          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 26.5"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 27.0"
           xcodegen generate --spec project.yml
           xcodebuild build-for-testing \
             -project BluRayToVisionPro.xcodeproj \
@@ -174,14 +174,14 @@ jobs:
       - name: Package native macOS app smoke
         env:
           BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: https://diagnostics.shinycomputers.com
-          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
         run: uv run python scripts/native_app.py package
 
       - name: Installed Mac UI smoke
         id: installed-ui
         timeout-minutes: 10
         env:
-          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
         run: |
           set -euo pipefail
           uv run python -m scripts.pre_signing_ui \
