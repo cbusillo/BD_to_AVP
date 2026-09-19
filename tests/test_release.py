@@ -10,6 +10,7 @@ import unittest
 
 from pathlib import Path
 
+from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts import embedded_python, release
 from scripts.beta3_recovery_evidence import BETA3_RECOVERY_EVIDENCE_PATH, Beta3RecoveryEvidenceError
 from scripts.production_identity import PRODUCTION_SPARKLE_PUBLIC_KEY
@@ -199,6 +200,17 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(app["bundle_identifier"], "com.shinycomputers.bd-to-avp")
         self.assertNotIn("briefcase", pyproject["tool"])
 
+    def test_published_qualification_records_match_their_archived_evidence(self) -> None:
+        evidence_root = REPO_ROOT / "docs" / "release-evidence"
+        archived = 0
+        for record_path in sorted((REPO_ROOT / "docs" / "qualification").glob("*signed-qualification-v1.json")):
+            release_tag = json.loads(record_path.read_text(encoding="utf-8"))["candidate"]["release_tag"]
+            archived_path = evidence_root / release_tag / "qualification-record.json"
+            if archived_path.is_file():
+                archived += 1
+                self.assertEqual(record_path.read_bytes(), archived_path.read_bytes(), record_path.name)
+        self.assertGreater(archived, 0)
+
     def test_repository_records_candidate_preparation_and_prior_release_history(self) -> None:
         metadata = release.load_release_metadata()
         # pyproject.toml is the single source of the candidate's identity. Assert the derived
@@ -320,27 +332,40 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(qualification["candidate"]["public_version"], metadata.public_version)
         self.assertEqual(qualification["candidate"]["build_version"], metadata.build_version)
         self.assertEqual(qualification["candidate"]["release_tag"], metadata.release_tag)
-        self.assertEqual(qualification["candidate"]["workflow"], "Prerelease")
-        # Keep the candidate's protocol pinned after publication, even when development advances.
-        self.assertEqual(qualification["candidate"]["worker_protocol_version"], 13)
-        self.assertEqual(qualification["candidate"]["mapping_version"], 2)
-        self.assertEqual(
-            qualification["candidate"]["route_table_sha256"],
-            "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
-        )
+        self.assertEqual(qualification["candidate"]["workflow"], "Prerelease" if metadata.prerelease else "Stable")
+        if not candidate_receipt.is_file():
+            # An unpublished candidate must describe the source it will be built from. Once it is
+            # published the record is history, and development may advance past it.
+            route_table_path = REPO_ROOT / "docs" / "qualification" / "video-quality-route-table-v2.json"
+            route_table = json.loads(route_table_path.read_text(encoding="utf-8"))
+            self.assertEqual(qualification["candidate"]["worker_protocol_version"], PROTOCOL_VERSION)
+            self.assertEqual(qualification["candidate"]["mapping_version"], route_table["mapping_version"])
+            self.assertEqual(
+                qualification["candidate"]["route_table_sha256"],
+                hashlib.sha256(route_table_path.read_bytes()).hexdigest(),
+            )
         # Each candidate records its own owning issues, so assert the shape rather than the
         # previous candidate's issue number.
         self.assertTrue(qualification["issues"])
         for issue_reference in qualification["issues"]:
             self.assertRegex(issue_reference, r"^#\d+$")
-        self.assertEqual(
-            set(qualification["immutable_history"]["burned_builds"]),
-            {147, 154, 165, 166, 168},
-        )
+        # History only accumulates: a burned build recorded by any earlier candidate stays burned.
+        burned_builds = set(qualification["immutable_history"]["burned_builds"])
+        for earlier_path in (REPO_ROOT / "docs" / "qualification").glob("*signed-qualification-v1.json"):
+            earlier = json.loads(earlier_path.read_text(encoding="utf-8"))
+            if int(earlier["candidate"]["build_version"]) < int(metadata.build_version):
+                earlier_burned = set(earlier.get("immutable_history", {}).get("burned_builds", []))
+                self.assertLessEqual(earlier_burned, burned_builds, earlier_path.name)
+        self.assertNotIn(int(metadata.build_version), burned_builds)
+        # The prior Stable is the newest Stable release with an immutable receipt, not a literal.
         previous_stable = qualification["immutable_history"]["previous_stable"]
-        self.assertEqual(previous_stable["release_tag"], "v0.3.2")
-        self.assertEqual(previous_stable["package_version"], "0.3.2")
-        self.assertEqual(previous_stable["build_version"], "171")
+        stable_tags = [
+            receipt.parent.name
+            for receipt in (REPO_ROOT / "docs" / "release-evidence").glob("v*/release-receipt.json")
+            if re.fullmatch(r"v\d+\.\d+\.\d+", receipt.parent.name) and receipt.parent.name != metadata.release_tag
+        ]
+        newest_stable = max(stable_tags, key=lambda tag: tuple(int(part) for part in tag[1:].split(".")))
+        self.assertEqual(previous_stable["release_tag"], newest_stable)
         previous_stable_receipt_path = (
             REPO_ROOT / "docs" / "release-evidence" / previous_stable["release_tag"] / "release-receipt.json"
         )
