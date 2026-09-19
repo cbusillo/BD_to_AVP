@@ -1,10 +1,13 @@
 import hashlib
 import json
+import subprocess
 import tempfile
 import unittest
 
 from pathlib import Path
 from unittest.mock import patch
+
+import yaml
 
 from scripts import build_edge264_macos
 
@@ -224,6 +227,80 @@ class Edge264BuilderTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "Xcode 26.5"),
         ):
             build_edge264_macos.verify_toolchain(provenance)
+
+
+def git(repository: Path, *arguments: str) -> str:
+    identity = ["-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+    return subprocess.check_output(["git", "-C", str(repository), *identity, *arguments], text=True).strip()
+
+
+class Edge264PinUpdateTests(unittest.TestCase):
+    def test_resolve_revision_names_the_commit_behind_tags_latest_and_full_shas(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            upstream = Path(temp_dir)
+            git(upstream, "init", "--quiet")
+            commits = {}
+            # Version order, not creation or alphabetical order, decides "latest".
+            for tag in ("v2026.10.02", "v2026.9.30"):
+                git(upstream, "commit", "--quiet", "--allow-empty", "-m", tag)
+                git(upstream, "tag", "--annotate", "-m", tag, tag)
+                commits[tag] = git(upstream, "rev-parse", "HEAD")
+            git(upstream, "commit", "--quiet", "--allow-empty", "-m", "untagged")
+            git(upstream, "tag", "lightweight")
+            head = git(upstream, "rev-parse", "HEAD")
+
+            self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "latest"), commits["v2026.10.02"])
+            self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "v2026.9.30"), commits["v2026.9.30"])
+            self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "lightweight"), head)
+            self.assertEqual(build_edge264_macos.resolve_revision(str(upstream), "f" * 40), "f" * 40)
+            with self.assertRaisesRegex(RuntimeError, "no tag matching"):
+                build_edge264_macos.resolve_revision(str(upstream), "v1")
+
+    def test_writing_the_loaded_manifest_reproduces_the_committed_file(self) -> None:
+        committed = REPO_ROOT / build_edge264_macos.PROVENANCE_RELATIVE_PATH
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rewritten = Path(temp_dir) / "edge264.json"
+            build_edge264_macos.write_provenance(rewritten, build_edge264_macos.load_provenance(committed))
+
+            self.assertEqual(rewritten.read_bytes(), committed.read_bytes())
+
+
+class Edge264UpstreamWatchTests(unittest.TestCase):
+    """Run the watcher's shell step against a stand-in pin check and gh."""
+
+    def run_watch(self, pending: str, open_issue: str) -> list[str]:
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".github/workflows/edge264-upstream-watch.yml").read_text(encoding="utf-8")
+        )
+        (step,) = [
+            step for job in workflow["jobs"].values() for step in job["steps"] if "gh issue" in step.get("run", "")
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bin_directory = Path(temp_dir)
+            calls = bin_directory / "calls"
+            calls.touch()
+            (bin_directory / "python3").write_text(f"#!/bin/sh\nprintf '%s' '{pending}'\n", encoding="utf-8")
+            (bin_directory / "gh").write_text(
+                f"#!/bin/sh\necho \"$2\" >> '{calls}'\n[ \"$2\" = list ] && printf '%s' '{open_issue}'\nexit 0\n",
+                encoding="utf-8",
+            )
+            for tool in ("python3", "gh"):
+                (bin_directory / tool).chmod(0o755)
+            subprocess.run(
+                ["/bin/bash", "-e", "-c", step["run"]],
+                env={**step["env"], "PATH": f"{bin_directory}:/usr/bin:/bin", "GH_TOKEN": "unused"},
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+            )
+            return calls.read_text(encoding="utf-8").split()
+
+    def test_a_current_pin_touches_no_issue(self) -> None:
+        self.assertEqual(self.run_watch(pending="", open_issue=""), [])
+
+    def test_a_stale_pin_opens_one_issue_and_never_a_second(self) -> None:
+        self.assertEqual(self.run_watch(pending="a" * 40, open_issue=""), ["list", "create"])
+        self.assertEqual(self.run_watch(pending="a" * 40, open_issue="12"), ["list"])
 
 
 if __name__ == "__main__":
