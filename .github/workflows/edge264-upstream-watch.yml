@@ -1,0 +1,44 @@
+---
+name: edge264 Upstream Watch
+
+"on":
+  schedule:
+    - cron: "23 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: edge264-upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Open an issue when upstream has a newer tag than the pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: Bundled edge264 is behind upstream
+        run: |
+          pending="$(python3 scripts/build_edge264_macos.py --pending-update)"
+          if [ -z "$pending" ]; then
+            echo "The edge264 pin is current."
+            exit 0
+          fi
+          existing="$(gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number')"
+          body="Upstream's newest tag is at \`$pending\`. Run the **Update edge264 Pin** workflow (revision \`latest\`) to open the update pull request."
+          if [ -n "$existing" ]; then
+            echo "Issue #$existing is already open."
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

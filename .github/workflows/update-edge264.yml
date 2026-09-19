@@ -1,0 +1,91 @@
+---
+name: Update edge264 Pin
+
+"on":
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Upstream tag or full commit SHA to pin; "latest" is the highest version tag
+        required: true
+        default: latest
+
+concurrency:
+  group: update-edge264
+  cancel-in-progress: false
+
+jobs:
+  # Build the candidate with the release toolchain. This job compiles and runs
+  # upstream code (make check), so it holds read-only permissions.
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build and pin edge264
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+          EDGE264_REVISION: ${{ inputs.revision }}
+        run: uv run python scripts/build_edge264_macos.py --update "$EDGE264_REVISION"
+
+      - name: Upload pinned decoder
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: edge264-pin
+          path: |
+            bd_to_avp/bin/edge264_test
+            bd_to_avp/resources/notices/edge264-mvc-build.json
+          retention-days: 1
+
+  # Push the built files as a branch. This job holds a write token but never
+  # runs the candidate. It stops at the branch: the repository does not let
+  # GitHub Actions open pull requests, and a pull request opened by an operator
+  # starts CI, which rebuilds the decoder byte for byte.
+  push-branch:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download pinned decoder
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: edge264-pin
+          path: bd_to_avp/
+
+      - name: Push the update branch
+        env:
+          BRANCH: automation/update-edge264
+          REQUESTED: ${{ inputs.revision }}
+        run: |
+          chmod 755 bd_to_avp/bin/edge264_test
+          if git diff --quiet; then
+            echo "The edge264 pin is already at the requested revision." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          revision="$(jq -r .revision bd_to_avp/resources/notices/edge264-mvc-build.json)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "$BRANCH"
+          git commit --all --message "Update bundled edge264 to $revision"
+          git push --force origin "$BRANCH"
+          {
+            echo "Pushed \`$BRANCH\` pinning \`$revision\` (requested: \`$REQUESTED\`)."
+            echo
+            echo "Open the pull request: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$BRANCH?expand=1"
+          } >> "$GITHUB_STEP_SUMMARY"
