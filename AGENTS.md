@@ -29,3 +29,24 @@
   `/Applications`.
 - Keep `scripts/native_app.py package` as the underlying package/release
   verification command; `publish-current` is the local durable handoff command.
+
+# Tests
+
+- A test earns its place only if it fails when the product is broken and passes
+  when someone makes an intended change. If a version bump, toolchain bump,
+  runner change or reworded workflow step would fail it, it is the wrong test.
+- Never assert a literal that is defined elsewhere in the repository (version,
+  build number, protocol version, toolchain, digest, file name). Assert that
+  the sources agree, or derive the expectation from the single source of truth.
+- Never assert workflow, script or document *text* (`assertIn("...", str(job))`,
+  `step["run"]`, file contents). Check workflow structure by rule in
+  `tests/test_workflow_security_policy.py`, or extract the script and run it.
+- Code that loads or verifies a committed document must not depend on the state
+  of the working tree. Check live files only on the path that acts on them.
+- Do not add generated inventories, counts or snapshots that must be
+  regenerated or hand-registered when an unrelated file changes.
+- Keep byte-exact and digest gates on real artifacts and immutable evidence:
+  the CI rebuild comparison of bundled tools, archived release evidence, and
+  the signing approval contract.
+- Removing or replacing tests: list what was removed and why in the pull
+  request, and show planted faults that the remaining suite still catches.
