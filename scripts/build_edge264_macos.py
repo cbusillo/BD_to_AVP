@@ -93,8 +93,9 @@ def resolve_revision(repository: str, revision: str) -> str:
     tags = [line.split("\t") for line in listing.splitlines()]
     if not tags:
         raise RuntimeError(f"edge264 repository has no tag matching {revision}")
-    newest = tags[0][1].removesuffix("^{}")
-    # An annotated tag lists the tag object and, with ^{}, the commit it points at.
+    # An annotated tag lists the tag object and, with ^{}, the commit it points at. Rank the tag
+    # names only: a peeled "v1^{}" entry otherwise sorts above a later "v1-2".
+    newest = next(name for _, name in tags if not name.endswith("^{}"))
     commits = {name: commit for commit, name in tags if name.removesuffix("^{}") == newest}
     return commits.get(f"{newest}^{{}}", commits[newest])
 
@@ -133,11 +134,25 @@ def make_command(provenance: BuildProvenance, target: str) -> list[str]:
     ]
 
 
-def build_edge264(output_path: Path, provenance: BuildProvenance, *, verify: bool = True) -> str:
+def build_edge264(
+    output_path: Path,
+    provenance: BuildProvenance,
+    *,
+    verify: bool = True,
+    must_descend_from: str | None = None,
+) -> str:
     with tempfile.TemporaryDirectory(prefix="edge264-mvc-build-") as temp_dir:
         checkout = Path(temp_dir) / "edge264-mvc"
         run(["git", "clone", "--filter=blob:none", provenance.repository, str(checkout)])
         run(["git", "checkout", "--detach", provenance.revision], checkout)
+        if must_descend_from:
+            # "latest" may only move the pin forward; an older or unrelated commit is a resolution mistake.
+            try:
+                run(["git", "merge-base", "--is-ancestor", must_descend_from, provenance.revision], checkout)
+            except subprocess.CalledProcessError as error:
+                raise RuntimeError(
+                    f"latest edge264 tag {provenance.revision} does not descend from the pinned {must_descend_from}"
+                ) from error
         build_env = os.environ.copy()
         build_env["MACOSX_DEPLOYMENT_TARGET"] = provenance.minimum_macos
         run(make_command(provenance, "check"), checkout, build_env)
@@ -201,6 +216,7 @@ def main() -> int:
         if latest != provenance.revision:
             print(latest)
         return 0
+    pinned_revision = provenance.revision
     if args.update:
         repository = args.repository or provenance.repository
         provenance = dataclasses.replace(
@@ -215,7 +231,12 @@ def main() -> int:
     verify_toolchain(provenance)
 
     output_path = args.output.resolve()
-    built_sha256 = build_edge264(output_path, provenance, verify=not args.update)
+    built_sha256 = build_edge264(
+        output_path,
+        provenance,
+        verify=not args.update,
+        must_descend_from=pinned_revision if args.update == "latest" and not args.repository else None,
+    )
     if args.update:
         write_provenance(provenance_path, dataclasses.replace(provenance, unsigned_sha256=built_sha256))
         print(f"Pinned {provenance.repository} at {provenance.revision}")
