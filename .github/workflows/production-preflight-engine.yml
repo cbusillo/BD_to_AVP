@@ -19,13 +19,13 @@ permissions:
 env:
   XCODEGEN_VERSION: 2.45.4
   XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
-  XCODE_VERSION: "26.5"
-  XCODE_BUILD_VERSION: 17F42
+  XCODE_VERSION: "27.0"
+  XCODE_BUILD_VERSION: 27A266a
 
 jobs:
   preflight:
     name: Build and qualify the production package
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     permissions:
       contents: read
@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(uname -m)" = "arm64"
-          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "27"
           test -n "$SUPPORT_DIAGNOSTICS_ENDPOINT"
           XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
           if [ ! -d "$XCODE_PATH" ]; then

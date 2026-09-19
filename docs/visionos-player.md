@@ -561,7 +561,7 @@ simulator app Documents directory; when present, it verifies direct Library →
 Play → Library, Library → Details → Play, Details Done → Library, player Done →
 Details, replay, and ornament auto-hide behavior.
 
-CI pins Xcode 26.5, regenerates the project, and always runs
+CI pins the release Xcode, regenerates the project, and always runs
 `build-for-testing` against the generic visionOS Simulator destination. When an
 available visionOS 26-or-newer runtime and Apple Vision Pro device type exist,
 CI creates, boots, tests, and deletes a temporary simulator with

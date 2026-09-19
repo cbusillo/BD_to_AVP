@@ -150,8 +150,8 @@ binds its OIDC `job_workflow_ref` and `job_workflow_sha` claims to the exact
 operator run, then revalidates that policy fingerprint after the `macos-signing`
 approval gate.
 
-The engine's package job runs on GitHub's Apple-Silicon `macos-26` runner. It selects
-Xcode 26.5 build `17F42` explicitly and installs the XcodeGen 2.45.4 release
+The engine's package job runs on GitHub's Apple-Silicon `xcode-27` runner. It selects
+the Xcode pinned by `XCODE_VERSION` and `XCODE_BUILD_VERSION` in the workflow explicitly and installs the XcodeGen 2.45.4 release
 artifact only after verifying its committed SHA-256 digest. It:
 
 1. verifies that protected `main` has not moved;
