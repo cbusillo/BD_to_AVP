@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "ec70508b4decc079f8c98d26295fdefdac984a30",
+    "sha": "4107054c23d7541d1f2915461345d5a8fa3f240c",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -445,7 +445,7 @@
       "python-unittest-discovery": 113,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2991,
+    "ci_test_case_count": 2992,
     "classification_counts": {
       "accepted-cost": 61,
       "valuable": 202
@@ -456,7 +456,7 @@
       "TypeScript": 1
     },
     "support_fixture_count": 84,
-    "test_case_count": 3024,
+    "test_case_count": 3025,
     "test_file_count": 179,
     "unmapped_test_file_count": 0
   },
@@ -4985,7 +4985,7 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 74,
+          "occurrences": 79,
           "signal": "filesystem_access"
         },
         {
@@ -5005,7 +5005,7 @@
           "signal": "hardware_or_media"
         }
       ],
-      "test_case_count": 67
+      "test_case_count": 68
     },
     {
       "bundle": "python-unittest-discovery",
