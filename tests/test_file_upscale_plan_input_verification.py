@@ -60,7 +60,7 @@ class PlanInputVerificationTests(unittest.TestCase):
 
     @classmethod
     def _plan_with_matching_inputs(cls, plan, directory: Path):
-        matching = {
+        matching: dict[str, object] = {
             field.name: cls._matching_binding(directory, field.name)
             for field in dataclasses.fields(plan)
             if isinstance(getattr(plan, field.name), FileBinding)
