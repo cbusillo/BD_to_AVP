@@ -120,6 +120,29 @@ extension WorkerProcessRunning {
     func sendControl(_ command: WorkerWaitCommand) async throws { throw WorkerControlError.unavailable }
 }
 
+/// Keeps macOS from throttling the app while a worker job runs.
+///
+/// App Nap slows an app whose windows are hidden or whose display sleeps. The
+/// app then stops draining the worker's event pipe, which used to end a healthy
+/// hours-long conversion. Whether the Mac may sleep stays the job's own
+/// keep-awake setting, so this only opts out of throttling.
+struct WorkerActivityAssertion: Sendable {
+    var begin: @Sendable (_ reason: String) -> NSObjectProtocol
+    var end: @Sendable (NSObjectProtocol) -> Void
+
+    static let system = WorkerActivityAssertion(
+        begin: { reason in
+            ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiatedAllowingIdleSystemSleep],
+                reason: reason
+            )
+        },
+        end: { token in
+            ProcessInfo.processInfo.endActivity(token)
+        }
+    )
+}
+
 final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     typealias EventHandler = (WorkerEvent) async throws -> Void
 
@@ -132,6 +155,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
 
     private let configuration: WorkerLaunchConfiguration
     private let cancellationEscalationDelay: TimeInterval
+    private let activityAssertion: WorkerActivityAssertion
     private let stateLock = NSLock()
     private var activeProcess: Process?
     private var activeProcessGroupID: pid_t?
@@ -144,14 +168,20 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
 
     init(
         configuration: WorkerLaunchConfiguration,
-        cancellationEscalationDelay: TimeInterval = defaultCancellationEscalationDelay
+        cancellationEscalationDelay: TimeInterval = defaultCancellationEscalationDelay,
+        activityAssertion: WorkerActivityAssertion = .system
     ) {
         precondition(cancellationEscalationDelay > 0)
         self.configuration = configuration
         self.cancellationEscalationDelay = cancellationEscalationDelay
+        self.activityAssertion = activityAssertion
     }
 
     func run(job: WorkerJobSpec, onEvent: @escaping EventHandler) async throws -> WorkerRunResult {
+        let activity = activityAssertion.begin("Running a conversion job")
+        defer {
+            activityAssertion.end(activity)
+        }
         do {
             let result = try await withTaskCancellationHandler(
                 operation: {
