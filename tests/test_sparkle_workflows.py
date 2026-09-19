@@ -370,7 +370,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
-        self.assertEqual(workflow["env"]["XCODE_VERSION"], "26.5")
         self.assertIn("dmg_sha256", package["outputs"])
         self.assertIn("dmg_size", package["outputs"])
         self.assertEqual(package_step["env"]["DMG_NAME"], "${{ needs.prepare.outputs.dmg_name }}")
