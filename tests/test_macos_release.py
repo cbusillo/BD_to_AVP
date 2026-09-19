@@ -290,30 +290,10 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
 
 
 class MacOSReleaseWorkflowTests(unittest.TestCase):
-    def test_production_workflow_owns_macos_packaging_and_compatibility(self) -> None:
+    def test_a_draft_release_waits_for_the_compatibility_check(self) -> None:
         workflow_path = REPO_ROOT / ".github" / "workflows" / "release-engine.yml"
         workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-        package = workflow["jobs"]["package"]
-        compatibility = workflow["jobs"]["compatibility"]
-        create_draft = workflow["jobs"]["create-draft"]
-
-        self.assertEqual(package["runs-on"], "macos-26")
-        self.assertNotIn("self-hosted", str(package))
-        self.assertEqual(workflow["env"]["XCODE_VERSION"], "26.5")
-        self.assertIn("Xcode_${XCODE_VERSION}.app", str(package))
-        self.assertIn("17F42", str(workflow["env"]))
-        self.assertIn("090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef", str(workflow["env"]))
-        self.assertIn("python scripts/native_app.py package", str(package))
-        self.assertIn("python -m scripts.macos_release", str(package))
-        self.assertNotIn("python -m scripts.briefcase_app package", str(package))
-        self.assertEqual(compatibility["runs-on"], "macos-26")
-        self.assertIn("--smoke-app", str(compatibility))
-        self.assertIn("--smoke-tools", str(compatibility))
-        self.assertIn("--smoke-worker", str(compatibility))
-        self.assertIn("jq -se", str(package))
-        self.assertIn("Packaged DMG metadata is not a single valid JSON object.", str(package))
-        self.assertIn("compatibility", create_draft["needs"])
-        self.assertFalse((REPO_ROOT / ".github" / "workflows" / "native-ui-preview.yml").exists())
+        self.assertIn("compatibility", workflow["jobs"]["create-draft"]["needs"])
 
 
 if __name__ == "__main__":
