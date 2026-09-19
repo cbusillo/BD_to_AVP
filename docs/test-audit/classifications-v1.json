@@ -293,6 +293,7 @@
         "tests/test_direct_mv_hevc_quality_sweep.py",
         "tests/test_direct_mv_hevc_route_integration.py",
         "tests/test_event_hls_mv_hevc_fixture.py",
+        "tests/test_file_upscale_plan_input_verification.py",
         "tests/test_file_upscale_quality_mapping_selection.py",
         "tests/test_file_upscale_quality_repeatability_calibration.py",
         "tests/test_file_upscale_quality_sweep.py",
