@@ -8,7 +8,7 @@
   ],
   "baseline": {
     "repository": "cbusillo/BD_to_AVP",
-    "sha": "5a19f3ec6e097ef55ddcde6c2a5235642692fd11",
+    "sha": "ec70508b4decc079f8c98d26295fdefdac984a30",
     "source_snapshot": "tracked repository files at generation time"
   },
   "classification_summary": {
@@ -442,22 +442,22 @@
       "BluRayToVisionProUITests": 1,
       "SpatialPlaybackProbeTests": 1,
       "SpatialPlaybackProbeUITests": 1,
-      "python-unittest-discovery": 112,
+      "python-unittest-discovery": 113,
       "support-diagnostics-vitest": 1
     },
-    "ci_test_case_count": 2989,
+    "ci_test_case_count": 2991,
     "classification_counts": {
-      "accepted-cost": 60,
+      "accepted-cost": 61,
       "valuable": 202
     },
     "language_file_counts": {
-      "Python": 112,
+      "Python": 113,
       "Swift": 65,
       "TypeScript": 1
     },
     "support_fixture_count": 84,
-    "test_case_count": 3022,
-    "test_file_count": 178,
+    "test_case_count": 3024,
+    "test_file_count": 179,
     "unmapped_test_file_count": 0
   },
   "support_fixtures": [
@@ -3649,6 +3649,29 @@
         "ci-python-discovery",
         "media-hardware-contract"
       ],
+      "classification_rationale": "tests/test_file_upscale_plan_input_verification.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence.",
+      "lane_ids": [
+        "ci.python.unittest"
+      ],
+      "language": "Python",
+      "path": "tests/test_file_upscale_plan_input_verification.py",
+      "special_requirements": [],
+      "static_brittleness_signals": [
+        {
+          "occurrences": 3,
+          "signal": "filesystem_access"
+        }
+      ],
+      "test_case_count": 3
+    },
+    {
+      "bundle": "python-unittest-discovery",
+      "classification": "accepted-cost",
+      "classification_cohort": "python-media-hardware-and-quality-qualification",
+      "classification_evidence_ids": [
+        "ci-python-discovery",
+        "media-hardware-contract"
+      ],
       "classification_rationale": "tests/test_file_upscale_quality_mapping_selection.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence.",
       "lane_ids": [
         "ci.python.unittest"
@@ -4962,7 +4985,7 @@
       ],
       "static_brittleness_signals": [
         {
-          "occurrences": 79,
+          "occurrences": 74,
           "signal": "filesystem_access"
         },
         {
@@ -4982,7 +5005,7 @@
           "signal": "hardware_or_media"
         }
       ],
-      "test_case_count": 68
+      "test_case_count": 67
     },
     {
       "bundle": "python-unittest-discovery",
