@@ -455,8 +455,8 @@ Big thanks to:
   unsigned binary checksum.
   To move the pin, run the **Update edge264 Pin** workflow (or, with the pinned Xcode installed,
   `uv run python scripts/build_edge264_macos.py --update latest`): it builds the requested tag or commit, runs
-  upstream's checks, and writes the binary, revision and checksum together. CI then rebuilds the result byte for
-  byte. A weekly watch opens an issue when upstream tags a release newer than the pin.
+  upstream's checks, and writes the binary, revision and checksum together. The workflow pushes the result as the
+  `automation/update-edge264` branch; open the pull request from it, and CI rebuilds the decoder byte for byte. A weekly watch opens an issue when upstream tags a release newer than the pin.
 
 [MakeMKV]: https://www.makemkv.com/
 
