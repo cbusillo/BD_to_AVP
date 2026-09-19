@@ -1,9 +1,9 @@
 # Test Audit Inventory v1
 
-- Baseline reference: `8eb6c245b3324032e29be0080c58092b105ca87a`
-- Test files: **178**
+- Baseline reference: `ec70508b4decc079f8c98d26295fdefdac984a30`
+- Test files: **179**
 - Support fixtures: **84**
-- Test cases counted: **3021**
+- Test cases counted: **3024**
 - Classification source: `docs/test-audit/classifications-v1.json`
 
 ## Lanes
@@ -64,7 +64,7 @@ CODE_SIGNING_ALLOWED=NO` | `.github/workflows/ci.yml`, `macos/project.yml` |
 
 ## Disposition Summary
 
-- `accepted-cost`: **60** rows.
+- `accepted-cost`: **61** rows.
 - `valuable`: **202** rows.
 - High-confidence implementation candidates are recorded in the JSON artifact.
 - Non-actionable review observations: **1**.
@@ -206,6 +206,7 @@ Exact-head evidence captured from `257fd21f38e49031b9fa96a733875702313ebd5c`:
 | `tests/test_event_hls_mv_hevc_fixture.py` | Python | `python-unittest-discovery` | 14 | `accepted-cost` | tests/test_event_hls_mv_hevc_fixture.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | — | filesystem_access (15) |
 | `tests/test_ffmpeg_manifest_update.py` | Python | `python-unittest-discovery` | 13 | `valuable` | tests/test_ffmpeg_manifest_update.py exercises a maintained Python product, parser, configuration, GUI, process, or validation contract in the authoritative discovery lane. No age, static-signal, or direct-reference observation is treated as removal evidence. | `ci-python-discovery` | network access | filesystem_access (4), network_access (21) |
 | `tests/test_ffmpeg_vendor.py` | Python | `python-unittest-discovery` | 6 | `valuable` | tests/test_ffmpeg_vendor.py exercises a maintained Python product, parser, configuration, GUI, process, or validation contract in the authoritative discovery lane. No age, static-signal, or direct-reference observation is treated as removal evidence. | `ci-python-discovery` | network access | filesystem_access (6), network_access (5) |
+| `tests/test_file_upscale_plan_input_verification.py` | Python | `python-unittest-discovery` | 3 | `accepted-cost` | tests/test_file_upscale_plan_input_verification.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | — | filesystem_access (3) |
 | `tests/test_file_upscale_quality_mapping_selection.py` | Python | `python-unittest-discovery` | 36 | `accepted-cost` | tests/test_file_upscale_quality_mapping_selection.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | real-media or SSIF/ISO fixture may be required | filesystem_access (27) |
 | `tests/test_file_upscale_quality_repeatability_calibration.py` | Python | `python-unittest-discovery` | 16 | `accepted-cost` | tests/test_file_upscale_quality_repeatability_calibration.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | — | filesystem_access (16) |
 | `tests/test_file_upscale_quality_sweep.py` | Python | `python-unittest-discovery` | 26 | `accepted-cost` | tests/test_file_upscale_quality_sweep.py covers media, codec, packaged-artifact, device, physical-disc, or Tier 3 qualification behavior. Its fixtures and setup are accepted maintenance cost because the repository documents these boundaries and provides no concrete replacement or removal evidence. | `ci-python-discovery`, `media-hardware-contract` | — | environment_dependent (2), filesystem_access (15), external_process (3), polling_or_waiting (3) |

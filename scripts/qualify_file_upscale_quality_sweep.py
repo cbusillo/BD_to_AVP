@@ -566,6 +566,24 @@ def parse_sweep_plan(raw: object) -> SweepPlan:
     )
 
 
+def verify_current_sweep_inputs(plan: SweepPlan) -> None:
+    """Require the working tree to hold the exact inputs this plan measures with.
+
+    Loading a plan only verifies the document and its pinned predecessors, so an
+    immutable plan stays readable after a bound tool or public contract moves
+    on. Call this on the paths that start or finish a measurement run.
+    """
+    for label, file_binding in (
+        ("FFmpeg vendor manifest", plan.ffmpeg_manifest),
+        ("FX Upscale binary", plan.fx_upscale_binary),
+        *((f"bundled tool {key}", tool) for key, tool in plan.bundled_tools.items()),
+    ):
+        if not file_binding.path.is_file():
+            raise QualificationFailure(f"{label} is unavailable.")
+        if sha256_file(file_binding.path) != file_binding.sha256:
+            raise QualificationFailure(f"{label} does not match its pinned SHA-256 identity.")
+
+
 def load_sweep_plan(path: Path) -> tuple[SweepPlan, CorpusBinding, str, str]:
     resolved_path = path.resolve()
     relative_path = _relative_repository_path(resolved_path, "File-upscale sweep plan")
@@ -579,15 +597,6 @@ def load_sweep_plan(path: Path) -> tuple[SweepPlan, CorpusBinding, str, str]:
         raise QualificationFailure("The file-upscale corpus binding does not match its pinned SHA-256 identity.")
     if binding.binding_id != parsed.binding_id:
         raise QualificationFailure("The file-upscale corpus binding ID does not match the sweep plan.")
-    for label, file_binding in (
-        ("FFmpeg vendor manifest", parsed.ffmpeg_manifest),
-        ("FX Upscale binary", parsed.fx_upscale_binary),
-        *((f"bundled tool {key}", tool) for key, tool in parsed.bundled_tools.items()),
-    ):
-        if not file_binding.path.is_file():
-            raise QualificationFailure(f"{label} is unavailable.")
-        if sha256_file(file_binding.path) != file_binding.sha256:
-            raise QualificationFailure(f"{label} does not match its pinned SHA-256 identity.")
     return (
         SweepPlan(
             experiment_id=parsed.experiment_id,
@@ -2147,6 +2156,7 @@ def _run_quality_sweep_unlocked(
         raise QualificationFailure("File-upscale quality sweep requires macOS arm64.")
     source_git_sha = _git_head_from_clean_worktree()
     plan, binding, plan_sha256, binding_sha256 = load_sweep_plan(sweep_plan_path)
+    verify_current_sweep_inputs(plan)
     if _require_head_tracked_file(sweep_plan_path, "Experiment plan") != plan.relative_path:
         raise QualificationFailure("Experiment plan repository identity changed during validation.")
     if _require_head_tracked_file(plan.binding_path, "Corpus binding") != binding.relative_path:
@@ -2321,6 +2331,7 @@ def _run_quality_sweep_unlocked(
     if _git_head_from_clean_worktree() != source_git_sha:
         raise QualificationFailure("File-upscale sweep Git identity changed before final receipt freeze.")
     final_plan, final_binding, final_plan_sha256, final_binding_sha256 = load_sweep_plan(sweep_plan_path)
+    verify_current_sweep_inputs(final_plan)
     if (
         final_plan != plan
         or final_binding != binding

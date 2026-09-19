@@ -986,6 +986,19 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
     )
 
 
+def verify_current_experiment_inputs(plan: ExperimentPlan) -> None:
+    """Require the working tree to hold the exact inputs this plan measures with.
+
+    Loading a plan only verifies the document and its pinned predecessors, so an
+    immutable plan stays readable after the vendored FFmpeg moves on. Call this
+    on the paths that start or finish a measurement run.
+    """
+    if not plan.ffmpeg_manifest_path.is_file():
+        raise QualificationFailure("The pinned FFmpeg vendor manifest is unavailable.")
+    if sha256_file(plan.ffmpeg_manifest_path) != plan.ffmpeg_manifest_sha256:
+        raise QualificationFailure("The FFmpeg vendor manifest does not match its pinned SHA-256 identity.")
+
+
 def load_experiment_plan(path: Path) -> tuple[ExperimentPlan, CorpusBinding, str, str]:
     resolved_path = path.resolve()
     relative_path = _relative_repository_path(resolved_path, "Generated calibration experiment plan")
@@ -1006,10 +1019,6 @@ def load_experiment_plan(path: Path) -> tuple[ExperimentPlan, CorpusBinding, str
     expected_binding_schema = 2 if parsed.schema_version == 4 else 1
     if binding.schema_version != expected_binding_schema:
         raise QualificationFailure("The corpus binding schema does not match the experiment stage.")
-    if not parsed.ffmpeg_manifest_path.is_file():
-        raise QualificationFailure("The pinned FFmpeg vendor manifest is unavailable.")
-    if sha256_file(parsed.ffmpeg_manifest_path) != parsed.ffmpeg_manifest_sha256:
-        raise QualificationFailure("The FFmpeg vendor manifest does not match its pinned SHA-256 identity.")
     if parsed.bitrate_search is not None:
         collapse_plan_binding = parsed.bitrate_search.collapse_plan
         if not collapse_plan_binding.path.is_file():
@@ -3431,6 +3440,7 @@ def _run_calibration_unlocked(
             raise QualificationFailure(f"Required bundled tool is unavailable: {tool.name}")
     source_git_sha = _git_head_from_clean_worktree()
     plan, binding, plan_sha256, binding_sha256 = load_experiment_plan(experiment_plan_path)
+    verify_current_experiment_inputs(plan)
     _verify_bitrate_search_source_receipts(
         plan,
         binding,
@@ -3618,6 +3628,7 @@ def _run_calibration_unlocked(
     if _git_head_from_clean_worktree() != source_git_sha:
         raise QualificationFailure("Calibration Git identity changed before final receipt freeze.")
     final_plan, final_binding, final_plan_sha256, final_binding_sha256 = load_experiment_plan(experiment_plan_path)
+    verify_current_experiment_inputs(final_plan)
     if (
         final_plan_sha256 != plan_sha256
         or final_binding_sha256 != binding_sha256
