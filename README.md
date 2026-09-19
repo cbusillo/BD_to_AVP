@@ -447,7 +447,8 @@ Big thanks to:
 - Thibault Raffaillac, Celticom/TVLabs, and Jens Duttke for [edge264-mvc][edge264-mvc], used by the bundled native MVC
   splitter. The BSD license notice is included in `bd_to_avp/resources/notices/edge264-mvc-LICENSE_BSD.txt`. The
   pinned source revision directly supports Annex B MVC input from stdin and FIFOs, nonzero failure exits, bounded
-  no-progress recovery, and terminal incomplete-frame recovery. `scripts/build_edge264_macos.py` reproduces the
+  no-progress recovery, terminal incomplete-frame recovery, and skipping a corrupt right-eye slice with the damaged
+  frame filled in from the left eye. `scripts/build_edge264_macos.py` reproduces the
   unsigned binary with the pinned release Xcode, SDK, and baseline arm64 architecture flags. App packaging re-signs
   that Mach-O as part of the containing application signature. `bd_to_avp/resources/notices/edge264-mvc-build.json`
   is the source of truth for the source revision, build toolchain, deployment target, linkage, and reproducible

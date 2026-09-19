@@ -13,7 +13,7 @@ from bd_to_avp import preflight
 from bd_to_avp.modules.audio import create_transcoded_audio_file
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
-from bd_to_avp.modules.disc import create_mkv_file, get_disc_and_mvc_video_info, MKVCreationError
+from bd_to_avp.modules.disc import DiscInfo, create_mkv_file, get_disc_and_mvc_video_info, MKVCreationError
 from bd_to_avp.modules.file import (
     file_exists_normalized,
     is_initial_conversion_stage,
@@ -27,6 +27,8 @@ from bd_to_avp.modules.preview import create_bounded_preview_source
 from bd_to_avp.modules.sub import create_srt_from_mkv, SRTCreationError
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video import (
+    Edge264DamageCollector,
+    build_damaged_source_warning,
     create_av1_sbs_file,
     create_av1_stereo_file,
     create_direct_mv_hevc_file,
@@ -139,6 +141,29 @@ def normalized_cancellation_event(
 
 def stage_observability_context(stage: str) -> ObservabilityContext:
     return ObservabilityContext(stage=ObservabilityStage(stage))
+
+
+def report_damaged_source(
+    activity: ActivityReporter | None,
+    damage_collector: Edge264DamageCollector,
+    disc_info: DiscInfo,
+    stage: str,
+) -> None:
+    message = build_damaged_source_warning(damage_collector, disc_info.frame_rate)
+    if message is None:
+        return
+    if activity is None:
+        cli_message(f"Warning: {message}")
+        return
+    activity.warning(
+        message,
+        stage=stage,
+        code="damaged_source_video_concealed",
+        skipped_count=damage_collector.skipped_count,
+        source_positions_seconds=[
+            round(seconds, 3) for seconds in damage_collector.source_positions_seconds(disc_info.frame_rate)[:32]
+        ],
+    )
 
 
 def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
@@ -442,6 +467,7 @@ def process_each(
     )
     raise_if_cancelled(cancellation_event)
     generated_mv_hevc_expectations: tuple[tuple[int, int], float] | None = None
+    damage_collector = Edge264DamageCollector()
     if video_route.output_mode is VideoMode.AV1_SBS:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
             activity.stage_started("encode_av1_stereo", "Encoding side-by-side AV1 stereo video")
@@ -453,7 +479,9 @@ def process_each(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("encode_av1_stereo"),
+            damage_collector=damage_collector,
         )
+        report_damaged_source(activity, damage_collector, disc_info, "encode_av1_stereo")
         raise_if_cancelled(cancellation_event)
         if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
             activity.stage_started("finalize_av1_stereo", "Adding Apple stereo metadata to AV1 video")
@@ -484,7 +512,9 @@ def process_each(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("create_left_right_files"),
+            damage_collector=damage_collector,
         )
+        report_damaged_source(activity, damage_collector, disc_info, "create_left_right_files")
     else:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
             activity.stage_started("create_left_right_files", "Creating left and right eye video")
@@ -496,7 +526,9 @@ def process_each(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("create_left_right_files"),
+            damage_collector=damage_collector,
         )
+        report_damaged_source(activity, damage_collector, disc_info, "create_left_right_files")
         raise_if_cancelled(cancellation_event)
         if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
             activity.stage_started("combine_to_mv_hevc", "Combining stereo video into MV-HEVC")
