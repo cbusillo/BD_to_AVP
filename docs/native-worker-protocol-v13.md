@@ -137,19 +137,25 @@ old grant outcome cannot become a new apparent deadline. The UI clears pending
 actions on recovery, terminal events, retry, or transport failure and never
 redirects an old action to a new attempt.
 
-Worker event output allows up to 10 seconds for each complete ordered record,
-including waiting for another writer. Nonblocking pipe writes and a monotonic
-deadline tolerate ordinary temporary backpressure while bounding a permanently
-full pipe. A shutdown batch of control rejections shares one 10-second budget.
-Event state remains readable while output waits. A partial record, closed pipe,
-or exhausted transport budget makes the stream unusable: no subsequent record
-or terminal event is appended to a partial JSON prefix. The worker still reaps
-its descendants and closes its independent resources, then reports exit 74.
+Worker event output distinguishes a host that is slow from a stream that is
+broken. macOS throttles an app whose display sleeps or whose windows are hidden,
+so a live host can stop draining the pipe for minutes while the conversion is
+healthy; the Mac app also holds an activity assertion for the whole job so this
+is rare. Heartbeat and observability records are superseded by the next one:
+when the pipe has no room within one second they are skipped before any byte is
+written, without consuming a sequence number, so the host still sees a gapless
+stream. Every other record is ordered and waits up to 15 minutes, including
+waiting for another writer, using nonblocking writes and a monotonic deadline.
+A shutdown batch of control rejections shares one such budget. Event state
+remains readable while output waits. A closed pipe, a partial record, or an
+exhausted budget makes the stream unusable: no subsequent record or terminal
+event is appended to a partial JSON prefix. The worker still reaps its
+descendants and closes its independent resources, then reports exit 74.
 The first transport failure also notifies the process owner outside event state
 locks, sets the shared cancellation signal, and starts its existing asynchronous
 descendant cleanup. This applies equally to heartbeat, control-reader, and
-observability output: swallowing a background sink error cannot leave a healthy
-conversion running without a usable event stream. A separate failure marker
+observability output: a genuinely failed sink cannot leave a healthy conversion
+running without a usable event stream. A separate failure marker
 keeps this stop classified as transport exit 74, rather than user cancellation.
 This is a protocol-delivery failure, not `artifact_no_growth` or an automatic
 media retry. Completed output files remain the operation's result, but delivery

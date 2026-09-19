@@ -24,14 +24,14 @@ env:
   GH_REPO: ${{ github.repository }}
   XCODEGEN_VERSION: 2.45.4
   XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
-  XCODE_VERSION: "27.0"
-  XCODE_BUILD_VERSION: 27A266a
+  XCODE_VERSION: "26.5"
+  XCODE_BUILD_VERSION: 17F42
 
 jobs:
   qualify:
     name: Collect exact post-publication qualification receipts
     if: github.actor == github.repository_owner
-    runs-on: xcode-27
+    runs-on: macos-26
     timeout-minutes: 90
     permissions:
       actions: read
@@ -121,7 +121,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(uname -m)" = "arm64"
-          test "$(sw_vers -productVersion | cut -d. -f1)" = "27"
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
           XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
           if [ ! -d "$XCODE_PATH" ]; then
             echo "Pinned Xcode path is unavailable: $XCODE_PATH" >&2

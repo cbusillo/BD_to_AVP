@@ -31,7 +31,13 @@ PROTOCOL_VERSION = 13
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
-EVENT_WRITE_TIMEOUT_SECONDS = 10.0
+# A host that is alive but slow to read (macOS throttles an app whose display
+# sleeps) is not a broken stream. Ordered records wait this long; a closed pipe
+# or a torn record still fails immediately.
+EVENT_WRITE_TIMEOUT_SECONDS = 900.0
+# Heartbeats and observability samples are superseded by the next one, so they
+# are skipped, not queued, when the pipe has no room.
+DROPPABLE_EVENT_GRACE_SECONDS = 1.0
 EVENT_WRITE_CHUNK_BYTES = 512
 ZERO_JOB_ID = str(UUID(int=0))
 
@@ -116,6 +122,9 @@ class WorkerEventType(StrEnum):
             self.JOB_CANCELLED,
             self.JOB_DECISION_REQUIRED,
         }
+
+
+DROPPABLE_EVENT_TYPES = frozenset({WorkerEventType.HEARTBEAT, WorkerEventType.OBSERVABILITY})
 
 
 class WorkerProtocolError(ValueError):
@@ -1654,6 +1663,7 @@ class WorkerEventEmitter:
         self._sequence = -1
         self._terminal_emitted = False
         self._transport_failed = False
+        self._dropped_event_count = 0
         self._on_transport_failure = on_transport_failure
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
@@ -1670,13 +1680,19 @@ class WorkerEventEmitter:
         *,
         deadline: float | None = None,
     ) -> dict[str, Any]:
+        droppable = event_type in DROPPABLE_EVENT_TYPES
         deadline = min(
             deadline if deadline is not None else float("inf"), time.monotonic() + self.write_timeout_seconds
         )
-        if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        lock_deadline = min(deadline, time.monotonic() + DROPPABLE_EVENT_GRACE_SECONDS) if droppable else deadline
+        if not self._write_lock.acquire(timeout=max(0.0, lock_deadline - time.monotonic())):
+            if droppable:
+                return self._drop(event_type)
             self._mark_transport_failed()
             raise WorkerEventTransportError("Worker event transport remained busy")
         try:
+            if droppable and not self._has_room(DROPPABLE_EVENT_GRACE_SECONDS):
+                return self._drop(event_type)
             with self._lock:
                 if self._transport_failed:
                     raise WorkerEventTransportError("Worker event transport is unavailable")
@@ -1705,6 +1721,27 @@ class WorkerEventEmitter:
             return event
         finally:
             self._write_lock.release()
+
+    @property
+    def dropped_event_count(self) -> int:
+        with self._lock:
+            return self._dropped_event_count
+
+    def _drop(self, event_type: WorkerEventType) -> dict[str, Any]:
+        # No sequence number is consumed, so the host still sees a gapless stream.
+        with self._lock:
+            if self._transport_failed:
+                raise WorkerEventTransportError("Worker event transport is unavailable")
+            self._dropped_event_count += 1
+        return {"type": event_type.value, "dropped": True}
+
+    def _has_room(self, grace_seconds: float) -> bool:
+        if self._descriptor is None:
+            return True
+        try:
+            return bool(select.select([], [self._descriptor], [], grace_seconds)[1])
+        except (OSError, ValueError):
+            return True  # let the write report a closed or invalid pipe
 
     def _mark_transport_failed(self) -> None:
         with self._lock:
