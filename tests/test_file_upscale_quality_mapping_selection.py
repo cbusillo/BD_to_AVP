@@ -31,7 +31,7 @@ from scripts.qualify_file_upscale_quality_mapping_selection import (
     _validate_clean_work_directory,
     assign_provisional_mappings,
     exit_code_for_evidence,
-    load_mapping_selection_plan as _load_mapping_selection_plan,
+    load_mapping_selection_plan,
     main as mapping_selection_main,
     materialized_case_orders,
     parse_mapping_corpus_binding,
@@ -53,10 +53,6 @@ from tests.test_file_upscale_quality_sweep import (
 
 PUBLIC_LADDER_SHA256 = "04620e59e5380c88d3d5152f78712402675f31db6f1253c1d93224af585111dc"
 VIDEO_QUALITY_SWIFT_SHA256 = "6f204564261d859590086ca41e9a27ac9f69bc0feb225137cf0abc4a98082dfa"
-
-
-def load_mapping_selection_plan(path: Path):
-    return _load_mapping_selection_plan(path, allow_historical_public_contracts=True)
 
 
 def _source_noise_receipt() -> dict[str, object]:

@@ -615,10 +615,26 @@ def parse_repeatability_calibration_plan(raw: object) -> RepeatabilityCalibratio
     )
 
 
+def verify_current_repeatability_inputs(plan: RepeatabilityCalibrationPlan) -> None:
+    """Require the working tree to hold the exact inputs this plan measures with.
+
+    Loading a plan only verifies the document and its pinned predecessors, so an
+    immutable plan stays readable after a bound tool or public contract moves
+    on. Call this on the paths that start or finish a measurement run.
+    """
+    for label, file_binding in (
+        ("FFmpeg vendor manifest", plan.ffmpeg_manifest),
+        ("FX Upscale binary", plan.fx_upscale_binary),
+        ("video-quality ladder manifest", plan.ladder_manifest),
+        ("VideoQuality.swift", plan.video_quality_swift),
+        *((f"bundled tool {key}", tool) for key, tool in plan.bundled_tools.items()),
+    ):
+        if not file_binding.path.is_file() or sha256_file(file_binding.path) != file_binding.sha256:
+            raise QualificationFailure(f"{label} does not match its pinned SHA-256 identity.")
+
+
 def load_repeatability_calibration_plan(
     path: Path,
-    *,
-    allow_historical_public_contracts: bool = False,
 ) -> tuple[RepeatabilityCalibrationPlan, CorpusBinding, str, str]:
     resolved_path = path.resolve()
     relative_path = _relative_repository_path(resolved_path, "File-upscale repeatability-calibration plan")
@@ -634,10 +650,7 @@ def load_repeatability_calibration_plan(
         or binding.selected_case_ids != EXPECTED_CASE_IDS
     ):
         raise QualificationFailure("The repeatability-calibration corpus binding does not match its pinned identity.")
-    predecessor, predecessor_binding, predecessor_sha256, _ = load_mapping_selection_plan(
-        parsed.predecessor_plan.path,
-        allow_historical_public_contracts=allow_historical_public_contracts,
-    )
+    predecessor, predecessor_binding, predecessor_sha256, _ = load_mapping_selection_plan(parsed.predecessor_plan.path)
     if (
         predecessor_sha256 != parsed.predecessor_plan.sha256
         or predecessor.schema_version != parsed.predecessor_plan.schema_version
@@ -667,19 +680,6 @@ def load_repeatability_calibration_plan(
         or parsed.maximum_final_to_base_size_ratio != predecessor.maximum_final_to_base_size_ratio
     ):
         raise QualificationFailure("The production tool, public contract, or technical check binding changed.")
-    public_contract_labels = {"video-quality ladder manifest", "VideoQuality.swift"}
-    for label, file_binding in (
-        ("FFmpeg vendor manifest", parsed.ffmpeg_manifest),
-        ("FX Upscale binary", parsed.fx_upscale_binary),
-        ("video-quality ladder manifest", parsed.ladder_manifest),
-        ("VideoQuality.swift", parsed.video_quality_swift),
-        *((f"bundled tool {key}", tool) for key, tool in parsed.bundled_tools.items()),
-    ):
-        current_matches = file_binding.path.is_file() and sha256_file(file_binding.path) == file_binding.sha256
-        if not current_matches and not (
-            allow_historical_public_contracts and label in public_contract_labels and file_binding.path.is_file()
-        ):
-            raise QualificationFailure(f"{label} does not match its pinned SHA-256 identity.")
     return (
         RepeatabilityCalibrationPlan(**{**parsed.__dict__, "relative_path": relative_path}),
         binding,
@@ -1457,6 +1457,7 @@ def _run_repeatability_calibration_unlocked(
         raise QualificationFailure("File-upscale repeatability calibration requires macOS arm64.")
     source_git_sha = _git_head_from_clean_worktree()
     plan, binding, plan_sha256, binding_sha256 = load_repeatability_calibration_plan(calibration_plan_path)
+    verify_current_repeatability_inputs(plan)
     if _require_head_tracked_file(calibration_plan_path, "Repeatability-calibration plan") != plan.relative_path:
         raise QualificationFailure("Repeatability-calibration plan repository identity changed during validation.")
     _ensure_tracked_inputs(plan, binding, calibration_plan_path)
@@ -1682,6 +1683,7 @@ def _run_repeatability_calibration_unlocked(
     final_plan, final_binding, final_plan_sha256, final_binding_sha256 = load_repeatability_calibration_plan(
         calibration_plan_path
     )
+    verify_current_repeatability_inputs(final_plan)
     final_predecessor = verify_predecessor_receipt(final_plan, final_binding, predecessor_receipt_path)
     if (
         final_plan != plan

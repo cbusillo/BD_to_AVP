@@ -1416,10 +1416,26 @@ def _validate_v2_source_plan(plan: MappingSelectionPlan, binding: CorpusBinding)
         raise QualificationFailure("The v2 source calibration-only scope changed.")
 
 
+def verify_current_mapping_selection_inputs(plan: MappingSelectionPlan) -> None:
+    """Require the working tree to hold the exact inputs this plan measures with.
+
+    Loading a plan only verifies the document and its pinned predecessors, so an
+    immutable plan stays readable after a bound tool or public contract moves
+    on. Call this on the paths that start or finish a measurement run.
+    """
+    for label, file_binding in (
+        ("FFmpeg vendor manifest", plan.ffmpeg_manifest),
+        ("FX Upscale binary", plan.fx_upscale_binary),
+        ("video-quality ladder manifest", plan.ladder_manifest),
+        ("VideoQuality.swift", plan.video_quality_swift),
+        *((f"bundled tool {key}", tool) for key, tool in plan.bundled_tools.items()),
+    ):
+        if not file_binding.path.is_file() or sha256_file(file_binding.path) != file_binding.sha256:
+            raise QualificationFailure(f"{label} does not match its pinned SHA-256 identity.")
+
+
 def load_mapping_selection_plan(
     path: Path,
-    *,
-    allow_historical_public_contracts: bool = False,
 ) -> tuple[MappingSelectionPlan, CorpusBinding, str, str]:
     resolved_path = path.resolve()
     relative_path = _relative_repository_path(resolved_path, "File-upscale mapping-selection plan")
@@ -1448,19 +1464,6 @@ def load_mapping_selection_plan(
         _validate_v2_source_plan(parsed, binding)
     else:
         raise QualificationFailure("The mapping-selection plan contract is unsupported.")
-    public_contract_labels = {"video-quality ladder manifest", "VideoQuality.swift"}
-    for label, file_binding in (
-        ("FFmpeg vendor manifest", parsed.ffmpeg_manifest),
-        ("FX Upscale binary", parsed.fx_upscale_binary),
-        ("video-quality ladder manifest", parsed.ladder_manifest),
-        ("VideoQuality.swift", parsed.video_quality_swift),
-        *((f"bundled tool {key}", tool) for key, tool in parsed.bundled_tools.items()),
-    ):
-        current_matches = file_binding.path.is_file() and sha256_file(file_binding.path) == file_binding.sha256
-        if not current_matches and not (
-            allow_historical_public_contracts and label in public_contract_labels and file_binding.path.is_file()
-        ):
-            raise QualificationFailure(f"{label} does not match its pinned SHA-256 identity.")
     _validate_public_ladder(parsed.ladder_manifest.path)
     return (
         MappingSelectionPlan(
@@ -3480,6 +3483,7 @@ def _run_mapping_selection_unlocked(
         raise QualificationFailure("File-upscale mapping selection requires macOS arm64.")
     source_git_sha = _git_head_from_clean_worktree()
     plan, binding, plan_sha256, binding_sha256 = load_mapping_selection_plan(selection_plan_path)
+    verify_current_mapping_selection_inputs(plan)
     if _require_head_tracked_file(selection_plan_path, "Mapping-selection plan") != plan.relative_path:
         raise QualificationFailure("Mapping-selection plan repository identity changed during validation.")
     _ensure_tracked_inputs(plan, binding, selection_plan_path)
@@ -3709,6 +3713,7 @@ def _run_mapping_selection_unlocked(
     final_plan, final_binding, final_plan_sha256, final_binding_sha256 = load_mapping_selection_plan(
         selection_plan_path
     )
+    verify_current_mapping_selection_inputs(final_plan)
     final_source_response = verify_source_response(final_plan, source_receipt_path)
     if (
         final_plan != plan
