@@ -48,11 +48,11 @@ Issue #609 closed published and fully qualified Beta `0.3.2b7`, public tag
 `v0.3.2-beta.7`, and build `169`. Issue #613 closed published and fully
 qualified RC `0.3.2rc1`, public tag `v0.3.2-rc.1`, and build `170` under
 feature freeze. Issue #614 closed published Stable `0.3.2`, public tag
-`v0.3.2`, and build `171`. Beta `0.3.3b1` / build `172` and Beta `0.3.3b2` /
-build `173` are published and immutable; Beta 2's qualification is complete in
-issue #741. Issue #766 owns prepared successor Beta `0.3.3b3`, public tag
-`v0.3.3-beta.3`, and build `174`, recorded in
-[the Beta 3 cut packet](0.3.3-beta.3-cut-packet.md). Its metadata and
+`v0.3.2`, and build `171`. Beta `0.3.3b1` / build `172`, Beta `0.3.3b2` /
+build `173` and Beta `0.3.3b3` / build `174` are published and immutable; Beta
+3's qualification is complete in issue #766. Issue #779 owns prepared successor
+Beta `0.3.3b4`, public tag `v0.3.3-beta.4`, and build `175`, recorded in
+[the Beta 4 cut packet](0.3.3-beta.4-cut-packet.md). Its metadata and
 preregistered qualification are preparation-only; Prerelease dispatch, signing
 approval, and publication remain separately authorized boundaries.
 
