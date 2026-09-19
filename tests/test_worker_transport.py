@@ -41,17 +41,51 @@ def fill_pipe(descriptor: int) -> None:
 
 
 class WorkerEventTransportTests(unittest.TestCase):
-    def test_heartbeat_transport_failure_stops_healthy_running_child(self) -> None:
-        self._assert_background_failure_stops_worker("heartbeat")
+    def test_a_host_that_stops_reading_does_not_stop_a_healthy_conversion(self) -> None:
+        # macOS throttles an app whose display sleeps, so it can stop draining the
+        # event pipe for minutes while the conversion itself is healthy.
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child.pid"
+            growing_output = Path(directory) / "growing.mov"
+            process = self._start_silent_worker(marker, growing_output, "heartbeat")
+            try:
+                self._wait_for_child(process, marker)
+                time.sleep(2.5)  # the host reads nothing; heartbeats fill the pipe and are skipped
+                self.assertIsNone(process.poll())
+                child = psutil.Process(int(marker.read_text()))
+                self.assertTrue(child.is_running())
+                size_while_ignored = growing_output.stat().st_size
+                time.sleep(0.2)
+                self.assertGreater(growing_output.stat().st_size, size_while_ignored)
+
+                assert process.stdout is not None
+                sequences = []
+                for _ in range(40):  # the host wakes up and reads again
+                    sequences.append(json.loads(process.stdout.readline())["sequence"])
+                self.assertEqual(sequences, list(range(sequences[0], sequences[0] + len(sequences))))
+                self.assertIsNone(process.poll())
+            finally:
+                self._stop_silent_worker(process, marker)
+
+    def test_a_host_that_closes_the_event_pipe_stops_the_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child.pid"
+            growing_output = Path(directory) / "growing.mov"
+            process = self._start_silent_worker(marker, growing_output, "heartbeat")
+            try:
+                self._wait_for_child(process, marker)
+                assert process.stdout is not None
+                process.stdout.close()
+                self.assertEqual(process.wait(timeout=6), TRANSPORT_FAILURE_EXIT_CODE)
+                self.assertFalse(psutil.pid_exists(int(marker.read_text())))
+            finally:
+                self._stop_silent_worker(process, marker)
 
     def test_control_reader_transport_failure_stops_healthy_running_child(self) -> None:
         self._assert_background_failure_stops_worker("control")
 
-    def _assert_background_failure_stops_worker(self, origin: str) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            marker = Path(directory) / "child.pid"
-            growing_output = Path(directory) / "growing.mov"
-            script = """
+    def _start_silent_worker(self, marker: Path, growing_output: Path, origin: str) -> "subprocess.Popen[str]":
+        script = """
 import pathlib, sys
 from bd_to_avp.process_runner import ChildProcessRunner, ProcessArtifactProbe, ProcessCancelled, ProcessSpec
 from bd_to_avp.worker.__main__ import run_worker
@@ -78,21 +112,50 @@ raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=
                             isolate_process_stdin=True, event_write_timeout_seconds=.2,
                             heartbeat_interval=.001 if sys.argv[3]=='heartbeat' else 30))
 """
-            process = subprocess.Popen(
-                [sys.executable, "-c", script, str(marker), str(growing_output), origin],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(marker), str(growing_output), origin],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert process.stdin is not None
+        process.stdin.write(request_line(Path("/tmp/movie.mkv")))
+        process.stdin.flush()
+        return process
+
+    def _wait_for_child(self, process: "subprocess.Popen[str]", marker: Path) -> None:
+        deadline = time.monotonic() + 2
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(marker.exists())
+        while not marker.read_text() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    def _stop_silent_worker(self, process: "subprocess.Popen[str]", marker: Path) -> None:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        if marker.exists() and marker.read_text():
             try:
+                child = psutil.Process(int(marker.read_text()))
+                child.kill()
+                child.wait(timeout=2)
+            except psutil.NoSuchProcess:
+                # The worker is expected to have reaped the child before fallback cleanup.
+                pass
+
+    def _assert_background_failure_stops_worker(self, origin: str) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child.pid"
+            growing_output = Path(directory) / "growing.mov"
+            process = self._start_silent_worker(marker, growing_output, origin)
+            try:
+                self._wait_for_child(process, marker)
                 assert process.stdin is not None
-                process.stdin.write(request_line(Path("/tmp/movie.mkv")))
-                process.stdin.flush()
-                deadline = time.monotonic() + 2
-                while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                self.assertTrue(marker.exists())
                 if origin == "control":
                     # Compact invalid records fill only the outgoing pipe. The
                     # host keeps both pipes open and deliberately does not read.
@@ -108,20 +171,7 @@ raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=
                 self.assertNotIn('"type":"job.completed"', delivered)
                 self.assertEqual(process.stderr.read(), "")
             finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait(timeout=2)
-                for stream in (process.stdin, process.stdout, process.stderr):
-                    if stream is not None:
-                        stream.close()
-                if marker.exists():
-                    try:
-                        child = psutil.Process(int(marker.read_text()))
-                        child.kill()
-                        child.wait(timeout=2)
-                    except psutil.NoSuchProcess:
-                        # The worker is expected to have reaped the child before fallback cleanup.
-                        pass
+                self._stop_silent_worker(process, marker)
 
     def test_slow_draining_pipe_delivers_complete_ordered_records(self) -> None:
         read_fd, write_fd = os.pipe()
