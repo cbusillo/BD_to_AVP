@@ -24,6 +24,42 @@ final class WorkerProcessClientTests: XCTestCase {
         XCTAssertFalse(result.diagnosticSnapshot.isRunning)
     }
 
+    func testHoldsAnActivityAssertionForTheWholeJobSoTheAppIsNotThrottled() async throws {
+        let recorder = ActivityRecorder()
+        let client = fixtureClient(
+            body: """
+            print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"worker_version": "test", "process_group_id": os.getpid()}}), flush=True)
+            print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.completed", "job_id": job_id, "sequence": 1, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10, "titles": []}}}), flush=True)
+            """,
+            activityAssertion: recorder.assertion
+        )
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        var heldDuringEvents: [Bool] = []
+
+        XCTAssertFalse(recorder.isActive)
+        _ = try await client.run(job: job) { _ in
+            heldDuringEvents.append(recorder.isActive)
+        }
+
+        XCTAssertEqual(heldDuringEvents, [true, true])
+        XCTAssertFalse(recorder.isActive)
+        XCTAssertEqual(recorder.ended, 1)
+    }
+
+    func testReleasesTheActivityAssertionWhenTheJobFails() async throws {
+        let recorder = ActivityRecorder()
+        let client = fixtureClient(body: "sys.exit(3)", activityAssertion: recorder.assertion)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+
+        do {
+            _ = try await client.run(job: job) { _ in }
+            XCTFail("A worker that exits without events must fail the job.")
+        } catch {
+            XCTAssertFalse(recorder.isActive)
+            XCTAssertEqual(recorder.ended, 1)
+        }
+    }
+
     func testDeliversObservabilityBetweenReadyAndTerminalEvents() async throws {
         let client = fixtureClient(body: """
         \(readyEvent())
@@ -536,7 +572,8 @@ final class WorkerProcessClientTests: XCTestCase {
 
     private func fixtureClient(
         body: String,
-        environment overrides: [String: String] = [:]
+        environment overrides: [String: String] = [:],
+        activityAssertion: WorkerActivityAssertion = .system
     ) -> WorkerProcessClient {
         let script = """
         import json
@@ -561,7 +598,35 @@ final class WorkerProcessClientTests: XCTestCase {
                 arguments: ["-c", script],
                 currentDirectoryURL: nil,
                 environment: environment
-            )
+            ),
+            activityAssertion: activityAssertion
+        )
+    }
+}
+
+private final class ActivityRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = 0
+    private(set) var reasons: [String] = []
+    private(set) var ended = 0
+
+    var isActive: Bool { lock.withLock { active > 0 } }
+
+    var assertion: WorkerActivityAssertion {
+        WorkerActivityAssertion(
+            begin: { reason in
+                self.lock.withLock {
+                    self.active += 1
+                    self.reasons.append(reason)
+                }
+                return NSObject()
+            },
+            end: { _ in
+                self.lock.withLock {
+                    self.active -= 1
+                    self.ended += 1
+                }
+            }
         )
     }
 }
