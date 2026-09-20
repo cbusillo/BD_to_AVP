@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import json
 import os
 import platform
@@ -21,6 +22,7 @@ from scripts.artifact_identity import app_tree_sha256
 from scripts.release_receipt import build_receipt as build_release_receipt
 from scripts.release_receipt import write_receipt
 from scripts.tier3_clean_machine import (
+    SCREENSHOT_SYSTEM_SETTINGS,
     UPDATER_GUARD_HANDLERS,
     UPDATER_GUARD_REASONS,
     UPDATER_PRESS_RUN,
@@ -673,12 +675,11 @@ class Tier3CleanMachineTests(unittest.TestCase):
                             release_notes_url=release_notes_url,
                         )
 
-                    self.assertEqual(len(captured_commands), 2 if phase == "candidate" else 1)
                     finish_collector.assert_called_once_with(collector)
                     if phase == "updater":
                         updater_evidence = json.loads((output_directory / evidence_name).read_text(encoding="utf-8"))
                         self.assertIs(updater_evidence["release_notes_url_observed"], True)
-                    command = captured_commands[-1]
+                    (command,) = [item for item in captured_commands if Path(item[0]).name == "xcodebuild"]
                     expected_settings = {
                         "BD_TO_AVP_UI_APP_PATH": str(app_path),
                         "BD_TO_AVP_UI_BUNDLE_IDENTIFIER": BUNDLE_IDENTIFIER,
@@ -703,6 +704,71 @@ class Tier3CleanMachineTests(unittest.TestCase):
                         argument = f"{key}={value}"
                         self.assertEqual(command.count(argument), 1)
                         self.assertLess(command.index(argument), len(command) - 1)
+
+    def _collect_on_system(
+        self, *, phase: str, system: dict[str, bool], ui_test_fails: bool = False
+    ) -> tuple[list[dict[str, bool]], dict[str, bool]]:
+        """Collect evidence against a fake system; return its settings at each UI test run, and at the end."""
+        system = dict(system)
+        during_ui_test: list[dict[str, bool]] = []
+
+        def run(command: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            del kwargs
+            output = ""
+            if Path(command[0]).name == "osascript":
+                action = command[-1].split(" preferences to ", maxsplit=1)[1]
+                if action.startswith("return "):
+                    output = "true\n" if system[action.removeprefix("return ")] else "false\n"
+                else:
+                    setting, value = action.removeprefix("set ").rsplit(" to ", maxsplit=1)
+                    system[setting] = {"true": True, "false": False}[value]
+            elif Path(command[0]).name == "xcodebuild":
+                during_ui_test.append(dict(system))
+                if ui_test_fails:
+                    raise CleanMachineError("UI test failed")
+            elif Path(command[0]).name == "ffmpeg":
+                Path(command[-1]).write_bytes(b"synthetic source")
+            return subprocess.CompletedProcess(command, 0, output, "")
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            synthetic_home = root / "home"
+            synthetic_home.mkdir()
+            with (
+                patch.object(MacOSOperations, "_run", side_effect=run),
+                patch.object(MacOSOperations, "_start_accessibility_collector", return_value=Mock()),
+                patch.object(MacOSOperations, "_stop_accessibility_collector", return_value=("", "")),
+                patch.object(MacOSOperations, "_finish_accessibility_collector"),
+                patch.object(MacOSOperations, "_extract_ui_attachments"),
+                contextlib.suppress(CleanMachineError),
+            ):
+                MacOSOperations().collect_ui_evidence(
+                    repo=root,
+                    phase=phase,
+                    app_path=root / APP_NAME,
+                    synthetic_home=synthetic_home,
+                    output_directory=root / "evidence",
+                    release_notes_url="https://example.test/notes",
+                )
+        return during_ui_test, system
+
+    def test_candidate_screenshots_are_captured_dark_without_the_dock_and_the_system_is_restored(self) -> None:
+        settings = [setting for _, setting in SCREENSHOT_SYSTEM_SETTINGS]
+        for already_set in ([], settings[:1], settings[1:], settings):
+            for ui_test_fails in (False, True):
+                with self.subTest(already_set=already_set, ui_test_fails=ui_test_fails):
+                    before = {setting: setting in already_set for setting in settings}
+                    during, after = self._collect_on_system(
+                        phase="candidate", system=before, ui_test_fails=ui_test_fails
+                    )
+                    self.assertEqual(during, [dict.fromkeys(settings, True)])
+                    self.assertEqual(after, before, "Each setting must end as it began.")
+
+    def test_updater_phase_leaves_the_system_settings_alone(self) -> None:
+        before = {setting: False for _, setting in SCREENSHOT_SYSTEM_SETTINGS}
+        during, after = self._collect_on_system(phase="updater", system=before)
+        self.assertEqual(during, [before])
+        self.assertEqual(after, before)
 
     def test_collect_ui_evidence_rejects_skipped_test_without_phase_output(self) -> None:
         operations = MacOSOperations()

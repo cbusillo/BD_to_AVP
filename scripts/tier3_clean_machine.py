@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import enum
 import hashlib
 import json
@@ -16,7 +17,7 @@ import time
 import urllib.request
 import uuid
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,8 @@ AUTOMATIC_CHECKS_KEY = "SUEnableAutomaticChecks"
 SENTINEL_VALUE = "tier3-preserve"
 LIVE_FEED_URL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
 RELEASES_URL = "https://github.com/cbusillo/BD_to_AVP/releases"
+# System Events preference suites and the boolean each must hold while UI screenshots are taken.
+SCREENSHOT_SYSTEM_SETTINGS = (("appearance preferences", "dark mode"), ("dock preferences", "autohide"))
 PROFILE_FIXTURE_V5_PATH = REPO_ROOT / "tests/fixtures/profile_library_v5.json"
 PROFILE_FIXTURE_V6_PATH = REPO_ROOT / "tests/fixtures/profile_library_v6.json"
 PROFILE_RELATIVE_PATH = Path("Library/Application Support/3D Blu-ray to Vision Pro/profiles.json")
@@ -952,6 +955,10 @@ def validate_environment(
         raise CleanMachineError(f"Qualification host is missing required tools: {', '.join(missing_tools)}.")
 
 
+def _system_events_script(preferences: str, action: str) -> str:
+    return f'tell application "System Events" to tell {preferences} to {action}'
+
+
 class MacOSOperations:
     required_tools = ("defaults", "ditto", "hdiutil", "log", "open", "osascript", "xcrun", "xcodebuild")
 
@@ -981,6 +988,28 @@ class MacOSOperations:
             detail = "\n".join(details) or "command failed"
             raise CleanMachineError(f"Command failed ({command[0]}): {detail}")
         return result
+
+    @contextlib.contextmanager
+    def _screenshot_conditions(self) -> Iterator[None]:
+        """Hold the system in dark mode with the Dock hidden, then restore both.
+
+        AppKit takes a dark appearance only from the system setting: it ignores an
+        AppleInterfaceStyle launch argument and the synthetic home's preferences. A launch
+        can still force light, so the UI test captures both appearances under this setting.
+        A window screenshot is a capture of its screen area, and a hosted runner's screen is
+        too short for the main window to clear the Dock.
+        """
+        changed: list[str] = []
+        try:
+            for preferences, setting in SCREENSHOT_SYSTEM_SETTINGS:
+                query = _system_events_script(preferences, f"return {setting}")
+                if self._run(["osascript", "-e", query]).stdout.strip() != "true":
+                    self._run(["osascript", "-e", _system_events_script(preferences, f"set {setting} to true")])
+                    changed.append(_system_events_script(preferences, f"set {setting} to false"))
+            yield
+        finally:
+            for restore in reversed(changed):
+                self._run(["osascript", "-e", restore])
 
     def _start_accessibility_collector(
         self,
@@ -1364,25 +1393,27 @@ class MacOSOperations:
             expected_url=RELEASES_URL if phase == "candidate" else release_notes_url,
         )
         try:
-            self._run(
-                [
-                    str(SYSTEM_TOOL_PATHS["xcodebuild"]),
-                    "-project",
-                    str(repo / "macos" / "BluRayToVisionPro.xcodeproj"),
-                    "-scheme",
-                    "BluRayToVisionProInstalledUI",
-                    "-derivedDataPath",
-                    str(derived_data),
-                    "-resultBundlePath",
-                    str(result_bundle),
-                    "-destination",
-                    "platform=macOS,arch=arm64",
-                    f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
-                    *(f"{key}={value}" for key, value in build_settings.items()),
-                    "test",
-                ],
-                timeout=UI_TEST_TIMEOUT_SECONDS,
-            )
+            # Only the candidate test captures appearance-labelled screenshots.
+            with self._screenshot_conditions() if phase == "candidate" else contextlib.nullcontext():
+                self._run(
+                    [
+                        str(SYSTEM_TOOL_PATHS["xcodebuild"]),
+                        "-project",
+                        str(repo / "macos" / "BluRayToVisionPro.xcodeproj"),
+                        "-scheme",
+                        "BluRayToVisionProInstalledUI",
+                        "-derivedDataPath",
+                        str(derived_data),
+                        "-resultBundlePath",
+                        str(result_bundle),
+                        "-destination",
+                        "platform=macOS,arch=arm64",
+                        f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
+                        *(f"{key}={value}" for key, value in build_settings.items()),
+                        "test",
+                    ],
+                    timeout=UI_TEST_TIMEOUT_SECONDS,
+                )
         except BaseException as error:
             stdout, stderr = self._stop_accessibility_collector(collector)
             detail = stderr.strip() or stdout.strip()
