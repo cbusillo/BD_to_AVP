@@ -3,8 +3,10 @@ import json
 import os
 import platform
 import plistlib
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -19,6 +21,9 @@ from scripts.artifact_identity import app_tree_sha256
 from scripts.release_receipt import build_receipt as build_release_receipt
 from scripts.release_receipt import write_receipt
 from scripts.tier3_clean_machine import (
+    UPDATER_GUARD_HANDLERS,
+    UPDATER_GUARD_REASONS,
+    UPDATER_PRESS_RUN,
     APP_NAME,
     BUNDLE_IDENTIFIER,
     CleanMachineError,
@@ -96,6 +101,7 @@ class FakeOperations(QualificationOperations):
         self.running = False
         self.candidate_source = app_sources[candidate_dmg.resolve()]
         self.pressed_actions: list[UpdateObservation] = []
+        self.reject_press_number: int | None = None
         self.update_attempts = 0
         self.intent_seen_before_press = False
         self.current_app_path: Path | None = None
@@ -282,6 +288,14 @@ class FakeOperations(QualificationOperations):
                 reason_code="updater-state-changed",
                 state=observation.state,
                 action_pressed=False,
+            )
+        if self.reject_press_number == len(self.pressed_actions) + 1:
+            raise SparkleUpdateFailure(
+                "Updater state changed before the guarded press. guard=button-disabled",
+                reason_code="updater-state-changed",
+                state=observation.state,
+                action_pressed=False,
+                guard_reason="button-disabled",
             )
         self.quit_calls_at_press.append(self.quit_calls)
         self.pressed_actions.append(observation)
@@ -1374,6 +1388,43 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertEqual(diagnostics["classifications"], ["installation-cache-create-failed"])
             self.assertNotIn(str(root), json.dumps(diagnostics))
 
+    def test_a_rejected_final_press_reports_the_earlier_press_and_the_guard_that_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            config = replace(config, diagnostics_output=root / "sparkle-install-diagnostics.json")
+            operations.install_action = "Install Update"
+            operations.reject_press_number = 2  # Install Update is pressed; Install and Relaunch is refused
+
+            with self.assertRaises(SparkleUpdateFailure) as raised:
+                run_qualification(config, operations)
+
+            failure = raised.exception
+            self.assertEqual(len(operations.pressed_actions), 1)
+            self.assertTrue(failure.action_pressed)
+            self.assertFalse(failure.retryable)
+            self.assertEqual(operations.update_attempts, 1)
+            self.assertEqual((failure.guard_reason, failure.action_count), ("button-disabled", 1))
+            self.assertNotIn("no action was pressed", str(failure))
+            diagnostics = json.loads(config.diagnostics_output.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics["guard_reason"], "button-disabled")
+            self.assertEqual(diagnostics["action_count"], 1)
+            self.assertEqual(diagnostics["action_phase"], failure.state.value)
+            self.assertNotIn(str(root), json.dumps(diagnostics))
+
+    def test_a_rejected_first_press_says_nothing_was_pressed_and_stays_retryable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.press_state_change_failures = 2
+
+            with self.assertRaises(SparkleUpdateFailure) as raised:
+                run_qualification(config, operations)
+
+            self.assertIn("no action was pressed", str(raised.exception))
+            self.assertEqual(raised.exception.action_count, 0)
+            self.assertEqual(operations.update_attempts, 2)
+
     def test_run_retries_when_updater_changes_after_intent_recording(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1591,23 +1642,6 @@ class Tier3CleanMachineTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_updater_waits_for_identified_enabled_install_button(self) -> None:
-        observe_script = MacOSOperations()._updater_observe_script()
-        press_script = MacOSOperations()._updater_press_script()
-
-        self.assertIn('attribute "AXIdentifier"', observe_script)
-        self.assertIn('"SUUpdateAlert"', observe_script)
-        self.assertIn('"SPUUserUpdateChoiceInstall"', observe_script)
-        self.assertIn('"SUStatusInstallAndRelaunch"', observe_script)
-        self.assertIn("enabled of selectedButton", observe_script)
-        self.assertIn('selectedTitle is "Install Update"', observe_script)
-        self.assertNotIn('return "staged-install"', observe_script)
-        self.assertIn('selectedTitle is "Install on Quit"', observe_script)
-        self.assertIn('"ready-install-update"', observe_script)
-        self.assertIn('"ready-install-relaunch"', observe_script)
-        self.assertIn('perform action "AXPress" of selectedButton', press_script)
-        self.assertIn("actualWindowMatch is not expectedWindowMatch", press_script)
-
     @unittest.skipUnless(platform.system() == "Darwin", "DMG mount integration requires macOS")
     def test_synthetic_dmg_mount_and_detach(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1628,6 +1662,75 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertEqual((mount_point / "fixture.txt").read_text(encoding="utf-8"), "fixture\n")
             operations._detach_mounts([mount_point])
             self.assertFalse(mount_point.exists())
+
+
+@unittest.skipUnless(sys.platform == "darwin", "AppleScript runs only on macOS")
+class UpdaterGuardHandlerTests(unittest.TestCase):
+    """Run the real guard handlers with synthetic windows and buttons; no UI access is needed."""
+
+    def decide(self, call: str) -> str:
+        script = UPDATER_GUARD_HANDLERS + f'on run\n    return item 1 of ({call}) & ":" & item 2 of ({call})\nend run'
+        completed = subprocess.run(
+            ["/usr/bin/osascript", "-"], input=script, capture_output=True, text=True, timeout=30, check=False
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return completed.stdout.strip()
+
+    def test_window_selection(self) -> None:
+        cases = {
+            'my chooseWindow({"", "SUUpdateAlert"}, {0, 0}, "identifier")': "ok:2",
+            'my chooseWindow({"SUUpdateAlert", "SUUpdateAlert"}, {0, 0}, "identifier")': "window-duplicate:0",
+            'my chooseWindow({"", ""}, {0, 1}, "button-identifier")': "ok:2",
+            'my chooseWindow({"", ""}, {1, 1}, "button-identifier")': "window-duplicate:0",
+            'my chooseWindow({"", ""}, {0, 0}, "identifier")': "window-missing:0",
+            'my chooseWindow({}, {}, "identifier")': "window-missing:0",
+            'my chooseWindow({"SUUpdateAlert"}, {0}, "button-identifier")': "window-changed:0",
+        }
+        for call, expected in cases.items():
+            with self.subTest(call=call):
+                self.assertEqual(self.decide(call), expected)
+
+    def test_button_selection(self) -> None:
+        install = "SPUUserUpdateChoiceInstall"
+        # identifiers, titles, enabled flags, expected identifier, expected title -> decision
+        cases = (
+            (["x", install], ["Later", "Install Update"], [True, True], install, "Install Update", "ok:2"),
+            ([install, install], ["Install Update"] * 2, [True, True], install, "Install Update", "button-duplicate:0"),
+            (["x"], ["Later"], [True], install, "Install Update", "button-missing:0"),
+            ([install], ["Install on Quit"], [True], install, "Install Update", "button-title:0"),
+            ([install], ["Install Update"], [False], install, "Install Update", "button-disabled:0"),
+            (["", ""], ["Skip", "Install and Relaunch"], [True, True], "", "Install and Relaunch", "ok:2"),
+            (["", ""], ["Install and Relaunch"] * 2, [True, True], "", "Install and Relaunch", "button-duplicate:0"),
+        )
+
+        def applescript_list(values: list) -> str:
+            rendered = [str(value).lower() if isinstance(value, bool) else f'"{value}"' for value in values]
+            return "{" + ", ".join(rendered) + "}"
+
+        for identifiers, titles, enabled, expected_identifier, expected_title, decision in cases:
+            call = (
+                f"my chooseButton({applescript_list(identifiers)}, {applescript_list(titles)}, "
+                f'{applescript_list(enabled)}, "{expected_identifier}", "{expected_title}")'
+            )
+            with self.subTest(decision=decision, titles=titles, enabled=enabled):
+                self.assertEqual(self.decide(call), decision)
+
+    def test_every_reason_a_handler_can_return_is_a_known_guard_reason(self) -> None:
+        returned = set(re.findall(r'return \{"([a-z-]+)", 0\}', UPDATER_GUARD_HANDLERS))
+        self.assertTrue(returned)
+        self.assertLessEqual(returned | {"process-count"}, UPDATER_GUARD_REASONS)
+
+    def test_the_whole_press_script_compiles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "press.applescript"
+            source.write_text(UPDATER_GUARD_HANDLERS + UPDATER_PRESS_RUN, encoding="utf-8")
+            completed = subprocess.run(
+                ["/usr/bin/osacompile", "-o", str(Path(directory) / "press.scpt"), str(source)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
 if __name__ == "__main__":
