@@ -9,3 +9,6 @@
 # GitHub Copilot persisted chat sessions
 /copilot/# GitHub Copilot persisted chat sessions
 /copilot/chatSessions
+# Machine-specific: the interpreter name and module settings differ per checkout
+/misc.xml
+/*.iml
