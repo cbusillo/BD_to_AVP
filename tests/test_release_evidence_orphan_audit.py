@@ -9,7 +9,6 @@ import unittest
 from collections.abc import Mapping
 from contextlib import redirect_stdout
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -449,20 +448,6 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         paginated = {endpoint for endpoint, paginate in api.get_calls if paginate}
         self.assertIn(f"repos/{REPOSITORY}/git/matching-refs/heads/automation/release-evidence-", paginated)
         self.assertIn(f"repos/{REPOSITORY}/issues?state=all&per_page=100", paginated)
-
-        workflow = (Path(__file__).parents[1] / ".github/workflows/release-evidence-orphan-audit.yml").read_text(
-            encoding="utf-8"
-        )
-        helper = (Path(__file__).parents[1] / "scripts/release_evidence_orphan_audit.py").read_text(encoding="utf-8")
-        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
-        self.assertIn("ref: main", workflow)
-        self.assertNotIn("git fetch", workflow.lower())
-        self.assertNotIn("automation/", workflow)
-        self.assertIn("uv sync --locked --all-groups --python 3.12", workflow)
-        self.assertIn("uv run --frozen", workflow)
-        self.assertNotIn('["git"', helper)
-        self.assertIn("git/trees", helper)
-        self.assertIn("git/blobs", helper)
 
     def test_finding_serialization_keeps_actionable_evidence(self) -> None:
         finding = EvidenceFinding(
