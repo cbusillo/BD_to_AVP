@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "qualification_id": "v0.3.3-beta.5-change-scoped-evidence-v1",
+  "recorded_at": "2026-09-20T13:32:56.504757Z",
+  "source": {
+    "build_version": "176",
+    "package_version": "0.3.3b5",
+    "public_version": "0.3.3-beta.5",
+    "release_tag": "v0.3.3-beta.5",
+    "source_sha": "39dd3277f6c0642a1c72d16a2d62a07738d0c50d"
+  },
+  "failed_preparation_run": {
+    "execution": "local_preparation_classification",
+    "candidate_sha": "39dd3277f6c0642a1c72d16a2d62a07738d0c50d",
+    "workflow_phase": "preparation",
+    "exit_code": 2,
+    "blocking_case_ids": [
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel"
+    ],
+    "signing_started": false,
+    "release_identity_created": false,
+    "report_sha256": "30529409d93158f16b83d6aa55bdbd8e8de813cde8f2e8afdc05d6d9f6d0e449",
+    "command": "uv run python -m scripts.qualify_release_scope --qualification docs/qualification/v0.3.3-beta.5-signed-qualification-v1.json --candidate-sha 39dd3277f6c0642a1c72d16a2d62a07738d0c50d --evidence docs/qualification/release-evidence-v1.json --release-stage beta --workflow-phase preparation --require-evidence"
+  },
+  "packaged_candidate": {
+    "app_tree_sha256": "69c0f89dcde9c0e64543b2f3e03734a87e410839dd6481c7c97d7354a42b675c",
+    "architecture": "arm64",
+    "bundle_identifier": "com.shinycomputers.bd-to-avp",
+    "codesign_verification": "passed",
+    "package_command": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py package",
+    "preview_presentation_smoke": "passed",
+    "signing": "ad_hoc_local",
+    "worker_cancellation_smoke": "passed",
+    "signature_verification": "codesign -dv reports Signature=adhoc and no TeamIdentifier",
+    "worker_protocol_smoke": "passed",
+    "support_diagnostics_endpoint": "https://diagnostics.shinycomputers.com",
+    "toolchain": "Xcode 27.0 (27A266a)",
+    "package_attempts": 1
+  },
+  "evidence_source_semantics": {
+    "developer_id_or_notarization_claimed": false,
+    "index_source": "signed_artifact_receipt",
+    "meaning": "Change-scoped evidence from the exact locally packaged, code-signed app tree; production Developer ID signing remains owned by the guarded release run.",
+    "project_precedent": "docs/qualification/v0.3.3-beta.4-change-scoped-evidence-v1.json"
+  },
+  "validation": {
+    "native_tests": {
+      "command": "uv run python scripts/native_app.py test",
+      "passed": 700,
+      "failed": 0,
+      "skipped": 0,
+      "log_sha256": "798e604f1bd036b46a8f87dec6f6e732c9ed3699ab728fdbb5a856cfe136a30c"
+    },
+    "focused_python_tests": {
+      "command": "uv run python -m unittest tests.test_preview tests.test_storage_capacity tests.test_process_preflight tests.test_subtitles tests.test_process_runner tests.test_worker_controls tests.test_worker_transport tests.test_worker_diagnostics tests.test_native_worker tests.test_support_diagnostics tests.test_native_mvc_split",
+      "passed": 376,
+      "failed": 0,
+      "skipped": 0,
+      "log_sha256": "94683d193c6efb19505b382d29d268a81528db9d3f5c70c598f1a1c51ab8214f"
+    },
+    "packaged_app": {
+      "exit_code": 0,
+      "log_sha256": "22f0e5dd09b40a61d49264ee6c593234967c1d136882851baef75e05feaf8808"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "gui-preview-cancel-cleanup",
+      "observations": {
+        "cancelled_preview_removes_partial_workspace": true,
+        "owned_worker_and_descendant_processes_reaped": true,
+        "packaged_worker_cancellation_smoke": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCancelledPreviewRemovesPartialWorkspace",
+        "macos/BluRayToVisionProTests/WorkerProcessClientTests.swift:testCancellationAllowsWorkerToReapSeparateSessionChild",
+        "scripts/native_app.py:packaged worker cancellation smoke"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "gui-preview-failure-cleanup",
+      "observations": {
+        "destination_workspace_failure_is_actionable": true,
+        "empty_owned_destination_root_removed": true,
+        "transient_cleanup_failure_retried": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspacePreparationFailureIsActionable",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspaceCleanupRemovesEmptyHiddenRoot",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCleanupRetriesTransientRemovalFailure"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "network-generated-final-output",
+      "observations": {
+        "destination_snapshots_preserved_in_batch_preparation": true,
+        "generated_route_job_spec_matches_shared_worker_fixture": true,
+        "final_output_move_returns_destination_path": true,
+        "packaged_worker_protocol_smoke": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testBatchPreparationSnapshotsProfileDestinationAndOptionsPerItem",
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testGeneratedRouteJobSpecMatchesSharedV12WorkerFixture",
+        "tests/test_process_preflight.py:test_output_move_returns_final_output_path",
+        "scripts/native_app.py:smoke_packaged_worker"
+      ],
+      "scope": {
+        "current_change_review": "Fresh native and Python regressions verify destination snapshots, generated-route job construction, and the final-output move path on the exact candidate. Packaged worker smoke verifies the embedded worker protocol. The candidate changes the worker event transport and adds an app activity assertion; neither alters output handling, and tests/test_worker_transport.py covers the transport change. No mounted-network media conversion was rerun.",
+        "mounted_network_conversion_rerun": false,
+        "prior_real_network_evidence": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json",
+        "qualification_kind": "exact_candidate_change_scoped_regression"
+      },
+      "status": "passed"
+    },
+    {
+      "case_id": "overwrite-and-conversion-cancel",
+      "observations": {
+        "existing_output_rejected_before_workspace_mutation": true,
+        "resumed_and_unowned_workspaces_preserved": true,
+        "view_model_stop_transitions_to_stopping": true,
+        "owned_workspaces_removed_after_cancellation": true
+      },
+      "proof": [
+        "tests/test_process_preflight.py:test_existing_output_aborts_before_workspace_mutation",
+        "tests/test_process_preflight.py:test_cancelled_conversion_cleans_owned_workspaces",
+        "tests/test_process_preflight.py:test_cancelled_conversion_preserves_unowned_workspaces",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testStopActiveWorkerCancelsConversionAndTransitionsToStopping",
+        "tests/test_process_preflight.py:test_resumed_cancellation_preserves_existing_workspaces"
+      ],
+      "status": "passed"
+    }
+  ],
+  "privacy": {
+    "diagnostic_tokens_recorded": false,
+    "private_hostnames_recorded": false,
+    "private_media_identifiers_recorded": false,
+    "private_paths_recorded": false
+  },
+  "acceptance": {
+    "blocking_case_ids": [],
+    "failed_case_count": 0,
+    "passed": true,
+    "passed_case_count": 4
+  },
+  "result": "accepted_public_safe_summary"
+}

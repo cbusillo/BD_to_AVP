@@ -1179,6 +1179,46 @@
       "source": "signed_artifact_receipt",
       "source_sha": "32ad56270e1dc2afe682f35323c6487d309e2df4",
       "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-09-20T13:32:56.504757Z",
+      "case_id": "gui-preview-cancel-cleanup",
+      "receipt_id": "v0.3.3-beta.5:gui-preview-cancel-cleanup:39dd327",
+      "reference": "docs/qualification/v0.3.3-beta.5-change-scoped-evidence-v1.json",
+      "sha256": "10f5f63ef4949f1b3c181874e29eb0deb265bacd1064064a65be01fde36ea092",
+      "source": "signed_artifact_receipt",
+      "source_sha": "39dd3277f6c0642a1c72d16a2d62a07738d0c50d",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-09-20T13:32:56.504757Z",
+      "case_id": "gui-preview-failure-cleanup",
+      "receipt_id": "v0.3.3-beta.5:gui-preview-failure-cleanup:39dd327",
+      "reference": "docs/qualification/v0.3.3-beta.5-change-scoped-evidence-v1.json",
+      "sha256": "10f5f63ef4949f1b3c181874e29eb0deb265bacd1064064a65be01fde36ea092",
+      "source": "signed_artifact_receipt",
+      "source_sha": "39dd3277f6c0642a1c72d16a2d62a07738d0c50d",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-09-20T13:32:56.504757Z",
+      "case_id": "network-generated-final-output",
+      "receipt_id": "v0.3.3-beta.5:network-generated-final-output:39dd327",
+      "reference": "docs/qualification/v0.3.3-beta.5-change-scoped-evidence-v1.json",
+      "sha256": "10f5f63ef4949f1b3c181874e29eb0deb265bacd1064064a65be01fde36ea092",
+      "source": "signed_artifact_receipt",
+      "source_sha": "39dd3277f6c0642a1c72d16a2d62a07738d0c50d",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-09-20T13:32:56.504757Z",
+      "case_id": "overwrite-and-conversion-cancel",
+      "receipt_id": "v0.3.3-beta.5:overwrite-and-conversion-cancel:39dd327",
+      "reference": "docs/qualification/v0.3.3-beta.5-change-scoped-evidence-v1.json",
+      "sha256": "10f5f63ef4949f1b3c181874e29eb0deb265bacd1064064a65be01fde36ea092",
+      "source": "signed_artifact_receipt",
+      "source_sha": "39dd3277f6c0642a1c72d16a2d62a07738d0c50d",
+      "status": "accepted"
     }
   ],
   "schema_version": 1
