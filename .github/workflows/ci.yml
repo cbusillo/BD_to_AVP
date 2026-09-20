@@ -16,9 +16,42 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  lanes:
+    name: Select lanes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.lanes.outputs.native }}
+      player: ${{ steps.lanes.outputs.player }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Select the lanes this change needs
+        id: lanes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run --no-project --with pyyaml python scripts/ci_lanes.py --event "$EVENT_NAME" --base "$PR_BASE_SHA"
+
+  checks:
+    name: Python, evidence and packaging checks
     runs-on: xcode-27
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - name: Check out repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -46,21 +79,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked --all-groups --python 3.12
-
-      - name: Select the lanes this change needs
-        id: lanes
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: uv run python -m scripts.ci_lanes --event "$EVENT_NAME" --base "$PR_BASE_SHA"
-
-      - name: Rebuild bundled edge264 with release toolchain
-        if: steps.lanes.outputs.native == 'true'
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
-        run: |
-          uv run python scripts/build_edge264_macos.py --output "$RUNNER_TEMP/edge264_test"
-          cmp bd_to_avp/bin/edge264_test "$RUNNER_TEMP/edge264_test"
 
       - name: Install support diagnostics dependencies
         working-directory: support-diagnostics
@@ -119,107 +137,6 @@ jobs:
       - name: Verify release evidence index
         run: uv run python -m scripts.release_evidence_v2 index --check --worktree
 
-      - name: Install XcodeGen
-        if: steps.lanes.outputs.native == 'true' || steps.lanes.outputs.player == 'true'
-        run: brew install xcodegen
-
-      - name: Build and conditionally test BDToAVPPlayer visionOS bundle
-        if: steps.lanes.outputs.player == 'true'
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
-        run: |
-          set -euo pipefail
-          cd macos
-          export DEVELOPER_DIR="/Applications/Xcode_27.0.app/Contents/Developer"
-          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
-          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 27.0"
-          xcodegen generate --spec project.yml
-          xcodebuild build-for-testing \
-            -project BluRayToVisionPro.xcodeproj \
-            -scheme BDToAVPPlayer \
-            -configuration Debug \
-            -destination "generic/platform=visionOS Simulator" \
-            -derivedDataPath build/BDToAVPPlayerDerivedData \
-            CODE_SIGNING_ALLOWED=NO
-
-          runtime_id="$(xcrun simctl list runtimes -j | jq -r '
-            [.runtimes[]
-              | select(.isAvailable == true)
-              | select(.platform == "visionOS" or (.name | startswith("visionOS")))
-              | select((.version | split(".")[0] | tonumber) >= 26)
-              | .identifier]
-            | first // empty
-          ')"
-          device_type_id="$(xcrun simctl list devicetypes -j | jq -r '
-            [.devicetypes[] | select(.name == "Apple Vision Pro") | .identifier]
-            | first // empty
-          ')"
-
-          if [[ -z "$runtime_id" || -z "$device_type_id" ]]; then
-            echo "::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS 26+ runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none})."
-            exit 0
-          fi
-
-          simulator_name="BDToAVPPlayer CI ${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
-          simulator_udid="$(xcrun simctl create "$simulator_name" "$device_type_id" "$runtime_id")"
-          cleanup_simulator() {
-            xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
-            xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
-          }
-          trap cleanup_simulator EXIT INT TERM
-
-          xcrun simctl boot "$simulator_udid"
-          xcrun simctl bootstatus "$simulator_udid" -b
-          xcodebuild test-without-building \
-            -project BluRayToVisionPro.xcodeproj \
-            -scheme BDToAVPPlayer \
-            -configuration Debug \
-            -destination "platform=visionOS Simulator,id=$simulator_udid" \
-            -derivedDataPath build/BDToAVPPlayerDerivedData \
-            CODE_SIGNING_ALLOWED=NO
-
-      - name: macOS app tests
-        if: steps.lanes.outputs.native == 'true'
-        run: uv run python scripts/native_app.py test
-
-      - name: Package native macOS app smoke
-        if: steps.lanes.outputs.native == 'true'
-        env:
-          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: https://diagnostics.shinycomputers.com
-          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
-        run: uv run python scripts/native_app.py package
-
-      - name: Installed Mac UI smoke
-        if: steps.lanes.outputs.native == 'true'
-        id: installed-ui
-        timeout-minutes: 10
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
-        run: |
-          set -euo pipefail
-          uv run python -m scripts.pre_signing_ui \
-            --app "macos/build/package/3D Blu-ray to Vision Pro.app" \
-            --dmg "$RUNNER_TEMP/ci-installed-ui.dmg" \
-            --qualification-root "$RUNNER_TEMP/ci-installed-ui" \
-            --evidence-directory "$RUNNER_TEMP/ci-installed-ui-evidence" \
-            --output-report "$RUNNER_TEMP/ci-installed-ui-report.json" \
-            --failure-diagnostics-directory "$RUNNER_TEMP/ci-installed-ui-diagnostics" \
-            --source-sha "$(git rev-parse HEAD)" \
-            --workflow-run-id "$GITHUB_RUN_ID" \
-            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
-
-      - name: Retain installed Mac UI evidence
-        if: always() && steps.installed-ui.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: ci-installed-ui-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/ci-installed-ui-report.json
-            ${{ runner.temp }}/ci-installed-ui-evidence
-            ${{ runner.temp }}/ci-installed-ui-diagnostics
-          if-no-files-found: ignore
-          retention-days: 7
-
       - name: Import smoke
         run: >-
           uv run python -c
@@ -242,10 +159,6 @@ jobs:
 
       - name: Build Python package
         run: uv build
-
-      - name: Verify bundled tools and deployment targets
-        if: steps.lanes.outputs.native == 'true'
-        run: uv run python scripts/verify_app_tools.py
 
       - name: Resolve post-publication milestone context
         id: milestone-context
@@ -327,3 +240,187 @@ jobs:
             echo "Blocking post-publication qualification is incomplete or invalid." >&2
             exit 1
           fi
+
+  native:
+    name: Mac app
+    needs: lanes
+    if: needs.lanes.outputs.native == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --python 3.12
+
+      - name: Rebuild bundled edge264 with release toolchain
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+        run: |
+          uv run python scripts/build_edge264_macos.py --output "$RUNNER_TEMP/edge264_test"
+          cmp bd_to_avp/bin/edge264_test "$RUNNER_TEMP/edge264_test"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: macOS app tests
+        run: uv run python scripts/native_app.py test
+
+      - name: Package native macOS app smoke
+        env:
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: https://diagnostics.shinycomputers.com
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+        run: uv run python scripts/native_app.py package
+
+      - name: Installed Mac UI smoke
+        id: installed-ui
+        timeout-minutes: 10
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.pre_signing_ui \
+            --app "macos/build/package/3D Blu-ray to Vision Pro.app" \
+            --dmg "$RUNNER_TEMP/ci-installed-ui.dmg" \
+            --qualification-root "$RUNNER_TEMP/ci-installed-ui" \
+            --evidence-directory "$RUNNER_TEMP/ci-installed-ui-evidence" \
+            --output-report "$RUNNER_TEMP/ci-installed-ui-report.json" \
+            --failure-diagnostics-directory "$RUNNER_TEMP/ci-installed-ui-diagnostics" \
+            --source-sha "$(git rev-parse HEAD)" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Retain installed Mac UI evidence
+        if: always() && steps.installed-ui.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-installed-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ci-installed-ui-report.json
+            ${{ runner.temp }}/ci-installed-ui-evidence
+            ${{ runner.temp }}/ci-installed-ui-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Verify bundled tools and deployment targets
+        run: uv run python scripts/verify_app_tools.py
+
+  player:
+    name: visionOS player
+    needs: lanes
+    if: needs.lanes.outputs.player == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --python 3.12
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build and conditionally test BDToAVPPlayer visionOS bundle
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          cd macos
+          export DEVELOPER_DIR="/Applications/Xcode_27.0.app/Contents/Developer"
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 27.0"
+          xcodegen generate --spec project.yml
+          xcodebuild build-for-testing \
+            -project BluRayToVisionPro.xcodeproj \
+            -scheme BDToAVPPlayer \
+            -configuration Debug \
+            -destination "generic/platform=visionOS Simulator" \
+            -derivedDataPath build/BDToAVPPlayerDerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+          runtime_id="$(xcrun simctl list runtimes -j | jq -r '
+            [.runtimes[]
+              | select(.isAvailable == true)
+              | select(.platform == "visionOS" or (.name | startswith("visionOS")))
+              | select((.version | split(".")[0] | tonumber) >= 26)
+              | .identifier]
+            | first // empty
+          ')"
+          device_type_id="$(xcrun simctl list devicetypes -j | jq -r '
+            [.devicetypes[] | select(.name == "Apple Vision Pro") | .identifier]
+            | first // empty
+          ')"
+
+          if [[ -z "$runtime_id" || -z "$device_type_id" ]]; then
+            echo "::notice::Skipping BDToAVPPlayer visionOS unit tests: an available visionOS 26+ runtime and Apple Vision Pro device type are required (runtime=${runtime_id:-none}, device_type=${device_type_id:-none})."
+            exit 0
+          fi
+
+          simulator_name="BDToAVPPlayer CI ${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
+          simulator_udid="$(xcrun simctl create "$simulator_name" "$device_type_id" "$runtime_id")"
+          cleanup_simulator() {
+            xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
+            xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
+          }
+          trap cleanup_simulator EXIT INT TERM
+
+          xcrun simctl boot "$simulator_udid"
+          xcrun simctl bootstatus "$simulator_udid" -b
+          xcodebuild test-without-building \
+            -project BluRayToVisionPro.xcodeproj \
+            -scheme BDToAVPPlayer \
+            -configuration Debug \
+            -destination "platform=visionOS Simulator,id=$simulator_udid" \
+            -derivedDataPath build/BDToAVPPlayerDerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+  validate:
+    # The one required check. A lane that was not needed is skipped, which passes.
+    needs: [lanes, checks, native, player]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected lane to have passed
+        env:
+          RESULTS: >-
+            ${{ needs.lanes.result }} ${{ needs.checks.result }}
+            ${{ needs.native.result }} ${{ needs.player.result }}
+        run: |
+          echo "lane results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A lane did not pass: $result" >&2; exit 1 ;;
+            esac
+          done

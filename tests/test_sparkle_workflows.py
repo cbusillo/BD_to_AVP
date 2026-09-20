@@ -47,15 +47,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         workflow = load_workflow("ci.yml")
         checkouts = [
             step
-            for step in workflow["jobs"]["validate"]["steps"]
+            for job in workflow["jobs"].values()
+            for step in job["steps"]
             if step.get("uses", "").startswith("actions/checkout@")
         ]
 
-        self.assertEqual(len(checkouts), 1)
-        checkout = checkouts[0]
-        self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
-        self.assertEqual(checkout["with"]["fetch-depth"], "0")
-        self.assertEqual(checkout["with"]["persist-credentials"], "false")
+        # Every job that checks out the repository gets full history without stored credentials.
+        self.assertTrue(checkouts)
+        for checkout in checkouts:
+            self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
+            self.assertEqual(checkout["with"]["fetch-depth"], "0")
+            self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
     def test_sparkle_bundle_uses_importable_module_entrypoint(self) -> None:
         workflow = load_release_engine()
@@ -1216,8 +1218,7 @@ fi
 
     def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:
         workflow = load_workflow("ci.yml")
-        steps = workflow["jobs"]["validate"]["steps"]
-        by_name = {step["name"]: step for step in steps}
+        by_name = {step["name"]: step for job in workflow["jobs"].values() for step in job["steps"]}
         context = by_name["Resolve post-publication milestone context"]
         classify = by_name["Classify post-publication milestone evidence"]
         upload = by_name["Upload post-publication milestone report"]
