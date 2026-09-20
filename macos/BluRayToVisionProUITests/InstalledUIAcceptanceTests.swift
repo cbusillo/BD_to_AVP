@@ -301,6 +301,10 @@ final class InstalledUIAcceptanceTests: XCTestCase {
     private func launchInstalledApp(context: QualificationContext,
                                     appearance: QualificationAppearance) throws -> XCUIApplication {
         let app = XCUIApplication(url: context.appURL)
+        // The synthetic home confines files only. macOS serves UserDefaults for the real user whatever these
+        // variables say, so on a developer machine this app shares the installed app's preferences. That is
+        // accepted (#769): no receipt depends on a preference. Prefer a launch argument to clicking a choice
+        // the app would save.
         app.launchEnvironment = [
             "HOME": context.syntheticHome.path,
             "CFFIXED_USER_HOME": context.syntheticHome.path,
