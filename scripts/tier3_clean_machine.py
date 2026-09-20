@@ -108,6 +108,140 @@ class CleanMachineError(RuntimeError):
     pass
 
 
+UPDATER_GUARD_REASONS = frozenset(
+    {
+        "process-count",
+        "window-duplicate",
+        "window-missing",
+        "window-changed",
+        "button-duplicate",
+        "button-missing",
+        "button-title",
+        "button-disabled",
+    }
+)
+
+# The decisions live in handlers that take plain values, so the real guard logic
+# can be executed with synthetic windows and buttons. Reading an accessibility
+# attribute can raise, and an `error` raised inside `try` is swallowed, so the
+# run handler only collects values inside `try` and decides outside it.
+UPDATER_GUARD_HANDLERS = """on chooseWindow(windowIdentifiers, installButtonCounts, expectedWindowMatch)
+    set chosenIndex to 0
+    set actualMatch to "none"
+    set matchCount to 0
+    repeat with i from 1 to count of windowIdentifiers
+        if (item i of windowIdentifiers) is "SUUpdateAlert" then
+            set matchCount to matchCount + 1
+            set chosenIndex to i
+            set actualMatch to "identifier"
+        end if
+    end repeat
+    if matchCount is 0 then
+        repeat with i from 1 to count of installButtonCounts
+            if (item i of installButtonCounts) > 0 then
+                set matchCount to matchCount + 1
+                set chosenIndex to i
+                set actualMatch to "button-identifier"
+            end if
+        end repeat
+    end if
+    if matchCount > 1 then return {"window-duplicate", 0}
+    if matchCount is 0 then return {"window-missing", 0}
+    if actualMatch is not expectedWindowMatch then return {"window-changed", 0}
+    return {"ok", chosenIndex}
+end chooseWindow
+
+on chooseButton(buttonIdentifiers, buttonTitles, buttonsEnabled, expectedIdentifier, expectedTitle)
+    set chosenIndex to 0
+    set matchCount to 0
+    repeat with i from 1 to count of buttonTitles
+        if expectedIdentifier is not "" then
+            set isMatch to (item i of buttonIdentifiers) is expectedIdentifier
+        else
+            set isMatch to (item i of buttonTitles) is expectedTitle
+        end if
+        if isMatch then
+            set matchCount to matchCount + 1
+            set chosenIndex to i
+        end if
+    end repeat
+    if matchCount > 1 then return {"button-duplicate", 0}
+    if matchCount is 0 then return {"button-missing", 0}
+    if (item chosenIndex of buttonTitles) is not expectedTitle then return {"button-title", 0}
+    if not (item chosenIndex of buttonsEnabled) then return {"button-disabled", 0}
+    return {"ok", chosenIndex}
+end chooseButton
+
+"""
+
+UPDATER_PRESS_RUN = """on rejectPress(guardReason)
+    error "Updater state changed before the guarded press. guard=" & guardReason
+end rejectPress
+
+on run argv
+    set targetBundleID to item 1 of argv
+    set expectedWindowMatch to item 2 of argv
+    set expectedIdentifier to item 3 of argv
+    set expectedTitle to item 4 of argv
+    tell application "System Events"
+        set processMatches to every application process whose bundle identifier is targetBundleID
+        if (count of processMatches) is not 1 then my rejectPress("process-count")
+        set targetProcess to item 1 of processMatches
+        tell targetProcess
+            set candidateWindows to windows
+            set windowIdentifiers to {}
+            set installButtonCounts to {}
+            repeat with candidateWindow in candidateWindows
+                set windowIdentifier to ""
+                try
+                    set windowIdentifier to (value of attribute "AXIdentifier" of candidateWindow) as text
+                end try
+                set end of windowIdentifiers to windowIdentifier
+                set installButtons to 0
+                repeat with candidateButton in buttons of candidateWindow
+                    set candidateIdentifier to ""
+                    try
+                        set candidateIdentifier to (value of attribute "AXIdentifier" of candidateButton) as text
+                    end try
+                    if candidateIdentifier is "SPUUserUpdateChoiceInstall" then set installButtons to installButtons + 1
+                    if candidateIdentifier is "SUStatusInstallAndRelaunch" then set installButtons to installButtons + 1
+                end repeat
+                set end of installButtonCounts to installButtons
+            end repeat
+            set windowChoice to my chooseWindow(windowIdentifiers, installButtonCounts, expectedWindowMatch)
+            if (item 1 of windowChoice) is not "ok" then my rejectPress(item 1 of windowChoice)
+            set targetWindow to item (item 2 of windowChoice) of candidateWindows
+
+            set candidateButtons to buttons of targetWindow
+            set buttonIdentifiers to {}
+            set buttonTitles to {}
+            set buttonsEnabled to {}
+            repeat with candidateButton in candidateButtons
+                set buttonIdentifier to ""
+                try
+                    set buttonIdentifier to (value of attribute "AXIdentifier" of candidateButton) as text
+                end try
+                set buttonTitle to ""
+                try
+                    set buttonTitle to (name of candidateButton) as text
+                end try
+                set buttonEnabled to false
+                try
+                    set buttonEnabled to (enabled of candidateButton) as boolean
+                end try
+                set end of buttonIdentifiers to buttonIdentifier
+                set end of buttonTitles to buttonTitle
+                set end of buttonsEnabled to buttonEnabled
+            end repeat
+            set buttonChoice to my chooseButton(buttonIdentifiers, buttonTitles, buttonsEnabled, ¬
+                expectedIdentifier, expectedTitle)
+            if (item 1 of buttonChoice) is not "ok" then my rejectPress(item 1 of buttonChoice)
+            perform action "AXPress" of (item (item 2 of buttonChoice) of candidateButtons)
+        end tell
+    end tell
+end run"""
+
+
 class SparkleUpdateFailure(CleanMachineError):
     def __init__(
         self,
@@ -116,11 +250,15 @@ class SparkleUpdateFailure(CleanMachineError):
         reason_code: str,
         state: SparkleUpdateState,
         action_pressed: bool,
+        guard_reason: str = "",
+        action_count: int = 0,
     ) -> None:
         super().__init__(message)
         self.reason_code = reason_code
         self.state = state
         self.action_pressed = action_pressed
+        self.guard_reason = guard_reason
+        self.action_count = action_count
 
     @property
     def retryable(self) -> bool:
@@ -553,6 +691,10 @@ def _sparkle_script_failure(error: CleanMachineError, *, action_pressed: bool) -
         "Updater state changed before the guarded press.": "updater-state-changed",
     }
     reason_code = next((code for marker, code in markers.items() if marker in message), "updater-script-failure")
+    guard_reason = ""
+    if reason_code == "updater-state-changed":
+        reported = re.search(r"guard=([a-z-]+)", message)
+        guard_reason = reported.group(1) if reported and reported.group(1) in UPDATER_GUARD_REASONS else "unclassified"
     state = SparkleUpdateState.UNKNOWN
     if reason_code in {"application-process-timeout", "update-menu-timeout"}:
         state = SparkleUpdateState.WAITING_FOR_WINDOW
@@ -561,6 +703,7 @@ def _sparkle_script_failure(error: CleanMachineError, *, action_pressed: bool) -
         reason_code=reason_code,
         state=state,
         action_pressed=action_pressed,
+        guard_reason=guard_reason,
     )
 
 
@@ -1601,78 +1744,7 @@ end run"""
 
     @staticmethod
     def _updater_press_script() -> str:
-        return """on run argv
-    set targetBundleID to item 1 of argv
-    set expectedWindowMatch to item 2 of argv
-    set expectedIdentifier to item 3 of argv
-    set expectedTitle to item 4 of argv
-    tell application "System Events"
-        set processMatches to every application process whose bundle identifier is targetBundleID
-        if (count of processMatches) is not 1 then
-            error "Updater state changed before the guarded press."
-        end if
-        set targetProcess to item 1 of processMatches
-        tell targetProcess
-            set targetWindow to missing value
-            set actualWindowMatch to "none"
-            repeat with candidateWindow in windows
-                try
-                    if (value of attribute "AXIdentifier" of candidateWindow) is "SUUpdateAlert" then
-                        if targetWindow is not missing value then
-                            error "Updater state changed before the guarded press."
-                        end if
-                        set targetWindow to candidateWindow
-                        set actualWindowMatch to "identifier"
-                    end if
-                end try
-            end repeat
-            if targetWindow is missing value then
-                repeat with candidateWindow in windows
-                    repeat with candidateButton in buttons of candidateWindow
-                        try
-                            set candidateIdentifier to value of attribute "AXIdentifier" of candidateButton
-                            set isInstallChoice to candidateIdentifier is "SPUUserUpdateChoiceInstall"
-                            set isFinalInstallChoice to candidateIdentifier is "SUStatusInstallAndRelaunch"
-                            if isInstallChoice or isFinalInstallChoice then
-                                if targetWindow is not missing value then
-                                    error "Updater state changed before the guarded press."
-                                end if
-                                set targetWindow to candidateWindow
-                                set actualWindowMatch to "button-identifier"
-                                exit repeat
-                            end if
-                        end try
-                    end repeat
-                end repeat
-            end if
-            if targetWindow is missing value or actualWindowMatch is not expectedWindowMatch then
-                error "Updater state changed before the guarded press."
-            end if
-
-            set selectedButton to missing value
-            if expectedIdentifier is not "" then
-                repeat with candidateButton in buttons of targetWindow
-                    try
-                        if (value of attribute "AXIdentifier" of candidateButton) is expectedIdentifier then
-                            if selectedButton is not missing value then
-                                error "Updater state changed before the guarded press."
-                            end if
-                            set selectedButton to candidateButton
-                        end if
-                    end try
-                end repeat
-            else if exists button expectedTitle of targetWindow then
-                set selectedButton to button expectedTitle of targetWindow
-            end if
-            if selectedButton is missing value then error "Updater state changed before the guarded press."
-            if (name of selectedButton as text) is not expectedTitle then
-                error "Updater state changed before the guarded press."
-            end if
-            if not (enabled of selectedButton) then error "Updater state changed before the guarded press."
-            perform action "AXPress" of selectedButton
-        end tell
-    end tell
-end run"""
+        return UPDATER_GUARD_HANDLERS + UPDATER_PRESS_RUN
 
 
 def _case_policy(policy: Mapping[str, Any], case_id: str) -> Mapping[str, Any]:
@@ -2005,11 +2077,19 @@ def _perform_sparkle_update(
             if error.reason_code != "updater-state-changed":
                 raise
             record_transition("intent-invalidated", observation)
+            earlier = (
+                "no action was pressed"
+                if action_count == 0
+                else f"this press was rejected after {action_count} earlier action(s) were pressed"
+            )
             raise SparkleUpdateFailure(
-                "Sparkle updater changed after intent was durably recorded; no action was pressed.",
+                f"Sparkle updater changed after intent was durably recorded; {earlier} "
+                f"(guard={error.guard_reason or 'unclassified'}, phase={observation.state.value}).",
                 reason_code="updater-state-changed",
                 state=observation.state,
                 action_pressed=action_count > 0,
+                guard_reason=error.guard_reason or "unclassified",
+                action_count=action_count,
             ) from error
         pressed_journal_sha256 = record_transition("pressed", observation)
         action_count += 1
@@ -2199,6 +2279,7 @@ def _record_sparkle_failure_diagnostics(
     candidate: ReleaseArtifact,
     failure_stage: str,
     reason_code: str,
+    failure: SparkleUpdateFailure | None = None,
 ) -> str:
     try:
         facts = operations.collect_sparkle_diagnostics(runtime_layout.home)
@@ -2225,6 +2306,14 @@ def _record_sparkle_failure_diagnostics(
         "schema_version": 1,
         "status": "failed",
     }
+    if failure is not None and failure.guard_reason:
+        # Fixed vocabulary only: no window contents, titles or paths.
+        payload = {
+            **payload,
+            "action_count": failure.action_count,
+            "action_phase": failure.state.value,
+            "guard_reason": failure.guard_reason,
+        }
     if config.diagnostics_output is not None:
         _write_json(config.diagnostics_output.resolve(), payload)
     return (
@@ -2635,12 +2724,15 @@ def _run_qualification(
                 candidate=candidate,
                 failure_stage=failure_stage,
                 reason_code=error.reason_code,
+                failure=error,
             )
             raise SparkleUpdateFailure(
                 f"{error} {diagnostic_summary}",
                 reason_code=error.reason_code,
                 state=error.state,
                 action_pressed=error.action_pressed,
+                guard_reason=error.guard_reason,
+                action_count=error.action_count,
             ) from error
         except (CleanMachineError, OSError, subprocess.TimeoutExpired) as error:
             diagnostic_summary = _record_sparkle_failure_diagnostics(
