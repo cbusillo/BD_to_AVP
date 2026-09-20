@@ -21,7 +21,7 @@ final class MovieSharingController: ObservableObject {
     private static let foldersKey = "movieSharing.approvedFolders.v1"
     private static let enabledKey = "movieSharing.enabled.v1"
 
-    init(defaults: UserDefaults = .standard, trust: MovieLibraryTrustStore = MovieLibraryTrustStore()) {
+    init(defaults: UserDefaults = .standard, trust: MovieLibraryTrustStore = .forRunningApp()) {
         self.defaults = defaults
         self.trust = trust
         do {
