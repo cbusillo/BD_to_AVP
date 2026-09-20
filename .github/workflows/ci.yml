@@ -47,7 +47,15 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups --python 3.12
 
+      - name: Select the lanes this change needs
+        id: lanes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run python -m scripts.ci_lanes --event "$EVENT_NAME" --base "$PR_BASE_SHA"
+
       - name: Rebuild bundled edge264 with release toolchain
+        if: steps.lanes.outputs.native == 'true'
         env:
           DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
         run: |
@@ -112,9 +120,11 @@ jobs:
         run: uv run python -m scripts.release_evidence_v2 index --check --worktree
 
       - name: Install XcodeGen
+        if: steps.lanes.outputs.native == 'true' || steps.lanes.outputs.player == 'true'
         run: brew install xcodegen
 
       - name: Build and conditionally test BDToAVPPlayer visionOS bundle
+        if: steps.lanes.outputs.player == 'true'
         env:
           DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
         run: |
@@ -169,15 +179,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
       - name: macOS app tests
+        if: steps.lanes.outputs.native == 'true'
         run: uv run python scripts/native_app.py test
 
       - name: Package native macOS app smoke
+        if: steps.lanes.outputs.native == 'true'
         env:
           BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: https://diagnostics.shinycomputers.com
           DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
         run: uv run python scripts/native_app.py package
 
       - name: Installed Mac UI smoke
+        if: steps.lanes.outputs.native == 'true'
         id: installed-ui
         timeout-minutes: 10
         env:
@@ -231,6 +244,7 @@ jobs:
         run: uv build
 
       - name: Verify bundled tools and deployment targets
+        if: steps.lanes.outputs.native == 'true'
         run: uv run python scripts/verify_app_tools.py
 
       - name: Resolve post-publication milestone context

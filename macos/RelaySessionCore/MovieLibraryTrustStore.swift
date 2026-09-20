@@ -62,6 +62,55 @@ final class MovieLibraryTrustStore: @unchecked Sendable {
         self.write = write
     }
 
+    /// The store the running app should use.
+    ///
+    /// A team-signed app keeps its pairing identity in the Keychain. A build with
+    /// no team identifier (an ad-hoc local build, or the unit-test host) is a
+    /// different application to the Keychain every time it is rebuilt, so it would
+    /// ask for the login password to read the production item on every launch. It
+    /// gets its own owner-only file instead and never touches that item.
+    static func forRunningApp(
+        isTeamSigned: Bool = runningCodeHasTeamIdentifier(),
+        localBuildDirectory: URL? = nil
+    ) -> MovieLibraryTrustStore {
+        guard !isTeamSigned else { return MovieLibraryTrustStore() }
+        let directory = localBuildDirectory ?? FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.shinycomputers.bd-to-avp", isDirectory: true)
+        let file = directory.appendingPathComponent("local-build-movie-sharing.json")
+        return MovieLibraryTrustStore(
+            read: {
+                guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+                return try Data(contentsOf: file)
+            },
+            write: { data in
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+                try data.write(to: file, options: [.atomic])
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            }
+        )
+    }
+
+    static func runningCodeHasTeamIdentifier() -> Bool {
+        #if os(macOS)
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return true }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return true }
+        var information: CFDictionary?
+        let flags = SecCSFlags(rawValue: kSecCSSigningInformation)
+        guard SecCodeCopySigningInformation(staticCode, flags, &information) == errSecSuccess,
+              let details = information as? [String: Any] else { return true }
+        return details[kSecCodeInfoTeamIdentifier as String] as? String != nil
+        #else
+        return true
+        #endif
+    }
+
     private func load() throws -> Document {
         guard let data = try read() else { return Document() }
         guard data.count <= 64 * 1_024, let document = try? JSONDecoder().decode(Document.self, from: data),
