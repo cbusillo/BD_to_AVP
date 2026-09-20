@@ -94,6 +94,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             || isWorkerCancellationSmoke(arguments: arguments)
     }
 
+    /// Xcode sets this variable only in a process that hosts unit tests. An app launched by a UI test does not have it.
+    nonisolated static func isUnitTestHost(environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    /// Startup work that reaches the user's Keychain item and shared-folder bookmarks is for a person using the app.
+    nonisolated static func suppressesDefaultLaunch(arguments: [String], environment: [String: String]) -> Bool {
+        isAutomationSmoke(arguments: arguments) || isUnitTestHost(environment: environment)
+    }
+
     func attach(window: NSWindow, workCoordinator: AppWorkCoordinator) {
         self.workCoordinator = workCoordinator
         guard managedWindow !== window else {
