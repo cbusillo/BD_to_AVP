@@ -1,0 +1,66 @@
+{
+  "capture_sha256": "d2faad01b6dbac117245f3254f7bc7d6f77c7dd08d6e4547f64b81f4a8295ccb",
+  "capture_workflow": {
+    "actor": "shiny-code-bot",
+    "path": ".github/workflows/release-evidence.yml",
+    "run_attempt": 1,
+    "run_id": 35455876916
+  },
+  "captured_at": "2026-09-19T16:43:54Z",
+  "live_appcast": {
+    "sha256": "d14b0c4a30787441c8adea3a58f664757a3d485163fa685a9819ce3593af954d",
+    "verified_at": "2026-09-19T16:43:54Z"
+  },
+  "qualification_record": {
+    "path": "docs/release-evidence/v0.3.3-beta.4/qualification-record.json",
+    "sha256": "93b60623466ef2d9f452c546bf107a385b5ce8f9e52aab898b84d1a2a5b7e1fc"
+  },
+  "receipt": {
+    "asset_id": 575103605,
+    "file_sha256": "7a424e158aed2a66e4de84b6a621c8b5df136eac7d0b92ce950678655ea50266",
+    "path": "docs/release-evidence/v0.3.3-beta.4/release-receipt.json",
+    "receipt_sha256": "e133e73c06c98d6c736544ea9935c457c33c05be5e95e3b0a92ff7b392ef92ed"
+  },
+  "record_type": "capture",
+  "release_tag": "v0.3.3-beta.4",
+  "release_workflow": {
+    "actor": "shiny-code-bot",
+    "path": ".github/workflows/prerelease.yml",
+    "run_attempt": 1,
+    "run_id": 35431319669
+  },
+  "repository": "cbusillo/BD_to_AVP",
+  "schema_version": 2,
+  "signed_ui": {
+    "archive": {
+      "path": "docs/release-evidence/v0.3.3-beta.4/signed-artifact-ui.zip",
+      "sha256": "5634bce505f2f0ed754d61a57ae25b066d183773ad1ee3e1fbf32dddf2ce741b"
+    },
+    "artifact_id": 10588411900,
+    "receipt": {
+      "file_sha256": "0ef16507b28f0d6dbca77f686c800186fe6bae29ef5b9e0d2c738ccca3a1040b",
+      "path": "docs/release-evidence/v0.3.3-beta.4/signed-artifact-ui-receipt.json",
+      "receipt_sha256": "813eaecff39b45d208215674e190b907492fb47d92819d8d924fce14b79baad5"
+    }
+  },
+  "source_inputs": {
+    "policy": {
+      "path": "docs/qualification/release-qualification-policy-v1.json",
+      "sha256": "448f803fff707ef740a5d0ab0ac7327bc345a029499915fd0e80d5f0af648770"
+    },
+    "qualification_template": {
+      "path": "docs/qualification/v0.3.3-beta.4-signed-qualification-v1.json",
+      "sha256": "b5e9e07341228e5c49de87356da5e5c0b166ae9a710985b8d854333df9fe3bf8"
+    },
+    "route_table": {
+      "path": "docs/qualification/video-quality-route-table-v2.json",
+      "sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214"
+    },
+    "runner": {
+      "path": ".github/workflows/milestone-qualification.yml",
+      "sha256": "3c78f40b9506efe6ca78f0cba33e27f8b79b40a1c7a340198ff64b4eda9d6ea7"
+    }
+  },
+  "source_sha": "32ad56270e1dc2afe682f35323c6487d309e2df4",
+  "state": "CAPTURED"
+}
