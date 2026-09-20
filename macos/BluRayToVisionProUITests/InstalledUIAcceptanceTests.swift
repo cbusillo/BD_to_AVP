@@ -180,9 +180,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
             !lightApp.descendants(matching: .any)["source-configuration-sheet"].exists
         })
 
-        let lightWindow = lightApp.windows.firstMatch
-        XCTAssertTrue(lightWindow.exists)
-        attachScreenshot(lightWindow.screenshot(), name: "screenshot-light.png")
+        try attachMainWindowScreenshot(of: lightApp, showing: .light, name: "screenshot-light.png")
 
         openUpdatesSettings(in: lightApp)
         let updateAction = lightApp.buttons["update-action"]
@@ -219,12 +217,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         defer {
             darkApp.terminate()
         }
-        XCTAssertTrue(
-            darkApp.descendants(matching: .any)["main-window-content"].waitForExistence(timeout: 30)
-        )
-        let darkWindow = darkApp.windows.firstMatch
-        XCTAssertTrue(darkWindow.waitForExistence(timeout: 30))
-        attachScreenshot(darkWindow.screenshot(), name: "screenshot-dark.png")
+        try attachMainWindowScreenshot(of: darkApp, showing: .dark, name: "screenshot-dark.png")
     }
 
     func testDevelopmentSetupShell() throws {
@@ -312,7 +305,8 @@ final class InstalledUIAcceptanceTests: XCTestCase {
             "HOME": context.syntheticHome.path,
             "CFFIXED_USER_HOME": context.syntheticHome.path,
         ]
-        app.launchArguments = appearance.launchArguments
+        // A restored Settings window from the previous launch must not stand in for the main window.
+        app.launchArguments = appearance.launchArguments + ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 30))
         let matches = NSRunningApplication.runningApplications(withBundleIdentifier: context.bundleIdentifier)
@@ -375,6 +369,39 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         }
     }
 
+    /// Captures the window that holds the main content, and only under the name of the appearance it shows.
+    private func attachMainWindowScreenshot(of app: XCUIApplication,
+                                            showing appearance: QualificationAppearance,
+                                            name: String) throws {
+        let mainWindow = app.windows.containing(.any, identifier: "main-window-content").firstMatch
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 30), "The main window is not open.")
+        liftAboveDock(mainWindow)
+        let screenshot = mainWindow.screenshot()
+        let brightness = try XCTUnwrap(QualificationAppearance.meanBrightness(of: screenshot.image),
+                                       "The main-window screenshot could not be measured.")
+        XCTAssertEqual(
+            QualificationAppearance(meanBrightness: brightness), appearance,
+            "\(name) has mean brightness \(brightness), which is not a \(appearance) window. "
+                + "Dark needs the system in dark mode; the qualification runner sets it."
+        )
+        attachScreenshot(screenshot, name: name)
+    }
+
+    /// A window screenshot is a capture of its screen area, so a Dock over the bottom edge would be in it.
+    private func liftAboveDock(_ window: XCUIElement) {
+        guard let screen = NSScreen.screens.first else {
+            return
+        }
+        let visibleBottom = screen.frame.height - screen.visibleFrame.minY
+        let overlap = window.frame.maxY - visibleBottom
+        guard overlap > 0 else {
+            return
+        }
+        let titleBar = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: 14))
+        titleBar.press(forDuration: 0.3, thenDragTo: titleBar.withOffset(CGVector(dx: 0, dy: -overlap)))
+    }
+
     private func attachScreenshot(_ screenshot: XCUIScreenshot, name: String) {
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
@@ -414,8 +441,28 @@ private enum QualificationAppearance: Equatable {
         case .light:
             ["-NSRequiresAquaSystemAppearance", "YES"]
         case .dark:
-            ["-AppleInterfaceStyle", "Dark"]
+            // AppKit ignores an AppleInterfaceStyle argument; dark comes only from the system setting.
+            ["-NSRequiresAquaSystemAppearance", "NO"]
         }
+    }
+
+    init(meanBrightness: Double) {
+        self = meanBrightness < 0.5 ? .dark : .light
+    }
+
+    /// Mean grey level of the image, from 0 (black) to 1 (white).
+    static func meanBrightness(of image: NSImage) -> Double? {
+        let side = 64
+        var pixels = [UInt8](repeating: 0, count: side * side)
+        guard let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let context = CGContext(data: &pixels, width: side, height: side, bitsPerComponent: 8,
+                                      bytesPerRow: side, space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
+            return nil
+        }
+        context.interpolationQuality = .medium
+        context.draw(source, in: CGRect(x: 0, y: 0, width: side, height: side))
+        return Double(pixels.reduce(0) { $0 + Int($1) }) / Double(pixels.count * 255)
     }
 }
 

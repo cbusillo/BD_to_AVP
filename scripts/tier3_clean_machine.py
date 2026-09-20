@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import enum
 import hashlib
 import json
@@ -16,7 +17,7 @@ import time
 import urllib.request
 import uuid
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -809,6 +810,10 @@ def validate_environment(
         raise CleanMachineError(f"Qualification host is missing required tools: {', '.join(missing_tools)}.")
 
 
+def _dark_mode_script(action: str) -> str:
+    return f'tell application "System Events" to tell appearance preferences to {action}'
+
+
 class MacOSOperations:
     required_tools = ("defaults", "ditto", "hdiutil", "log", "open", "osascript", "xcrun", "xcodebuild")
 
@@ -838,6 +843,23 @@ class MacOSOperations:
             detail = "\n".join(details) or "command failed"
             raise CleanMachineError(f"Command failed ({command[0]}): {detail}")
         return result
+
+    @contextlib.contextmanager
+    def _system_dark_mode(self) -> Iterator[None]:
+        """Hold the system in dark mode, then restore it.
+
+        AppKit takes a dark appearance only from the system setting: it ignores an
+        AppleInterfaceStyle launch argument and the synthetic home's preferences. A launch
+        can still force light, so the UI test captures both appearances under this setting.
+        """
+        was_dark = self._run(["osascript", "-e", _dark_mode_script("return dark mode")]).stdout.strip() == "true"
+        if not was_dark:
+            self._run(["osascript", "-e", _dark_mode_script("set dark mode to true")])
+        try:
+            yield
+        finally:
+            if not was_dark:
+                self._run(["osascript", "-e", _dark_mode_script("set dark mode to false")])
 
     def _start_accessibility_collector(
         self,
@@ -1221,25 +1243,27 @@ class MacOSOperations:
             expected_url=RELEASES_URL if phase == "candidate" else release_notes_url,
         )
         try:
-            self._run(
-                [
-                    str(SYSTEM_TOOL_PATHS["xcodebuild"]),
-                    "-project",
-                    str(repo / "macos" / "BluRayToVisionPro.xcodeproj"),
-                    "-scheme",
-                    "BluRayToVisionProInstalledUI",
-                    "-derivedDataPath",
-                    str(derived_data),
-                    "-resultBundlePath",
-                    str(result_bundle),
-                    "-destination",
-                    "platform=macOS,arch=arm64",
-                    f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
-                    *(f"{key}={value}" for key, value in build_settings.items()),
-                    "test",
-                ],
-                timeout=UI_TEST_TIMEOUT_SECONDS,
-            )
+            # Only the candidate test captures appearance-labelled screenshots.
+            with self._system_dark_mode() if phase == "candidate" else contextlib.nullcontext():
+                self._run(
+                    [
+                        str(SYSTEM_TOOL_PATHS["xcodebuild"]),
+                        "-project",
+                        str(repo / "macos" / "BluRayToVisionPro.xcodeproj"),
+                        "-scheme",
+                        "BluRayToVisionProInstalledUI",
+                        "-derivedDataPath",
+                        str(derived_data),
+                        "-resultBundlePath",
+                        str(result_bundle),
+                        "-destination",
+                        "platform=macOS,arch=arm64",
+                        f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
+                        *(f"{key}={value}" for key, value in build_settings.items()),
+                        "test",
+                    ],
+                    timeout=UI_TEST_TIMEOUT_SECONDS,
+                )
         except BaseException as error:
             stdout, stderr = self._stop_accessibility_collector(collector)
             detail = stderr.strip() or stdout.strip()

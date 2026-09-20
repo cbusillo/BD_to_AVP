@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import json
 import os
 import platform
@@ -659,12 +660,11 @@ class Tier3CleanMachineTests(unittest.TestCase):
                             release_notes_url=release_notes_url,
                         )
 
-                    self.assertEqual(len(captured_commands), 2 if phase == "candidate" else 1)
                     finish_collector.assert_called_once_with(collector)
                     if phase == "updater":
                         updater_evidence = json.loads((output_directory / evidence_name).read_text(encoding="utf-8"))
                         self.assertIs(updater_evidence["release_notes_url_observed"], True)
-                    command = captured_commands[-1]
+                    (command,) = [item for item in captured_commands if Path(item[0]).name == "xcodebuild"]
                     expected_settings = {
                         "BD_TO_AVP_UI_APP_PATH": str(app_path),
                         "BD_TO_AVP_UI_BUNDLE_IDENTIFIER": BUNDLE_IDENTIFIER,
@@ -689,6 +689,75 @@ class Tier3CleanMachineTests(unittest.TestCase):
                         argument = f"{key}={value}"
                         self.assertEqual(command.count(argument), 1)
                         self.assertLess(command.index(argument), len(command) - 1)
+
+    def _collect_with_system_appearance(
+        self, *, phase: str, system_is_dark: bool, ui_test_fails: bool = False
+    ) -> tuple[list[bool], bool]:
+        """Run evidence collection against a fake system; return dark mode at each UI test run, and at the end."""
+        state = {"dark": system_is_dark}
+        dark_during_ui_test: list[bool] = []
+
+        def run(command: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            del kwargs
+            output = ""
+            if Path(command[0]).name == "osascript":
+                script = command[-1]
+                if script.endswith("return dark mode"):
+                    output = "true\n" if state["dark"] else "false\n"
+                elif script.endswith("set dark mode to true"):
+                    state["dark"] = True
+                elif script.endswith("set dark mode to false"):
+                    state["dark"] = False
+                else:
+                    raise AssertionError(f"unexpected script: {script}")
+            elif Path(command[0]).name == "xcodebuild":
+                dark_during_ui_test.append(state["dark"])
+                if ui_test_fails:
+                    raise CleanMachineError("UI test failed")
+            elif Path(command[0]).name == "ffmpeg":
+                Path(command[-1]).write_bytes(b"synthetic source")
+            return subprocess.CompletedProcess(command, 0, output, "")
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            synthetic_home = root / "home"
+            synthetic_home.mkdir()
+            with (
+                patch.object(MacOSOperations, "_run", side_effect=run),
+                patch.object(MacOSOperations, "_start_accessibility_collector", return_value=Mock()),
+                patch.object(MacOSOperations, "_stop_accessibility_collector", return_value=("", "")),
+                patch.object(MacOSOperations, "_finish_accessibility_collector"),
+                patch.object(MacOSOperations, "_extract_ui_attachments"),
+                contextlib.suppress(CleanMachineError),
+            ):
+                MacOSOperations().collect_ui_evidence(
+                    repo=root,
+                    phase=phase,
+                    app_path=root / APP_NAME,
+                    synthetic_home=synthetic_home,
+                    output_directory=root / "evidence",
+                    release_notes_url="https://example.test/notes",
+                )
+        return dark_during_ui_test, state["dark"]
+
+    def test_candidate_screenshots_are_captured_in_dark_mode_and_the_system_is_restored(self) -> None:
+        for ui_test_fails in (False, True):
+            with self.subTest(ui_test_fails=ui_test_fails):
+                during, after = self._collect_with_system_appearance(
+                    phase="candidate", system_is_dark=False, ui_test_fails=ui_test_fails
+                )
+                self.assertEqual(during, [True])
+                self.assertFalse(after, "A light system must be light again afterwards.")
+
+    def test_a_system_already_in_dark_mode_stays_dark(self) -> None:
+        during, after = self._collect_with_system_appearance(phase="candidate", system_is_dark=True)
+        self.assertEqual(during, [True])
+        self.assertTrue(after)
+
+    def test_updater_phase_leaves_the_system_appearance_alone(self) -> None:
+        during, after = self._collect_with_system_appearance(phase="updater", system_is_dark=False)
+        self.assertEqual(during, [False])
+        self.assertFalse(after)
 
     def test_collect_ui_evidence_rejects_skipped_test_without_phase_output(self) -> None:
         operations = MacOSOperations()
