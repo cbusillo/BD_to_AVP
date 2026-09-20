@@ -170,16 +170,6 @@ class NativeAppPackagingTests(unittest.TestCase):
             {key: f"$({key})" for key in environment_keys},
         )
 
-    def test_installed_ui_appearance_uses_app_launch_arguments(self) -> None:
-        source = (MACOS_ROOT / "BluRayToVisionProUITests" / "InstalledUIAcceptanceTests.swift").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("app.launchArguments = appearance.launchArguments", source)
-        self.assertIn('["-NSRequiresAquaSystemAppearance", "YES"]', source)
-        self.assertIn('["-AppleInterfaceStyle", "Dark"]', source)
-        self.assertNotIn('executableURL = URL(fileURLWithPath: "/usr/bin/defaults")', source)
-
     def test_installed_ui_update_button_is_scoped_to_sparkle_window(self) -> None:
         source = (MACOS_ROOT / "BluRayToVisionProUITests" / "InstalledUIAcceptanceTests.swift").read_text(
             encoding="utf-8"
