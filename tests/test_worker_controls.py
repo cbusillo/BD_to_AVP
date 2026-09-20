@@ -577,8 +577,9 @@ class WorkerControlProcessTests(unittest.TestCase):
                     "while waiting('extended'):\n"
                     " if len(paths)>1: paths[1].write_bytes(b'healthy sibling')\n"
                     " print('same repeated decoder line', flush=True); time.sleep(.04)\n"
-                    "paths[0].write_bytes(b'recovered output')\n"
-                    "while waiting('recovered'): time.sleep(.02)\n"
+                    "grown=b'recovered output'\n"
+                    "while waiting('recovered'):\n"
+                    " grown+=b'.'; [p.write_bytes(grown) for p in paths]; time.sleep(.02)\n"
                 )
                 result = ChildProcessRunner(monotonic_clock=clock).run(
                     ProcessSpec(
@@ -594,15 +595,24 @@ class WorkerControlProcessTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0)
                 events = [json.loads(line) for line in output.getvalue().splitlines()]
-                acknowledgements = [event["payload"] for event in events if event["type"] == "control.result"]
+                # Judge the episode this test set up. The clock runs fast, so a slow exit after
+                # recovery is itself a stall, and the runner is right to open a second episode.
+                stalls = [event["payload"] for event in events if event["type"] == "tool.stall"]
+                episode = [stall for stall in stalls if stall["stall_episode_id"] == stalls[0]["stall_episode_id"]]
+                self.assertEqual([stall["state"] for stall in episode], ["stalled", "extended", "recovered"])
+                self.assertEqual(stalls[: len(episode)], episode, "The first episode must finish before another.")
+                acknowledgements = [
+                    event["payload"]
+                    for event in events
+                    if event["type"] == "control.result"
+                    and event["payload"]["stall_episode_id"] == stalls[0]["stall_episode_id"]
+                ]
                 self.assertEqual(len(acknowledgements), 1)
                 self.assertTrue(acknowledgements[0]["accepted"])
-                states = [event["payload"]["state"] for event in events if event["type"] == "tool.stall"]
-                self.assertEqual(states, ["stalled", "extended", "recovered"])
                 self.assertNotIn("private-title", output.getvalue())
                 self.assertNotIn("same repeated decoder", output.getvalue())
                 if output_count == 2:
-                    stalled = next(event["payload"] for event in events if event["type"] == "tool.stall")
+                    stalled = stalls[0]
                     self.assertEqual([artifact["state"] for artifact in stalled["artifacts"]], ["stalled", "growing"])
 
 
