@@ -51,6 +51,8 @@ AUTOMATIC_CHECKS_KEY = "SUEnableAutomaticChecks"
 SENTINEL_VALUE = "tier3-preserve"
 LIVE_FEED_URL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
 RELEASES_URL = "https://github.com/cbusillo/BD_to_AVP/releases"
+# System Events preference suites and the boolean each must hold while UI screenshots are taken.
+SCREENSHOT_SYSTEM_SETTINGS = (("appearance preferences", "dark mode"), ("dock preferences", "autohide"))
 PROFILE_FIXTURE_V5_PATH = REPO_ROOT / "tests/fixtures/profile_library_v5.json"
 PROFILE_FIXTURE_V6_PATH = REPO_ROOT / "tests/fixtures/profile_library_v6.json"
 PROFILE_RELATIVE_PATH = Path("Library/Application Support/3D Blu-ray to Vision Pro/profiles.json")
@@ -953,8 +955,8 @@ def validate_environment(
         raise CleanMachineError(f"Qualification host is missing required tools: {', '.join(missing_tools)}.")
 
 
-def _dark_mode_script(action: str) -> str:
-    return f'tell application "System Events" to tell appearance preferences to {action}'
+def _system_events_script(preferences: str, action: str) -> str:
+    return f'tell application "System Events" to tell {preferences} to {action}'
 
 
 class MacOSOperations:
@@ -988,21 +990,26 @@ class MacOSOperations:
         return result
 
     @contextlib.contextmanager
-    def _system_dark_mode(self) -> Iterator[None]:
-        """Hold the system in dark mode, then restore it.
+    def _screenshot_conditions(self) -> Iterator[None]:
+        """Hold the system in dark mode with the Dock hidden, then restore both.
 
         AppKit takes a dark appearance only from the system setting: it ignores an
         AppleInterfaceStyle launch argument and the synthetic home's preferences. A launch
         can still force light, so the UI test captures both appearances under this setting.
+        A window screenshot is a capture of its screen area, and a hosted runner's screen is
+        too short for the main window to clear the Dock.
         """
-        was_dark = self._run(["osascript", "-e", _dark_mode_script("return dark mode")]).stdout.strip() == "true"
-        if not was_dark:
-            self._run(["osascript", "-e", _dark_mode_script("set dark mode to true")])
+        changed: list[str] = []
         try:
+            for preferences, setting in SCREENSHOT_SYSTEM_SETTINGS:
+                query = _system_events_script(preferences, f"return {setting}")
+                if self._run(["osascript", "-e", query]).stdout.strip() != "true":
+                    self._run(["osascript", "-e", _system_events_script(preferences, f"set {setting} to true")])
+                    changed.append(_system_events_script(preferences, f"set {setting} to false"))
             yield
         finally:
-            if not was_dark:
-                self._run(["osascript", "-e", _dark_mode_script("set dark mode to false")])
+            for restore in reversed(changed):
+                self._run(["osascript", "-e", restore])
 
     def _start_accessibility_collector(
         self,
@@ -1387,7 +1394,7 @@ class MacOSOperations:
         )
         try:
             # Only the candidate test captures appearance-labelled screenshots.
-            with self._system_dark_mode() if phase == "candidate" else contextlib.nullcontext():
+            with self._screenshot_conditions() if phase == "candidate" else contextlib.nullcontext():
                 self._run(
                     [
                         str(SYSTEM_TOOL_PATHS["xcodebuild"]),

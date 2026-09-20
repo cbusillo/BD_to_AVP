@@ -22,6 +22,7 @@ from scripts.artifact_identity import app_tree_sha256
 from scripts.release_receipt import build_receipt as build_release_receipt
 from scripts.release_receipt import write_receipt
 from scripts.tier3_clean_machine import (
+    SCREENSHOT_SYSTEM_SETTINGS,
     UPDATER_GUARD_HANDLERS,
     UPDATER_GUARD_REASONS,
     UPDATER_PRESS_RUN,
@@ -704,28 +705,25 @@ class Tier3CleanMachineTests(unittest.TestCase):
                         self.assertEqual(command.count(argument), 1)
                         self.assertLess(command.index(argument), len(command) - 1)
 
-    def _collect_with_system_appearance(
-        self, *, phase: str, system_is_dark: bool, ui_test_fails: bool = False
-    ) -> tuple[list[bool], bool]:
-        """Run evidence collection against a fake system; return dark mode at each UI test run, and at the end."""
-        state = {"dark": system_is_dark}
-        dark_during_ui_test: list[bool] = []
+    def _collect_on_system(
+        self, *, phase: str, system: dict[str, bool], ui_test_fails: bool = False
+    ) -> tuple[list[dict[str, bool]], dict[str, bool]]:
+        """Collect evidence against a fake system; return its settings at each UI test run, and at the end."""
+        system = dict(system)
+        during_ui_test: list[dict[str, bool]] = []
 
         def run(command: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             del kwargs
             output = ""
             if Path(command[0]).name == "osascript":
-                script = command[-1]
-                if script.endswith("return dark mode"):
-                    output = "true\n" if state["dark"] else "false\n"
-                elif script.endswith("set dark mode to true"):
-                    state["dark"] = True
-                elif script.endswith("set dark mode to false"):
-                    state["dark"] = False
+                action = command[-1].split(" preferences to ", maxsplit=1)[1]
+                if action.startswith("return "):
+                    output = "true\n" if system[action.removeprefix("return ")] else "false\n"
                 else:
-                    raise AssertionError(f"unexpected script: {script}")
+                    setting, value = action.removeprefix("set ").rsplit(" to ", maxsplit=1)
+                    system[setting] = {"true": True, "false": False}[value]
             elif Path(command[0]).name == "xcodebuild":
-                dark_during_ui_test.append(state["dark"])
+                during_ui_test.append(dict(system))
                 if ui_test_fails:
                     raise CleanMachineError("UI test failed")
             elif Path(command[0]).name == "ffmpeg":
@@ -752,26 +750,25 @@ class Tier3CleanMachineTests(unittest.TestCase):
                     output_directory=root / "evidence",
                     release_notes_url="https://example.test/notes",
                 )
-        return dark_during_ui_test, state["dark"]
+        return during_ui_test, system
 
-    def test_candidate_screenshots_are_captured_in_dark_mode_and_the_system_is_restored(self) -> None:
-        for ui_test_fails in (False, True):
-            with self.subTest(ui_test_fails=ui_test_fails):
-                during, after = self._collect_with_system_appearance(
-                    phase="candidate", system_is_dark=False, ui_test_fails=ui_test_fails
-                )
-                self.assertEqual(during, [True])
-                self.assertFalse(after, "A light system must be light again afterwards.")
+    def test_candidate_screenshots_are_captured_dark_without_the_dock_and_the_system_is_restored(self) -> None:
+        settings = [setting for _, setting in SCREENSHOT_SYSTEM_SETTINGS]
+        for already_set in ([], settings[:1], settings[1:], settings):
+            for ui_test_fails in (False, True):
+                with self.subTest(already_set=already_set, ui_test_fails=ui_test_fails):
+                    before = {setting: setting in already_set for setting in settings}
+                    during, after = self._collect_on_system(
+                        phase="candidate", system=before, ui_test_fails=ui_test_fails
+                    )
+                    self.assertEqual(during, [dict.fromkeys(settings, True)])
+                    self.assertEqual(after, before, "Each setting must end as it began.")
 
-    def test_a_system_already_in_dark_mode_stays_dark(self) -> None:
-        during, after = self._collect_with_system_appearance(phase="candidate", system_is_dark=True)
-        self.assertEqual(during, [True])
-        self.assertTrue(after)
-
-    def test_updater_phase_leaves_the_system_appearance_alone(self) -> None:
-        during, after = self._collect_with_system_appearance(phase="updater", system_is_dark=False)
-        self.assertEqual(during, [False])
-        self.assertFalse(after)
+    def test_updater_phase_leaves_the_system_settings_alone(self) -> None:
+        before = {setting: False for _, setting in SCREENSHOT_SYSTEM_SETTINGS}
+        during, after = self._collect_on_system(phase="updater", system=before)
+        self.assertEqual(during, [before])
+        self.assertEqual(after, before)
 
     def test_collect_ui_evidence_rejects_skipped_test_without_phase_output(self) -> None:
         operations = MacOSOperations()

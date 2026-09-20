@@ -375,7 +375,6 @@ final class InstalledUIAcceptanceTests: XCTestCase {
                                             name: String) throws {
         let mainWindow = app.windows.containing(.any, identifier: "main-window-content").firstMatch
         XCTAssertTrue(mainWindow.waitForExistence(timeout: 30), "The main window is not open.")
-        liftAboveDock(mainWindow)
         let screenshot = mainWindow.screenshot()
         let brightness = try XCTUnwrap(QualificationAppearance.meanBrightness(of: screenshot.image),
                                        "The main-window screenshot could not be measured.")
@@ -385,21 +384,6 @@ final class InstalledUIAcceptanceTests: XCTestCase {
                 + "Dark needs the system in dark mode; the qualification runner sets it."
         )
         attachScreenshot(screenshot, name: name)
-    }
-
-    /// A window screenshot is a capture of its screen area, so a Dock over the bottom edge would be in it.
-    private func liftAboveDock(_ window: XCUIElement) {
-        guard let screen = NSScreen.screens.first else {
-            return
-        }
-        let visibleBottom = screen.frame.height - screen.visibleFrame.minY
-        let overlap = window.frame.maxY - visibleBottom
-        guard overlap > 0 else {
-            return
-        }
-        let titleBar = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
-            .withOffset(CGVector(dx: 0, dy: 14))
-        titleBar.press(forDuration: 0.3, thenDragTo: titleBar.withOffset(CGVector(dx: 0, dy: -overlap)))
     }
 
     private func attachScreenshot(_ screenshot: XCUIScreenshot, name: String) {
@@ -442,7 +426,9 @@ private enum QualificationAppearance: Equatable {
             ["-NSRequiresAquaSystemAppearance", "YES"]
         case .dark:
             // AppKit ignores an AppleInterfaceStyle argument; dark comes only from the system setting.
-            ["-NSRequiresAquaSystemAppearance", "NO"]
+            // This is the app's second launch, when Sparkle would ask about automatic checks over the window;
+            // an argument answers for this launch only and is never saved.
+            ["-NSRequiresAquaSystemAppearance", "NO", "-SUEnableAutomaticChecks", "NO"]
         }
     }
 
