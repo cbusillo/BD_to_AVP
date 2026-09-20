@@ -37,6 +37,26 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertFalse(AppDelegate.isAutomationSmoke(arguments: ["app"]))
     }
 
+    func testDefaultLaunchIsSuppressedForSmokeRunsAndUnitTestHostsOnly() {
+        let hosted = ["XCTestConfigurationFilePath": "/tmp/session.xctestconfiguration"]
+        XCTAssertTrue(AppDelegate.suppressesDefaultLaunch(arguments: ["app"], environment: hosted))
+        XCTAssertTrue(
+            AppDelegate.suppressesDefaultLaunch(arguments: ["app", AppDelegate.startupSmokeArgument], environment: [:])
+        )
+        XCTAssertFalse(AppDelegate.suppressesDefaultLaunch(arguments: ["app"], environment: [:]))
+        XCTAssertFalse(AppDelegate.suppressesDefaultLaunch(arguments: ["app"], environment: ["HOME": "/Users/someone"]))
+    }
+
+    func testTheAppHostingTheseTestsSuppressesDefaultLaunch() {
+        // The real process: fails if Xcode stops marking test hosts the way the app detects them.
+        XCTAssertTrue(
+            AppDelegate.suppressesDefaultLaunch(
+                arguments: ProcessInfo.processInfo.arguments,
+                environment: ProcessInfo.processInfo.environment
+            )
+        )
+    }
+
     func testNotificationPresentationPolicyMatchesAppActivity() {
         XCTAssertEqual(AppDelegate.notificationPresentationOptions(isActive: true), [.list])
         XCTAssertEqual(AppDelegate.notificationPresentationOptions(isActive: false), [.banner, .list, .sound])

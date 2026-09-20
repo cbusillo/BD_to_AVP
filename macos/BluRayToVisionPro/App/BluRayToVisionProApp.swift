@@ -97,7 +97,10 @@ struct BluRayToVisionProApp: App {
         _movieSharingController = StateObject(wrappedValue: movieSharingController)
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
-        suppressDefaultLaunch = AppDelegate.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments)
+        suppressDefaultLaunch = AppDelegate.suppressesDefaultLaunch(
+            arguments: ProcessInfo.processInfo.arguments,
+            environment: ProcessInfo.processInfo.environment
+        )
         appDelegate.observabilityEventStore = observabilityEventStore
         appDelegate.relayHostController = relayHostController
         appDelegate.movieSharingController = movieSharingController
