@@ -541,9 +541,17 @@ class WorkerControlProcessTests(unittest.TestCase):
                 output = io.StringIO()
                 job_id = str(uuid4())
 
+                # The child advances on these markers, not on wall-clock guesses, so a slow
+                # machine cannot make it finish before the runner has reported each state.
+                markers = Path(directory) / "markers"
+                markers.mkdir()
+
                 class AutomaticWaitControls(WorkerControls):
+                    marker_directory = markers
+
                     def emit_stall(self, payload: Mapping[str, object]) -> None:
                         super().emit_stall(payload)
+                        (self.marker_directory / str(payload["state"])).touch()
                         if payload["state"] == "stalled":
                             self.receive_line(
                                 json.dumps(
@@ -562,16 +570,19 @@ class WorkerControlProcessTests(unittest.TestCase):
                 context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER), process_controls=controls)
                 paths = tuple(Path(directory) / f"private-title-eye-{number}" for number in range(output_count))
                 script = (
-                    "import pathlib,sys,time; paths=[pathlib.Path(p) for p in sys.argv[1:]]; "
+                    "import pathlib,sys,time; markers=pathlib.Path(sys.argv[1]); "
+                    "paths=[pathlib.Path(p) for p in sys.argv[2:]]; "
                     "[p.write_bytes(b'video') for p in paths]; started=time.monotonic()\n"
-                    "while time.monotonic()-started < 1.4:\n"
+                    "def waiting(state): return not (markers/state).exists() and time.monotonic()-started < 60\n"
+                    "while waiting('extended'):\n"
                     " if len(paths)>1: paths[1].write_bytes(b'healthy sibling')\n"
                     " print('same repeated decoder line', flush=True); time.sleep(.04)\n"
-                    "paths[0].write_bytes(b'recovered output'); time.sleep(.15)\n"
+                    "paths[0].write_bytes(b'recovered output')\n"
+                    "while waiting('recovered'): time.sleep(.02)\n"
                 )
                 result = ChildProcessRunner(monotonic_clock=clock).run(
                     ProcessSpec(
-                        argv=(sys.executable, "-c", script, *paths),
+                        argv=(sys.executable, "-c", script, str(markers), *paths),
                         tool_id="mv_hevc_encoder" if output_count == 1 else "ffmpeg",
                         display_name="encode",
                         artifacts=tuple(ProcessArtifactProbe(f"eye_{i}", path=path) for i, path in enumerate(paths)),
