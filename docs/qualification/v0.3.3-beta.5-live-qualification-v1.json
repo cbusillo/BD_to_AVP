@@ -1,0 +1,40 @@
+{
+  "candidate": {
+    "appcast_sha256": "707c46a7962c09d648ba20e87d1b5ad894ab7e3483b5d72bc8b7f05b2c8cf3fd",
+    "build": "176",
+    "dmg_sha256": "2a83f5820556bb1858c6e7df6cc77a7f9bd711a2c608a1bfb8806e0e4492851d",
+    "package_version": "0.3.3b5",
+    "public_version": "0.3.3-beta.5",
+    "release_id": 392454315,
+    "release_run_id": 35514822686,
+    "release_tag": "v0.3.3-beta.5",
+    "signed_app_tree_sha256": "2d01af4ba2602f89314df15bfc436df96ad238729e0ab4607ea01e671afa2463",
+    "source_sha": "b99a9e38c7f00980dd59cc295d90ad7f6032b387"
+  },
+  "cases": [
+    {
+      "id": "sparkle-update-route",
+      "observations": {
+        "candidate_offered_on_beta_route": true,
+        "install_action": "Install and Relaunch",
+        "post_update_build": "176",
+        "post_update_package_version": "0.3.3b5",
+        "post_update_signed_app_tree_sha256": "2d01af4ba2602f89314df15bfc436df96ad238729e0ab4607ea01e671afa2463",
+        "prior_release_tag": "v0.3.3-beta.4",
+        "profile_preserved": true,
+        "qualification_artifact_digest": "sha256:ad81651daf8124d683f52b38a358a2b8a3235826706061aeab3e4648d0764b3c",
+        "qualification_artifact_id": 10606813773,
+        "qualification_evidence_sha": "45b1b8b8cb8f5feda9d084023a9d02d85146da8e",
+        "qualification_manifest_sha256": "4af42baeb3e09ea984b1c1641ab70d63da4bb1e800c4749dca1711fa6e215beb",
+        "qualification_receipt_reference": "docs/qualification/v0.3.3-beta.5-clean-machine-signed-update-v1.json",
+        "qualification_receipt_sha256": "8937b2ec47a234e15520961ab02def387ff909f18edc77948775b5161e75c0ee",
+        "qualification_workflow_run_id": 35516255552,
+        "route": "beta"
+      },
+      "result": "passed"
+    }
+  ],
+  "qualification_id": "beta-live-qualification-v1",
+  "qualified_at": "2026-09-20T14:28:42Z",
+  "schema_version": 1
+}
