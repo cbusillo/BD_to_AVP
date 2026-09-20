@@ -133,9 +133,11 @@ class WorkflowSecurityPolicyTests(unittest.TestCase):
             condition = str(job.get("if", ""))
             if "!cancelled()" not in condition and "always()" not in condition:
                 continue
+            # The check may be in the condition or in a step that fails the job.
+            examined = condition + json.dumps(job.get("steps", []))
             for need in direct_needs(job):
                 with self.subTest(workflow=workflow_name, job=job_name, need=need):
-                    self.assertIn(f"needs.{need}.result", condition)
+                    self.assertIn(f"needs.{need}.result", examined)
 
     def test_release_checkouts_use_the_dispatched_commit(self) -> None:
         for workflow_name in ("release-engine.yml", "production-preflight-engine.yml"):
