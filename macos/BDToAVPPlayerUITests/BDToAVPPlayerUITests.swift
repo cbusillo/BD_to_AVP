@@ -10,10 +10,14 @@ final class BDToAVPPlayerUITests: XCTestCase {
         app.launch()
         app.buttons["source-on-my-vision-pro"].tap()
 
+        // Decide whether the fixture is present only once the library has rendered, and look the
+        // tile up as the button it is. Snapshotting every descendant of a just-launched app can
+        // time out while evaluating the query on a slow simulator, which fails the test instead
+        // of skipping it.
+        XCTAssertTrue(app.staticTexts["built-in-stereo-checks-title"].waitForExistence(timeout: 30))
+
         let movieID = "documents:playerlongfixture.mov"
-        let movieTile = app.descendants(matching: .any)
-            .matching(identifier: "movie-tile-\(movieID)")
-            .firstMatch
+        let movieTile = app.buttons["movie-tile-\(movieID)"]
         guard movieTile.waitForExistence(timeout: 10) else {
             throw XCTSkip("Requires PlayerLongFixture.mov in the app Documents directory.")
         }
