@@ -6,6 +6,25 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class MovieLibraryTests: XCTestCase {
+    func testAnUnsignedLocalBuildKeepsItsPairingInAnOwnerOnlyFileNotTheKeychain() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("trust-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("local-build-movie-sharing.json")
+
+        let store = MovieLibraryTrustStore.forRunningApp(isTeamSigned: false, localBuildDirectory: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        let hostKey = try store.hostPrivateKey()
+        try store.trustClient(publicKey: Data(repeating: 7, count: 32), name: "Headset")
+
+        // A relaunch of the same local build finds the same identity and peers.
+        let relaunched = MovieLibraryTrustStore.forRunningApp(isTeamSigned: false, localBuildDirectory: directory)
+        XCTAssertEqual(try relaunched.hostPrivateKey(), hostKey)
+        XCTAssertEqual(try relaunched.trustedClients().map(\.name), ["Headset"])
+        let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(permissions?.int16Value, 0o600)
+    }
+
     func testSecurityScopedBookmarkReopensApprovedDirectory() async throws {
         let fixture = try MovieTestFixture()
         defer { fixture.remove() }
