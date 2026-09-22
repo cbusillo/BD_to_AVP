@@ -25,7 +25,7 @@ dependencies = [
     "psutil>=5.9.8,<8",
     "pyobjc-framework-vision>=11.0,<13; sys_platform == 'darwin'",
     "pysrt>=1.1.2,<2",
-    "trakit>=0.2.2,<0.4",
+    "trakit>=0.2.2,<0.5",
     "wakepy>=0.9.1,<1.1",
 ]
 
