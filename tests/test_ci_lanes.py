@@ -67,6 +67,20 @@ class CILaneSelectionTests(unittest.TestCase):
             with self.subTest(source=prefix):
                 self.assertTrue(self.lanes(f"{prefix.rstrip('/')}/Example.swift")["player"])
 
+    def test_ci_build_configuration_changes_select_every_lane_that_uses_them(self) -> None:
+        workflow = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        )
+        for lane, job in workflow["jobs"].items():
+            if lane not in self.lanes():
+                continue
+            for step in job.get("steps", []):
+                configuration = step.get("env", {}).get("XCODE_XCCONFIG_FILE")
+                if configuration:
+                    path = configuration.removeprefix("${{ github.workspace }}/")
+                    with self.subTest(lane=lane, configuration=path):
+                        self.assertTrue(self.lanes(path)[lane])
+
 
 if __name__ == "__main__":
     unittest.main()

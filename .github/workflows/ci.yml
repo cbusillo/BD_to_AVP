@@ -278,8 +278,37 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Identify compilation cache inputs
+        id: compilation-inputs
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          echo "toolchain=$(xcodebuild -version | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sources=$(git rev-parse HEAD:macos)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore test compilation cache
+        id: compilation-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/native-compilation-cache.noindex
+          key: compilation-v1-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.compilation-inputs.outputs.toolchain }}-${{ hashFiles('macos/project.yml', '.github/ci-compilation-cache.xcconfig') }}-${{ steps.compilation-inputs.outputs.sources }}
+          restore-keys: |
+            compilation-v1-native-${{ runner.os }}-${{ runner.arch }}-${{ steps.compilation-inputs.outputs.toolchain }}-${{ hashFiles('macos/project.yml', '.github/ci-compilation-cache.xcconfig') }}-
+
       - name: macOS app tests
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+          XCODE_XCCONFIG_FILE: ${{ github.workspace }}/.github/ci-compilation-cache.xcconfig
+          CI_COMPILATION_CACHE_PATH: ${{ runner.temp }}/native-compilation-cache.noindex
         run: uv run python scripts/native_app.py test
+
+      - name: Save test compilation cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.compilation-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/native-compilation-cache.noindex
+          key: ${{ steps.compilation-cache.outputs.cache-primary-key }}
 
       - name: Package native macOS app smoke
         env:
@@ -350,9 +379,29 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Identify compilation cache inputs
+        id: compilation-inputs
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          echo "toolchain=$(xcodebuild -version | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sources=$(git rev-parse HEAD:macos)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore test compilation cache
+        id: compilation-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/player-compilation-cache.noindex
+          key: compilation-v1-player-${{ runner.os }}-${{ runner.arch }}-${{ steps.compilation-inputs.outputs.toolchain }}-${{ hashFiles('macos/project.yml', '.github/ci-compilation-cache.xcconfig') }}-${{ steps.compilation-inputs.outputs.sources }}
+          restore-keys: |
+            compilation-v1-player-${{ runner.os }}-${{ runner.arch }}-${{ steps.compilation-inputs.outputs.toolchain }}-${{ hashFiles('macos/project.yml', '.github/ci-compilation-cache.xcconfig') }}-
+
       - name: Build and conditionally test BDToAVPPlayer visionOS bundle
         env:
           DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+          XCODE_XCCONFIG_FILE: ${{ github.workspace }}/.github/ci-compilation-cache.xcconfig
+          CI_COMPILATION_CACHE_PATH: ${{ runner.temp }}/player-compilation-cache.noindex
         run: |
           set -euo pipefail
           cd macos
@@ -403,6 +452,13 @@ jobs:
             -destination "platform=visionOS Simulator,id=$simulator_udid" \
             -derivedDataPath build/BDToAVPPlayerDerivedData \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Save test compilation cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.compilation-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/player-compilation-cache.noindex
+          key: ${{ steps.compilation-cache.outputs.cache-primary-key }}
 
   validate:
     # The one required check. A lane that was not needed is skipped, which passes.

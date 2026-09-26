@@ -20,7 +20,12 @@ PLAYER_TARGET = "BDToAVPPlayer"
 INERT_PREFIXES = ("docs/", "tests/", "screenshots/", "design/")
 INERT_SUFFIXES = (".md",)
 # Inputs to every Xcode build, and the lane definitions themselves.
-SHARED_BUILD_INPUTS = ("macos/project.yml", ".github/workflows/ci.yml", "scripts/ci_lanes.py")
+SHARED_BUILD_INPUTS = (
+    "macos/project.yml",
+    ".github/workflows/ci.yml",
+    ".github/ci-compilation-cache.xcconfig",
+    "scripts/ci_lanes.py",
+)
 ALL_LANES = ("native", "player")
 
 
