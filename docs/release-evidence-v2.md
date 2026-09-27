@@ -38,7 +38,8 @@ and unreadable REST blobs are **malformed**.
 
 Stale or malformed findings are grouped into one marker-owned alert issue,
 assigned to `cbusillo`. Only issues authored by `cbusillo`,
-`github-actions[bot]`, or `shiny-code-bot` can be adopted or updated; public
+`github-actions[bot]`, `shiny-code-app[bot]`, or the former `shiny-code-bot`
+identity can be adopted or updated; public
 lookalike issues are ignored. The audit updates or reopens that same issue, can
 adopt one pre-existing trusted matching alert, and closes it when the findings
 clear. If more than one trusted matching alert exists, the audit reports an

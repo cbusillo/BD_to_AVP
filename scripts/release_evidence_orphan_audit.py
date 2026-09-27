@@ -22,6 +22,7 @@ from scripts.release_evidence_v2 import (
     evidence_ref_for_tag,
     sanitize_release_tag,
 )
+from scripts.release_workflow_policy import RECEIPT_ACTORS
 
 
 MAIN_BRANCH = "main"
@@ -34,7 +35,7 @@ ALERT_MARKER = "<!-- release-evidence-orphan-audit:v1 -->"
 ALERT_TITLE = "Release evidence orphan audit requires attention"
 GITHUB_TIMEOUT_SECONDS = 30
 MAX_FUTURE_SKEW = timedelta(minutes=5)
-TRUSTED_ALERT_BOT_LOGINS = frozenset({"github-actions[bot]", "shiny-code-bot"})
+TRUSTED_ALERT_BOT_LOGINS = RECEIPT_ACTORS | {"github-actions[bot]"}
 LEGACY_EVIDENCE_MARKERS = frozenset(
     {
         "failed-post-publication-qualification-v1.json",

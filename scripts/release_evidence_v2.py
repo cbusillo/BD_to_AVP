@@ -35,7 +35,7 @@ from scripts.release_qualification_manifest import (
     load_validated_manifest,
     manifest_sha256,
 )
-from scripts.release_workflow_policy import REQUIRED_ACTOR
+from scripts.release_workflow_policy import RECEIPT_ACTORS
 from scripts.signed_artifact_receipt import (
     MAX_RECEIPT_BYTES,
     PROFILE_CASE_ID,
@@ -1481,7 +1481,7 @@ def _validate_capture(reader: _BundleReader, record: Mapping[str, Any]) -> Captu
     capture_workflow = _workflow_binding(
         record.get("capture_workflow"), "capture-v2 workflow", expected_path=EVIDENCE_WORKFLOW_PATH
     )
-    if capture_workflow.actor != REQUIRED_ACTOR:
+    if capture_workflow.actor not in RECEIPT_ACTORS:
         raise ReleaseEvidenceV2Error("capture-v2 workflow actor is not the approved release actor.")
     release_route = _string(release_receipt.get("release_route"), "release route")
     source_inputs = _validate_source_inputs(

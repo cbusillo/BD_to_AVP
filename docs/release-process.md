@@ -205,11 +205,17 @@ trusted route from the exact validated caller path and writes the validated
 route and publication effects to the run summary.
 
 The workflow must be dispatched and rerun through the configured
-`shiny-code-bot` automation identity. The required approver is `cbusillo`, and
+`shiny-code-app[bot]` GitHub App identity. The required approver is `cbusillo`, and
 the guarded approval helper rejects a run whose actor or triggering actor is the
 same account. Verify both run actors and the exact protected-main SHA before
 requesting approval. The reusable engine independently requires both run actors
-to be `shiny-code-bot` before release work begins.
+to be `shiny-code-app[bot]` before release work begins.
+
+Published receipts and archived evidence from the former `shiny-code-bot`
+identity remain valid and immutable. Evidence reconciliation requires the live
+run's actor and triggering actor to match the actor recorded in its receipt.
+Historical evidence compatibility does not authorize the former bot to dispatch
+or approve a new release; the signing approver remains `cbusillo`.
 
 Generated notes use production-stage-aware history. An Alpha, Beta, or RC
 compares with the newest lower published production release whose tag is an

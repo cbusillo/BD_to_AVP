@@ -38,6 +38,7 @@ from scripts.release_qualification_manifest import (
     write_manifest,
 )
 from scripts.release_receipt import build_receipt, receipt_sha256, write_receipt
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 
 
 DMG_SHA256 = "a" * 64
@@ -185,7 +186,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             {
                 "release_route": "stable",
                 "source_sha": source_sha,
-                "workflow_actor": "shiny-code-bot",
+                "workflow_actor": REQUIRED_ACTOR,
                 "workflow_run_id": 12345,
                 "workflow_run_attempt": 1,
                 "package_version": "0.3.0",
@@ -314,7 +315,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             {
                 "release_route": "prerelease",
                 "source_sha": base_sha,
-                "workflow_actor": "shiny-code-bot",
+                "workflow_actor": REQUIRED_ACTOR,
                 "workflow_run_id": 22222,
                 "workflow_run_attempt": 1,
                 "package_version": "0.3.1b1",
@@ -464,7 +465,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             {
                 "release_route": "prerelease",
                 "source_sha": base_sha,
-                "workflow_actor": "shiny-code-bot",
+                "workflow_actor": REQUIRED_ACTOR,
                 "workflow_run_id": 22222,
                 "workflow_run_attempt": 1,
                 "package_version": "0.3.1b1",
@@ -612,7 +613,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             {
                 "release_route": "prerelease",
                 "source_sha": source_sha,
-                "workflow_actor": "shiny-code-bot",
+                "workflow_actor": REQUIRED_ACTOR,
                 "workflow_run_id": 22222,
                 "workflow_run_attempt": 1,
                 "package_version": "0.3.1b1",
@@ -878,7 +879,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 {
                     "release_route": "stable",
                     "source_sha": "e" * 40,
-                    "workflow_actor": "shiny-code-bot",
+                    "workflow_actor": REQUIRED_ACTOR,
                     "workflow_run_id": 111,
                     "workflow_run_attempt": 1,
                     "package_version": "0.2.143",

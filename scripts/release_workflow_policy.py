@@ -23,7 +23,10 @@ ENGINE_WORKFLOW_PATH = ".github/workflows/release-engine.yml"
 RELEASE_FREEZES_PATH = REPO_ROOT / ".github" / "release-freezes.json"
 REQUIRED_REF = "refs/heads/main"
 REQUIRED_EVENT = "workflow_dispatch"
-REQUIRED_ACTOR = "shiny-code-bot"
+REQUIRED_ACTOR = "shiny-code-app[bot]"
+# Reading immutable evidence must continue to accept the actor that published it.
+# This set is not authorization to dispatch or approve a new release.
+RECEIPT_ACTORS = frozenset({"shiny-code-bot", REQUIRED_ACTOR})
 APPROVAL_ENVIRONMENT = "macos-signing"
 OIDC_AUDIENCE = "bd-to-avp-release-engine"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")

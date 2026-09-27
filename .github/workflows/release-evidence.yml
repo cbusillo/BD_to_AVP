@@ -553,7 +553,7 @@ jobs:
             echo "GitHub evidence actor ID is invalid." >&2
             exit 1
           fi
-          if [ -z "$EVIDENCE_ACTOR_LOGIN" ] || [[ "$EVIDENCE_ACTOR_LOGIN" == *[!A-Za-z0-9_-]* ]]; then
+          if ! [[ "$EVIDENCE_ACTOR_LOGIN" =~ ^[A-Za-z0-9_-]+(\[bot\])?$ ]]; then
             echo "GitHub evidence actor login is invalid." >&2
             exit 1
           fi

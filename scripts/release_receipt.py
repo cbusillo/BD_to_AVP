@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from scripts.release import DMG_NAME_PREFIX, ReleaseError, parse_build_version, parse_release_version
+from scripts.release_workflow_policy import RECEIPT_ACTORS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -285,7 +286,7 @@ def validate_receipt(receipt: Mapping[str, Any]) -> None:
         raise ReleaseReceiptError("Release receipt workflow does not match its route.")
     if workflow.get("engine_path") != ENGINE_WORKFLOW_PATH:
         raise ReleaseReceiptError("Release receipt engine workflow path is not canonical.")
-    if workflow.get("actor") != "shiny-code-bot":
+    if _string(workflow.get("actor"), "workflow actor") not in RECEIPT_ACTORS:
         raise ReleaseReceiptError("Release receipt actor is not the approved release actor.")
     _integer(workflow.get("run_id"), "workflow run_id")
     _integer(workflow.get("run_attempt"), "workflow run_attempt")

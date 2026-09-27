@@ -48,6 +48,8 @@ from scripts.signed_artifact_receipt import (
 )
 from scripts.tier3_receipt import build_receipt as build_tier3_receipt, receipt_sha256 as tier3_receipt_sha256
 
+from scripts.release_workflow_policy import REQUIRED_ACTOR
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TAG = "v0.3.0-rc.3"
@@ -90,7 +92,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             {
                 "release_route": "prerelease",
                 "source_sha": source_sha,
-                "workflow_actor": "shiny-code-bot",
+                "workflow_actor": REQUIRED_ACTOR,
                 "workflow_run_id": 12345,
                 "workflow_run_attempt": 2,
                 "package_version": "0.3.0rc3",
@@ -229,7 +231,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         return with_self_digest(
             {
                 "capture_workflow": {
-                    "actor": "shiny-code-bot",
+                    "actor": REQUIRED_ACTOR,
                     "path": ".github/workflows/release-evidence.yml",
                     "run_attempt": 1,
                     "run_id": 22222,
@@ -249,7 +251,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 "record_type": "capture",
                 "release_tag": TAG,
                 "release_workflow": {
-                    "actor": "shiny-code-bot",
+                    "actor": REQUIRED_ACTOR,
                     "path": ".github/workflows/prerelease.yml",
                     "run_attempt": 2,
                     "run_id": 12345,
@@ -850,7 +852,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 {
                     "release_route": "prerelease",
                     "source_sha": "1" * 40,
-                    "workflow_actor": "shiny-code-bot",
+                    "workflow_actor": REQUIRED_ACTOR,
                     "workflow_run_id": 12344,
                     "workflow_run_attempt": 1,
                     "package_version": "0.3.0rc2",
@@ -1138,7 +1140,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 live_appcast_path=bundle / "live-appcast.xml",
                 captured_at="2026-08-05T12:02:00Z",
                 live_appcast_verified_at="2026-08-05T12:01:30Z",
-                capture_workflow_actor="shiny-code-bot",
+                capture_workflow_actor=REQUIRED_ACTOR,
                 capture_workflow_run_id=22223,
                 capture_workflow_run_attempt=2,
                 release_receipt_asset_id=99,

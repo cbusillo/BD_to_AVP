@@ -64,7 +64,7 @@
     "approvalRequiredExitCode": 20,
     "safetyErrorExitCode": 21,
     "repository": "cbusillo/BD_to_AVP",
-    "releaseActor": "shiny-code-bot",
+    "releaseActor": "shiny-code-app[bot]",
     "approvalActor": "cbusillo",
     "requiredBranch": "main",
     "requiredEvent": "workflow_dispatch",
