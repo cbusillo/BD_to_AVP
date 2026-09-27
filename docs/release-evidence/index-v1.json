@@ -77,6 +77,16 @@
       "workflow_run_id": 32796196439
     },
     {
+      "publication_record": "docs/release-evidence/v0.3.3/publication-record.json",
+      "published_at": "2026-09-27T20:32:01Z",
+      "receipt": "docs/release-evidence/v0.3.3/release-receipt.json",
+      "receipt_file_sha256": "9e7e9091db115340919c8c42383e4f9f791e4041ed1bf5fa73e3c7e380f93d5a",
+      "release_id": 397799164,
+      "source_sha": "2329c9dae3624f13fc20d242f784bdc8d21168c0",
+      "tag": "v0.3.3",
+      "workflow_run_id": 36346212606
+    },
+    {
       "publication_record": "docs/release-evidence/v0.3.3-beta.2/publication-record.json",
       "published_at": "2026-09-16T20:07:27Z",
       "receipt": "docs/release-evidence/v0.3.3-beta.2/release-receipt.json",
