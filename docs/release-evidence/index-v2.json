@@ -189,11 +189,23 @@
       "release_tag": "v0.3.2-rc.1"
     },
     {
-      "evidence_class": "v2-captured",
+      "evidence_class": "v2-qualified",
       "files": [
         {
           "path": "docs/release-evidence/v0.3.3/capture-v2.json",
           "sha256": "89d39453c585ae6e53272020faf9f905acdfb2d0c38ee003a6829a1ddfc0af9c"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3/clean-machine-signed-update-receipt.json",
+          "sha256": "dd933cae0a97df9591f5a85066da82b95fc96b480e93899f84dbbc3d8ab922b2"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3/installed-ui-accessibility-receipt.json",
+          "sha256": "235c779c1b1e7f86a02398366da8b30a1d46ba18e58b7f74c89ca2893523c5ee"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3/live-qualification-v1.json",
+          "sha256": "140a27f962e40b499363a0919e6351170b21df2d96891f8184a2a0923ad79b75"
         },
         {
           "path": "docs/release-evidence/v0.3.3/publication-record.json",
@@ -206,6 +218,10 @@
         {
           "path": "docs/release-evidence/v0.3.3/qualification-record.json",
           "sha256": "907660dab537134233fa6fbe9e71d5ae98dfa962c9ad1a841d58ad045353ef9e"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3/qualification-v2.json",
+          "sha256": "c2eecaa75a006e4485d25fafa14be71b6d720f149c9491b5e8d165ba6deb56de"
         },
         {
           "path": "docs/release-evidence/v0.3.3/release-receipt.json",
