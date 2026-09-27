@@ -34,6 +34,7 @@ from scripts.release_workflow_policy import (
     PRERELEASE_ROUTE,
     PRERELEASE_WORKFLOW_NAME,
     REQUIRED_ACTOR,
+    RECEIPT_ACTORS,
     STABLE_OPERATOR_WORKFLOW_PATH,
     STABLE_ROUTE,
     STABLE_WORKFLOW_NAME,
@@ -98,8 +99,8 @@ def workflow_run(*, status: str, conclusion: str | None = None, **overrides: Any
         "event": "workflow_dispatch",
         "status": status,
         "conclusion": conclusion,
-        "actor": {"login": "shiny-code-bot"},
-        "triggering_actor": {"login": "shiny-code-bot"},
+        "actor": {"login": REQUIRED_ACTOR},
+        "triggering_actor": {"login": REQUIRED_ACTOR},
         "run_attempt": 1,
     }
     values.update(overrides)
@@ -136,8 +137,8 @@ def approval_fingerprint(
         workflow_id=workflow_id,
         environment_id=ENVIRONMENT_ID,
         run_attempt=1,
-        run_actor="shiny-code-bot",
-        triggering_actor="shiny-code-bot",
+        run_actor=REQUIRED_ACTOR,
+        triggering_actor=REQUIRED_ACTOR,
     )
 
 
@@ -210,16 +211,16 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
             workflow_id=WORKFLOW_ID,
             environment_id=ENVIRONMENT_ID,
             run_attempt=1,
-            run_actor="shiny-code-bot",
-            triggering_actor="shiny-code-bot",
+            run_actor=REQUIRED_ACTOR,
+            triggering_actor=REQUIRED_ACTOR,
         )
         second = build_approval_fingerprint(
             expectation(),
             workflow_id=WORKFLOW_ID,
             environment_id=ENVIRONMENT_ID,
             run_attempt=2,
-            run_actor="shiny-code-bot",
-            triggering_actor="shiny-code-bot",
+            run_actor=REQUIRED_ACTOR,
+            triggering_actor=REQUIRED_ACTOR,
         )
 
         self.assertNotEqual(first, second)
@@ -231,8 +232,8 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
             workflow_id=WORKFLOW_ID,
             environment_id=ENVIRONMENT_ID,
             run_attempt=1,
-            run_actor="shiny-code-bot",
-            triggering_actor="shiny-code-bot",
+            run_actor=REQUIRED_ACTOR,
+            triggering_actor=REQUIRED_ACTOR,
         )
 
         self.assertNotEqual(trusted, substituted)
@@ -434,30 +435,31 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
 
     def test_both_run_actors_must_be_release_automation(self) -> None:
         for actor_field in ("actor", "triggering_actor"):
-            with self.subTest(actor_field=actor_field):
-                client = FakeGitHubAPI()
-                client.add(
-                    RUN_ENDPOINT,
-                    workflow_run(status="completed", conclusion="success", **{actor_field: {"login": "cbusillo"}}),
-                )
-                events: list[dict[str, object]] = []
+            for actor in {"cbusillo", "untrusted-app[bot]", *RECEIPT_ACTORS} - {REQUIRED_ACTOR}:
+                with self.subTest(actor_field=actor_field, actor=actor):
+                    client = FakeGitHubAPI()
+                    client.add(
+                        RUN_ENDPOINT,
+                        workflow_run(status="completed", conclusion="success", **{actor_field: {"login": actor}}),
+                    )
+                    events: list[dict[str, object]] = []
 
-                result = main(
-                    [
-                        "watch",
-                        "--run-id",
-                        str(RUN_ID),
-                        "--workflow",
-                        WORKFLOW,
-                        "--head-sha",
-                        HEAD_SHA,
-                    ],
-                    client=client,
-                    emit=events.append,
-                )
+                    result = main(
+                        [
+                            "watch",
+                            "--run-id",
+                            str(RUN_ID),
+                            "--workflow",
+                            WORKFLOW,
+                            "--head-sha",
+                            HEAD_SHA,
+                        ],
+                        client=client,
+                        emit=events.append,
+                    )
 
-                self.assertEqual(result, EXIT_SAFETY_ERROR)
-                self.assertIn(REQUIRED_ACTOR, str(events[0]["message"]))
+                    self.assertEqual(result, EXIT_SAFETY_ERROR)
+                    self.assertIn(REQUIRED_ACTOR, str(events[0]["message"]))
 
 
 class GitHubReleaseRunApprovalTests(unittest.TestCase):
@@ -468,8 +470,8 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
         workflow_id: int = WORKFLOW_ID,
         can_approve: bool = True,
         environment: str = "macos-signing",
-        run_actor: str = "shiny-code-bot",
-        triggering_actor: str = "shiny-code-bot",
+        run_actor: str = REQUIRED_ACTOR,
+        triggering_actor: str = REQUIRED_ACTOR,
         reviewers: tuple[str, ...] = ("cbusillo",),
     ) -> FakeGitHubAPI:
         client = FakeGitHubAPI()
@@ -581,7 +583,7 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
 
     def test_wrong_active_login_is_rejected(self) -> None:
         client = FakeGitHubAPI()
-        client.add("user", {"login": "shiny-code-bot"}, active_auth=True)
+        client.add("user", {"login": REQUIRED_ACTOR}, active_auth=True)
         events: list[dict[str, object]] = []
 
         result = main(

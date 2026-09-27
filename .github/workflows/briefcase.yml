@@ -91,8 +91,8 @@ jobs:
           test "$OPERATOR_WORKFLOW_SHA" = "$GITHUB_SHA"
           test "$ENGINE_WORKFLOW_REF" = "$EXPECTED_ENGINE_REF"
           test "$ENGINE_WORKFLOW_SHA" = "$GITHUB_SHA"
-          test "$GITHUB_ACTOR" = "shiny-code-bot"
-          test "$GITHUB_TRIGGERING_ACTOR" = "shiny-code-bot"
+          test "$GITHUB_ACTOR" = "shiny-code-app[bot]"
+          test "$GITHUB_TRIGGERING_ACTOR" = "shiny-code-app[bot]"
           case "$RELEASE_POLICY_FINGERPRINT" in
             (*[!0-9a-f]*|'') echo "Invalid release policy fingerprint." >&2; exit 1 ;;
           esac
@@ -204,8 +204,8 @@ jobs:
           test "$GITHUB_REF_PROTECTED" = "true"
           test "$GITHUB_WORKFLOW_REF" = \
             "cbusillo/BD_to_AVP/.github/workflows/briefcase.yml@refs/heads/main"
-          test "$GITHUB_ACTOR" = "shiny-code-bot"
-          test "$GITHUB_TRIGGERING_ACTOR" = "shiny-code-bot"
+          test "$GITHUB_ACTOR" = "shiny-code-app[bot]"
+          test "$GITHUB_TRIGGERING_ACTOR" = "shiny-code-app[bot]"
           MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
           test "$MAIN_SHA" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" "$GITHUB_SHA"

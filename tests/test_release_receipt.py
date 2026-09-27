@@ -18,6 +18,7 @@ from scripts.release_receipt import (
     validate_receipt,
     write_receipt,
 )
+from scripts.release_workflow_policy import RECEIPT_ACTORS, REQUIRED_ACTOR
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +33,7 @@ def receipt_facts() -> dict[str, object]:
     return {
         "release_route": "prerelease",
         "source_sha": SOURCE_SHA,
-        "workflow_actor": "shiny-code-bot",
+        "workflow_actor": REQUIRED_ACTOR,
         "workflow_run_id": 12345,
         "workflow_run_attempt": 2,
         "package_version": "0.3.0rc3",
@@ -73,7 +74,7 @@ def receipt_facts() -> dict[str, object]:
 
 def workflow_run() -> dict[str, object]:
     return {
-        "actor": {"login": "shiny-code-bot"},
+        "actor": {"login": REQUIRED_ACTOR},
         "conclusion": "success",
         "event": "workflow_dispatch",
         "head_branch": "main",
@@ -84,7 +85,7 @@ def workflow_run() -> dict[str, object]:
         "repository": {"full_name": "cbusillo/BD_to_AVP"},
         "run_attempt": 2,
         "status": "completed",
-        "triggering_actor": {"login": "shiny-code-bot"},
+        "triggering_actor": {"login": REQUIRED_ACTOR},
     }
 
 
@@ -168,6 +169,23 @@ def minimal_reconcile_receipt() -> dict[str, object]:
 
 
 class ReleaseReceiptTests(unittest.TestCase):
+    def test_archived_release_receipts_keep_their_recorded_actors(self) -> None:
+        for path in (REPO_ROOT / "docs" / "release-evidence").glob("*/release-receipt.json"):
+            with self.subTest(receipt=path.parent.name):
+                validate_receipt(json.loads(path.read_bytes()))
+
+    def test_reconciliation_rejects_an_actor_that_differs_from_the_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt = build_receipt(receipt_facts())
+            for field in ("actor", "triggering_actor"):
+                for actor in RECEIPT_ACTORS - {REQUIRED_ACTOR}:
+                    with self.subTest(field=field, actor=actor):
+                        run = workflow_run()
+                        run[field] = {"login": actor}
+                        with self.assertRaisesRegex(ReleaseEvidenceError, "receipt's approved release actor"):
+                            reconcile(root, run, {}, receipt, root / "receipt.json", root / "appcast.xml")
+
     def test_build_is_deterministic_and_public_safe(self) -> None:
         first = build_receipt(receipt_facts())
         second = build_receipt(receipt_facts())

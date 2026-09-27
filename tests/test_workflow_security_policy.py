@@ -8,11 +8,22 @@ fail them; weakening the release's trust boundaries must.
 import json
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, ClassVar
 
 import yaml
+
+from scripts.release_workflow_policy import (
+    ENGINE_WORKFLOW_PATH,
+    RECEIPT_ACTORS,
+    REPOSITORY,
+    REQUIRED_ACTOR,
+    REQUIRED_REF,
+    STABLE_OPERATOR_WORKFLOW_PATH,
+    STABLE_ROUTE,
+)
 
 WORKFLOW_DIRECTORY = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 UNTRUSTED_TRIGGERS = {"pull_request", "pull_request_target", "push", "schedule", "issue_comment"}
@@ -69,6 +80,10 @@ class WorkflowSecurityPolicyTests(unittest.TestCase):
         for workflow_name, workflow in self.workflows.items():
             for job_name, job in workflow["jobs"].items():
                 yield workflow_name, workflow, job_name, job
+
+    def test_release_metadata_agrees_with_the_guarded_actor(self) -> None:
+        config = json.loads((WORKFLOW_DIRECTORY.parent / "github.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["releaseOperations"]["releaseActor"], REQUIRED_ACTOR)
 
     def test_external_actions_are_pinned_to_commit_shas(self) -> None:
         for workflow_name, _, job_name, job in self.jobs():
@@ -161,8 +176,8 @@ class ReleaseOperatorGuardTests(unittest.TestCase):
         "ACTUAL_OPERATOR_WORKFLOW_SHA": "a" * 40,
         "ACTUAL_RUN_ID": "100",
         "ACTUAL_RUN_ATTEMPT": "1",
-        "ACTUAL_ACTOR": "shiny-code-bot",
-        "ACTUAL_TRIGGERING_ACTOR": "shiny-code-bot",
+        "ACTUAL_ACTOR": REQUIRED_ACTOR,
+        "ACTUAL_TRIGGERING_ACTOR": REQUIRED_ACTOR,
     }
     FORWARDED: ClassVar[dict[str, str]] = {
         "INPUT_RELEASE_SHA": "ACTUAL_SHA",
@@ -225,6 +240,14 @@ class ReleaseOperatorGuardTests(unittest.TestCase):
                 "ACTUAL_TRIGGERING_ACTOR": "cbusillo",
                 "INPUT_OPERATOR_TRIGGERING_ACTOR": "cbusillo",
             },
+            "a retired automation actor": {
+                "ACTUAL_ACTOR": "shiny-code-bot",
+                "INPUT_OPERATOR_ACTOR": "shiny-code-bot",
+            },
+            "a retired automation re-run": {
+                "ACTUAL_TRIGGERING_ACTOR": "shiny-code-bot",
+                "INPUT_OPERATOR_TRIGGERING_ACTOR": "shiny-code-bot",
+            },
             "a release SHA other than the dispatched one": {"INPUT_RELEASE_SHA": "c" * 40},
             "a forged operator run id": {"INPUT_OPERATOR_RUN_ID": "999"},
             "a forged operator run attempt": {"INPUT_OPERATOR_RUN_ATTEMPT": "2"},
@@ -233,6 +256,63 @@ class ReleaseOperatorGuardTests(unittest.TestCase):
         for description, overrides in deviations.items():
             with self.subTest(deviation=description):
                 self.assertNotEqual(self.run_guard(**overrides), 0)
+
+
+class StablePublicationGuardTests(unittest.TestCase):
+    """Exercise the final Python-publication guard with read-only GitHub responses."""
+
+    def run_guard(self, **overrides: str) -> int:
+        jobs = load_workflows()[Path(STABLE_OPERATOR_WORKFLOW_PATH).name]["jobs"]
+        guard = next(
+            step
+            for job in jobs.values()
+            for step in job.get("steps", [])
+            if "RELEASE_POLICY_FINGERPRINT" in step.get("env", {})
+        )
+        source_sha = "a" * 40
+        environment = {
+            "GITHUB_REPOSITORY": REPOSITORY,
+            "GITHUB_REF": REQUIRED_REF,
+            "GITHUB_SHA": source_sha,
+            "GITHUB_ACTOR": REQUIRED_ACTOR,
+            "GITHUB_TRIGGERING_ACTOR": REQUIRED_ACTOR,
+            "ENGINE_WORKFLOW_REF": f"{REPOSITORY}/{ENGINE_WORKFLOW_PATH}@{REQUIRED_REF}",
+            "ENGINE_WORKFLOW_SHA": source_sha,
+            "RELEASE_ROUTE": STABLE_ROUTE,
+            "OPERATOR_WORKFLOW_REF": f"{REPOSITORY}/{STABLE_OPERATOR_WORKFLOW_PATH}@{REQUIRED_REF}",
+            "OPERATOR_WORKFLOW_PATH": STABLE_OPERATOR_WORKFLOW_PATH,
+            "OPERATOR_WORKFLOW_SHA": source_sha,
+            "RELEASE_POLICY_FINGERPRINT": "b" * 64,
+            "RELEASE_SHA": source_sha,
+            "PYTHON_ARTIFACT_DIGEST": "c" * 64,
+            "PYTHON_ARTIFACT_ID": "123",
+            **overrides,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            gh = Path(directory) / "gh"
+            gh.write_text(
+                '#!/bin/sh\ncase "$*" in\n'
+                '  *"/git/ref/heads/main"*) printf "%s\\n" "$GITHUB_SHA" ;;\n'
+                '  *"/actions/artifacts/"*) printf "sha256:%s\\n" "$PYTHON_ARTIFACT_DIGEST" ;;\n'
+                "  *) exit 99 ;;\nesac\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o700)
+            return subprocess.run(
+                ["/bin/bash", "-c", guard["run"]],
+                env={"PATH": f"{directory}:/usr/bin:/bin", **environment},
+                capture_output=True,
+                check=False,
+            ).returncode
+
+    def test_current_automation_can_reach_python_publication(self) -> None:
+        self.assertEqual(self.run_guard(), 0)
+
+    def test_human_retired_and_untrusted_actors_cannot_publish(self) -> None:
+        for field in ("GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR"):
+            for actor in {"cbusillo", "untrusted-app[bot]", *RECEIPT_ACTORS} - {REQUIRED_ACTOR}:
+                with self.subTest(field=field, actor=actor):
+                    self.assertNotEqual(self.run_guard(**{field: actor}), 0)
 
 
 # Post-publication qualification compiles a test helper on the macOS release that

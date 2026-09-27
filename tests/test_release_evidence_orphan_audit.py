@@ -21,6 +21,7 @@ from scripts.release_evidence_orphan_audit import (
     main,
     run_audit,
 )
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 
 
 REPOSITORY = "cbusillo/BD_to_AVP"
@@ -403,6 +404,18 @@ class ReleaseEvidenceOrphanAuditTests(unittest.TestCase):
         self.assertEqual(report.alert_action, "adopt")
         self.assertEqual(api.updated[0][0], 22)
         self.assertIn(ALERT_MARKER, str(api.updated[0][1]["body"]))
+
+    def test_updates_an_alert_created_by_current_release_automation(self) -> None:
+        fixture = AuditFixture()
+        fixture.add_bundle("v1.0.5", captured_at=NOW - timedelta(days=4))
+        api = fixture.finalize()
+        api.issue_pages = [[alert_issue(22, author=REQUIRED_ACTOR)]]
+
+        report = run_audit(api, now=NOW)
+
+        self.assertEqual(report.alert_action, "update")
+        self.assertEqual(api.updated[0][0], 22)
+        self.assertEqual(api.created, [])
 
     def test_updates_one_managed_alert_and_closes_it_when_clear(self) -> None:
         stale_fixture = AuditFixture()

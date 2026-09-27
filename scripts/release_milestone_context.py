@@ -25,6 +25,7 @@ from scripts.release_qualification_manifest import (
     load_validated_manifest,
 )
 from scripts.release_receipt import RECEIPT_ASSET_NAME, ReleaseReceiptError, load_validated_checked_receipt
+from scripts.release_workflow_policy import RECEIPT_ACTORS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -514,7 +515,7 @@ def validate_cancelled_attempt_record(repo_root: Path, release_tag: str) -> Mapp
         release.get("target_sha") != source_sha
         or release.get("prerelease") is not True
         or workflow.get("name") != "Prerelease"
-        or workflow.get("actor") != "shiny-code-bot"
+        or workflow.get("actor") not in RECEIPT_ACTORS
     ):
         raise ReleaseMilestoneContextError(
             "Cancelled release-attempt receipt does not preserve guarded prerelease identity."
@@ -993,7 +994,7 @@ def _load_validated_failed_attempt(
         release.get("target_sha") != source_sha
         or release.get("prerelease") is not True
         or workflow.get("name") != "Prerelease"
-        or workflow.get("actor") != "shiny-code-bot"
+        or workflow.get("actor") not in RECEIPT_ACTORS
     ):
         raise ReleaseMilestoneContextError(
             "Failed release-attempt receipt does not preserve guarded prerelease identity."

@@ -21,6 +21,7 @@ from scripts.release_receipt import (
     file_sha256,
     validate_receipt,
 )
+from scripts.release_workflow_policy import RECEIPT_ACTORS
 
 
 EVIDENCE_INDEX_PATH = Path("docs/qualification/release-evidence-v1.json")
@@ -292,7 +293,7 @@ def validate_publication(
                 raise ReleaseEvidenceError(f"Checked PyPI recovery run has unexpected {field}.")
         for actor_field in ("actor", "triggering_actor"):
             actor = _mapping(recovery_workflow_run.get(actor_field), f"recovery workflow run {actor_field}")
-            if actor.get("login") != "shiny-code-bot":
+            if _string(actor.get("login"), f"recovery workflow run {actor_field} login") not in RECEIPT_ACTORS:
                 raise ReleaseEvidenceError(f"Recovery workflow run {actor_field} is not the approved release actor.")
         recovery_repository = _mapping(recovery_workflow_run.get("repository"), "recovery workflow repository")
         if recovery_repository.get("full_name") != EXPECTED_REPOSITORY:
@@ -310,8 +311,8 @@ def validate_publication(
         raise ReleaseEvidenceError("Completed release run ID or attempt does not match the receipt.")
     for actor_field in ("actor", "triggering_actor"):
         actor = _mapping(workflow_run.get(actor_field), f"workflow run {actor_field}")
-        if actor.get("login") != "shiny-code-bot":
-            raise ReleaseEvidenceError(f"Workflow run {actor_field} is not the approved release actor.")
+        if actor.get("login") != workflow.get("actor"):
+            raise ReleaseEvidenceError(f"Workflow run {actor_field} differs from the receipt's approved release actor.")
     repository = _mapping(workflow_run.get("repository"), "workflow run repository")
     if repository.get("full_name") != EXPECTED_REPOSITORY:
         raise ReleaseEvidenceError("Workflow run repository is not canonical.")

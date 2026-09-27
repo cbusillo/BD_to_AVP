@@ -14,6 +14,7 @@ from scripts.release_workflow_policy import (
     PRERELEASE_ROUTE,
     PRERELEASE_WORKFLOW_NAME,
     REPOSITORY,
+    RECEIPT_ACTORS,
     REQUIRED_ACTOR,
     REQUIRED_EVENT,
     REQUIRED_REF,
@@ -168,11 +169,12 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
 
     def test_unapproved_actor_and_rerun_actor_fail_closed(self) -> None:
         for key in ("RELEASE_ACTOR", "RELEASE_TRIGGERING_ACTOR"):
-            with self.subTest(key=key):
-                environment = valid_environment()
-                environment[key] = "cbusillo"
-                with self.assertRaisesRegex(ReleaseWorkflowPolicyError, "actor"):
-                    validate_engine_environment(environment)
+            for actor in {"cbusillo", "untrusted-app[bot]", *RECEIPT_ACTORS} - {REQUIRED_ACTOR}:
+                with self.subTest(key=key, actor=actor):
+                    environment = valid_environment()
+                    environment[key] = actor
+                    with self.assertRaisesRegex(ReleaseWorkflowPolicyError, "actor"):
+                        validate_engine_environment(environment)
 
     def test_caller_cannot_forge_operator_evidence_inputs(self) -> None:
         environment = valid_environment()

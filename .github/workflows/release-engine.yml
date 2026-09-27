@@ -188,8 +188,8 @@ jobs:
             *) echo "Unapproved release operator workflow." >&2; exit 1 ;;
           esac
           test "$ACTUAL_OPERATOR_WORKFLOW_SHA" = "$ACTUAL_SHA"
-          test "$ACTUAL_ACTOR" = "shiny-code-bot"
-          test "$ACTUAL_TRIGGERING_ACTOR" = "shiny-code-bot"
+          test "$ACTUAL_ACTOR" = "shiny-code-app[bot]"
+          test "$ACTUAL_TRIGGERING_ACTOR" = "shiny-code-app[bot]"
           test "$INPUT_RELEASE_SHA" = "$ACTUAL_SHA"
           test "$INPUT_OPERATOR_WORKFLOW_REF" = "$ACTUAL_OPERATOR_WORKFLOW_REF"
           test "$INPUT_OPERATOR_WORKFLOW_SHA" = "$ACTUAL_OPERATOR_WORKFLOW_SHA"
