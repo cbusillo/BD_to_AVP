@@ -315,6 +315,75 @@ class StablePublicationGuardTests(unittest.TestCase):
                     self.assertNotEqual(self.run_guard(**{field: actor}), 0)
 
 
+class EvidenceBranchIdentityTests(unittest.TestCase):
+    def run_preparation(self, root: Path, **overrides: str) -> subprocess.CompletedProcess[bytes]:
+        self.git(root, "init", "-q")
+        self.git(
+            root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base"
+        )
+        workflow = load_workflows()["release-evidence.yml"]
+        step = next(
+            step
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if "EVIDENCE_ACTOR_LOGIN" in step.get("env", {})
+        )
+        return subprocess.run(
+            ["/bin/bash", "-c", step["run"]],
+            cwd=root,
+            env={
+                "PATH": "/usr/bin:/bin",
+                "HOME": str(root),
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "EVIDENCE_ACTOR_ID": "1234",
+                "EVIDENCE_ACTOR_LOGIN": REQUIRED_ACTOR,
+                "EVIDENCE_REF": "automation/release-evidence-test",
+                "EXPECTED_EXISTING_BRANCH_SHA": "",
+                "EXPECTED_MAIN_SHA": self.git(root, "rev-parse", "HEAD"),
+                **overrides,
+            },
+            capture_output=True,
+            check=False,
+        )
+
+    @staticmethod
+    def git(root: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(root), "GIT_CONFIG_NOSYSTEM": "1"},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def test_app_identity_can_create_and_author_the_evidence_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.run_preparation(root)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.git(root, "commit", "--allow-empty", "-qm", "evidence")
+            self.assertEqual(self.git(root, "show", "-s", "--format=%an", "HEAD"), REQUIRED_ACTOR)
+            self.assertEqual(
+                self.git(root, "show", "-s", "--format=%ae", "HEAD"),
+                f"1234+{REQUIRED_ACTOR}@users.noreply.github.com",
+            )
+
+    def test_invalid_actor_metadata_is_rejected_before_branch_creation(self) -> None:
+        for field, value in (
+            ("EVIDENCE_ACTOR_LOGIN", ""),
+            ("EVIDENCE_ACTOR_LOGIN", "app[bot"),
+            ("EVIDENCE_ACTOR_LOGIN", "app[bot]extra"),
+            ("EVIDENCE_ACTOR_LOGIN", "app\nname"),
+            ("EVIDENCE_ACTOR_ID", "0"),
+            ("EVIDENCE_ACTOR_ID", "not-a-number"),
+        ):
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.assertNotEqual(self.run_preparation(root, **{field: value}).returncode, 0)
+                self.assertEqual(self.git(root, "branch", "--list", "automation/release-evidence-test"), "")
+
+
 # Post-publication qualification compiles a test helper on the macOS release that
 # the qualification policy names; it builds nothing that ships.
 QUALIFICATION_ONLY_WORKFLOWS = {"milestone-qualification.yml"}
