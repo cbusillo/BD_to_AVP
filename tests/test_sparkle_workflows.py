@@ -13,6 +13,7 @@ from pathlib import Path
 
 from scripts import release
 from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
+from scripts.release_evidence_v2 import qualification_template_path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -843,10 +844,10 @@ printf '%s' "$CODESIGN_METADATA"
             release_operations["qualificationEvidencePath"],
             "docs/qualification/release-evidence-v1.json",
         )
-        # The qualification record is named after the candidate, so derive the expected path from
-        # the release metadata rather than pinning the previous candidate's filename.
-        expected_qualification_record = (
-            f"docs/qualification/{release.load_release_metadata().release_tag}-signed-qualification-v1.json"
+        # Preparation and evidence capture must select the same route-specific record.
+        metadata = release.load_release_metadata()
+        expected_qualification_record = qualification_template_path(
+            metadata.release_tag, "prerelease" if metadata.prerelease else "stable"
         )
         self.assertEqual(release_operations["qualificationRecordPath"], expected_qualification_record)
         self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
