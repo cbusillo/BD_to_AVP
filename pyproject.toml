@@ -16,7 +16,7 @@ authors = [
 keywords = ["Blu-ray", "3D", "Apple Vision Pro", "MV-HEVC", "Conversion", "Vision Pro", "BD3D"]
 dependencies = [
     "babelfish>=0.6.1,<0.7",
-    "cleanit>=0.4.8,<0.5",
+    "cleanit>=0.4.8,<0.6",
     "click>=8.1.3,<9",
     "ffmpeg-python>=0.2.0,<0.3",
     "humanize>=4.9.0,<5",
@@ -54,7 +54,7 @@ dev = [
     "types-psutil>=5.9.5.20240516",
 ]
 runtime-build = [
-    "meson==1.12.0",
+    "meson==1.12.1",
     "ninja==1.13.2",
     "setuptools==84.0.0",
     "wheel==0.48.0",
