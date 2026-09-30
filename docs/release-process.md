@@ -471,6 +471,14 @@ The workflow performs these ordered boundaries:
    protected `main` moved, rerun Release Evidence to refresh the manifest before
    resuming.
 
+   When an exact run failed because of a qualification-runner defect, merge the
+   runner fix through a normal pull request, rerun Release Evidence to refresh
+   the manifest, then run `resume` again. It reports
+   `checkpoint_rebind_required` with the exact `--retry-run-id` and
+   `--retry-checkpoint-sha256` values; rerun with those plus the expected main
+   and manifest digests to dispatch one run on the fixed runner. Do not move or
+   delete the local checkpoint by hand for this case.
+
    Resume exit `0` means observation completed without an operator decision,
    exit `20` means an exact operator action or later observation is required,
    exit `21` means an identity or concurrency safety conflict stopped the
