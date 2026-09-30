@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from collections import defaultdict, deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -143,6 +143,7 @@ def manifest() -> dict[str, object]:
             "policy_checkpoint": "2" * 64,
             "route_table": "3" * 64,
             "controller_runner": "4" * 64,
+            "evidence_index_base": "7" * 64,
         },
         "release_receipt": {"file_sha256": "5" * 64},
         "signed_ui_artifact": {"artifact_id": 456, "artifact_sha256": "6" * 64},
@@ -804,6 +805,11 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         old_manifest["manifest_sha256"] = old_manifest_sha
         old_manifest["runner_sha"] = old_main_sha
         old_manifest["canonical_evidence"] = {"ref": EVIDENCE_REF, "base_sha": old_main_sha}
+        old_manifest["input_digests"] = {
+            **cast(dict[str, str], old_manifest["input_digests"]),
+            "controller_runner": old_identity.controller_runner_sha256,
+            "evidence_index_base": "b" * 64,
+        }
         with tempfile.TemporaryDirectory() as temporary_directory:
             checkpoint = Path(temporary_directory) / "checkpoint.json"
             serialized = _checkpoint_payload(
@@ -1069,21 +1075,29 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             main_sha="f" * 40,
             evidence_sha="9" * 40,
         )
-        old_manifest = manifest()
-        old_manifest["manifest_sha256"] = previous.manifest_sha256
-        old_manifest["runner_sha"] = previous.runner_sha
-        old_manifest["prior"] = {"release_tag": "v0.9.0"}
-
-        with (
-            patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
-            patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
-            patch(
-                "scripts.release_qualification_resume.manifest_sha256",
-                side_effect=lambda document: document["manifest_sha256"],
+        drifts: dict[str, Callable[[dict[str, Any]], None]] = {
+            "prior release": lambda document: document.update(prior={"release_tag": "v0.9.0"}),
+            "route table digest": lambda document: document.update(
+                input_digests={**cast(dict[str, str], document["input_digests"]), "route_table": "0" * 64}
             ),
-            self.assertRaisesRegex(QualificationResumeSafetyError, "decision-bearing manifest inputs"),
-        ):
-            _validate_checkpoint_rebind(REPO_ROOT, previous, identity(), manifest())
+        }
+        for label, drift in drifts.items():
+            with self.subTest(drift=label):
+                old_manifest = manifest()
+                old_manifest["manifest_sha256"] = previous.manifest_sha256
+                old_manifest["runner_sha"] = previous.runner_sha
+                drift(old_manifest)
+
+                with (
+                    patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
+                    patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
+                    patch(
+                        "scripts.release_qualification_resume.manifest_sha256",
+                        side_effect=lambda document: document["manifest_sha256"],
+                    ),
+                    self.assertRaisesRegex(QualificationResumeSafetyError, "decision-bearing manifest inputs"),
+                ):
+                    _validate_checkpoint_rebind(REPO_ROOT, previous, identity(), manifest())
 
     def test_refreshed_runner_rebind_rechecks_run_attempt_at_mutation_boundary(self) -> None:
         old_main_sha = "f" * 40
