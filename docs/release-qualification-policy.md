@@ -275,6 +275,8 @@ bound to the pull-request base SHA and that document's digest, and policy cases
 owned by the `release_candidate` phase. It rejects artifact-owned, live
 publication, milestone, Tier 1, and Tier 3 evidence, and it cannot claim
 Developer ID signing, notarization, or a created release identity.
+`uv run python -m scripts.beta_change_scoped_evidence` produces the document and
+receipts for this lane; see `release-process.md`.
 
 Any mutation under `docs/release-evidence/`, any other evidence-index change
 without a validated preparation transition, or any qualification record carrying
