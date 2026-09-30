@@ -16,9 +16,16 @@ from scripts.qualify_release_scope import (
     QualificationScopeError,
     _matches_milestone_tier1_receipt,
     classify_release_scope,
+    git_changed_paths,
     load_policy,
     load_qualification_overrides,
     main,
+)
+from scripts.release import (
+    RELEASE_IDENTITY_PATHS,
+    _replace_section_value,
+    _replace_yaml_mapping_value,
+    load_release_metadata,
 )
 from scripts.release_receipt import (
     ArtifactReceiptExpectation,
@@ -1391,6 +1398,103 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertEqual(report["workflow_phase"], "artifact")
         self.assertIn("exact same-run release receipt", report["error"])
+
+
+class ReleaseIdentityInvalidationTests(unittest.TestCase):
+    """A release version bump must not invalidate carried evidence; any other change to the same files must."""
+
+    def setUp(self) -> None:
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        self.repo = Path(temporary_directory.name)
+        self._git("init", "-q")
+        for relative in RELEASE_IDENTITY_PATHS:
+            destination = self.repo / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((REPO_ROOT / relative).read_bytes())
+        self.base_sha = self._commit("base")
+        metadata = load_release_metadata(
+            self.repo / "pyproject.toml",
+            self.repo / "uv.lock",
+            self.repo / "macos" / "project.yml",
+        )
+        self.current_version = metadata.package_version
+        self.next_version = f"{self.current_version}.post1"
+        self.next_build = str(int(metadata.build_version) + 1)
+
+    def _git(self, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", *arguments],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def _commit(self, message: str) -> str:
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", message)
+        return self._git("rev-parse", "HEAD")
+
+    def _edit(self, relative: str, transform: Callable[[str], str]) -> None:
+        path = self.repo / relative
+        path.write_text(transform(path.read_text(encoding="utf-8")), encoding="utf-8")
+
+    def _bump_release_identity(self) -> None:
+        settings = ("targets", "BluRayToVisionPro", "settings", "base")
+        self._edit(
+            "pyproject.toml",
+            lambda text: _replace_section_value(
+                _replace_section_value(text, "project", "version", self.next_version),
+                "tool.bd_to_avp",
+                "build_version",
+                self.next_build,
+            ),
+        )
+        self._edit(
+            "uv.lock",
+            lambda text: text.replace(
+                f'name = "bd-to-avp"\nversion = "{self.current_version}"',
+                f'name = "bd-to-avp"\nversion = "{self.next_version}"',
+            ),
+        )
+        self._edit(
+            "macos/project.yml",
+            lambda text: _replace_yaml_mapping_value(
+                _replace_yaml_mapping_value(text, settings, "MARKETING_VERSION", self.next_version),
+                settings,
+                "CURRENT_PROJECT_VERSION",
+                self.next_build,
+            ),
+        )
+
+    def _changed(self, candidate_sha: str) -> set[str]:
+        return git_changed_paths(self.repo)(self.base_sha, candidate_sha)
+
+    def test_release_version_bump_does_not_invalidate(self) -> None:
+        self._bump_release_identity()
+        candidate_sha = self._commit("bump")
+
+        self.assertEqual(self._changed(candidate_sha), set())
+
+    def test_other_changes_beside_the_bump_still_invalidate(self) -> None:
+        edits: dict[str, Callable[[str], str]] = {
+            "pyproject.toml": lambda text: text.replace(
+                'name = "bd_to_avp"', 'name = "bd_to_avp"\nkeywords = ["x"]', 1
+            ),
+            "uv.lock": lambda text: text + '\n[[package]]\nname = "added-package"\nversion = "1.0"\n',
+            "macos/project.yml": lambda text: text.replace(
+                "ENABLE_HARDENED_RUNTIME: YES", "ENABLE_HARDENED_RUNTIME: NO"
+            ),
+        }
+        for relative, transform in edits.items():
+            with self.subTest(path=relative):
+                self._git("checkout", "-q", "--detach", self.base_sha)
+                self._bump_release_identity()
+                self._edit(relative, transform)
+                candidate_sha = self._commit(f"bump and change {relative}")
+
+                self.assertEqual(self._changed(candidate_sha), {relative})
 
 
 if __name__ == "__main__":

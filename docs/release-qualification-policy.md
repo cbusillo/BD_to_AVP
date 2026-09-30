@@ -130,7 +130,12 @@ timestamps.
 
 Carry-forward is allowed only when an accepted named receipt exists and the
 diff from that receipt's source SHA contains no path covered by the case's
-direct invalidation patterns or referenced contracts. Stable continues to
+direct invalidation patterns or referenced contracts. A change to
+`pyproject.toml`, `uv.lock`, or `macos/project.yml` that is only the release
+version and build written by `scripts.release` does not count, so a Beta whose
+signing, packaging, Sparkle, bundle layout, entitlements, and toolchain did not
+move carries the prior updater and clean-machine evidence instead of rerunning
+it. Any other change to those files still invalidates. Stable continues to
 require the live Sparkle route and automated clean-machine/UI receipts. It does
 not force a fresh physical-hardware receipt or manual native-notes capture solely
 because a Stable milestone is due. Tier 1 invalidation mappings document

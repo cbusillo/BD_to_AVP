@@ -35,6 +35,9 @@
       ".github/workflows/prerelease.yml",
       ".github/workflows/release-engine.yml",
       ".github/workflows/sparkle-pages.yml",
+      "macos/BluRayToVisionPro/Info-Release.plist",
+      "macos/BluRayToVisionPro/Worker.entitlements",
+      "macos/project.yml",
       "scripts/artifact_identity.py",
       "scripts/embedded_python.py",
       "scripts/github_release_run.py",
@@ -50,9 +53,11 @@
       ".github/workflows/sparkle-pages.yml",
       "macos/BluRayToVisionPro/Feature/SparkleUpdateBackend.swift",
       "macos/BluRayToVisionPro/Feature/UpdateController.swift",
+      "macos/BluRayToVisionPro/Info-Release.plist",
       "scripts/sparkle_appcast.py",
       "scripts/sparkle_bundle.py",
-      "scripts/sparkle_macos.py"
+      "scripts/sparkle_macos.py",
+      "sparkle-public-ed-key.txt"
     ],
     "packaged-worker": [
       "bd_to_avp/worker/**",
