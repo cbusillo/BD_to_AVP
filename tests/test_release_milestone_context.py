@@ -7,9 +7,10 @@ import tempfile
 import unittest
 import zipfile
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from scripts.release_milestone_context import (
@@ -425,6 +426,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         include_extra_evidence_file: bool = False,
         include_generated_v2_index: bool = False,
         tamper_config: bool = False,
+        extra_paths: Sequence[str] = (),
     ) -> tuple[str, str]:
         base_qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
         base_qualification = json.loads(base_qualification_path.read_text(encoding="utf-8"))
@@ -559,6 +561,11 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             index_path = root / "docs/release-evidence/index-v2.json"
             index_path.write_text('{"legacy_index":{},"releases":[],"schema_version":2}\n', encoding="utf-8")
             paths.append(index_path)
+        for relative in extra_paths:
+            extra_path = root / relative
+            extra_path.parent.mkdir(parents=True, exist_ok=True)
+            extra_path.write_text("successor edit\n", encoding="utf-8")
+            paths.append(extra_path)
         subprocess.run(["git", "add", *paths], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "prepare successor after published beta"], cwd=root, check=True)
         head_sha = subprocess.run(
@@ -1824,6 +1831,34 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     base_branch="main",
                     published_receipt_verifier=lambda _path, _receipt, _digest: None,
                 )
+
+    def test_prior_receipt_carry_forward_leaves_the_carried_release_files_alone(self) -> None:
+        cases = {
+            "docs/0.3.1-beta.2-cut-packet.md": None,
+            "docs/0.3.1-beta.1-cut-packet.md": "carried release's own files",
+            "docs/qualification/v0.3.1-beta.1-live-qualification-v1.json": "carried release's own files",
+        }
+        for relative, refusal in cases.items():
+            with self.subTest(path=relative), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, head_sha = self.prepare_published_prior_receipt_transition(root, extra_paths=(relative,))
+
+                arguments: dict[str, Any] = {
+                    "base_sha": base_sha,
+                    "head_sha": head_sha,
+                    "head_branch": "prepare/v0.3.1-beta.2",
+                    "base_repo": "cbusillo/BD_to_AVP",
+                    "head_repo": "cbusillo/BD_to_AVP",
+                    "base_branch": "main",
+                    "published_receipt_verifier": lambda _path, _receipt, _digest: None,
+                }
+
+                if refusal is None:
+                    self.assertIsNone(discover_milestone_receipt(root, **arguments))
+                else:
+                    with self.assertRaisesRegex(ReleaseMilestoneContextError, refusal):
+                        discover_milestone_receipt(root, **arguments)
 
     def test_rejects_failed_candidate_with_wrong_receipt_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
