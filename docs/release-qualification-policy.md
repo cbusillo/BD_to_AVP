@@ -556,7 +556,10 @@ manifest digests; it revalidates the historical run under the old identity,
 requires the new main to descend from the old runner, rejects changes to every
 decision-bearing manifest input and immutable release binding, rescans for a
 competing refreshed run at the mutation boundary, and atomically replaces only
-that observed checkpoint before dispatching the new runner identity.
+that observed checkpoint before dispatching the new runner identity. The
+runner workflow digest and the evidence-index baseline are expected to change
+with the fix and are not decision-bearing; the policy, policy checkpoint, route
+table, qualification record, prior release, and every release binding are.
 The same fail-closed replacement is available after an exact successful run
 when a later protected-main reconciliation enhancement requires one fresh run
 bound to the refreshed runner. It uses the same exact run ID, checkpoint digest,

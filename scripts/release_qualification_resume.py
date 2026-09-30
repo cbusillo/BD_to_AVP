@@ -486,6 +486,11 @@ def _checkpoint_rebind_manifest_projection(manifest: Mapping[str, Any]) -> Mappi
     canonical_evidence = dict(_mapping(normalized.get("canonical_evidence"), "manifest canonical evidence"))
     canonical_evidence.pop("base_sha", None)
     normalized["canonical_evidence"] = canonical_evidence
+    # A runner fix changes the runner workflow and moves the evidence baseline; neither decides the result.
+    input_digests = dict(_mapping(normalized.get("input_digests"), "manifest input digests"))
+    input_digests.pop("controller_runner", None)
+    input_digests.pop("evidence_index_base", None)
+    normalized["input_digests"] = input_digests
     return normalized
 
 
