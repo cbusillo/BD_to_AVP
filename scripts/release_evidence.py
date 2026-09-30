@@ -390,6 +390,47 @@ def _merge_unique_record(records: list[dict[str, Any]], record: dict[str, Any], 
         raise ReleaseEvidenceError(f"Existing immutable record {record[key]!r} conflicts with this publication.")
 
 
+def merge_release_ledger_record(repo_root: Path, record: Mapping[str, Any]) -> Path:
+    """Add one release to the tag-sorted ledger; an identical record is a no-op, a different one conflicts."""
+    ledger_path = repo_root / RELEASE_LEDGER_PATH
+    ledger = (
+        dict(_load_json(ledger_path, "release evidence ledger"))
+        if ledger_path.exists()
+        else {"schema_version": 1, "releases": []}
+    )
+    if ledger.get("schema_version") != 1:
+        raise ReleaseEvidenceError("Release evidence ledger schema_version must be 1.")
+    releases = [
+        dict(_mapping(item, "release ledger record"))
+        for item in _sequence(ledger.get("releases"), "release ledger releases")
+    ]
+    _merge_unique_record(releases, dict(record), "tag")
+    ledger["releases"] = sorted(releases, key=lambda item: cast(str, item["tag"]))
+    _write_json(ledger_path, ledger)
+    return ledger_path
+
+
+def merge_evidence_receipts(repo_root: Path, records: Sequence[Mapping[str, Any]]) -> Path:
+    """Append receipts to the evidence index in order; identical receipts are no-ops, different ones conflict."""
+    evidence_path = repo_root / EVIDENCE_INDEX_PATH
+    evidence = (
+        dict(_load_json(evidence_path, "release qualification evidence"))
+        if evidence_path.exists()
+        else {"schema_version": 1, "receipts": []}
+    )
+    if evidence.get("schema_version") != 1:
+        raise ReleaseEvidenceError("Release qualification evidence schema_version must be 1.")
+    receipts = [
+        dict(_mapping(item, "qualification evidence receipt"))
+        for item in _sequence(evidence.get("receipts"), "qualification evidence receipts")
+    ]
+    for record in records:
+        _merge_unique_record(receipts, dict(record), "receipt_id")
+    evidence["receipts"] = receipts
+    _write_json(evidence_path, evidence)
+    return evidence_path
+
+
 def _update_qualification(repo_root: Path, receipt: Mapping[str, Any]) -> Path:
     release = _mapping(receipt.get("release"), "receipt release")
     tag = _string(release.get("tag"), "release tag")
@@ -841,18 +882,6 @@ def reconcile(
         raise ReleaseEvidenceError(f"Checked publication record for immutable release {tag} conflicts.")
     _write_json(publication_path, publication_record)
 
-    ledger_path = repo_root / RELEASE_LEDGER_PATH
-    ledger = (
-        dict(_load_json(ledger_path, "release evidence ledger"))
-        if ledger_path.exists()
-        else {"schema_version": 1, "releases": []}
-    )
-    if ledger.get("schema_version") != 1:
-        raise ReleaseEvidenceError("Release evidence ledger schema_version must be 1.")
-    releases = [
-        dict(_mapping(item, "release ledger record"))
-        for item in _sequence(ledger.get("releases"), "release ledger releases")
-    ]
     ledger_record = {
         "publication_record": publication_path.relative_to(repo_root).as_posix(),
         "published_at": publication["published_at"],
@@ -865,23 +894,10 @@ def reconcile(
     }
     if recovery_workflow_run is not None:
         ledger_record["recovery_workflow_run"] = recovery_workflow_run
-    _merge_unique_record(releases, ledger_record, "tag")
-    ledger["releases"] = sorted(releases, key=lambda item: cast(str, item["tag"]))
-    _write_json(ledger_path, ledger)
+    merge_release_ledger_record(repo_root, ledger_record)
 
-    evidence_path = repo_root / EVIDENCE_INDEX_PATH
-    evidence = (
-        dict(_load_json(evidence_path, "release qualification evidence"))
-        if evidence_path.exists()
-        else {"schema_version": 1, "receipts": []}
-    )
-    if evidence.get("schema_version") != 1:
-        raise ReleaseEvidenceError("Release qualification evidence schema_version must be 1.")
-    receipts = [
-        dict(_mapping(item, "qualification evidence receipt"))
-        for item in _sequence(evidence.get("receipts"), "qualification evidence receipts")
-    ]
     reference = checked_receipt.relative_to(repo_root).as_posix()
+    evidence_records: list[dict[str, Any]] = []
     for case_id in _sequence(receipt.get("tier1_case_references"), "Tier 1 case references"):
         case = _string(case_id, "Tier 1 case ID")
         evidence_record = {
@@ -898,9 +914,8 @@ def reconcile(
         }
         if recovery_workflow_run is not None:
             evidence_record["recovery_workflow_run"] = recovery_workflow_run
-        _merge_unique_record(receipts, evidence_record, "receipt_id")
-    evidence["receipts"] = receipts
-    _write_json(evidence_path, evidence)
+        evidence_records.append(evidence_record)
+    merge_evidence_receipts(repo_root, evidence_records)
 
     qualification_record_path = repo_root / "docs" / "release-evidence" / tag / QUALIFICATION_RECORD_NAME
     if qualification_record_path.exists():

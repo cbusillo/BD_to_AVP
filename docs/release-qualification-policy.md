@@ -104,7 +104,12 @@ may not modify the evidence index, release ledger, policy, route table,
 publication record, qualification snapshot, or milestone manifest. The
 receipt makes the real prior artifact available to `qualification-base` and the
 next exact-artifact route; it does not convert a failed milestone result into
-accepted evidence.
+accepted evidence. This is the routine order for consecutive Betas, not only a
+recovery path: the carried release's own evidence lands afterwards as its own
+pull request, preferably one terminal pull request, after Release Evidence
+refreshes its branch onto the successor's main. A release whose runner-bound
+policy or route inputs change on main before it qualifies cannot qualify
+against its recorded runner and lands capture-only or as a disposition.
 
 When exact post-publication qualification fails after a release is already
 immutable, record the terminal result in
@@ -417,9 +422,16 @@ protected-main advance may refresh runner-owned and evidence-baseline checkpoint
 fields, but only after the prior manifest validates and the immutable release,
 qualification snapshot, workflow, receipt, prior-release, and signed-UI
 identities remain byte-for-byte equivalent. Evidence pull requests may not
-modify the runner-bound policy or route table directly. A rolling qualification
-merge conflict may be resolved only in favor of protected main because the
-release-specific snapshot is immutable; every other conflict fails closed. If
+modify the runner-bound policy or route table directly. Evidence branches are
+refreshed onto protected main by `scripts.release_evidence_refresh`, not by a
+textual merge: only the release's own bundle, compatibility records, and cut
+packet are carried, its evidence-index receipts are appended after main's, its
+ledger record is added through the ledger writer, and index-v2 is regenerated.
+The rolling qualification follows protected main whenever main changed it,
+because the release-specific snapshot is immutable; a release-owned file that
+main changed differently, a conflicting or foreign receipt, or any other branch
+change fails closed. Once the bundle holds a terminal record, the manifest is
+frozen and a refresh never rebinds it. If
 no checked receipt was
 captured before artifact expiry, qualification stops rather than reconstructing
 evidence. Absolute paths, private field
