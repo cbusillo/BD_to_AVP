@@ -403,11 +403,11 @@ The workflow performs these ordered boundaries:
    immutable qualification snapshot and the controller, policy, route table,
    and case classifications stored at its recorded runner SHA, and refreshes
    only reviewed-main policy and checkpoint fields while preserving exact
-   release and artifact identity. Once the branch holds
-   `qualification-v2.json`, `disposition-v2.json`, or a failed post-publication
-   disposition, the manifest is frozen: the rerun only refreshes the branch and
-   does not recapture, rebuild, or rebind the manifest, because the terminal
-   pull-request gate does not need runner freshness.
+   release and artifact identity. Once the branch holds `qualification-v2.json`,
+   the manifest is frozen: the rerun only refreshes the branch and does not
+   recapture, rebuild, or rebind the manifest, because the terminal
+   pull-request gate does not need runner freshness. Other bundles keep the
+   rebind, since their pull-request gates still require a fresh manifest.
 
    The routine order for consecutive Betas is: the next Beta's preparation may
    carry the previous Beta's exact release receipt (see the carry-forward rule

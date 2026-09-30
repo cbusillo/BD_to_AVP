@@ -430,8 +430,8 @@ ledger record is added through the ledger writer, and index-v2 is regenerated.
 The rolling qualification follows protected main whenever main changed it,
 because the release-specific snapshot is immutable; a release-owned file that
 main changed differently, a conflicting or foreign receipt, or any other branch
-change fails closed. Once the bundle holds a terminal record, the manifest is
-frozen and a refresh never rebinds it. If
+change fails closed. Once the bundle holds `qualification-v2.json`, the
+manifest is frozen and a refresh never rebinds it. If
 no checked receipt was
 captured before artifact expiry, qualification stops rather than reconstructing
 evidence. Absolute paths, private field

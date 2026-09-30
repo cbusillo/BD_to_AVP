@@ -30,7 +30,6 @@ from scripts.release_evidence import (
 )
 from scripts.release_evidence_refresh import ReleaseEvidenceRefreshError, refresh_evidence_branch
 from scripts.release_evidence_v2 import (
-    DISPOSITION_NAME,
     QUALIFICATION_NAME,
     build_index_v2,
     check_index_v2,
@@ -38,7 +37,7 @@ from scripts.release_evidence_v2 import (
 )
 from scripts.release_milestone_context import (
     EXPECTED_REPOSITORY,
-    FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_NAME,
+    QUALIFICATION_V2_PATH_PATTERN,
     RELEASE_V2_INDEX_PATH,
     discover_milestone_manifest,
     discover_terminal_v2_qualification,
@@ -402,11 +401,12 @@ class TerminalRefreshTests(RefreshScenario):
         )
         self.assertEqual(show(root, "HEAD", rolling_path(root, main)), show(root, main, rolling_path(root, main)))
 
-    def test_the_terminal_record_names_agree_with_their_producers(self) -> None:
-        self.assertEqual(
-            set(TERMINAL_RECORD_NAMES),
-            {QUALIFICATION_NAME, DISPOSITION_NAME, FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_NAME},
-        )
+    def test_only_records_that_skip_manifest_freshness_freeze_the_manifest(self) -> None:
+        # A frozen manifest can only land through the terminal gate, which does not require freshness.
+        for name in TERMINAL_RECORD_NAMES:
+            with self.subTest(record=name):
+                self.assertIsNotNone(QUALIFICATION_V2_PATH_PATTERN.fullmatch(evidence_path(STABLE_TAG, name)))
+        self.assertIn(QUALIFICATION_NAME, TERMINAL_RECORD_NAMES)
 
 
 if __name__ == "__main__":

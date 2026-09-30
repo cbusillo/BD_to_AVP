@@ -39,12 +39,9 @@ CONTROLLER_RUNNER_PATH = Path(".github/workflows/milestone-qualification.yml")
 SIGNAL_RECEIPT_NAME = "signed-artifact-ui-receipt.json"
 SIGNAL_ARCHIVE_NAME = "signed-artifact-ui.zip"
 MANIFEST_NAME = "qualification-manifest.json"
-# A bundle holding any of these has reached its terminal state; its manifest is bound and never rebuilt.
-TERMINAL_RECORD_NAMES = (
-    "qualification-v2.json",
-    "disposition-v2.json",
-    "failed-post-publication-qualification-v1.json",
-)
+# A bundle holding one of these is terminal and its manifest is never rebuilt. Only records whose
+# pull-request gate skips manifest freshness belong here; other bundles must stay rebindable.
+TERMINAL_RECORD_NAMES = ("qualification-v2.json",)
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 REF_PATTERN = re.compile(r"^automation/release-evidence-v[0-9A-Za-z][0-9A-Za-z.-]*$")
