@@ -169,6 +169,32 @@ Review and commit all resulting changes. CI runs
 embedded-runtime and native-package smoke. Do not dispatch a release from an unmerged branch
 or from a stale main commit.
 
+### Beta Change-Scoped Evidence
+
+When a Beta candidate's preparation classification exits `2` with blocking
+`release_candidate` Tier 2 cases, produce the change-scoped evidence with the
+repository command instead of assembling it by hand. From a clean
+`qualify/<beta-tag>` worktree whose HEAD is the candidate SHA on `main`, run:
+
+```sh
+uv run python -m scripts.beta_change_scoped_evidence
+```
+
+The command reruns the preparation classifier exactly as the document records
+it, then the focused Python tests, the native test suite, and the local ad hoc
+`scripts/native_app.py package` run with the production support diagnostics
+endpoint. It checks every proof in its committed per-case catalog against the
+individual passed results and fails closed on a dirty worktree, a wrong branch,
+a non-Beta release, a blocking case outside the catalog or this lane, or any
+missing, skipped, or failed proof. On success it writes
+`docs/qualification/<beta-tag>-change-scoped-evidence-v1.json` and appends one
+receipt per proved case to `docs/qualification/release-evidence-v1.json`.
+Command logs stay outside the repository; only their digests are recorded. The
+command does not commit or push: review the diff, commit both files on the
+qualify branch, and open its pull request against the unchanged candidate SHA.
+When the classifier reports no blocking cases, the command exits without
+writing anything.
+
 ## Release Orchestration
 
 > **RC 3 is published and immutable.** Guarded Prerelease run `30990186667`
@@ -384,14 +410,39 @@ The workflow performs these ordered boundaries:
    in force. A reconciliation or
    milestone failure does not rebuild, replace, or invalidate the correctly
    published release. If protected `main` advances while the evidence branch is
-   active, rerunning Release Evidence first validates the prior manifest against
-   its immutable qualification snapshot and the controller, policy, route table,
-   and case classifications stored at its recorded runner SHA, then refreshes
+   active, refresh the branch by rerunning Release Evidence rather than merging
+   `main` into it. The rerun rebuilds the branch from protected `main` with
+   `uv run python -m scripts.release_evidence_refresh`, never with a textual
+   merge: it copies only files the release owns (its
+   `docs/release-evidence/<tag>/` bundle, its compatibility records under
+   `docs/qualification/`, and its cut packet re-rendered from `main`'s copy by
+   the maintained publication renderer), appends the release's own
+   evidence-index receipts after `main`'s, adds its ledger record through the
+   ledger writer, and regenerates `index-v2.json`. The result is one commit
+   whose parents are the previous branch head and `main`, so the branch keeps
+   its history and contains `main`; rerunning against the same `main` changes
+   nothing. A release-owned file that `main` changed differently, a receipt ID
+   that `main` holds with other content, a receipt for another release, or any
+   branch change outside those paths fails closed. The rolling qualification
+   follows protected `main` whenever `main` changed it. Before a terminal
+   record exists, the rerun then validates the prior manifest against its
+   immutable qualification snapshot and the controller, policy, route table,
+   and case classifications stored at its recorded runner SHA, and refreshes
    only reviewed-main policy and checkpoint fields while preserving exact
-   release and artifact identity. If the rolling qualification changed on both
-   branches, the workflow resolves only that path in favor of protected main;
-   any other merge conflict fails closed while the per-release snapshot remains
-   unchanged. Manifest preparation selects the newest prior published ancestor
+   release and artifact identity. Once the branch holds `qualification-v2.json`,
+   the manifest is frozen: the rerun only refreshes the branch and does not
+   recapture, rebuild, or rebind the manifest, because the terminal
+   pull-request gate does not need runner freshness. Other bundles keep the
+   rebind, since their pull-request gates still require a fresh manifest.
+
+   The routine order for consecutive Betas is: the next Beta's preparation may
+   carry the previous Beta's exact release receipt (see the carry-forward rule
+   in `docs/release-qualification-policy.md`), and the previous Beta's own
+   evidence lands later as its own pull request, preferably one terminal pull
+   request after its milestone qualification. If runner-bound policy or route
+   inputs change on `main` before that release qualifies, it can no longer
+   qualify against its recorded runner; land it capture-only or as a
+   disposition instead. Manifest preparation selects the newest prior published ancestor
    that already has a checked immutable release receipt; an unreconciled prior
    release remains immutable history but cannot serve as a qualification base.
    If
@@ -471,6 +522,14 @@ The workflow performs these ordered boundaries:
    protected `main` moved, rerun Release Evidence to refresh the manifest before
    resuming.
 
+   When an exact run failed because of a qualification-runner defect, merge the
+   runner fix through a normal pull request, rerun Release Evidence to refresh
+   the manifest, then run `resume` again. It reports
+   `checkpoint_rebind_required` with the exact `--retry-run-id` and
+   `--retry-checkpoint-sha256` values; rerun with those plus the expected main
+   and manifest digests to dispatch one run on the fixed runner. Do not move or
+   delete the local checkpoint by hand for this case.
+
    Resume exit `0` means observation completed without an operator decision,
    exit `20` means an exact operator action or later observation is required,
    exit `21` means an identity or concurrency safety conflict stopped the
@@ -531,6 +590,9 @@ The workflow performs these ordered boundaries:
    update pull request when the version changes; tap CI must pass formula audit,
    source installation, command tests, and linkage checks before merge.
    Prereleases do not update the formula.
+16. After a Mac Beta is published, point the visionOS player's TestFlight
+   description and review notes at it
+   ([procedure](visionos-player.md#point-the-testflight-text-at-each-new-mac-beta)).
 
 For Stable releases, PyPI publication and the Homebrew tap update remain
 independent post-publication operations. PyPI starts only after the reusable

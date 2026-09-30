@@ -90,10 +90,11 @@ uv run python -m scripts.qualify_release_scope \
   --require-evidence
 ```
 
-When a published candidate's post-publication evidence branch cannot merge
-through its protected pull request, a reviewed successor preparation may add
-that release's exact checked receipt
-without claiming milestone completion. This narrow carry-forward is accepted
+The next Beta does not wait for the previous release's post-publication
+evidence. While that evidence has not landed, a reviewed successor preparation
+may add the previous release's exact checked receipt without claiming milestone
+completion, and the previous release's qualification lands later as its own
+evidence pull request. This carry-forward is accepted
 only when the receipt was absent from the base, matches the immutable GitHub
 release asset and successful guarded workflow run, validates against its release
 tag commit, exactly matches the successor qualification's
@@ -101,10 +102,17 @@ tag commit, exactly matches the successor qualification's
 addition. The branch must be the exact `prepare/<candidate-tag>` branch, and
 GitHub config may change only to advance `qualificationRecordPath`. The change
 may not modify the evidence index, release ledger, policy, route table,
-publication record, qualification snapshot, or milestone manifest. The
+publication record, qualification snapshot, or milestone manifest, and it may
+not change the carried release's cut packet or `docs/qualification/<tag>-*`
+files, which stay with that release's own evidence. The
 receipt makes the real prior artifact available to `qualification-base` and the
 next exact-artifact route; it does not convert a failed milestone result into
-accepted evidence.
+accepted evidence. This is the routine order for consecutive Betas, not only a
+recovery path: the carried release's own evidence lands afterwards as its own
+pull request, preferably one terminal pull request, after Release Evidence
+refreshes its branch onto the successor's main. A release whose runner-bound
+policy or route inputs change on main before it qualifies cannot qualify
+against its recorded runner and lands capture-only or as a disposition.
 
 When exact post-publication qualification fails after a release is already
 immutable, record the terminal result in
@@ -130,7 +138,12 @@ timestamps.
 
 Carry-forward is allowed only when an accepted named receipt exists and the
 diff from that receipt's source SHA contains no path covered by the case's
-direct invalidation patterns or referenced contracts. Stable continues to
+direct invalidation patterns or referenced contracts. A change to
+`pyproject.toml`, `uv.lock`, or `macos/project.yml` that is only the release
+version and build written by `scripts.release` does not count, so a Beta whose
+signing, packaging, Sparkle, bundle layout, entitlements, and toolchain did not
+move carries the prior updater and clean-machine evidence instead of rerunning
+it. Any other change to those files still invalidates. Stable continues to
 require the live Sparkle route and automated clean-machine/UI receipts. It does
 not force a fresh physical-hardware receipt or manual native-notes capture solely
 because a Stable milestone is due. Tier 1 invalidation mappings document
@@ -267,6 +280,8 @@ bound to the pull-request base SHA and that document's digest, and policy cases
 owned by the `release_candidate` phase. It rejects artifact-owned, live
 publication, milestone, Tier 1, and Tier 3 evidence, and it cannot claim
 Developer ID signing, notarization, or a created release identity.
+`uv run python -m scripts.beta_change_scoped_evidence` produces the document and
+receipts for this lane; see `release-process.md`.
 
 Any mutation under `docs/release-evidence/`, any other evidence-index change
 without a validated preparation transition, or any qualification record carrying
@@ -417,9 +432,16 @@ protected-main advance may refresh runner-owned and evidence-baseline checkpoint
 fields, but only after the prior manifest validates and the immutable release,
 qualification snapshot, workflow, receipt, prior-release, and signed-UI
 identities remain byte-for-byte equivalent. Evidence pull requests may not
-modify the runner-bound policy or route table directly. A rolling qualification
-merge conflict may be resolved only in favor of protected main because the
-release-specific snapshot is immutable; every other conflict fails closed. If
+modify the runner-bound policy or route table directly. Evidence branches are
+refreshed onto protected main by `scripts.release_evidence_refresh`, not by a
+textual merge: only the release's own bundle, compatibility records, and cut
+packet are carried, its evidence-index receipts are appended after main's, its
+ledger record is added through the ledger writer, and index-v2 is regenerated.
+The rolling qualification follows protected main whenever main changed it,
+because the release-specific snapshot is immutable; a release-owned file that
+main changed differently, a conflicting or foreign receipt, or any other branch
+change fails closed. Once the bundle holds `qualification-v2.json`, the
+manifest is frozen and a refresh never rebinds it. If
 no checked receipt was
 captured before artifact expiry, qualification stops rather than reconstructing
 evidence. Absolute paths, private field
@@ -556,7 +578,10 @@ manifest digests; it revalidates the historical run under the old identity,
 requires the new main to descend from the old runner, rejects changes to every
 decision-bearing manifest input and immutable release binding, rescans for a
 competing refreshed run at the mutation boundary, and atomically replaces only
-that observed checkpoint before dispatching the new runner identity.
+that observed checkpoint before dispatching the new runner identity. The
+runner workflow digest and the evidence-index baseline are expected to change
+with the fix and are not decision-bearing; the policy, policy checkpoint, route
+table, qualification record, prior release, and every release binding are.
 The same fail-closed replacement is available after an exact successful run
 when a later protected-main reconciliation enhancement requires one fresh run
 bound to the refreshed runner. It uses the same exact run ID, checkpoint digest,

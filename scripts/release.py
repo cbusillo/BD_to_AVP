@@ -858,6 +858,46 @@ def _validate_lock_refresh(
         raise ReleaseError("uv lock refresh changed data other than the editable project version.")
 
 
+RELEASE_IDENTITY_PATHS = ("pyproject.toml", "uv.lock", "macos/project.yml")
+MACOS_PROJECT_BASE_SETTINGS = ("targets", "BluRayToVisionPro", "settings", "base")
+
+
+def is_release_identity_only_change(relative_path: str, base: bytes, candidate: bytes) -> bool:
+    """Return whether candidate differs from base only by the version and build release preparation writes."""
+    try:
+        if relative_path == "pyproject.toml":
+            candidate_project = _load_toml_bytes(candidate, "candidate pyproject.toml")
+            updated = _replace_section_value(
+                base.decode("utf-8"),
+                "project",
+                "version",
+                str(candidate_project["project"]["version"]),
+            )
+            updated = _replace_section_value(
+                updated,
+                "tool.bd_to_avp",
+                "build_version",
+                str(candidate_project["tool"]["bd_to_avp"]["build_version"]),
+            )
+            return updated.encode("utf-8") == candidate
+        if relative_path == "uv.lock":
+            base_lock = _load_toml_bytes(base, "base uv.lock")
+            candidate_lock = _load_toml_bytes(candidate, "candidate uv.lock")
+            candidate_version = _editable_project_package(candidate_lock, "Candidate uv.lock").get("version")
+            _editable_project_package(base_lock, "Base uv.lock")["version"] = candidate_version
+            return base_lock == candidate_lock
+        if relative_path == "macos/project.yml":
+            candidate_text = candidate.decode("utf-8")
+            updated = base.decode("utf-8")
+            for key in ("MARKETING_VERSION", "CURRENT_PROJECT_VERSION"):
+                value = _yaml_mapping_value(candidate_text, MACOS_PROJECT_BASE_SETTINGS, key)
+                updated = _replace_yaml_mapping_value(updated, MACOS_PROJECT_BASE_SETTINGS, key, value)
+            return updated == candidate_text
+    except (ReleaseError, UnicodeDecodeError, KeyError, TypeError):
+        return False
+    return False
+
+
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY)
     try:

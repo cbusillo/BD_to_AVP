@@ -228,6 +228,30 @@ the Beta updater route and the initial stereo checks. Include the matching
 signed Mac release link in TestFlight's beta description and review notes once
 it is published; a developer's local Current build is not a public Mac release.
 
+### Point the TestFlight text at each new Mac Beta
+
+After every published Mac Beta, update the player's TestFlight text so it names
+the new Mac build. The app is `visionosTestFlight.appStoreConnectID` in
+`.github/github.json`. Two fields carry the Mac version, release link and guide
+link:
+
+- the en-US `betaAppLocalizations` `description`
+- the `betaAppReviewDetails` `notes`
+
+The change is two substitutions in each field: the Mac version and build in the
+form `0.3.3 beta N (build B)`, and the `v0.3.3-beta.N` tag in the release and
+guide URLs.
+
+Use the App Store Connect API. Sign an ES256 JWT with the team API key
+(`aud: appstoreconnect-v1`, lifetime at most 20 minutes). Read the current values
+with `GET /v1/apps/{appId}/betaAppLocalizations` and
+`GET /v1/apps/{appId}/betaAppReviewDetail`. Write them with
+`PATCH /v1/betaAppLocalizations/{localizationId}` and
+`PATCH /v1/betaAppReviewDetails/{appId}`, then read both fields back. The API
+key is not in this repository; its location is recorded in the owner's private
+infrastructure documentation. Never print the key or its identifiers into logs,
+issues or pull requests.
+
 The sidebar's **Privacy Policy** link opens the policy applicable to the build.
 Its URL is pinned to the policy's published commit so branch deletion cannot
 break it. Use the same URL in TestFlight metadata. Update the
