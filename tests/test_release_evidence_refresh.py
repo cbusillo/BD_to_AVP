@@ -15,11 +15,11 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest import mock
 
 from scripts.release_evidence import (
     EVIDENCE_INDEX_PATH,
@@ -130,7 +130,7 @@ def prepare_successor_carrying_receipt(
 class RefreshScenario(unittest.TestCase):
     fixture: Path
     temporary: tempfile.TemporaryDirectory[str]
-    environment: mock._patch_dict
+    environment: unittest.mock._patch_dict
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -138,7 +138,7 @@ class RefreshScenario(unittest.TestCase):
         base = Path(cls.temporary.name)
         empty_config = base / "gitconfig"
         empty_config.write_text("", encoding="utf-8")
-        cls.environment = mock.patch.dict(
+        cls.environment = unittest.mock.patch.dict(
             os.environ,
             {
                 "GIT_CONFIG_GLOBAL": str(empty_config),
