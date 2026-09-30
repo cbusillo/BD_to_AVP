@@ -39,6 +39,9 @@ CONTROLLER_RUNNER_PATH = Path(".github/workflows/milestone-qualification.yml")
 SIGNAL_RECEIPT_NAME = "signed-artifact-ui-receipt.json"
 SIGNAL_ARCHIVE_NAME = "signed-artifact-ui.zip"
 MANIFEST_NAME = "qualification-manifest.json"
+# A bundle holding one of these is terminal and its manifest is never rebuilt. Only records whose
+# pull-request gate skips manifest freshness belong here; other bundles must stay rebindable.
+TERMINAL_RECORD_NAMES = ("qualification-v2.json",)
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 REF_PATTERN = re.compile(r"^automation/release-evidence-v[0-9A-Za-z][0-9A-Za-z.-]*$")
@@ -1124,6 +1127,12 @@ def build_manifest_for_reconciled_release(
             )
         if existing == manifest:
             return dict(existing)
+        terminal_records = sorted(name for name in TERMINAL_RECORD_NAMES if (manifest_path.parent / name).exists())
+        if terminal_records:
+            raise ReleaseQualificationManifestError(
+                f"Qualification manifest for {release_tag} is frozen by its terminal record {terminal_records[0]}; "
+                "refresh the evidence branch without rebuilding the manifest."
+            )
         write_manifest(manifest, manifest_path, replace_existing=True)
     else:
         write_manifest(manifest, manifest_path)

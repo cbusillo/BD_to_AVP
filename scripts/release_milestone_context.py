@@ -1952,8 +1952,22 @@ def discover_terminal_v2_qualification(
     return release_tag
 
 
-def validate_terminal_v2_diff(repo_root: Path, release_tag: str, base_sha: str, changed_paths: Sequence[str]) -> None:
-    """Admit the exact bundle and the maintained producers' compatibility records."""
+@dataclass(frozen=True)
+class ReleaseCompatibilityPaths:
+    """Files outside a release's bundle that the maintained producers write for that one release."""
+
+    bundle_prefix: str
+    cut_packet: str
+    live_path: str
+    qualification_paths: frozenset[str]
+    receipt_copies: Mapping[str, str]
+
+    @property
+    def release_owned_paths(self) -> frozenset[str]:
+        return frozenset({self.cut_packet, *self.qualification_paths, *self.receipt_copies})
+
+
+def release_compatibility_paths(release_tag: str) -> ReleaseCompatibilityPaths:
     bundle_prefix = f"docs/release-evidence/{release_tag}/"
     qualification_paths = {
         f"docs/qualification/{release_tag}-signed-qualification-v1.json",
@@ -1970,8 +1984,24 @@ def validate_terminal_v2_diff(repo_root: Path, release_tag: str, base_sha: str, 
     }
     live_path = f"docs/qualification/{release_tag}-live-qualification-v1.json"
     receipt_copies[live_path] = f"{bundle_prefix}live-qualification-v1.json"
+    return ReleaseCompatibilityPaths(
+        bundle_prefix=bundle_prefix,
+        cut_packet=f"docs/{release_tag.removeprefix('v')}-cut-packet.md",
+        live_path=live_path,
+        qualification_paths=frozenset(qualification_paths),
+        receipt_copies=receipt_copies,
+    )
+
+
+def validate_terminal_v2_diff(repo_root: Path, release_tag: str, base_sha: str, changed_paths: Sequence[str]) -> None:
+    """Admit the exact bundle and the maintained producers' compatibility records."""
+    compatibility = release_compatibility_paths(release_tag)
+    bundle_prefix = compatibility.bundle_prefix
+    qualification_paths = compatibility.qualification_paths
+    receipt_copies = compatibility.receipt_copies
+    live_path = compatibility.live_path
     receipt_paths = set(receipt_copies)
-    cut_packet = f"docs/{release_tag.removeprefix('v')}-cut-packet.md"
+    cut_packet = compatibility.cut_packet
     compatibility_paths = {
         EVIDENCE_INDEX_PATH,
         RELEASE_LEDGER_PATH,

@@ -410,14 +410,39 @@ The workflow performs these ordered boundaries:
    in force. A reconciliation or
    milestone failure does not rebuild, replace, or invalidate the correctly
    published release. If protected `main` advances while the evidence branch is
-   active, rerunning Release Evidence first validates the prior manifest against
-   its immutable qualification snapshot and the controller, policy, route table,
-   and case classifications stored at its recorded runner SHA, then refreshes
+   active, refresh the branch by rerunning Release Evidence rather than merging
+   `main` into it. The rerun rebuilds the branch from protected `main` with
+   `uv run python -m scripts.release_evidence_refresh`, never with a textual
+   merge: it copies only files the release owns (its
+   `docs/release-evidence/<tag>/` bundle, its compatibility records under
+   `docs/qualification/`, and its cut packet re-rendered from `main`'s copy by
+   the maintained publication renderer), appends the release's own
+   evidence-index receipts after `main`'s, adds its ledger record through the
+   ledger writer, and regenerates `index-v2.json`. The result is one commit
+   whose parents are the previous branch head and `main`, so the branch keeps
+   its history and contains `main`; rerunning against the same `main` changes
+   nothing. A release-owned file that `main` changed differently, a receipt ID
+   that `main` holds with other content, a receipt for another release, or any
+   branch change outside those paths fails closed. The rolling qualification
+   follows protected `main` whenever `main` changed it. Before a terminal
+   record exists, the rerun then validates the prior manifest against its
+   immutable qualification snapshot and the controller, policy, route table,
+   and case classifications stored at its recorded runner SHA, and refreshes
    only reviewed-main policy and checkpoint fields while preserving exact
-   release and artifact identity. If the rolling qualification changed on both
-   branches, the workflow resolves only that path in favor of protected main;
-   any other merge conflict fails closed while the per-release snapshot remains
-   unchanged. Manifest preparation selects the newest prior published ancestor
+   release and artifact identity. Once the branch holds `qualification-v2.json`,
+   the manifest is frozen: the rerun only refreshes the branch and does not
+   recapture, rebuild, or rebind the manifest, because the terminal
+   pull-request gate does not need runner freshness. Other bundles keep the
+   rebind, since their pull-request gates still require a fresh manifest.
+
+   The routine order for consecutive Betas is: the next Beta's preparation may
+   carry the previous Beta's exact release receipt (see the carry-forward rule
+   in `docs/release-qualification-policy.md`), and the previous Beta's own
+   evidence lands later as its own pull request, preferably one terminal pull
+   request after its milestone qualification. If runner-bound policy or route
+   inputs change on `main` before that release qualifies, it can no longer
+   qualify against its recorded runner; land it capture-only or as a
+   disposition instead. Manifest preparation selects the newest prior published ancestor
    that already has a checked immutable release receipt; an unreconciled prior
    release remains immutable history but cannot serve as a qualification base.
    If
