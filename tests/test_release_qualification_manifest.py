@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 from scripts.release_qualification_manifest import (
+    TERMINAL_RECORD_NAMES,
     MANIFEST_NAME,
     SIGNAL_ARCHIVE_NAME,
     SIGNAL_RECEIPT_NAME,
@@ -540,6 +541,47 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                     sparkle_route="rc",
                     qualification_path=Path("docs/release-evidence/v0.3.0/qualification-record.json"),
                 )
+
+    def test_a_terminal_record_freezes_the_manifest_against_rebinding(self) -> None:
+        for terminal_record in TERMINAL_RECORD_NAMES:
+            with self.subTest(terminal_record=terminal_record), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                candidate_path, _prior_path, signed_receipt_path, signed_archive_path = self.build_repository(root)
+
+                def rebuild(
+                    base: str,
+                    root: Path = root,
+                    archive: Path = signed_archive_path,
+                    receipt: Path = signed_receipt_path,
+                ) -> dict:
+                    return build_manifest_for_reconciled_release(
+                        repo_root=root,
+                        release_tag="v0.3.0",
+                        prior_tag="v0.3.0-rc.3",
+                        signed_ui_artifact_id=999,
+                        signed_ui_artifact_digest=sha256(archive),
+                        signed_ui_archive_source_path=archive,
+                        signed_ui_receipt_source_path=receipt,
+                        signed_ui_receipt_file_sha256=sha256(receipt),
+                        evidence_ref="automation/release-evidence-v0.3.0",
+                        evidence_base_sha=base,
+                        runner_sha=base,
+                        sparkle_route="rc",
+                        qualification_path=Path("docs/release-evidence/v0.3.0/qualification-record.json"),
+                    )
+
+                first_base = git_head(root)
+                bound = rebuild(first_base)
+                self.assertEqual(rebuild(first_base), bound)
+                (candidate_path.parent / terminal_record).write_text("{}\n", encoding="utf-8")
+                controller = root / ".github/workflows/milestone-qualification.yml"
+                controller.write_text("name: Refreshed Milestone Qualification\n", encoding="utf-8")
+                subprocess.run(["git", "add", "--all"], cwd=root, check=True)
+                subprocess.run(["git", "commit", "-qm", "main moves after qualification"], cwd=root, check=True)
+
+                with self.assertRaisesRegex(ReleaseQualificationManifestError, "frozen by its terminal record"):
+                    rebuild(git_head(root))
+                self.assertEqual(load_validated_manifest(candidate_path.parent / MANIFEST_NAME, repo_root=root), bound)
 
     def test_historical_manifest_survives_later_runner_and_rolling_input_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -141,6 +141,7 @@ jobs:
       - name: Preserve an existing idempotent evidence branch
         id: reuse
         env:
+          BASE_MAIN_SHA: ${{ steps.base.outputs.sha }}
           EVIDENCE_REF: ${{ steps.sanitize.outputs.evidence_ref }}
           RELEASE_TAG: ${{ steps.sanitize.outputs.release_tag }}
         run: |
@@ -230,25 +231,17 @@ jobs:
           echo "has_manifest=$HAS_MANIFEST" >> "$GITHUB_OUTPUT"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git checkout --detach refs/remotes/origin/release-evidence-existing
-          if ! git merge --no-edit main; then
-            ROLLING_QUALIFICATION_PATH=$(jq -er .releaseOperations.qualificationRecordPath .github/github.json)
-            CONFLICTS=$(git diff --name-only --diff-filter=U)
-            CONFLICT_COUNT=$(printf '%s\n' "$CONFLICTS" | sed '/^$/d' | wc -l | tr -d ' ')
-            if [ "$CONFLICT_COUNT" = "1" ] && [ "$CONFLICTS" = "$ROLLING_QUALIFICATION_PATH" ]; then
-              git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"
-              git add "$ROLLING_QUALIFICATION_PATH"
-              git commit --no-edit
-            else
-              printf 'Existing evidence branch has unsupported merge conflicts:\n%s\n' "$CONFLICTS" >&2
-              git merge --abort
-              exit 1
-            fi
-          fi
+          python -m scripts.release_evidence_refresh \
+            --release-tag "$RELEASE_TAG" \
+            --branch-ref refs/remotes/origin/release-evidence-existing \
+            --main-ref "$BASE_MAIN_SHA" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Capture signed artifact UI receipt before expiry
         id: signed-ui
-        if: steps.reuse.outputs.checkpoint_source != 'main'
+        if: >-
+          steps.reuse.outputs.checkpoint_source != 'main'
+          && steps.reuse.outputs.terminal != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REUSED_ARTIFACT_ID: ${{ steps.reuse.outputs.artifact_id }}
@@ -341,7 +334,9 @@ jobs:
 
       - name: Reconcile checked evidence
         id: reconcile
-        if: steps.reuse.outputs.checkpoint_source != 'main'
+        if: >-
+          steps.reuse.outputs.checkpoint_source != 'main'
+          && steps.reuse.outputs.terminal != 'true'
         env:
           RECOVERY: ${{ steps.source.outputs.recovery }}
         run: |
@@ -371,7 +366,9 @@ jobs:
 
       - name: Generate or validate durable capture-v2
         id: capture-v2
-        if: steps.reuse.outputs.checkpoint_source != 'main'
+        if: >-
+          steps.reuse.outputs.checkpoint_source != 'main'
+          && steps.reuse.outputs.terminal != 'true'
         env:
           CAPTURE_TIMESTAMP: ${{ steps.publication.outputs.live_appcast_verified_at }}
           CAPTURE_WORKFLOW_ACTOR: ${{ github.actor }}
@@ -424,6 +421,8 @@ jobs:
 
       - name: Stage only generated evidence files
         id: stage
+        env:
+          REFRESHED: ${{ steps.reuse.outputs.refreshed }}
         run: |
           set -euo pipefail
           mkdir -p prepared-evidence
@@ -431,7 +430,7 @@ jobs:
             git diff --name-only -- docs
             git ls-files --others --exclude-standard -- docs
           } | LC_ALL=C sort -u > new-evidence-files.txt
-          if [ ! -s new-evidence-files.txt ]; then
+          if [ ! -s new-evidence-files.txt ] && [ "${REFRESHED:-}" != "true" ]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -540,6 +539,11 @@ jobs:
             fi
           fi
 
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
       - name: Prepare exact evidence branch parent and actor identity
         env:
           EVIDENCE_ACTOR_ID: ${{ github.actor_id }}
@@ -547,6 +551,7 @@ jobs:
           EVIDENCE_REF: ${{ needs.validate-and-prepare.outputs.evidence_ref }}
           EXPECTED_EXISTING_BRANCH_SHA: ${{ needs.validate-and-prepare.outputs.existing_branch_sha }}
           EXPECTED_MAIN_SHA: ${{ needs.validate-and-prepare.outputs.base_main_sha }}
+          RELEASE_TAG: ${{ needs.validate-and-prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
           if ! [[ "$EVIDENCE_ACTOR_ID" =~ ^[1-9][0-9]*$ ]]; then
@@ -567,21 +572,11 @@ jobs:
               echo "Fetched evidence branch differs from its prepared SHA." >&2
               exit 1
             fi
-            git switch -C "$EVIDENCE_REF" refs/remotes/origin/release-evidence-existing
-            if ! git merge --no-edit "$EXPECTED_MAIN_SHA"; then
-              ROLLING_QUALIFICATION_PATH=$(jq -er .releaseOperations.qualificationRecordPath .github/github.json)
-              CONFLICTS=$(git diff --name-only --diff-filter=U)
-              CONFLICT_COUNT=$(printf '%s\n' "$CONFLICTS" | sed '/^$/d' | wc -l | tr -d ' ')
-              if [ "$CONFLICT_COUNT" = "1" ] && [ "$CONFLICTS" = "$ROLLING_QUALIFICATION_PATH" ]; then
-                git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"
-                git add "$ROLLING_QUALIFICATION_PATH"
-                git commit --no-edit
-              else
-                printf 'Existing evidence branch has unsupported merge conflicts:\n%s\n' "$CONFLICTS" >&2
-                git merge --abort
-                exit 1
-              fi
-            fi
+            python -m scripts.release_evidence_refresh \
+              --release-tag "$RELEASE_TAG" \
+              --branch-ref "$EXPECTED_EXISTING_BRANCH_SHA" \
+              --main-ref "$EXPECTED_MAIN_SHA"
+            git switch -C "$EVIDENCE_REF"
           else
             git switch -c "$EVIDENCE_REF" "$EXPECTED_MAIN_SHA"
           fi
@@ -634,15 +629,17 @@ jobs:
           fi
           git add -- docs
           git diff --cached --name-only > "$RUNNER_TEMP/staged-evidence-files.txt"
-          if [ ! -s "$RUNNER_TEMP/staged-evidence-files.txt" ]; then
+          if [ -s "$RUNNER_TEMP/staged-evidence-files.txt" ]; then
+            if grep -Ev '^docs/' "$RUNNER_TEMP/staged-evidence-files.txt" | grep -q .; then
+              echo "Evidence commit attempted to stage a path outside docs/." >&2
+              exit 1
+            fi
+            git commit -m "Record immutable evidence for $RELEASE_TAG" -- docs
+          elif [ -z "$EXPECTED_EXISTING_BRANCH_SHA" ] \
+            || [ "$(git rev-parse HEAD)" = "$EXPECTED_EXISTING_BRANCH_SHA" ]; then
             echo "Prepared evidence produced no branch changes." >&2
             exit 1
           fi
-          if grep -Ev '^docs/' "$RUNNER_TEMP/staged-evidence-files.txt" | grep -q .; then
-            echo "Evidence commit attempted to stage a path outside docs/." >&2
-            exit 1
-          fi
-          git commit -m "Record immutable evidence for $RELEASE_TAG" -- docs
           COMMIT_SHA=$(git rev-parse HEAD)
           REMOTE_MAIN_SHA=$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')
           if [ "$REMOTE_MAIN_SHA" != "$EXPECTED_MAIN_SHA" ]; then

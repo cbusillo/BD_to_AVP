@@ -888,11 +888,11 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(publish["permissions"], {"contents": "write"})
         self.assertNotIn("environment", prepare)
         self.assertNotIn("environment", publish)
-        [step["name"] for step in prepare["steps"]]
-        capture_step = next(
-            step for step in prepare["steps"] if step["name"] == "Generate or validate durable capture-v2"
-        )
-        self.assertEqual(capture_step["if"], "steps.reuse.outputs.checkpoint_source != 'main'")
+        evidence_writers = [
+            step for step in prepare["steps"] if step.get("id") in {"signed-ui", "reconcile", "capture-v2"}
+        ]
+        self.assertEqual(len(evidence_writers), 3)
+        self.assertEqual(len({step["if"] for step in evidence_writers}), 1)
         conflict_step = next(
             step for step in publish["steps"] if step["name"] == "Reject conflicting evidence on the idempotent branch"
         )
@@ -1087,77 +1087,21 @@ printf '%s' "$CODESIGN_METADATA"
             self.assertEqual(output_path.read_text(encoding="utf-8"), "has_changes=false\n")
             self.assertFalse(any((root / "prepared-evidence").rglob("*")))
 
-    def test_release_evidence_merge_preserves_snapshot_and_accepts_later_rolling_state(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
-            config_path = root / ".github/github.json"
-            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
-            snapshot_path = root / "docs/release-evidence/v1.0.0/qualification-record.json"
-            config_path.parent.mkdir(parents=True)
-            qualification_path.parent.mkdir(parents=True)
-            config_path.write_text(
-                json.dumps(
-                    {"releaseOperations": {"qualificationRecordPath": qualification_path.relative_to(root).as_posix()}}
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            qualification_path.write_text("base\n", encoding="utf-8")
-            subprocess.run(["git", "add", "."], cwd=root, check=True)
-            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
-
-            subprocess.run(["git", "switch", "-c", "automation/release-evidence-v1.0.0"], cwd=root, check=True)
-            qualification_path.write_text("release-bound\n", encoding="utf-8")
-            snapshot_path.parent.mkdir(parents=True)
-            snapshot_path.write_text("immutable snapshot\n", encoding="utf-8")
-            subprocess.run(["git", "add", "."], cwd=root, check=True)
-            subprocess.run(["git", "commit", "-qm", "evidence"], cwd=root, check=True)
-            evidence_sha = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
+            output_path.unlink()
+            subprocess.run(
+                ["bash", "-c", stage_script],
                 cwd=root,
+                env={**os.environ, "GITHUB_OUTPUT": str(output_path), "REFRESHED": "true"},
                 check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
+            )
 
-            subprocess.run(["git", "switch", "main"], cwd=root, check=True)
-            qualification_path.write_text("later main state\n", encoding="utf-8")
-            subprocess.run(["git", "add", qualification_path], cwd=root, check=True)
-            subprocess.run(["git", "commit", "-qm", "advance qualification"], cwd=root, check=True)
-            subprocess.run(["git", "checkout", "--detach", evidence_sha], cwd=root, check=True)
-
-            merge_script = r"""
-set -euo pipefail
-if ! git merge --no-edit main; then
-  ROLLING_QUALIFICATION_PATH=$(jq -er .releaseOperations.qualificationRecordPath .github/github.json)
-  CONFLICTS=$(git diff --name-only --diff-filter=U)
-  CONFLICT_COUNT=$(printf '%s\n' "$CONFLICTS" | sed '/^$/d' | wc -l | tr -d ' ')
-  if [ "$CONFLICT_COUNT" = "1" ] && [ "$CONFLICTS" = "$ROLLING_QUALIFICATION_PATH" ]; then
-    git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"
-    git add "$ROLLING_QUALIFICATION_PATH"
-    git commit --no-edit
-  else
-    git merge --abort
-    exit 1
-  fi
-fi
-"""
-            subprocess.run(["bash", "-c", merge_script], cwd=root, check=True)
-
-            self.assertEqual(qualification_path.read_text(encoding="utf-8"), "later main state\n")
-            self.assertEqual(snapshot_path.read_text(encoding="utf-8"), "immutable snapshot\n")
+            self.assertEqual(output_path.read_text(encoding="utf-8"), "has_changes=true\n")
             self.assertEqual(
-                subprocess.run(
-                    ["git", "diff", "--name-only", "--diff-filter=U"],
-                    cwd=root,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout,
-                "",
+                sorted(
+                    path.relative_to(root / "prepared-evidence").as_posix()
+                    for path in (root / "prepared-evidence").rglob("*.json")
+                ),
+                branch_only_paths,
             )
 
     def test_milestone_qualification_is_hosted_secret_free_and_read_only(self) -> None:
