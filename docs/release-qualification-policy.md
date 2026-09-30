@@ -90,10 +90,11 @@ uv run python -m scripts.qualify_release_scope \
   --require-evidence
 ```
 
-When a published candidate's post-publication evidence branch cannot merge
-through its protected pull request, a reviewed successor preparation may add
-that release's exact checked receipt
-without claiming milestone completion. This narrow carry-forward is accepted
+The next Beta does not wait for the previous release's post-publication
+evidence. While that evidence has not landed, a reviewed successor preparation
+may add the previous release's exact checked receipt without claiming milestone
+completion, and the previous release's qualification lands later as its own
+evidence pull request. This carry-forward is accepted
 only when the receipt was absent from the base, matches the immutable GitHub
 release asset and successful guarded workflow run, validates against its release
 tag commit, exactly matches the successor qualification's
@@ -101,7 +102,9 @@ tag commit, exactly matches the successor qualification's
 addition. The branch must be the exact `prepare/<candidate-tag>` branch, and
 GitHub config may change only to advance `qualificationRecordPath`. The change
 may not modify the evidence index, release ledger, policy, route table,
-publication record, qualification snapshot, or milestone manifest. The
+publication record, qualification snapshot, or milestone manifest, and it may
+not change the carried release's cut packet or `docs/qualification/<tag>-*`
+files, which stay with that release's own evidence. The
 receipt makes the real prior artifact available to `qualification-base` and the
 next exact-artifact route; it does not convert a failed milestone result into
 accepted evidence.
