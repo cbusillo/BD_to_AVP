@@ -14,6 +14,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+from scripts.release import RELEASE_IDENTITY_PATHS, is_release_identity_only_change
 from scripts.release_evidence import effective_successful_workflow_run_id
 from scripts.release_receipt import (
     ArtifactReceiptExpectation,
@@ -551,10 +552,31 @@ def git_changed_paths(repo: Path) -> ChangedPaths:
                 raise QualificationScopeError(
                     f"Unable to compare prior evidence SHA {base_sha} with candidate {candidate_sha}: {detail}"
                 )
-            cache[key] = {item.decode("utf-8", errors="surrogateescape") for item in result.stdout.split(b"\0") if item}
+            paths = {item.decode("utf-8", errors="surrogateescape") for item in result.stdout.split(b"\0") if item}
+            cache[key] = {
+                path
+                for path in paths
+                if path not in RELEASE_IDENTITY_PATHS
+                or not _release_identity_only(repo, path, base_sha=base_sha, candidate_sha=candidate_sha)
+            }
         return cache[key]
 
     return changed
+
+
+def _release_identity_only(repo: Path, path: str, *, base_sha: str, candidate_sha: str) -> bool:
+    contents: list[bytes] = []
+    for revision in (base_sha, candidate_sha):
+        result = subprocess.run(
+            ["git", "show", f"{revision}:{path}"],
+            cwd=repo,
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            return False
+        contents.append(result.stdout)
+    return is_release_identity_only_change(path, contents[0], contents[1])
 
 
 def git_is_ancestor(repo: Path) -> IsAncestor:
