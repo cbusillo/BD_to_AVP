@@ -227,3 +227,28 @@ uv run python -m unittest tests.test_tier3_clean_machine
 The real lane must still run on the declared macOS 26 environment and a newer
 published candidate before its receipt can be checked into the release evidence
 index.
+
+### Check harness changes before a release
+
+A change to `collect_ui_evidence` in `scripts/tier3_clean_machine.py` or to
+`macos/BluRayToVisionProUITests/InstalledUIAcceptanceTests.swift` can be checked
+on a hosted runner without cutting a release. The CI Mac app lane's "Installed
+Mac UI smoke" step (`scripts.pre_signing_ui`) runs the same candidate UI test
+against the ad-hoc packaged app. It keeps the artifact
+`ci-installed-ui-<run>-<attempt>` with the screenshots, UI result and
+accessibility tree. Download it and look at the screenshots before merging.
+Doing this on #804 caught two defects that local tests could not see: the Dock
+covering the window, and Sparkle's second-launch prompt.
+
+Milestone Qualification cannot be dispatched again against a Beta that has
+already qualified. Its bind step requires the manifest's `runner_sha` to equal
+current `main` and the `automation/release-evidence-<tag>` branch to contain
+current `main`. A change to the updater press (`_updater_press_script`) therefore
+first runs for real in the next Beta's post-publication qualification. Say so in
+the pull request that changes it.
+
+Two platform facts matter when reading these screenshots. AppKit ignores
+`-AppleInterfaceStyle` as a launch argument, so dark mode comes only from the
+system setting; `-NSRequiresAquaSystemAppearance YES` does force light.
+`CFFIXED_USER_HOME` redirects file APIs but not `UserDefaults`, so an installed
+UI run on a development machine shares the real app's preferences (#769).

@@ -539,6 +539,9 @@ The workflow performs these ordered boundaries:
    update pull request when the version changes; tap CI must pass formula audit,
    source installation, command tests, and linkage checks before merge.
    Prereleases do not update the formula.
+16. After a Mac Beta is published, point the visionOS player's TestFlight
+   description and review notes at it
+   ([procedure](visionos-player.md#point-the-testflight-text-at-each-new-mac-beta)).
 
 For Stable releases, PyPI publication and the Homebrew tap update remain
 independent post-publication operations. PyPI starts only after the reusable
