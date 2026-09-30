@@ -2225,6 +2225,17 @@ def discover_milestone_receipt(
                 raise ReleaseMilestoneContextError(
                     "Prepublication prior-receipt carry-forward may add only the exact checked receipt."
                 )
+            carried_release_files = sorted(
+                path
+                for path in changed_paths
+                if path == f"docs/{release_tag.removeprefix('v')}-cut-packet.md"
+                or path.startswith(f"docs/qualification/{release_tag}-")
+            )
+            if carried_release_files:
+                raise ReleaseMilestoneContextError(
+                    "Prepublication prior-receipt carry-forward may not change the carried release's own files; "
+                    f"they land with that release's evidence: {carried_release_files!r}."
+                )
             published_prior_receipt = _validate_carried_prior_receipt(
                 repo_root,
                 base_sha=base_sha,
