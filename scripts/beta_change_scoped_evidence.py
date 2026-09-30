@@ -510,7 +510,6 @@ def produce_change_scoped_evidence(
     runners: Runners,
     log_dir: Path,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
-    support_diagnostics_endpoint: str = DEFAULT_SUPPORT_DIAGNOSTICS_ENDPOINT,
 ) -> EvidenceResult | None:
     """Prove the blocking preparation cases and write the evidence; ``None`` when nothing blocks."""
     if metadata.channel != "beta":
@@ -595,6 +594,8 @@ def produce_change_scoped_evidence(
             "log_sha256": python_run.log_sha256,
         }
 
+    # Always the public production endpoint: the document is committed and must not name a private host.
+    support_diagnostics_endpoint = DEFAULT_SUPPORT_DIAGNOSTICS_ENDPOINT
     package_display = f"{SUPPORT_DIAGNOSTICS_ENDPOINT_ENV}={support_diagnostics_endpoint} {' '.join(PACKAGE_COMMAND)}"
     package_run = _record_run(
         runners.package,
@@ -804,11 +805,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory outside the repository for command logs (default: a new temporary directory).",
     )
-    parser.add_argument(
-        "--support-diagnostics-endpoint",
-        default=DEFAULT_SUPPORT_DIAGNOSTICS_ENDPOINT,
-        help="Support diagnostics endpoint embedded in the local package.",
-    )
     return parser
 
 
@@ -824,7 +820,6 @@ def main(argv: list[str] | None = None) -> int:
             qualification_relative,
             runners=default_runners(),
             log_dir=log_dir,
-            support_diagnostics_endpoint=args.support_diagnostics_endpoint,
         )
     except (BetaEvidenceError, ReleaseError) as error:
         print(f"Change-scoped evidence failed: {error}", file=sys.stderr)
