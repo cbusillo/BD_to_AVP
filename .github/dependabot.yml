@@ -5,6 +5,8 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
     schedule:
       interval: weekly
     labels:
@@ -22,6 +24,8 @@ updates:
   - package-ecosystem: uv
     directory: "/"
     open-pull-requests-limit: 2
+    cooldown:
+      semver-major-days: 30
     schedule:
       interval: weekly
     labels:
@@ -39,6 +43,8 @@ updates:
   - package-ecosystem: npm
     directory: "/support-diagnostics"
     open-pull-requests-limit: 2
+    cooldown:
+      semver-major-days: 30
     schedule:
       interval: weekly
     labels:
