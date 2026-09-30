@@ -169,6 +169,32 @@ Review and commit all resulting changes. CI runs
 embedded-runtime and native-package smoke. Do not dispatch a release from an unmerged branch
 or from a stale main commit.
 
+### Beta Change-Scoped Evidence
+
+When a Beta candidate's preparation classification exits `2` with blocking
+`release_candidate` Tier 2 cases, produce the change-scoped evidence with the
+repository command instead of assembling it by hand. From a clean
+`qualify/<beta-tag>` worktree whose HEAD is the candidate SHA on `main`, run:
+
+```sh
+uv run python -m scripts.beta_change_scoped_evidence
+```
+
+The command reruns the preparation classifier exactly as the document records
+it, then the focused Python tests, the native test suite, and the local ad hoc
+`scripts/native_app.py package` run with the production support diagnostics
+endpoint. It checks every proof in its committed per-case catalog against the
+individual passed results and fails closed on a dirty worktree, a wrong branch,
+a non-Beta release, a blocking case outside the catalog or this lane, or any
+missing, skipped, or failed proof. On success it writes
+`docs/qualification/<beta-tag>-change-scoped-evidence-v1.json` and appends one
+receipt per proved case to `docs/qualification/release-evidence-v1.json`.
+Command logs stay outside the repository; only their digests are recorded. The
+command does not commit or push: review the diff, commit both files on the
+qualify branch, and open its pull request against the unchanged candidate SHA.
+When the classifier reports no blocking cases, the command exits without
+writing anything.
+
 ## Release Orchestration
 
 > **RC 3 is published and immutable.** Guarded Prerelease run `30990186667`
