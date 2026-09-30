@@ -5,6 +5,7 @@ name: CodeQL
   push:
     branches:
       - main
+      - "launchplane/train/**"
   pull_request:
   schedule:
     - cron: "37 7 * * 1"
