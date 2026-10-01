@@ -8,6 +8,7 @@ from typing import Any
 from scripts.qualify_release_scope import DEFAULT_POLICY_PATH, load_policy
 from scripts.release_receipt import build_receipt as build_release_receipt
 from scripts.release_receipt import file_sha256, write_receipt
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 from scripts.tier3_receipt import (
     Tier3ReceiptError,
     build_receipt as build_tier3_receipt,
@@ -28,7 +29,7 @@ def release_facts() -> dict[str, object]:
     return {
         "release_route": "prerelease",
         "source_sha": SOURCE_SHA,
-        "workflow_actor": "shiny-code-bot",
+        "workflow_actor": REQUIRED_ACTOR,
         "workflow_run_id": 12345,
         "workflow_run_attempt": 1,
         "package_version": "0.3.0rc3",

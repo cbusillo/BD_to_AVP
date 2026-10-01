@@ -23,6 +23,7 @@ from scripts.release_qualification_manifest import (
     write_manifest,
 )
 from scripts.release_receipt import build_receipt, write_receipt
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 from scripts.signed_artifact_receipt import (
     PROFILE_CASE_ID,
     build_receipt as build_signed_artifact_receipt,
@@ -74,7 +75,7 @@ def release_facts(*, tag: str, source_sha: str, stable: bool) -> dict[str, objec
     return {
         "release_route": "stable" if stable else "prerelease",
         "source_sha": source_sha,
-        "workflow_actor": "shiny-code-bot",
+        "workflow_actor": REQUIRED_ACTOR,
         "workflow_run_id": 12345 if stable else 12346,
         "workflow_run_attempt": 1,
         "package_version": package,

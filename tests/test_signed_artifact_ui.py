@@ -6,6 +6,7 @@ from pathlib import Path
 
 from scripts.artifact_identity import app_tree_sha256
 from scripts.release_receipt import build_receipt, file_sha256, write_receipt
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 from scripts.signed_artifact_ui import SignedArtifactUIConfig, SignedArtifactUIError, run
 from scripts.tier3_clean_machine import APP_NAME, RELEASES_URL, CleanMachineError
 
@@ -138,7 +139,7 @@ class SignedArtifactUITests(unittest.TestCase):
         facts = {
             "release_route": "prerelease",
             "source_sha": CANDIDATE_SHA,
-            "workflow_actor": "shiny-code-bot",
+            "workflow_actor": REQUIRED_ACTOR,
             "workflow_run_id": 12345,
             "workflow_run_attempt": 2,
             "package_version": "0.3.0rc3",
