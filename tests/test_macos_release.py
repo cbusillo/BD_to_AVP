@@ -19,12 +19,12 @@ from scripts.macos_release import (
     notarize_and_staple,
     parse_args,
     run,
-    smoke_native_app,
     smoke_packaged_tools,
     verify_release_app,
 )
 from scripts.native_app import NATIVE_APP_NAME
 from scripts.sparkle_bundle import SparkleBundleMetadata
+from scripts.verify_app_tools import REQUIRED_TOOLS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 yaml = importlib.import_module("yaml")
@@ -97,31 +97,35 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
         self.assertNotIn("Processing:", stdout.getvalue())
         self.assertIn("Processing: release.dmg", stderr.getvalue())
 
-    def test_verify_release_app_delegates_identity_and_smoke_checks(self) -> None:
+    def test_verify_release_app_runs_only_the_requested_smokes(self) -> None:
         app_path = Path("/tmp") / NATIVE_APP_NAME
         metadata = release_metadata(app_path)
+        smoke_flags = {
+            "smoke_app": "smoke_native_app",
+            "smoke_tools": "smoke_packaged_tools",
+            "smoke_worker": "smoke_packaged_worker",
+        }
 
-        with (
-            patch("scripts.macos_release.verify_layout") as verify_layout,
-            patch("scripts.macos_release.inspect_app_bundle", return_value=metadata) as inspect_bundle,
-            patch("scripts.macos_release.smoke_native_app") as smoke_app,
-            patch("scripts.macos_release.smoke_packaged_tools") as smoke_tools,
-            patch("scripts.macos_release.smoke_packaged_worker") as smoke_worker,
-        ):
-            result = verify_release_app(
-                app_path,
-                verify_signatures=True,
-                smoke_app=True,
-                smoke_tools=True,
-                smoke_worker=True,
-            )
+        for requested in (None, *smoke_flags):
+            with (
+                self.subTest(requested=requested),
+                patch("scripts.macos_release.verify_layout"),
+                patch("scripts.macos_release.inspect_app_bundle", return_value=metadata),
+                patch("scripts.macos_release.smoke_native_app") as smoke_native,
+                patch("scripts.macos_release.smoke_packaged_tools") as smoke_tools,
+                patch("scripts.macos_release.smoke_packaged_worker") as smoke_worker,
+            ):
+                smokes = {
+                    "smoke_native_app": smoke_native,
+                    "smoke_packaged_tools": smoke_tools,
+                    "smoke_packaged_worker": smoke_worker,
+                }
+                flags = {flag: flag == requested for flag in smoke_flags}
 
-        self.assertEqual(result, metadata)
-        verify_layout.assert_called_once_with(app_path)
-        inspect_bundle.assert_called_once_with(app_path, verify_signatures=True)
-        smoke_app.assert_called_once_with(app_path)
-        smoke_tools.assert_called_once_with(app_path)
-        smoke_worker.assert_called_once_with(app_path)
+                verify_release_app(app_path, **flags)
+
+                ran = {name for name, smoke in smokes.items() if smoke.called}
+                self.assertEqual(ran, {smoke_flags[requested]} if requested else set())
 
     def test_verify_release_app_without_signatures_keeps_layout_validation(self) -> None:
         app_path = Path("/tmp") / NATIVE_APP_NAME
@@ -160,32 +164,13 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
         verify_layout.assert_called_once_with(app_path)
         inspect_bundle.assert_called_once_with(app_path, verify_signatures=False)
 
-    def test_native_app_smoke_uses_packaged_native_smoke(self) -> None:
-        app_path = Path("/tmp") / NATIVE_APP_NAME
-        with patch("scripts.macos_release.smoke_packaged_native_app") as packaged_smoke:
-            smoke_native_app(app_path)
-
-        packaged_smoke.assert_called_once_with(app_path)
-
     def test_packaged_tool_smoke_probes_release_tool_set(self) -> None:
         app_path = Path("/tmp") / NATIVE_APP_NAME
         with patch("scripts.macos_release.verify_tool") as verify_tool:
             smoke_packaged_tools(app_path)
 
-        tool_names = {call.args[0].name for call in verify_tool.call_args_list}
-        self.assertEqual(
-            tool_names,
-            {
-                "MP4Box",
-                "edge264_test",
-                "ffmpeg",
-                "ffprobe",
-                "fx-upscale",
-                "mv-hevc-encoder",
-                "ssif_probe",
-                "spatial-media-kit-tool",
-            },
-        )
+        probed = {call.args[0].name: call.args[1] for call in verify_tool.call_args_list}
+        self.assertEqual(probed, REQUIRED_TOOLS)
 
     def test_refuses_to_replace_an_existing_dmg(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

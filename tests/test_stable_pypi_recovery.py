@@ -54,6 +54,7 @@ def fixture_evidence(root: Path) -> dict[str, object]:
             "event": "workflow_dispatch",
             "head_branch": "main",
             "head_sha": "a" * 40,
+            # Historical: failed Stable run 31219050718 was dispatched by the legacy actor.
             "actor": "shiny-code-bot",
             "triggering_actor": "shiny-code-bot",
             "status": "completed",
@@ -225,6 +226,7 @@ class StablePyPIRecoveryTests(unittest.TestCase):
                 "head_sha": "a" * 40,
                 "status": "completed",
                 "conclusion": "failure",
+                # Matches the historical failed run's legacy actor recorded above.
                 "actor": {"login": "shiny-code-bot"},
                 "triggering_actor": {"login": "shiny-code-bot"},
             }

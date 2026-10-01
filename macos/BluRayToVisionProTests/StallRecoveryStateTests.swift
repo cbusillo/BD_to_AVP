@@ -107,7 +107,9 @@ final class StallRecoveryStateTests: XCTestCase {
     func testSharedStallFixtureRetainsUsefulProgressAndArtifactEvidence() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-        let data = try Data(contentsOf: root.appendingPathComponent("tests/fixtures/native_worker_stall_v13.json"))
+        let data = try Data(contentsOf: root.appendingPathComponent(
+            "tests/fixtures/native_worker_stall_v\(WorkerJobSpec.protocolVersion).json"
+        ))
         let decoded = try JSONDecoder().decode(WorkerEvent.self, from: data)
         XCTAssertEqual(decoded.protocolVersion, WorkerJobSpec.protocolVersion)
         XCTAssertEqual(decoded.type, .toolStall)

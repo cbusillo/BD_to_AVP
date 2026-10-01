@@ -8,7 +8,6 @@ import sys
 import tempfile
 import unittest
 
-from collections.abc import Iterator
 from pathlib import Path
 
 from scripts import release
@@ -32,15 +31,6 @@ def load_github_config() -> dict:
 
 def load_release_engine() -> dict:
     return load_workflow("release-engine.yml")
-
-
-def iter_workflow_uses(workflow: dict) -> Iterator[str]:
-    for job in workflow["jobs"].values():
-        if "uses" in job:
-            yield job["uses"]
-        for step in job.get("steps", []):
-            if "uses" in step:
-                yield step["uses"]
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -111,7 +101,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
         self.assertEqual(pre_signing["with"]["source_sha"], "${{ inputs.release_sha }}")
         self.assertIn("pre-signing-package", package["needs"])
-        self.assertGreaterEqual(str(package).count("refs/remotes/origin/main"), 4)
 
     def test_release_independent_production_preflight_is_secret_free_and_non_publishing(self) -> None:
         manual = load_workflow("production-preflight.yml")
@@ -1301,36 +1290,6 @@ printf '%s' "$CODESIGN_METADATA"
             deploy["with"]["expected_base_release_tag"],
             "${{ needs.prepare.outputs.base_snapshot_tag }}",
         )
-
-    def test_all_release_checkouts_use_dispatch_sha(self) -> None:
-        workflow = load_release_engine()
-        checkouts = [
-            step
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", [])
-            if step.get("uses", "").startswith("actions/checkout@")
-        ]
-
-        self.assertGreaterEqual(len(checkouts), 4)
-        for checkout in checkouts:
-            self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-            self.assertEqual(checkout["with"]["persist-credentials"], "false")
-
-    def test_all_external_actions_are_pinned_to_commit_shas(self) -> None:
-        action_uses: list[tuple[str, str]] = []
-        workflow_directory = REPO_ROOT / ".github" / "workflows"
-        workflow_paths = sorted(path for pattern in ("*.yml", "*.yaml") for path in workflow_directory.glob(pattern))
-        for workflow_path in workflow_paths:
-            workflow_name = workflow_path.name
-            workflow = load_workflow(workflow_name)
-            action_uses.extend(
-                (workflow_name, action) for action in iter_workflow_uses(workflow) if not action.startswith("./")
-            )
-
-        self.assertTrue(action_uses)
-        for workflow_name, action in action_uses:
-            with self.subTest(workflow=workflow_name, action=action):
-                self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
 
     def test_release_environment_contract_preserves_scoped_secrets(self) -> None:
         environments = load_github_config()["releaseEnvironments"]

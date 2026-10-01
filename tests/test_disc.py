@@ -1,11 +1,22 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bd_to_avp.modules import disc
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.process_runner import ProcessOutputSnapshot, ProcessResult
+
+
+# Lines from the MakeMKV log attached to issue #2 (scratched 3D disc).
+MAKEMKV_CORRUPT_SOURCE_LINE = (
+    "The source file '/BDMV/STREAM/00902.m2ts' is corrupt or invalid at offset 8744417280, attempting to work around"
+)
+MAKEMKV_SHORT_TITLE_LINE = (
+    "Title #00873.m2ts has length of 0 seconds which is less than minimum title length of 120 seconds "
+    "and was therefore skipped"
+)
+MAKEMKV_SUCCESS_OUTPUT = f"{MAKEMKV_SHORT_TITLE_LINE}\nOperation successfully completed\n1 titles saved\n"
 
 
 def process_result(output: str = "", stderr: str = "") -> ProcessResult:
@@ -265,26 +276,32 @@ class DiscStageArtifactTests(unittest.TestCase):
         self.assertIn("--minlength=0", command)
         self.assertIn(2, command)
 
-    def test_disc_rip_detects_makemkv_error_from_stderr(self) -> None:
+    def rip_with_makemkv_output(self, *, stdout: str, stderr: str) -> Mock:
         with tempfile.TemporaryDirectory() as temp_dir:
-            output_folder = Path(temp_dir)
             with (
                 patch.object(disc.config, "source_path", Path("/Movies/Feature.iso")),
                 patch.object(disc.config, "source_str", None),
-                patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
                 patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
                 patch.object(disc.config, "continue_on_error", False),
-                patch.object(disc.config, "MKV_ERROR_CODES", ["FAILED"]),
-                patch.object(disc.config, "MKV_ERROR_FILTERS", []),
                 patch.object(disc, "create_custom_makemkv_profile"),
                 patch.object(
                     disc,
                     "run_process_capture",
-                    return_value=process_result(stderr="FAILED to save title\n"),
+                    return_value=process_result(stdout, stderr=stderr),
                 ) as run_command,
-                self.assertRaises(disc.MKVCreationError),
             ):
-                disc.rip_disc_to_mkv(output_folder, disc.DiscInfo(main_title_number=2))
+                disc.rip_disc_to_mkv(Path(temp_dir), disc.DiscInfo(main_title_number=2))
+        return run_command
+
+    def test_disc_rip_stops_on_makemkv_corrupt_source_from_stderr(self) -> None:
+        with self.assertRaises(disc.MKVCreationError) as raised:
+            self.rip_with_makemkv_output(stdout=MAKEMKV_SUCCESS_OUTPUT, stderr=MAKEMKV_CORRUPT_SOURCE_LINE + "\n")
+
+        self.assertIn(MAKEMKV_CORRUPT_SOURCE_LINE, str(raised.exception))
+        self.assertNotIn(MAKEMKV_SHORT_TITLE_LINE, str(raised.exception))
+
+    def test_disc_rip_accepts_benign_makemkv_output(self) -> None:
+        run_command = self.rip_with_makemkv_output(stdout=MAKEMKV_SUCCESS_OUTPUT, stderr="")
 
         self.assertFalse(run_command.call_args.kwargs["merge_stderr"])
 
