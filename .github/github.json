@@ -169,7 +169,7 @@
     },
     "test": {
       "observabilityMigration": "uv run python scripts/validate_observability_migration.py",
-      "unitSmoke": "uv run pytest -n auto --dist loadfile -p no:cacheprovider tests",
+      "unitSmoke": "uv run pytest -n 6 --dist worksteal -p no:cacheprovider tests",
       "releaseQualificationPolicy": "uv run python -m scripts.qualify_release_scope --validate-policy",
       "releaseQualification": "uv run python -m unittest tests.test_qualify_release_scope",
       "releaseQualificationStatus": "uv run python -m unittest tests.test_release_qualification_controller",
