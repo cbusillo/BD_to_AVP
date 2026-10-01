@@ -425,12 +425,12 @@ class FinalMuxRealToolTests(unittest.TestCase):
             forced_sup.unlink()
 
             warnings: list[str] = []
-            failures: list[BaseException] = []
+            failures: list[Exception] = []
 
             def rip() -> None:
                 try:
                     sub.extract_subtitle_to_srt(subtitle_mkv, output_folder, warnings.append)
-                except BaseException as error:
+                except Exception as error:
                     failures.append(error)
 
             with (
