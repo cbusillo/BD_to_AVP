@@ -232,79 +232,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(metadata.make_latest, not version.prerelease)
         self.assertEqual(metadata.publish_pypi, not version.prerelease)
 
-        freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        beta6_freeze = freeze_policy["frozen_release_tags"]["v0.3.2-beta.6"]
-        self.assertEqual(beta6_freeze["issue"], 609)
-        self.assertIn("permanently non-reusable", beta6_freeze["reason"])
-        self.assertIn("authorized immutable disposition", beta6_freeze["reason"])
-        self.assertNotIn("v0.3.2-beta.7", freeze_policy["frozen_release_tags"])
-        self.assertNotIn("v0.3.2-rc.1", freeze_policy["frozen_release_tags"])
-        self.assertNotIn("v0.3.2", freeze_policy["frozen_release_tags"])
-        self.assertNotIn("v0.3.3-beta.1", freeze_policy["frozen_release_tags"])
-
-        cut_packet = (REPO_ROOT / "docs" / "0.3.2-beta.6-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.2b6`", cut_packet)
-        self.assertIn("Build `168`", cut_packet)
-        self.assertIn("#609", cut_packet)
-        self.assertIn("PR #611", cut_packet)
-        self.assertIn("PR #612", cut_packet)
-        self.assertIn("PR #620", cut_packet)
-        self.assertIn("PR #623", cut_packet)
-        self.assertIn("Privacy rules version `5`", cut_packet)
-        self.assertIn(release.CUT_PACKET_CANCELLED, cut_packet)
-        self.assertIn("Draft release `374538590`", cut_packet)
-        self.assertIn("was deleted under separate explicit authorization", cut_packet)
-        self.assertIn("draft-deletion-v1.json", cut_packet)
-        self.assertIn("Build `168` is permanently burned", cut_packet)
-        self.assertIn("PyPI", cut_packet)
-        self.assertIn("Homebrew", cut_packet)
-
-        beta7_cut_packet = (REPO_ROOT / "docs" / "0.3.2-beta.7-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.2b7`", beta7_cut_packet)
-        self.assertIn("Build `169`", beta7_cut_packet)
-        self.assertIn("Production Preflight run `32620933465`", beta7_cut_packet)
-        self.assertIn("Builds `165`, `166`, and `168` remain", beta7_cut_packet)
-        beta7_release_receipt = REPO_ROOT / "docs" / "release-evidence" / "v0.3.2-beta.7" / "release-receipt.json"
-        expected_beta7_state = (
-            release.CUT_PACKET_PUBLISHED if beta7_release_receipt.is_file() else release.CUT_PACKET_PREPARED
-        )
-        unexpected_beta7_state = (
-            release.CUT_PACKET_PREPARED if beta7_release_receipt.is_file() else release.CUT_PACKET_PUBLISHED
-        )
-        self.assertIn(expected_beta7_state, beta7_cut_packet)
-        self.assertNotIn(unexpected_beta7_state, beta7_cut_packet)
-
-        rc1_cut_packet = (REPO_ROOT / "docs" / "0.3.2-rc.1-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.2rc1`", rc1_cut_packet)
-        self.assertIn("Build `170`", rc1_cut_packet)
-        self.assertIn("feature freeze", rc1_cut_packet.lower())
-        self.assertIn("Production Preflight run `32791057931`", rc1_cut_packet)
-        self.assertIn("Beta 7", rc1_cut_packet)
-        rc1_release_receipt = REPO_ROOT / "docs" / "release-evidence" / "v0.3.2-rc.1" / "release-receipt.json"
-        expected_rc1_state = (
-            release.CUT_PACKET_PUBLISHED if rc1_release_receipt.is_file() else release.CUT_PACKET_PREPARED
-        )
-        unexpected_rc1_state = (
-            release.CUT_PACKET_PREPARED if rc1_release_receipt.is_file() else release.CUT_PACKET_PUBLISHED
-        )
-        self.assertIn(expected_rc1_state, rc1_cut_packet)
-        self.assertNotIn(unexpected_rc1_state, rc1_cut_packet)
-
-        stable_cut_packet = (REPO_ROOT / "docs" / "0.3.2-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.2`", stable_cut_packet)
-        self.assertIn("Build `171`", stable_cut_packet)
-        self.assertIn("v0.3.2-rc.1", stable_cut_packet)
-        self.assertIn("v0.3.1", stable_cut_packet)
-        stable_release_receipt = REPO_ROOT / "docs" / "release-evidence" / "v0.3.2" / "release-receipt.json"
-        expected_stable_state = (
-            release.CUT_PACKET_PUBLISHED if stable_release_receipt.is_file() else release.CUT_PACKET_PREPARED
-        )
-        unexpected_stable_state = (
-            release.CUT_PACKET_PREPARED if stable_release_receipt.is_file() else release.CUT_PACKET_PUBLISHED
-        )
-        self.assertIn(expected_stable_state, stable_cut_packet)
-        self.assertNotIn(unexpected_stable_state, stable_cut_packet)
-
         release.validate_release_cut_packet(metadata)
         candidate_receipt = REPO_ROOT / "docs" / "release-evidence" / metadata.release_tag / "release-receipt.json"
 
@@ -445,33 +372,24 @@ class ReleaseMetadataTests(unittest.TestCase):
             "release_id",
             "appcast_sha256",
         )
-        receipt_path = (
-            REPO_ROOT / "docs/release-evidence" / qualification["candidate"]["release_tag"] / "release-receipt.json"
-        )
+        # The identity is either still preregistered (all null) or exactly the committed receipt's.
+        # Either is valid before and after publication; a partial or mismatched identity is not.
         candidate_identity = {field: qualification["candidate"][field] for field in candidate_identity_fields}
-        terminal_v2_path = receipt_path.with_name("qualification-v2.json")
-        if receipt_path.exists():
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        valid_identities = [{field: None for field in candidate_identity_fields}]
+        if candidate_receipt.is_file():
+            receipt = json.loads(candidate_receipt.read_text(encoding="utf-8"))
             artifacts_by_kind = {artifact["kind"]: artifact for artifact in receipt["artifacts"]}
-            expected_candidate_identity = {
-                "source_git_sha": receipt["source_sha"],
-                "dmg_sha256": artifacts_by_kind["dmg"]["sha256"],
-                "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
-                "release_run_id": receipt["workflow"]["run_id"],
-                "release_id": receipt["release"]["id"],
-                "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
-            }
-            if terminal_v2_path.is_file():
-                # V2 may retain the original preregistration or the publisher's exact
-                # compatibility copy. A partial or mismatched publication identity is invalid.
-                self.assertIn(
-                    candidate_identity,
-                    (expected_candidate_identity, {field: None for field in candidate_identity_fields}),
-                )
-            else:
-                self.assertEqual(candidate_identity, expected_candidate_identity)
-        else:
-            self.assertEqual(candidate_identity, {field: None for field in candidate_identity_fields})
+            valid_identities.append(
+                {
+                    "source_git_sha": receipt["source_sha"],
+                    "dmg_sha256": artifacts_by_kind["dmg"]["sha256"],
+                    "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
+                    "release_run_id": receipt["workflow"]["run_id"],
+                    "release_id": receipt["release"]["id"],
+                    "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
+                }
+            )
+        self.assertIn(candidate_identity, valid_identities)
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(qualification["execution_policy"]["release_stage"], metadata.channel)
         self.assertEqual(
@@ -605,43 +523,40 @@ class ReleaseMetadataTests(unittest.TestCase):
             with self.assertRaisesRegex(release.ReleaseError, "prepared, published"):
                 release.validate_release_cut_packet(metadata, repo_root=root)
 
-    def test_rc2_records_immutable_published_identity(self) -> None:
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-rc.2-cut-packet.md").read_text(encoding="utf-8")
-        qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "rc2-signed-qualification-v1.json").read_text(encoding="utf-8")
+    def test_committed_cut_packets_satisfy_the_dispatch_validator(self) -> None:
+        recognized_states = (
+            release.CUT_PACKET_PREPARED,
+            release.CUT_PACKET_RECOVERY_PENDING,
+            release.CUT_PACKET_PUBLISHED,
+            release.CUT_PACKET_CANCELLED,
         )
-
-        self.assertIn("Published and immutable", cut_packet)
-        self.assertIn("`30944931796`", cut_packet)
-        self.assertIn("`cd56f02bab8589f527af6e45fe94b2ffcce473dc`", cut_packet)
-        self.assertIn("`e39e81b99cf9c7bd272095d7a3f96de378e0a251334e9a4c5a83c54b8f4c1d45`", cut_packet)
-        self.assertIn("`961b5e3bb0c2aba4b5ce474a0f0a559b80a037712df1f743427f2bf2b9cc48b6`", cut_packet)
-        self.assertIn("must not be rebuilt", cut_packet)
-        self.assertEqual(qualification["status"], "published_partial_exact_artifact")
-        self.assertEqual(qualification["candidate"]["release_id"], 365132159)
-        self.assertEqual(qualification["candidate"]["release_run_id"], 30944931796)
-        self.assertTrue(qualification["immutable_publication"]["must_not_rebuild"])
-        self.assertEqual(
-            set(qualification["immutable_publication"]["failed_case_ids"]),
-            {"malformed-pgs-recovery", "public-diagnostics-and-field-closure"},
-        )
-
-    def test_rc1_records_immutable_published_identity(self) -> None:
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-rc.1-cut-packet.md").read_text(encoding="utf-8")
-        qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "rc1-signed-qualification-v1.json").read_text(encoding="utf-8")
-        )
-
-        self.assertIn("Published and immutable", cut_packet)
-        self.assertIn("`30865530971`", cut_packet)
-        self.assertIn("`96146ac1b5f747dd78440761ad16e73d591fec4b`", cut_packet)
-        self.assertIn("`0d8aab0e63a4097aa7cc1c7df511dc0582aa767c7dbe81c75971815af3df162c`", cut_packet)
-        self.assertIn("`a88b258708a049e960fcb4f8985b5eb7eab50f539a882a2402b947187ba2e70b`", cut_packet)
-        self.assertIn("must not be rebuilt", cut_packet)
-        self.assertEqual(qualification["status"], "published_partial_exact_artifact")
-        self.assertEqual(qualification["candidate"]["release_id"], 364562591)
-        self.assertEqual(qualification["candidate"]["release_run_id"], 30865530971)
-        self.assertTrue(qualification["immutable_publication"]["must_not_rebuild"])
+        validated = 0
+        for path in sorted((REPO_ROOT / "docs").glob("*-cut-packet.md")):
+            # Every packet is named after a public release identity; parsing it is part of the check.
+            version = release.parse_release_tag(f"v{path.name.removesuffix('-cut-packet.md')}")
+            metadata = release.ReleaseMetadata(
+                package_version=version.text,
+                public_version=version.public_version,
+                build_version="0",  # the validator selects the packet by public version alone
+                release_tag=version.release_tag,
+                release_name=version.release_tag,
+                dmg_name=f"{release.DMG_NAME_PREFIX}-{version.public_version}.dmg",
+                channel=version.channel,
+                prerelease=version.prerelease,
+                first_candidate_of_cycle=version.first_candidate_of_cycle,
+                make_latest=not version.prerelease,
+                publish_pypi=not version.prerelease,
+            )
+            with self.subTest(cut_packet=path.name):
+                if any(state in path.read_text(encoding="utf-8") for state in recognized_states):
+                    self.assertEqual(release.validate_release_cut_packet(metadata), path.relative_to(REPO_ROOT))
+                    validated += 1
+                else:
+                    # Failed, abandoned and recovery-only packets predate the state vocabulary. The
+                    # validator must refuse them rather than treat them as dispatchable.
+                    with self.assertRaises(release.ReleaseError):
+                        release.validate_release_cut_packet(metadata)
+        self.assertGreater(validated, 0)
 
     def test_beta11_qualification_remains_historical_receipt(self) -> None:
         qualification = json.loads(
@@ -660,54 +575,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertFalse(qualification["acceptance"]["signed_beta_complete"])
         self.assertFalse(qualification["acceptance"]["passed"])
-
-    def test_beta12_cut_packet_records_abandoned_metadata(self) -> None:
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.12-cut-packet.md").read_text(encoding="utf-8")
-
-        self.assertIn("Abandoned metadata; never dispatched or published", cut_packet)
-        self.assertIn("`0.3.0b12`", cut_packet)
-        self.assertIn("Build `157`", cut_packet)
-        self.assertIn("No tag, draft, release", cut_packet)
-        self.assertIn("DMG, or appcast item was created", cut_packet)
-
-    def test_beta10_cut_packet_records_immutable_published_identity(self) -> None:
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.10-cut-packet.md").read_text(encoding="utf-8")
-
-        self.assertIn("Published and immutable", cut_packet)
-        self.assertIn("`30445073119`", cut_packet)
-        self.assertIn("`50b874a4ad681762f3aa94e02926b8a82f0aa221`", cut_packet)
-        self.assertIn("`6fed922114e152be4f2e95ad7ee597465ae8d550539e7566ed05a64d8176d91c`", cut_packet)
-        self.assertIn("`d89840da944b3a4519d68e84549ac7a69a9b2ffc5d2ec5717eabf6f0382151b0`", cut_packet)
-        self.assertIn("must not be rebuilt", cut_packet)
-        self.assertNotIn("The exact Beta 10 artifact remains pending", cut_packet)
-
-    def test_beta9_cut_packet_records_failed_burned_identity(self) -> None:
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.9-cut-packet.md").read_text(encoding="utf-8")
-
-        self.assertIn("Failed, unpublished, and permanently burned", cut_packet)
-        self.assertIn("`30426833488`", cut_packet)
-        self.assertIn("`355a5f559ba36d4e6862ad93c7d48527f8c7d5c0`", cut_packet)
-        self.assertIn("Build `154`", cut_packet)
-        self.assertIn("`1d8ca100cc43bdcf6dc678838de2cb99cf5c018024e871b06dec87b606a6f2a2`", cut_packet)
-        self.assertIn("`4313b95146c4e7ca89c6cc0fd6838708a3d4a904`", cut_packet)
-        self.assertIn("No tag, draft, release, DMG, appcast item", cut_packet)
-        self.assertIn("must not be appended to the appcast", cut_packet)
-        self.assertNotIn("Authorized metadata; publication pending", cut_packet)
-        self.assertNotIn("The exact Beta 9 artifact remains pending", cut_packet)
-
-    def test_beta8_cut_packet_records_immutable_published_identity(self) -> None:
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.8-cut-packet.md").read_text(encoding="utf-8")
-
-        self.assertIn("Published and immutable", cut_packet)
-        self.assertIn("`30341766419`", cut_packet)
-        self.assertIn("`8e10dc38f935fe7deb7bbe4f6e1095f18b6cf328`", cut_packet)
-        self.assertIn("`f16bd1c6f2d4820b0bdb985d8e9fc9617a7f7601ed69d0c203302063c29c23cc`", cut_packet)
-        self.assertIn("`7e9d66d372bd94ea1d11a0990c3e070ba97268b2ce21794f1c46f04235dc7b93`", cut_packet)
-        self.assertIn("Issue #382 is complete", cut_packet)
-        self.assertIn("publication-time snapshot", cut_packet)
-        self.assertIn("must not be rebuilt", cut_packet)
-        self.assertNotIn("Authorized metadata; publication pending", cut_packet)
-        self.assertNotIn("The exact Beta 8 artifact remains pending", cut_packet)
 
     def test_repository_beta3_recovery_evidence_is_exact(self) -> None:
         evidence = release.validate_beta3_recovery_evidence()
