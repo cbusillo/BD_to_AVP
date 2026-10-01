@@ -23,6 +23,12 @@ class MainSmokeTests(unittest.TestCase):
         start_gui.assert_called_once_with()
         start_process.assert_not_called()
 
+    def test_gui_starts_only_without_arguments(self) -> None:
+        with patch.object(sys, "argv", ["bd-to-avp"]):
+            self.assertTrue(Config.App().is_gui)
+        with patch.object(sys, "argv", ["bd-to-avp", "--source", "/tmp/movie.mkv"]):
+            self.assertFalse(Config.App().is_gui)
+
     def test_missing_gui_extra_exits_with_install_guidance(self) -> None:
         real_import = builtins.__import__
 
@@ -73,6 +79,7 @@ class MainSmokeTests(unittest.TestCase):
     def test_apple_vision_smoke_flag_runs_without_source(self) -> None:
         with (
             patch.object(sys, "argv", ["bd-to-avp", "--smoke-apple-vision-ocr"]),
+            patch.object(__main__.config.app, "is_gui", False),
             patch("bd_to_avp.__main__.AppleVisionOcr._load_frameworks") as load_frameworks,
             patch("bd_to_avp.__main__.start_process") as start_process,
             patch("builtins.print") as print_mock,
