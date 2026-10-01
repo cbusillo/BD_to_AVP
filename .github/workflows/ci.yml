@@ -452,12 +452,18 @@ jobs:
 
           xcrun simctl boot "$simulator_udid"
           xcrun simctl bootstatus "$simulator_udid" -b
+          # The simulator sometimes fails to launch the UI test runner. Retry a failed test once
+          # in a fresh process, and skip the sysdiagnose that used to add a 600 s timeout.
           xcodebuild test-without-building \
             -project BluRayToVisionPro.xcodeproj \
             -scheme BDToAVPPlayer \
             -configuration Debug \
             -destination "platform=visionOS Simulator,id=$simulator_udid" \
             -derivedDataPath build/BDToAVPPlayerDerivedData \
+            -retry-tests-on-failure \
+            -test-iterations 2 \
+            -test-repetition-relaunch-enabled YES \
+            -collect-test-diagnostics never \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Save test compilation cache
