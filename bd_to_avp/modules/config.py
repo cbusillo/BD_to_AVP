@@ -131,8 +131,7 @@ class Config:
             self.config_path = Path.home() / "Library" / "Application Support" / self.shortname
             self.config_file = (self.config_path / "config.ini").with_suffix(".ini")
 
-            if not self.config_path.exists():
-                self.config_path.mkdir(parents=True)
+            self.config_path.mkdir(parents=True, exist_ok=True)
             if not self.config_file.exists():
                 self.config_file.touch()
 

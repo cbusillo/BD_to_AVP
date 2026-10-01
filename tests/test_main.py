@@ -29,6 +29,15 @@ class MainSmokeTests(unittest.TestCase):
         with patch.object(sys, "argv", ["bd-to-avp", "--source", "/tmp/movie.mkv"]):
             self.assertFalse(Config.App().is_gui)
 
+    def test_settings_folder_created_by_another_process_is_accepted(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            with patch.object(Path, "home", return_value=home):
+                settings_folder = Config.App().config_path
+                # Another process created the folder after this one checked for it.
+                with patch.object(Path, "exists", return_value=False):
+                    self.assertEqual(Config.App().config_path, settings_folder)
+
     def test_missing_gui_extra_exits_with_install_guidance(self) -> None:
         real_import = builtins.__import__
 
