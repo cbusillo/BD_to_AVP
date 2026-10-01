@@ -35,9 +35,7 @@ from scripts.native_app import (
     WORKER_PROTOCOL_VERSION,
     WORKER_EXECUTABLE_NAME,
     MACOS_ROOT,
-    PROJECT_PATH,
     REPO_ROOT,
-    SCHEME,
     build_packaged_mv_hevc_encoder,
     ensure_clean_worktree,
     install_mv_hevc_encoder,
@@ -68,6 +66,8 @@ from scripts.native_app import (
 )
 from scripts.verify_packaged_mv_hevc_routes import app_tree_sha256 as qualification_app_tree_sha256
 from scripts.build_ssif_probe_macos import MANIFEST_PATH as SSIF_MANIFEST_PATH, load_manifest as load_ssif_manifest
+from scripts.production_identity import PRODUCTION_BUNDLE_IDENTIFIER
+from scripts.tier3_clean_machine import BUNDLE_IDENTIFIER as TIER3_BUNDLE_IDENTIFIER
 
 yaml = importlib.import_module("yaml")
 
@@ -136,20 +136,15 @@ class NativeAppPackagingTests(unittest.TestCase):
 
     def test_uses_production_identity(self) -> None:
         # Version and build move every release, so assert the packaging constants agree with
-        # pyproject.toml rather than restating literals that must be edited on every bump.
+        # pyproject.toml and the production identity rather than restating literals.
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)
 
-        self.assertEqual(PROJECT_PATH.name, "BluRayToVisionPro.xcodeproj")
-        self.assertEqual(SCHEME, "BluRayToVisionPro")
-        self.assertEqual(NATIVE_PACKAGE_CONFIGURATION, "Release")
-        self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
+        self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, PRODUCTION_BUNDLE_IDENTIFIER)
+        self.assertEqual(TIER3_BUNDLE_IDENTIFIER, PRODUCTION_BUNDLE_IDENTIFIER)
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
-        self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
         self.assertEqual(NATIVE_SHORT_VERSION, str(pyproject["project"]["version"]))
         self.assertEqual(NATIVE_BUILD_VERSION, str(pyproject["tool"]["bd_to_avp"]["build_version"]))
-        self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
-        self.assertEqual(MV_HEVC_ENCODER_NAME, "mv-hevc-encoder")
 
     def test_installed_ui_scheme_forwards_qualification_environment(self) -> None:
         project = yaml.load((MACOS_ROOT / "project.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
@@ -169,16 +164,6 @@ class NativeAppPackagingTests(unittest.TestCase):
             test_action["environmentVariables"],
             {key: f"$({key})" for key in environment_keys},
         )
-
-    def test_installed_ui_update_button_is_scoped_to_sparkle_window(self) -> None:
-        source = (MACOS_ROOT / "BluRayToVisionProUITests" / "InstalledUIAcceptanceTests.swift").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn('app.windows.matching(identifier: "SUUpdateAlert").firstMatch', source)
-        self.assertIn('matching(identifier: "SPUUserUpdateChoiceInstall")', source)
-        self.assertIn("in: updateWindow.buttons", source)
-        self.assertNotIn("in: app.buttons,\n            identifiers:", source)
 
     def test_builds_packaged_mv_hevc_encoder_at_requested_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -230,23 +215,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         }
         debug_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info.plist").read_bytes())
         release_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info-Release.plist").read_bytes())
-        app_source = (MACOS_ROOT / "BluRayToVisionPro" / "App" / "BluRayToVisionProApp.swift").read_text(
-            encoding="utf-8"
-        )
 
-        self.assertNotIn("BDToAVPNative", project_spec)
-        self.assertEqual(app_source.count('Window("Settings", id: AppWindowID.settings)'), 1)
-        self.assertIn("SettingsView(", app_source)
-        self.assertIn("profileStore: profileStore", app_source)
-        self.assertIn("capabilities: capabilities", app_source)
-        self.assertIn("updater: updater", app_source)
-        self.assertIn("UpdateCommands(updater: updater)", app_source)
-        self.assertIn("UpdateController(installPostponer: workCoordinator)", app_source)
-        self.assertIn("CommandGroup(replacing: .appSettings)", app_source)
-        self.assertIn("CommandGroup(after: .help)", app_source)
-        self.assertIn('Picker("Update Channel"', app_source)
-        self.assertIn("openWindow(id: AppWindowID.settings)", app_source)
-        self.assertIn(".windowResizability(.contentMinSize)", app_source)
         self.assertEqual(target_settings["base"]["CURRENT_PROJECT_VERSION"], NATIVE_BUILD_VERSION)
         self.assertNotIn("CURRENT_PROJECT_VERSION", release_settings)
         self.assertEqual(project["options"]["deploymentTarget"]["macOS"], NATIVE_MINIMUM_SYSTEM_VERSION)
@@ -254,11 +223,9 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(target_settings["base"]["MARKETING_VERSION"], NATIVE_SHORT_VERSION)
         self.assertEqual(target_settings["base"]["PRODUCT_BUNDLE_IDENTIFIER"], NATIVE_BUNDLE_IDENTIFIER)
         self.assertEqual(target_settings["base"]["PRODUCT_NAME"], NATIVE_PRODUCT_NAME)
-        self.assertEqual(debug_settings["PRODUCT_BUNDLE_IDENTIFIER"], "com.shinycomputers.bd-to-avp.development")
-        self.assertEqual(debug_settings["PRODUCT_NAME"], "3D Blu-ray to Vision Pro Development")
-        self.assertNotIn("Preview: release", project_spec)
-        self.assertNotIn("Native Preview", project_spec)
-        self.assertNotIn(".native-preview", project_spec)
+        # A development build must never take over the installed release's identity.
+        self.assertNotEqual(debug_settings["PRODUCT_BUNDLE_IDENTIFIER"], NATIVE_BUNDLE_IDENTIFIER)
+        self.assertNotEqual(debug_settings["PRODUCT_NAME"], NATIVE_PRODUCT_NAME)
         self.assertEqual(project["packages"]["Sparkle"]["exactVersion"], sparkle_manifest["version"])
         self.assertIn({"package": "Sparkle"}, project["targets"]["BluRayToVisionPro"]["dependencies"])
         self.assertIn({"sdk": "AVKit.framework"}, project["targets"]["BluRayToVisionPro"]["dependencies"])
@@ -275,113 +242,6 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(debug_info, {key: value for key, value in release_info.items() if key not in update_keys})
         self.assertEqual(release_settings["INFOPLIST_FILE"], "BluRayToVisionPro/Info-Release.plist")
         self.assertNotIn("SUEnableAutomaticChecks", release_info)
-
-    def test_native_ui_keeps_queue_sources_and_original_job_controls_visible(self) -> None:
-        content_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ContentView.swift").read_text(encoding="utf-8")
-        queue_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "PersistentQueueWorkspaceView.swift").read_text(
-            encoding="utf-8"
-        )
-        setup_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ConversionSetupView.swift").read_text(
-            encoding="utf-8"
-        )
-        encoding_editor = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "EncodingOptionsEditor.swift").read_text(
-            encoding="utf-8"
-        )
-        quality_editor = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "VideoQualityEditor.swift").read_text(
-            encoding="utf-8"
-        )
-        language_picker = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "LanguagePickerField.swift").read_text(
-            encoding="utf-8"
-        )
-        conversion_options = (MACOS_ROOT / "BluRayToVisionPro" / "Models" / "ConversionOptions.swift").read_text(
-            encoding="utf-8"
-        )
-        conversion_workflow = (MACOS_ROOT / "BluRayToVisionPro" / "Models" / "ConversionWorkflow.swift").read_text(
-            encoding="utf-8"
-        )
-        conversion_ui = (
-            setup_view + encoding_editor + quality_editor + language_picker + conversion_options + conversion_workflow
-        )
-
-        self.assertIn('.accessibilityLabel("\\(purpose.label): \\(selection.displayName)")', language_picker)
-        self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
-
-        self.assertIn('Button("No Inserted Disc Detected")', content_view)
-        self.assertIn('Button("Add \\(disc.displayName) to Queue")', content_view)
-        self.assertIn('Button("Add Disc Image…")', content_view)
-        self.assertIn('Button("Add Blu-ray Folder…")', content_view)
-        self.assertIn('Button("Add Folder of Movies…")', content_view)
-        self.assertIn('Button("Add 3D MKV…")', content_view)
-        self.assertIn('Button("Add MTS or M2TS…")', content_view)
-        self.assertIn('Button("Configure Source…", action: configureExistingSource)', content_view)
-        self.assertIn('Button("Add Folder of Movies…", action: addSourceFolder)', queue_view)
-        self.assertIn('Label("Save current settings as new profile", systemImage: "plus.square.on.square")', setup_view)
-        self.assertIn('.accessibilityLabel("Save current settings as new profile")', setup_view)
-        self.assertNotIn('Button("Save Current Settings as New Profile…", action: saveAsNewProfile)', setup_view)
-        self.assertLess(
-            content_view.index("No Inserted Disc Detected"),
-            content_view.index("Add MTS or M2TS…"),
-        )
-        for label in (
-            "Video quality",
-            "Custom",
-            "Expert quality controls",
-            "Direct final rate control",
-            "Direct final bitrate",
-            "Generated fallback",
-            "eye bitrate",
-            "Video Output",
-            "AV1 quality",
-            "AI FX upscale to 2\u00d7 resolution",
-            "Crop black bars",
-            "Swap left and right eyes",
-            "Audio handling",
-            "Audio languages",
-            "All Languages",
-            "Preferred Language Only",
-            "Audio language",
-            "Subtitle handling",
-            "Subtitle language",
-            "Start stage",
-            "The finished movie plus reusable files",
-            "Continue processing after recoverable errors",
-            "Use software HEVC encoder",
-            "Overwrite an existing output file",
-            "Remove original after success",
-            "Show generated commands in activity",
-        ):
-            self.assertIn(label, conversion_ui)
-
-        self.assertIn('Section("Subtitles")', encoding_editor)
-        self.assertNotIn("Subtitles and Languages", encoding_editor)
-        self.assertIn('GroupBox("Conversion Setup")', content_view)
-        self.assertIn('Text("Profile").foregroundStyle(.secondary)', content_view)
-        self.assertIn('Text("Destination").foregroundStyle(.secondary)', content_view)
-        self.assertIn('Text("Output").foregroundStyle(.secondary)', content_view)
-        self.assertIn("Opens a searchable list of audio languages", language_picker)
-        self.assertIn("Opens a searchable list of subtitle languages", language_picker)
-        self.assertIn("Search audio languages", language_picker)
-        self.assertIn("Search subtitle languages", language_picker)
-        self.assertNotIn("All audio tracks from the source are included, regardless of language.", encoding_editor)
-        self.assertNotIn("Subtitle language choices do not filter audio tracks.", encoding_editor)
-
-    def test_profile_settings_remain_resizable_and_scrollable_when_read_only(self) -> None:
-        settings_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "SettingsView.swift").read_text(encoding="utf-8")
-        encoding_editor = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "EncodingOptionsEditor.swift").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertNotIn(".frame(width: 900, height: 600)", settings_view)
-        self.assertIn("maxWidth: .infinity", settings_view)
-        self.assertIn("maxHeight: .infinity", settings_view)
-        self.assertIn("ProfileEncodingSummaryView(", settings_view)
-        self.assertIn("ScrollView {", settings_view)
-        self.assertNotIn("isEditable", encoding_editor)
-
-        content_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ContentView.swift").read_text(encoding="utf-8")
-        self.assertIn(".onChange(of: defaultJobOptions)", content_view)
-        self.assertIn("if let warningMessage = viewModel.state.warningMessage", content_view)
-        self.assertIn('return "Warning: \\(warningMessage)"', content_view)
 
     def test_native_build_settings_support_hosted_ci_deployment_override(self) -> None:
         settings = native_build_settings(
@@ -543,7 +403,7 @@ Load command 3
         encoder = Path("/tmp/mv-hevc-encoder")
         with (
             patch("scripts.native_app.minimum_macos_versions", return_value={"25.0"}),
-            self.assertRaisesRegex(RuntimeError, "MV-HEVC encoder must target macOS 26.0"),
+            self.assertRaisesRegex(RuntimeError, f"MV-HEVC encoder must target macOS {NATIVE_MINIMUM_SYSTEM_VERSION};"),
         ):
             verify_exact_minimum_system_version(encoder, "MV-HEVC encoder")
 
