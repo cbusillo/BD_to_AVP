@@ -152,7 +152,7 @@ PROOF_CATALOG: Mapping[str, Mapping[str, Any]] = {
         },
         "proof": [
             "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testBatchPreparationSnapshotsProfileDestinationAndOptionsPerItem",
-            "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testGeneratedRouteJobSpecMatchesSharedV12WorkerFixture",
+            "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testGeneratedRouteJobSpecMatchesSharedWorkerFixture",
             "tests/test_process_preflight.py:test_output_move_returns_final_output_path",
             "scripts/native_app.py:smoke_packaged_worker",
         ],

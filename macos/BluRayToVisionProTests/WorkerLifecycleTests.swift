@@ -134,10 +134,10 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertNil(state.progress)
     }
 
-    func testSharedV12ProgressFixtureDecodes() throws {
+    func testSharedProgressFixtureDecodes() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_stage_started_progress_v13.json")
+            from: currentProtocolFixtureData("native_worker_stage_started_progress")
         )
 
         XCTAssertEqual(event.payload.progress, WorkerProgress(currentStage: 1, totalStages: 2, stageFraction: nil))
@@ -162,7 +162,7 @@ final class WorkerLifecycleTests: XCTestCase {
     func testStructuredAudioFallbackWarningExposesCodecsAndActualAction() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v13.json")
+            from: currentProtocolFixtureData("native_worker_audio_fallback_warning")
         )
 
         XCTAssertEqual(event.payload.warningCode, "audio_automatic_fallback_to_aac")
@@ -183,7 +183,7 @@ final class WorkerLifecycleTests: XCTestCase {
     func testStructuredAudioLanguageFallbackWarningRemainsVisibleAndActionable() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_audio_language_fallback_warning_v13.json")
+            from: currentProtocolFixtureData("native_worker_audio_language_fallback_warning")
         )
 
         XCTAssertEqual(event.payload.warningCode, "audio_language_fallback")
@@ -403,10 +403,10 @@ final class WorkerLifecycleTests: XCTestCase {
         }
     }
 
-    func testDecodesAndAppliesSharedV12ConversionCompletionFixture() throws {
+    func testDecodesAndAppliesSharedConversionCompletionFixture() throws {
         let completed = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_conversion_completed_v13.json")
+            from: currentProtocolFixtureData("native_worker_conversion_completed")
         )
         let fixtureJobID = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
         var state = WorkerLifecycleState()
@@ -616,6 +616,10 @@ final class WorkerLifecycleTests: XCTestCase {
             sequence: sequence,
             payload: payload
         )
+    }
+
+    private func currentProtocolFixtureData(_ family: String) throws -> Data {
+        try sharedFixtureData(named: "\(family)_v\(WorkerJobSpec.protocolVersion).json")
     }
 
     private func sharedFixtureData(named name: String) throws -> Data {

@@ -28,6 +28,7 @@ def github_actions_publication_environment(expected_sha: str) -> dict[str, str]:
         "GITHUB_SHA": expected_sha,
         "GITHUB_EVENT_NAME": "workflow_dispatch",
         "GITHUB_WORKFLOW_REF": EXPECTED_PRERELEASE_WORKFLOW_REF,
+        # Historical: the one-time Beta 3 recovery is pinned to the legacy actor that performed it.
         "GITHUB_ACTOR": "shiny-code-bot",
         "GITHUB_TRIGGERING_ACTOR": "shiny-code-bot",
     }
