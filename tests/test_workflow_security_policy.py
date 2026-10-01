@@ -214,10 +214,14 @@ class SigningCredentialMainGuardTests(unittest.TestCase):
             self.git(checkout, "commit", "--allow-empty", "-qm", "dispatched")
             dispatched_sha = self.git(checkout, "rev-parse", "HEAD")
             self.git(checkout, "remote", "add", "origin", str(origin))
-            if main_moved:
-                self.git(checkout, "commit", "--allow-empty", "-qm", "merged after approval")
             self.git(checkout, "push", "-q", "origin", "HEAD:refs/heads/main")
-            self.git(checkout, "reset", "-q", "--hard", dispatched_sha)
+            self.git(checkout, "fetch", "-q", "origin")
+            if main_moved:
+                # Another merge lands from elsewhere; only a fresh fetch can see it.
+                other = root / "other"
+                self.git(root, "clone", "-q", "-b", "main", str(origin), str(other))
+                self.git(other, "commit", "--allow-empty", "-qm", "merged after approval")
+                self.git(other, "push", "-q", "origin", "HEAD:refs/heads/main")
             for command in self.STUBBED_COMMANDS:
                 stub = tools / command
                 stub.write_text(f'#!/bin/sh\necho {command} >> "{calls}"\nexit 1\n', encoding="utf-8")

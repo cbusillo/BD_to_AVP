@@ -558,6 +558,26 @@ class ReleaseMetadataTests(unittest.TestCase):
                         release.validate_release_cut_packet(metadata)
         self.assertGreater(validated, 0)
 
+    def test_published_qualification_records_stay_immutable(self) -> None:
+        def flags(value: object) -> list[object]:
+            if isinstance(value, dict):
+                found = [value["must_not_rebuild"]] if "must_not_rebuild" in value else []
+                return found + [flag for child in value.values() for flag in flags(child)]
+            if isinstance(value, list):
+                return [flag for child in value for flag in flags(child)]
+            return []
+
+        published = 0
+        for path in sorted((REPO_ROOT / "docs" / "qualification").glob("*.json")):
+            record = json.loads(path.read_text(encoding="utf-8"))
+            with self.subTest(record=path.name):
+                # A recorded publication can never be marked rebuildable again.
+                self.assertTrue(all(flag is True for flag in flags(record)))
+                if "immutable_publication" in record:
+                    published += 1
+                    self.assertNotIn(None, record["candidate"].values())
+        self.assertGreater(published, 0)
+
     def test_beta11_qualification_remains_historical_receipt(self) -> None:
         qualification = json.loads(
             (REPO_ROOT / "docs" / "qualification" / "beta11-shared-signed-qualification-v1.json").read_text(
