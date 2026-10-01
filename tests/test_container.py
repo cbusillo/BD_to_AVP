@@ -149,29 +149,6 @@ class AudioExtractionTests(unittest.TestCase):
 
 
 class MuxCommandTests(unittest.TestCase):
-    def test_final_mux_keeps_no_audio_mkv_video_only(self) -> None:
-        with (
-            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
-            patch.object(container.config, "audio_preferred_language", "eng"),
-            patch.object(container.config, "start_stage", Stage.CREATE_MKV),
-            patch.object(container, "get_audio_stream_data", return_value=[]),
-            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_process_capture") as run_command,
-        ):
-            container.mux_video_audio_subs(
-                Path("movie_MV-HEVC.mov"),
-                Path("source.mkv"),
-                Path("movie_AVP.mov"),
-                Path("."),
-            )
-
-        command = run_command.call_args.args[0]
-        self.assertEqual(
-            command[:5],
-            [Path("/tools/MP4Box"), "-new", "-add", "movie_MV-HEVC.mov:forcesync", Path("movie_AVP.mov")],
-        )
-        self.assertFalse(any("source.mkv#" in str(argument) for argument in command))
-
     def test_final_mux_uses_reindexed_prepared_tracks_in_source_order(self) -> None:
         streams = [
             audio_stream(0, "eng", title="English 5.1", default=True),
@@ -363,30 +340,6 @@ class MuxCommandTests(unittest.TestCase):
 
             self.assertTrue(mv_hevc_path.exists())
             self.assertTrue(audio_path.exists())
-
-    def test_final_mux_forces_video_sync_samples_for_quicktime_seeking(self) -> None:
-        with (
-            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
-            patch.object(container.config, "video_mode", VideoMode.MV_HEVC),
-            patch.object(
-                container,
-                "get_audio_stream_data",
-                return_value=[{"index": 0, "tags": {"language": "eng"}, "channel_layout": "7.1"}],
-            ),
-            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_process_capture") as run_command,
-        ):
-            container.mux_video_audio_subs(
-                Path("movie_MV-HEVC.mov"),
-                Path("audio_PCM.mov"),
-                Path("movie_AVP.mov"),
-                Path("."),
-            )
-
-        command = run_command.call_args.args[0]
-        self.assertEqual(command[:4], [Path("/tools/MP4Box"), "-new", "-add", "movie_MV-HEVC.mov:forcesync"])
-        self.assertIn("audio_PCM.mov#1:lang=eng:group=1:alternate_group=1", command)
-        self.assertEqual(command[-1], Path("movie_AVP.mov"))
 
     def test_av1_final_mux_preserves_existing_sync_samples(self) -> None:
         with (

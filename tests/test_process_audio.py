@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -162,6 +163,44 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 self.assertIs(call.kwargs["cancellation_event"], run_context.cancellation.event)
                 self.assertEqual(call.kwargs["observability_context"].stage.id, stage_id)
             self.assertIsNone(subtitle_stage.call_args.args[2])
+
+    def test_conversion_tools_use_its_temp_folder_and_the_caller_tmpdir_returns_afterwards(self) -> None:
+        # The conversion's temp folder is removed when it ends; a TMPDIR left
+        # pointing at it made MP4Box fail later in the same process with
+        # "Cannot open destination file".
+        with tempfile.TemporaryDirectory() as caller_tmpdir, tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            source_path.write_bytes(b"source")
+            output_folder = temp_path / "Movie"
+            output_folder.mkdir()
+            tmpdir_seen_by_tools: list[str | None] = []
+
+            def create_mkv(*_args: object, **_kwargs: object) -> Path:
+                tmpdir_seen_by_tools.append(os.environ.get("TMPDIR"))
+                raise RuntimeError("stop after the first tool stage")
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.dict(os.environ, {"TMPDIR": caller_tmpdir}))
+                stack.enter_context(patch.object(process.config, "source_path", source_path))
+                stack.enter_context(patch.object(process.config, "source_str", None))
+                stack.enter_context(patch.object(process.config, "output_root_path", temp_path))
+                stack.enter_context(patch.object(process.config, "overwrite", True))
+                stack.enter_context(patch.object(process.config, "start_stage", Stage.CREATE_MKV))
+                stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
+                stack.enter_context(
+                    patch.object(process, "get_disc_and_mvc_video_info", return_value=DiscInfo(name="Movie"))
+                )
+                stack.enter_context(
+                    patch.object(process, "prepare_output_folder_for_source", return_value=output_folder)
+                )
+                stack.enter_context(patch.object(process, "create_mkv_file", side_effect=create_mkv))
+
+                with self.assertRaisesRegex(RuntimeError, "stop after the first tool stage"):
+                    process.process_each()
+
+                self.assertEqual(tmpdir_seen_by_tools, [(temp_path / "temp_files").as_posix()])
+                self.assertEqual(os.environ.get("TMPDIR"), caller_tmpdir)
 
     def test_move_files_resume_skips_prior_processing_stages(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

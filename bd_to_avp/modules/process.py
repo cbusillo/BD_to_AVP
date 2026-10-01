@@ -326,6 +326,34 @@ def process_each(
     run_context: RunContext | None = None,
     video_route: ResolvedVideoRoute | None = None,
 ) -> Path:
+    # A conversion points TMPDIR at its own temp folder, which is removed when
+    # the conversion finishes. Restore the caller's value so the next source in
+    # a batch, and anything else in this process, never inherits a missing
+    # temporary directory (MP4Box, for one, cannot write output without it).
+    previous_tmpdir = os.environ.get("TMPDIR")
+    try:
+        return _process_each(
+            cancellation_event,
+            activity,
+            selected_title_id=selected_title_id,
+            run_context=run_context,
+            video_route=video_route,
+        )
+    finally:
+        if previous_tmpdir is None:
+            os.environ.pop("TMPDIR", None)
+        else:
+            os.environ["TMPDIR"] = previous_tmpdir
+
+
+def _process_each(
+    cancellation_event: Event | None,
+    activity: ActivityReporter | None,
+    *,
+    selected_title_id: str | None,
+    run_context: RunContext | None,
+    video_route: ResolvedVideoRoute | None,
+) -> Path:
     video_route = video_route or legacy_video_route()
     cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     raise_if_cancelled(cancellation_event)
