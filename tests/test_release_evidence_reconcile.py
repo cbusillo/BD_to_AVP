@@ -15,6 +15,7 @@ from scripts.release_evidence_reconcile import (
     reconcile,
 )
 from scripts.release_evidence_v2 import ReleaseEvidenceV2Error
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 
 
 TAG = "v0.3.2-beta.8"
@@ -66,11 +67,11 @@ class ReleaseEvidenceReconcileTests(unittest.TestCase):
 
     def write_bundle(self, repository: Path, *, source_sha: str) -> None:
         bundle = repository / "docs" / "release-evidence" / TAG
-        release_workflow = {"actor": "shiny-code-bot", "run_id": 101}
+        release_workflow = {"actor": REQUIRED_ACTOR, "run_id": 101}
         self.write_json(
             bundle / "capture-v2.json",
             {
-                "capture_workflow": {"actor": "shiny-code-bot", "run_id": 102},
+                "capture_workflow": {"actor": REQUIRED_ACTOR, "run_id": 102},
                 "receipt": {"path": f"docs/release-evidence/{TAG}/release-receipt.json"},
                 "release_tag": TAG,
                 "release_workflow": release_workflow,

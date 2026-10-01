@@ -15,7 +15,9 @@ from typing import Any, ClassVar
 
 import yaml
 
+from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
 from scripts.release_workflow_policy import (
+    APPROVAL_ENVIRONMENT,
     ENGINE_WORKFLOW_PATH,
     RECEIPT_ACTORS,
     REPOSITORY,
@@ -33,7 +35,8 @@ PINNED_ACTION = re.compile(r"^[^@]+@[0-9a-f]{40}$")
 
 def load_workflows() -> dict[str, dict[str, Any]]:
     return {
-        path.name: yaml.safe_load(path.read_text(encoding="utf-8")) for path in sorted(WORKFLOW_DIRECTORY.glob("*.yml"))
+        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted([*WORKFLOW_DIRECTORY.glob("*.yml"), *WORKFLOW_DIRECTORY.glob("*.yaml")])
     }
 
 
@@ -155,13 +158,110 @@ class WorkflowSecurityPolicyTests(unittest.TestCase):
                     self.assertIn(f"needs.{need}.result", examined)
 
     def test_release_checkouts_use_the_dispatched_commit(self) -> None:
+        checkouts = 0
         for workflow_name in ("release-engine.yml", "production-preflight-engine.yml"):
             for job_name, job in self.workflows[workflow_name]["jobs"].items():
                 for step in job.get("steps", []):
                     if str(step.get("uses", "")).startswith("actions/checkout@"):
+                        checkouts += 1
                         with self.subTest(workflow=workflow_name, job=job_name):
-                            self.assertIn("ref", step.get("with", {}))
-                            self.assertNotIn("github.ref", str(step["with"]["ref"]))
+                            # The exact dispatched commit, never a branch that can move under the run,
+                            # and no token left behind for later steps.
+                            self.assertEqual(step.get("with", {}).get("ref"), "${{ github.sha }}")
+                            self.assertIs(step["with"].get("persist-credentials"), False)
+        self.assertGreater(checkouts, 0)
+
+
+class SigningCredentialMainGuardTests(unittest.TestCase):
+    """Run each step that receives a signing credential against a protected main that has moved."""
+
+    # Commands a signing step reaches only after its guard. Each stub records that it ran and fails.
+    STUBBED_COMMANDS = ("security", "xcrun", "codesign", "openssl", "uv", "ditto", "jq")
+    SECRET_VALUES: ClassVar[dict[str, str]] = {"TEAM_ID": PRODUCTION_TEAM_ID, "DEV_ID": PRODUCTION_DEVELOPER_IDENTITY}
+
+    @staticmethod
+    def git(root: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", *arguments],
+            cwd=root,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(root), "GIT_CONFIG_NOSYSTEM": "1"},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def signing_steps(self) -> list[tuple[str, dict[str, Any]]]:
+        jobs = load_workflows()[Path(ENGINE_WORKFLOW_PATH).name]["jobs"]
+        steps = [
+            (f"{job_name}: {step.get('name')}", step)
+            for job_name, job in jobs.items()
+            if job.get("environment") == APPROVAL_ENVIRONMENT
+            for step in job.get("steps", [])
+            if "run" in step and secrets_read_by(step)
+        ]
+        self.assertTrue(steps)
+        return steps
+
+    def run_step(self, step: dict[str, Any], *, main_moved: bool) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            origin, checkout, tools = root / "origin.git", root / "checkout", root / "tools"
+            calls = root / "calls.log"
+            for path in (origin, checkout, tools):
+                path.mkdir()
+            self.git(origin, "init", "-q", "--bare")
+            self.git(checkout, "init", "-q", "-b", "main")
+            self.git(checkout, "commit", "--allow-empty", "-qm", "dispatched")
+            dispatched_sha = self.git(checkout, "rev-parse", "HEAD")
+            self.git(checkout, "remote", "add", "origin", str(origin))
+            self.git(checkout, "push", "-q", "origin", "HEAD:refs/heads/main")
+            self.git(checkout, "fetch", "-q", "origin")
+            if main_moved:
+                # Another merge lands from elsewhere; only a fresh fetch can see it.
+                other = root / "other"
+                self.git(root, "clone", "-q", "-b", "main", str(origin), str(other))
+                self.git(other, "commit", "--allow-empty", "-qm", "merged after approval")
+                self.git(other, "push", "-q", "origin", "HEAD:refs/heads/main")
+            for command in self.STUBBED_COMMANDS:
+                stub = tools / command
+                stub.write_text(f'#!/bin/sh\necho {command} >> "{calls}"\nexit 1\n', encoding="utf-8")
+                stub.chmod(0o700)
+            environment = {
+                name: self.SECRET_VALUES.get(name, "placeholder") if "${{" in str(value) else str(value)
+                for name, value in step.get("env", {}).items()
+            }
+            completed = subprocess.run(
+                ["/bin/bash", "-c", step["run"]],
+                cwd=checkout,
+                env={
+                    "PATH": f"{tools}:/usr/bin:/bin",
+                    "HOME": str(root),
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GITHUB_SHA": dispatched_sha,
+                    "GITHUB_RUN_ID": "100",
+                    "GITHUB_ENV": str(root / "github-env"),
+                    "RUNNER_TEMP": str(root),
+                    "KEYCHAIN_PATH": str(root / "release.keychain-db"),
+                    "BUILD_KEYCHAIN_PASSWORD": "placeholder",
+                    **environment,
+                },
+                capture_output=True,
+                check=False,
+            )
+            return completed.returncode, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+    def test_a_signing_step_proceeds_while_main_is_the_dispatched_commit(self) -> None:
+        for name, step in self.signing_steps():
+            with self.subTest(step=name):
+                _, calls = self.run_step(step, main_moved=False)
+                self.assertNotEqual(calls, "")
+
+    def test_a_signing_step_stops_before_using_credentials_once_main_moves(self) -> None:
+        for name, step in self.signing_steps():
+            with self.subTest(step=name):
+                returncode, calls = self.run_step(step, main_moved=True)
+                self.assertNotEqual(returncode, 0)
+                self.assertEqual(calls, "")
 
 
 class ReleaseOperatorGuardTests(unittest.TestCase):
