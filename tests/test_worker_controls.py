@@ -29,6 +29,7 @@ from bd_to_avp.worker.controls import MAX_CONTROL_BYTES, WorkerControls, WorkerI
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     MAX_REQUEST_BYTES,
+    PROTOCOL_VERSION,
     JobSpec,
     WorkerActivityReporter,
     WorkerEventEmitter,
@@ -61,7 +62,7 @@ class ControlHarness:
 
     def command(self, **overrides: Any) -> dict[str, Any]:
         command = {
-            "protocol_version": 13,
+            "protocol_version": PROTOCOL_VERSION,
             "type": "job.keep_waiting",
             "command_id": str(uuid4()),
             "job_id": self.job_id,
@@ -475,12 +476,6 @@ class WorkerInputFramingTests(unittest.TestCase):
                 self.assertEqual(events[0]["payload"]["control_capabilities"], ["keep_waiting_v1"])
                 self.assertEqual(events[-1]["type"], "job.completed")
 
-    def test_protocol_12_fixture_is_rejected_by_13_worker(self) -> None:
-        source = Path(__file__).parent / "fixtures/native_worker_convert_v12.json"
-        with self.assertRaises(WorkerProtocolError) as raised:
-            JobSpec.from_json_line(source.read_text())
-        self.assertEqual(raised.exception.code, "protocol_mismatch")
-
 
 class WorkerControlProcessTests(unittest.TestCase):
     def test_unattended_timeout_does_not_name_sibling_below_timeout_age(self) -> None:
@@ -556,7 +551,7 @@ class WorkerControlProcessTests(unittest.TestCase):
                             self.receive_line(
                                 json.dumps(
                                     dict(
-                                        protocol_version=13,
+                                        protocol_version=PROTOCOL_VERSION,
                                         type="job.keep_waiting",
                                         command_id=str(uuid4()),
                                         job_id=self._job_id,

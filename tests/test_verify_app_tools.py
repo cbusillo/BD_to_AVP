@@ -1,4 +1,7 @@
+import os
 import plistlib
+import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -6,38 +9,43 @@ import unittest
 from pathlib import Path
 from unittest.mock import call, patch
 
-from scripts import verify_app_tools
+from bd_to_avp.modules.config import config
+from scripts import smoke_release_app, verify_app_tools
+from scripts.native_app import MV_HEVC_ENCODER_NAME, NATIVE_MINIMUM_SYSTEM_VERSION, normalized_version
+from scripts.vendor_ffmpeg_macos import load_manifest
+
+REPOSITORY_BIN = Path(__file__).resolve().parents[1] / "bd_to_avp" / "bin"
+
+
+def packaged_app_with_bundled_tools(root: Path, minimum_system_version: str) -> Path:
+    app_path = root / "Test.app"
+    bin_path = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin"
+    shutil.copytree(REPOSITORY_BIN, bin_path)
+    with (app_path / "Contents" / "Info.plist").open("wb") as handle:
+        plistlib.dump({"LSMinimumSystemVersion": minimum_system_version}, handle)
+    return app_path
 
 
 class VerifyAppToolsTests(unittest.TestCase):
-    def test_required_tools_include_mp4box(self) -> None:
-        self.assertIn("MP4Box", verify_app_tools.REQUIRED_TOOLS)
-        self.assertEqual(verify_app_tools.REQUIRED_TOOLS["MP4Box"], ["-version"])
+    def test_tool_lists_agree_with_shipped_tools_and_runtime_lookups(self) -> None:
+        committed_tools = {
+            path.name for path in REPOSITORY_BIN.iterdir() if path.is_file() and os.access(path, os.X_OK)
+        }
+        vendored_tools = {asset.name for asset in load_manifest().assets}
+        shipped_tools = committed_tools | vendored_tools | {MV_HEVC_ENCODER_NAME}
+        runtime_bundled_tools = {
+            value.name
+            for value in vars(type(config)).values()
+            if isinstance(value, Path) and value.parent == config.SCRIPT_PATH_BIN
+        }
+        smoke_tools = smoke_release_app.REQUIRED_BUNDLED_TOOLS | smoke_release_app.OPTIONAL_BUNDLED_TOOLS
 
-    def test_core_tools_match_ci_package_smoke_scope(self) -> None:
-        self.assertEqual(set(verify_app_tools.CORE_TOOLS), {"ffmpeg", "ffprobe", "MP4Box", "ssif_probe"})
-        self.assertEqual(verify_app_tools.CORE_TOOLS["ssif_probe"], ["--version"])
-
-    def test_required_tools_cover_gui_runtime_dependencies(self) -> None:
-        self.assertEqual(
-            set(verify_app_tools.REQUIRED_TOOLS),
-            {
-                "ffmpeg",
-                "ffprobe",
-                "edge264_test",
-                "fx-upscale",
-                "mv-hevc-encoder",
-                "MP4Box",
-                "ssif_probe",
-                "spatial-media-kit-tool",
-            },
-        )
-
-    def test_release_profile_adds_gui_runtime_dependencies(self) -> None:
-        self.assertLess(set(verify_app_tools.CORE_TOOLS), set(verify_app_tools.REQUIRED_TOOLS))
-        self.assertIn("edge264_test", verify_app_tools.REQUIRED_TOOLS)
-        self.assertNotIn("edge264_test", verify_app_tools.CORE_TOOLS)
-        self.assertEqual(verify_app_tools.REQUIRED_TOOLS["mv-hevc-encoder"], ["--capability-probe"])
+        self.assertEqual(set(verify_app_tools.REQUIRED_TOOLS), shipped_tools)
+        self.assertLessEqual(runtime_bundled_tools, shipped_tools)
+        self.assertLessEqual(set(smoke_tools), set(verify_app_tools.REQUIRED_TOOLS))
+        for tool_name, probe_args in smoke_tools.items():
+            with self.subTest(tool=tool_name):
+                self.assertEqual(probe_args, verify_app_tools.REQUIRED_TOOLS[tool_name])
 
     def test_verify_tool_uses_probe_args_and_rejects_usr_local_linkage(self) -> None:
         with tempfile.NamedTemporaryFile() as tool_file:
@@ -142,23 +150,6 @@ class VerifyAppToolsTests(unittest.TestCase):
             ):
                 verify_app_tools.verify_tool(tool_path, ["-version"])
 
-    def test_rejects_mach_o_newer_than_app_minimum(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            app_path = Path(temp_dir) / "Test.app"
-            info_path = app_path / "Contents" / "Info.plist"
-            binary_path = app_path / "Contents" / "Resources" / "app_packages" / "example.so"
-            binary_path.parent.mkdir(parents=True)
-            binary_path.write_bytes(b"binary")
-            with info_path.open("wb") as handle:
-                plistlib.dump({"LSMinimumSystemVersion": "14.0"}, handle)
-
-            with (
-                patch.object(verify_app_tools, "is_mach_o", return_value=True),
-                patch.object(verify_app_tools, "minimum_macos_versions", return_value={"15.0"}),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "newer macOS version than 14.0"):
-                    verify_app_tools.verify_mach_o_minimum_versions(app_path)
-
     def test_rejects_missing_app_minimum(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             app_path = Path(temp_dir) / "Test.app"
@@ -170,20 +161,36 @@ class VerifyAppToolsTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "must define LSMinimumSystemVersion"):
                 verify_app_tools.verify_mach_o_minimum_versions(app_path)
 
-    def test_accepts_mach_o_at_or_below_app_minimum(self) -> None:
+    def test_bundled_mach_o_tools_fit_the_app_minimum(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            app_path = Path(temp_dir) / "Test.app"
-            info_path = app_path / "Contents" / "Info.plist"
-            binary_path = app_path / "Contents" / "Resources" / "app_packages" / "example.so"
-            binary_path.parent.mkdir(parents=True)
-            binary_path.write_bytes(b"binary")
-            with info_path.open("wb") as handle:
-                plistlib.dump({"LSMinimumSystemVersion": "14.0"}, handle)
+            app_path = packaged_app_with_bundled_tools(Path(temp_dir), NATIVE_MINIMUM_SYSTEM_VERSION)
+            bundled = [path for path in sorted(REPOSITORY_BIN.iterdir()) if verify_app_tools.is_mach_o(path)]
+            self.assertTrue(bundled, "expected Mach-O tools in bd_to_avp/bin")
 
-            with (
-                patch.object(verify_app_tools, "is_mach_o", return_value=True),
-                patch.object(verify_app_tools, "minimum_macos_versions", return_value={"13.0", "14.0"}),
-            ):
+            for path in bundled:
+                with self.subTest(tool=path.name):
+                    versions = verify_app_tools.minimum_macos_versions(path)
+                    self.assertTrue(versions)
+                    self.assertLessEqual(
+                        max(normalized_version(version) for version in versions),
+                        normalized_version(NATIVE_MINIMUM_SYSTEM_VERSION),
+                    )
+
+            verify_app_tools.verify_mach_o_minimum_versions(app_path)
+
+    def test_rejects_bundled_mach_o_newer_than_app_minimum(self) -> None:
+        newest_tool_minimum = max(
+            normalized_version(version)
+            for path in REPOSITORY_BIN.iterdir()
+            if verify_app_tools.is_mach_o(path)
+            for version in verify_app_tools.minimum_macos_versions(path)
+        )
+        older_app_minimum = f"{newest_tool_minimum[0] - 1}.0"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = packaged_app_with_bundled_tools(Path(temp_dir), older_app_minimum)
+
+            with self.assertRaisesRegex(RuntimeError, f"newer macOS version than {re.escape(older_app_minimum)}"):
                 verify_app_tools.verify_mach_o_minimum_versions(app_path)
 
 
