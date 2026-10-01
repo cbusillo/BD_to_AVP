@@ -108,7 +108,7 @@ def production_info(*, support_diagnostics_endpoint: object = "https://support.e
     }
 
 
-def test_app(root: Path, payload: bytes = b"current build") -> Path:
+def make_app_bundle(root: Path, payload: bytes = b"current build") -> Path:
     app_path = root / NATIVE_APP_NAME
     contents = app_path / "Contents"
     resources = contents / "Resources"
@@ -716,7 +716,7 @@ Load command 3
         built_at = datetime(2026, 7, 29, 1, 2, 3, tzinfo=UTC)
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
             retained_build = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / "retained"
             retained_build.mkdir(parents=True)
@@ -785,8 +785,8 @@ Load command 3
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             applications_directory = root / "Applications"
-            first_app = test_app(root / "first", b"first build")
-            second_app = test_app(root / "second", b"second build")
+            first_app = make_app_bundle(root / "first", b"first build")
+            second_app = make_app_bundle(root / "second", b"second build")
 
             with patch("scripts.native_app.verify_codesign"):
                 stable_app = publish_current_app(
@@ -824,14 +824,14 @@ Load command 3
             root = Path(temporary_directory)
             applications_directory = root / "Applications"
             old_directory = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / old_commit
-            old_app = test_app(old_directory)
+            old_app = make_app_bundle(old_directory)
             old_metadata = old_directory / CURRENT_BUILD_METADATA_NAME
             old_metadata.write_text("{}", encoding="utf-8")
             stable_app = applications_directory / CURRENT_APP_LINK_NAME
             stable_metadata = applications_directory / CURRENT_METADATA_LINK_NAME
             stable_app.symlink_to(old_app)
             stable_metadata.symlink_to(old_metadata)
-            new_app = test_app(root / "new", b"new build")
+            new_app = make_app_bundle(root / "new", b"new build")
 
             with patch("scripts.native_app.verify_codesign"):
                 publish_current_app(
@@ -857,7 +857,7 @@ Load command 3
             applications_directory = root / "Applications"
             applications_directory.mkdir()
             outside_directory = root / old_commit
-            old_app = test_app(outside_directory)
+            old_app = make_app_bundle(outside_directory)
             old_metadata = outside_directory / CURRENT_BUILD_METADATA_NAME
             old_metadata.write_text("{}", encoding="utf-8")
             stable_app = applications_directory / CURRENT_APP_LINK_NAME
@@ -870,7 +870,7 @@ Load command 3
                 self.assertRaisesRegex(RuntimeError, "outside the immutable build root"),
             ):
                 publish_current_app(
-                    test_app(root / "new", b"new build"),
+                    make_app_bundle(root / "new", b"new build"),
                     applications_directory=applications_directory,
                     source_commit="c" * 40,
                     base_main_commit="b" * 40,
@@ -883,7 +883,7 @@ Load command 3
         source_commit = "a" * 40
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
 
             with patch("scripts.native_app.verify_codesign"):
@@ -906,7 +906,7 @@ Load command 3
         base_main_commit = "b" * 40
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
 
             with patch("scripts.native_app.verify_codesign"):
@@ -936,7 +936,7 @@ Load command 3
         base_main_commit = "b" * 40
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
 
             with patch("scripts.native_app.verify_codesign"):
@@ -963,7 +963,7 @@ Load command 3
 
     def test_publish_current_app_refuses_system_applications_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            source_app = test_app(Path(temporary_directory) / "source")
+            source_app = make_app_bundle(Path(temporary_directory) / "source")
 
             with self.assertRaisesRegex(RuntimeError, "Refusing to publish.* /Applications"):
                 publish_current_app(
@@ -976,7 +976,7 @@ Load command 3
     def test_publish_current_app_rejects_symlinked_build_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
             applications_directory.mkdir()
             redirected_build_root = root / "redirected"
@@ -1001,7 +1001,7 @@ Load command 3
         source_commit = "a" * 40
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
             version_directory = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / source_commit
             version_directory.mkdir(parents=True)
@@ -1022,7 +1022,7 @@ Load command 3
     def test_publish_current_app_rejects_bundle_symlink_escape(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             outside = root / "outside"
             outside.write_text("outside", encoding="utf-8")
             (source_app / "Contents" / "Resources" / "escape").symlink_to(outside)
@@ -1040,7 +1040,7 @@ Load command 3
         base_main_commit = "b" * 40
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
             with patch("scripts.native_app.verify_codesign"):
                 publish_current_app(
@@ -1062,7 +1062,7 @@ Load command 3
     def test_publish_current_app_refuses_non_symlink_stable_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
             stable_app = applications_directory / CURRENT_APP_LINK_NAME
             stable_app.mkdir(parents=True)
@@ -1083,7 +1083,7 @@ Load command 3
     def test_publish_current_app_cleans_partial_copy_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source_app = test_app(root / "source")
+            source_app = make_app_bundle(root / "source")
             applications_directory = root / "Applications"
 
             def fail_copy(_source: Path, destination: Path, **_options: object) -> None:

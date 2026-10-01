@@ -24,7 +24,12 @@ jobs:
     outputs:
       native: ${{ steps.lanes.outputs.native }}
       player: ${{ steps.lanes.outputs.player }}
+      started: ${{ steps.started.outputs.epoch }}
     steps:
+      - name: Record when CI started
+        id: started
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Check out repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -115,7 +120,8 @@ jobs:
         run: uv run mypy bd_to_avp
 
       - name: Unit smoke tests
-        run: uv run python -m unittest discover -s tests -t .
+        # One worker per core; each test class stays on one worker.
+        run: uv run pytest -n auto --dist loadscope -p no:cacheprovider --durations 20 tests
 
       - name: Verify committed release evidence
         env:
@@ -481,3 +487,17 @@ jobs:
               *) echo "A lane did not pass: $result" >&2; exit 1 ;;
             esac
           done
+
+      - name: Report pull request time against its budget
+        if: always() && github.event_name == 'pull_request' && needs.lanes.outputs.started != ''
+        env:
+          STARTED: ${{ needs.lanes.outputs.started }}
+          BUDGET_MINUTES: "15"
+        run: |
+          elapsed=$(( $(date +%s) - STARTED ))
+          minutes=$(( elapsed / 60 ))
+          seconds=$(( elapsed % 60 ))
+          echo "CI took ${minutes}m ${seconds}s; the pull request budget is ${BUDGET_MINUTES}m." >> "$GITHUB_STEP_SUMMARY"
+          if (( elapsed > BUDGET_MINUTES * 60 )); then
+            echo "::warning title=CI over budget::CI took ${minutes}m ${seconds}s, over the ${BUDGET_MINUTES}-minute pull request budget."
+          fi
