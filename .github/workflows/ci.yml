@@ -120,8 +120,8 @@ jobs:
         run: uv run mypy bd_to_avp
 
       - name: Unit smoke tests
-        # More workers than runner cores: much of the suite waits on child processes.
-        run: uv run pytest -n 6 --dist worksteal -p no:cacheprovider --durations 20 tests
+        # One worker per core; each test class stays on one worker.
+        run: uv run pytest -n auto --dist loadscope -p no:cacheprovider --durations 20 tests
 
       - name: Verify committed release evidence
         env:

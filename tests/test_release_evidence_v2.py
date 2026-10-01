@@ -1023,7 +1023,11 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 verify_tag(root, tag, worktree=True)
 
             repo = root / "historical"
-            shutil.copytree(REPO_ROOT, repo, dirs_exist_ok=True)
+            subprocess.run(
+                ["git", "clone", "--quiet", "--shared", "--no-checkout", REPO_ROOT.as_posix(), repo.as_posix()],
+                check=True,
+            )
+            git(repo, "checkout", "--quiet", "--detach", git(REPO_ROOT, "rev-parse", "HEAD"))
             self.assertEqual(
                 verify_tag(repo, "v0.3.0", verification_revision=git(repo, "rev-parse", "HEAD"))["class"],
                 "legacy-publication-v1",
