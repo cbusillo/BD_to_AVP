@@ -319,7 +319,9 @@
           "macos/BluRayToVisionPro/Views/SettingsView.swift",
           "macos/BluRayToVisionProUITests/**",
           "macos/project.yml",
-          "scripts/tier3_clean_machine.py"
+          "scripts/tier3_clean_machine.py",
+          "tests/fixtures/profile_library_v5.json",
+          "tests/fixtures/profile_library_v6.json"
         ],
         "contracts": ["sparkle-update", "profile-storage", "preview-lifecycle", "support-diagnostics", "tier3-evidence"]
       },

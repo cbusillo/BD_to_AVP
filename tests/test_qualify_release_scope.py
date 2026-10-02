@@ -502,13 +502,17 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertEqual(result["invalidating_paths"], ["bd_to_avp/modules/preview.py"])
 
     def test_clean_machine_profile_inputs_invalidate_carried_evidence(self) -> None:
-        for fixture in (PROFILE_FIXTURE_V5_PATH, PROFILE_FIXTURE_V6_PATH):
+        for case_id, fixture in (
+            (case_id, fixture)
+            for case_id in ("clean-machine-signed-update", "installed-ui-accessibility")
+            for fixture in (PROFILE_FIXTURE_V5_PATH, PROFILE_FIXTURE_V6_PATH)
+        ):
             path = fixture.relative_to(REPO_ROOT).as_posix()
-            with self.subTest(path=path), tempfile.TemporaryDirectory() as temporary_directory:
+            with self.subTest(case_id=case_id, path=path), tempfile.TemporaryDirectory() as temporary_directory:
                 root = Path(temporary_directory)
-                evidence = self.tier3_evidence(root, "clean-machine-signed-update")
-                before = self.result_for(self.classify(evidence, root), "clean-machine-signed-update")
-                after = self.result_for(self.classify(evidence, root, changed={path}), "clean-machine-signed-update")
+                evidence = self.tier3_evidence(root, case_id)
+                before = self.result_for(self.classify(evidence, root), case_id)
+                after = self.result_for(self.classify(evidence, root, changed={path}), case_id)
             self.assertEqual(before["status"], "carry")
             self.assertEqual(after["status"], "retest")
             self.assertEqual(after["invalidating_paths"], [path])
@@ -516,11 +520,15 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
     def test_unrelated_fixture_preserves_clean_machine_and_profile_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            for case_id in ("clean-machine-signed-update", "profile-save-action-accessibility"):
+            for case_id in (
+                "clean-machine-signed-update",
+                "installed-ui-accessibility",
+                "profile-save-action-accessibility",
+            ):
                 with self.subTest(case_id=case_id):
                     evidence = (
                         self.tier3_evidence(root, case_id)
-                        if case_id == "clean-machine-signed-update"
+                        if case_id != "profile-save-action-accessibility"
                         else self.evidence(root, case_id)
                     )
                     result = self.result_for(
