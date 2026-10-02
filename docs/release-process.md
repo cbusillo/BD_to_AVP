@@ -683,7 +683,7 @@ sizes and hashes in `docs/release-evidence/v0.3.0-pypi-recovery.json`.
 The original Actions artifact's recorded expiry was 2026-08-14 and its API
 record is now unavailable. The one-time path is historical, not a current
 dispatch procedure. Do not rebuild or republish this historical release.
-For supported read-only file-set/hash verification, use:
+For supported read-only verification of PyPI-reported filenames, sizes and hashes, use:
 
 ```sh
 uv run python -m scripts.stable_pypi_recovery verify-pypi --state published
