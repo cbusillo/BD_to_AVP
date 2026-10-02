@@ -676,7 +676,7 @@ failed before PyPI trusted publishing because its checksum manifest included a
 generated `dist/.gitignore` that the artifact uploader omitted. Recovery
 [run `31238358554`](https://github.com/cbusillo/BD_to_AVP/actions/runs/31238358554)
 succeeded, and the [checked publication record](release-evidence/v0.3.0/publication-record.json)
-preserves it separately from the original failed release run. On 2026-10-02,
+preserves it separately from the original failed release run. On 2026-10-02 UTC,
 the published wheel and source archive were downloaded and matched the original
 sizes and hashes in `docs/release-evidence/v0.3.0-pypi-recovery.json`.
 
@@ -689,10 +689,17 @@ For supported read-only file-set/hash verification, use:
 uv run python -m scripts.stable_pypi_recovery verify-pypi --state published
 ```
 
+It exits `0` with no output when the published file set matches.
+
 The [Stable cut packet](0.3.0-cut-packet.md#post-publication-pypi-recovery)
 preserves the original contract. Obsolete workflow-path cleanup is tracked in
 [#866](https://github.com/cbusillo/BD_to_AVP/issues/866); immutable recovery and
 qualification evidence stays preserved.
+Treat the frozen `remove_after_verified_recovery` flag as historical. Retain
+the pinned evidence file, the helper's `load_evidence`/`verify-pypi` support,
+and historical recovery validation in `scripts/release_evidence.py` and the
+release-evidence workflow; any refactor must ship equivalent read-only and
+historical replay paths alongside removal.
 
 For the Beta 3 seed, a pre-publication failure leaves the existing feed and all
 published assets unchanged: retain the matching draft for an exact retry or stop
