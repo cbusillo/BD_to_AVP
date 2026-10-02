@@ -278,8 +278,9 @@ content-aware native release-note link qualification passed. The immutable notes
 contain no issue URL, so that category is explicitly not applicable; every PR,
 comparison, and full-release link present in the source notes opened externally.
 Stable `v0.3.0` build `161` is published and immutable. Its item omits
-`sparkle:channel`. Stable `v0.3.1` build `162` and subsequent releases through
-Stable `v0.3.3` build `177` are also published. An unchanneled Stable item is
+`sparkle:channel`. Stable `v0.3.1` build `162` and Stable `v0.3.3` build `177`
+are also published; failed or cancelled builds `165`, `166`, and `168` remain
+absent. An unchanneled Stable item is
 eligible on every route; a new item enters the feed only after guarded
 publication succeeds. Current publication evidence is linked from
 [the release process](release-process.md).

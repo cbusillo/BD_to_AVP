@@ -199,7 +199,8 @@ writing anything.
 
 Qualification recovery's personal-account dispatch and evidence-write path
 below is a manual Director procedure, not an agent write path. Agents use
-read-only `status` or preflight and hand off those mutations until the bot path
+`uv run python -m scripts.release_qualification_controller status --release-tag <tag>`
+for read-only observation and hand off those mutations until the bot path
 tracked in [#854](https://github.com/cbusillo/BD_to_AVP/issues/854) exists.
 The separate run-bound signing approval contract remains unchanged.
 

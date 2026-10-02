@@ -36,7 +36,8 @@ refresh or check instead of receiving an implicit default.
 
 At that audit baseline, the evidence supported closing milestone #10 after the
 exact-head isolation sweep and broad gates. This records the historical
-decision; reviewer approval is not a current merge or completion gate. No
+decision; its historical review wording is not a completion gate for this
+audit, and normal branch protections still apply to pull requests. No
 evidence-backed replacement, consolidation, or removal candidate remains.
 Neither test age, static brittleness signals, nor zero direct string references
 independently justify a non-retention decision.

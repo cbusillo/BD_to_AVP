@@ -27,7 +27,9 @@ For a historical candidate, explicitly select its archived qualification record
 instead. The generic original Stable record is not the current candidate.
 
 Qualification dispatch and evidence writes requiring the personal GitHub identity
-are manual Director procedures. Agents can use read-only `status` and preflight;
+are manual Director procedures. Agents can use
+`uv run python -m scripts.release_qualification_controller status --release-tag <tag>`
+for read-only observation;
 the supported automation write path is tracked in
 [#854](https://github.com/cbusillo/BD_to_AVP/issues/854). Do not use the personal
 account to work around that missing path. Signing approval keeps its separate

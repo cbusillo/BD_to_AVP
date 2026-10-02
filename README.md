@@ -216,14 +216,16 @@ bd-to-avp
 
 As long as you provide no arguments, the GUI will open.
 
+The GUI locks configuration load/save actions while a job is active so each
+run uses the settings captured at startup. Choosing **Stop Processing**
+requests a cooperative stop and keeps the button in a stopping state until the
+worker exits.
+
 ## Native Mac App Workflow
 
 The signed DMG provides the SwiftUI Mac app described below.
 
-The GUI locks configuration load/save actions while a job is active so each
-run uses the settings captured at startup. Choosing **Stop Processing**
-requests a cooperative stop and keeps the button in a stopping state until the
-worker exits. When a disc, ISO, or Blu-ray folder contains multiple MVC titles,
+When a disc, ISO, or Blu-ray folder contains multiple MVC titles,
 the macOS app can convert the main movie, every detected 3D video, or a custom
 selection. Multi-title selections run serially and preserve completed outputs
 if a later video needs attention. For source-folder jobs, accepted MKV or subtitle error

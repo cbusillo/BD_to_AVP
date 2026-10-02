@@ -107,8 +107,9 @@ document it as an external dependency with preflight behavior.
   published and immutable. RC 2 (`v0.3.0-rc.2`, internal version `0.3.0rc2`,
   build `159`) and RC 3 (`v0.3.0-rc.3`, internal version `0.3.0rc3`, build
   `160`) are also published and immutable. Stable `v0.3.0` build `161` is
-  published and immutable. Stable `v0.3.1` build `162` and subsequent releases
-  through Stable `v0.3.3` build `177` are also published; see
+  published and immutable. Stable `v0.3.1` build `162` and Stable `v0.3.3`
+  build `177` are also published; failed or cancelled builds `165`, `166`,
+  and `168` remain unpublished. See
   [the release process](release-process.md) for their immutable evidence.
   Beta 3 build `148` remains the
   manual-download seed and immutable appcast history below the later Beta
