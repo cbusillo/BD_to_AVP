@@ -42,8 +42,14 @@ checked signed-artifact UI receipt and original one-file Actions ZIP captured
 by Release Evidence while the artifact was unexpired. It cannot push, edit a release, approve an
 environment, or access release secrets.
 
-Dispatch it only after its workflow definition is present on the canonical
-evidence branch:
+Dispatch it from protected `main` only after its workflow definition is present
+there and the canonical evidence branch contains the checked manifest:
+
+This is a manual Director step: the workflow requires the repository owner's
+personal GitHub identity. Agents use
+`uv run python -m scripts.release_qualification_controller status --release-tag <tag>`
+for read-only observation and hand off dispatch until the bot path in
+[#854](https://github.com/cbusillo/BD_to_AVP/issues/854) is implemented.
 
 ```sh
 gh workflow run milestone-qualification.yml \

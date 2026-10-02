@@ -96,7 +96,7 @@ Expected result:
   explicitly, captures app stdout/stderr, and reports process plus log-tail
   evidence if the bounded receipt wait expires.
 - `Info.plist` supplies the package version, and the packaged worker reports the
-  same version through a protocol-v12 inspection request.
+  same version through an inspection request using the current worker protocol.
 - The packaged Apple Vision OCR smoke runs through the bundled worker entrypoint
   with a sanitized `PATH`.
 - The native host cancels a fixture worker that owns a stubborn child in a

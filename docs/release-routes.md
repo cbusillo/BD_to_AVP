@@ -5,7 +5,7 @@ contract for the direct-distribution application. Implementation work must fail
 closed when it cannot satisfy this contract.
 
 The application preference model, release metadata/history parser, appcast
-tooling, reusable release engine, and guarded operator entrypoints implement
+tooling, reusable release engine, and guarded release entrypoints implement
 this four-route contract. Beta 3 through Beta 8, Beta 10, and Beta 11 are
 published and immutable at builds `148` through `156`, excluding permanently
 burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
@@ -23,10 +23,11 @@ authorized immutable-disposition path; its tag and build are permanently
 non-reusable. Beta `0.3.2b7` build `169` and RC `0.3.2rc1` build `170` are
 published, immutable, and fully qualified. Stable `0.3.2` build `171` is
 published and immutable. Beta `0.3.3b1` build `172` is also published and
-qualified. Issue #741 owns prepared successor Beta `0.3.3b2` build `173`;
-Prerelease dispatch, signing approval, and publication remain
-separately authorized. Run-bound signing approval remains a separate
-authorization boundary.
+qualified. Beta `0.3.3b2` build `173` through Beta `0.3.3b5` build `176` and
+Stable `0.3.3` build `177` are published and immutable; publication and
+qualification records are linked from [the release process](release-process.md).
+Future release dispatch, run-bound signing approval, and publication remain
+separately authorized boundaries.
 
 ## Production Identity
 
@@ -142,7 +143,7 @@ and the one-time manual-download seed:
 - bundle identifier `com.shinycomputers.bd-to-avp`; and
 - a production-app replacement rather than a side-by-side Preview install.
 
-Currently shipped Stable and RC clients expose only Stable and RC. They cannot
+Pre-Beta-3 Stable and RC clients exposed only Stable and RC. They cannot
 select Beta, so they cannot discover Beta 3 through Sparkle; release or support
 guidance must never claim otherwise. Testers obtain the exact Beta 3 DMG through
 its GitHub Release and drag it into `/Applications`, replacing the production
@@ -163,8 +164,8 @@ appcast even though older clients cannot discover it.
 
 Selecting Stable after installing Beta 3 does not downgrade to `0.2.143`; the
 client waits for a newer eligible Stable build. Beta 4 through Beta 10 are
-immutable production history. Failed Beta 9 burns build `154`, and Beta 11
-reserves the next global build, `156`.
+immutable production history. Failed Beta 9 burns build `154`, and published
+Beta 11 uses global build `156`.
 
 ## Beta 6 Published History
 
@@ -507,9 +508,9 @@ qualification contract is recorded in
 
 Beta `0.3.3b1`, public tag `v0.3.3-beta.1`, is published and qualified at global
 build `172`. Its checked release receipt and Release Evidence v2 bundle remain
-immutable. It is the selected updater source for prepared Beta `0.3.3b2`, public
-tag and title `v0.3.3-beta.2`, build `173`. Stable `0.3.2` build `171` remains the
-prior Stable history and evidence base.
+immutable. It was the selected updater source for published Beta `0.3.3b2`,
+public tag and title `v0.3.3-beta.2`, build `173`. Stable `0.3.2` build `171`
+was the prior Stable history and evidence base for that release.
 
 Beta 2 adds Movie Sharing to the full Mac app for Shiny 3D Cinema. Its item is
 eligible on the Beta and Alpha update routes through the Prerelease workflow.

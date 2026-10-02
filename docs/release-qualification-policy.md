@@ -16,6 +16,25 @@ SHAs with the candidate using the local Git repository.
 
 ## Validate The Policy
 
+For commands that take `--qualification`, select the current candidate record
+from `releaseOperations.qualificationRecordPath` in `.github/github.json`:
+
+```sh
+export RELEASE_QUALIFICATION_RECORD="$(jq -r '.releaseOperations.qualificationRecordPath' .github/github.json)"
+```
+
+For a historical candidate, explicitly select its archived qualification record
+instead. The generic original Stable record is not the current candidate.
+
+Qualification dispatch and evidence writes requiring the personal GitHub identity
+are manual Director procedures. Agents can use
+`uv run python -m scripts.release_qualification_controller status --release-tag <tag>`
+for read-only observation;
+the supported automation write path is tracked in
+[#854](https://github.com/cbusillo/BD_to_AVP/issues/854). Do not use the personal
+account to work around that missing path. Signing approval keeps its separate
+run-bound human identity requirement.
+
 ```sh
 uv run python -m scripts.qualify_release_scope --validate-policy
 ```
@@ -25,7 +44,7 @@ uv run python -m scripts.qualify_release_scope --validate-policy
 ```sh
 uv run python -m scripts.qualify_release_scope \
   --candidate-sha "$CANDIDATE_SHA" \
-  --qualification docs/qualification/stable-signed-qualification-v1.json \
+  --qualification "$RELEASE_QUALIFICATION_RECORD" \
   --evidence path/to/checked-evidence.json \
   --release-stage stable
 ```
@@ -83,7 +102,7 @@ artifact and milestone receipts.
 ```sh
 uv run python -m scripts.qualify_release_scope \
   --candidate-sha "$CANDIDATE_SHA" \
-  --qualification docs/qualification/stable-signed-qualification-v1.json \
+  --qualification "$RELEASE_QUALIFICATION_RECORD" \
   --evidence path/to/checked-evidence.json \
   --release-stage stable \
   --workflow-phase preparation \
@@ -293,7 +312,8 @@ requires exactly one canonical checked release receipt on the idempotent
 (the macOS signing job). It checks the `preparation` phase using the exact
 `github.sha`, the committed Sparkle channel as the release stage, the checked
 `docs/qualification/release-evidence-v1.json` as evidence, and
-`docs/qualification/stable-signed-qualification-v1.json` as the candidate file.
+the candidate file selected by `releaseOperations.qualificationRecordPath` in
+`.github/github.json`.
 When committed metadata identifies the first candidate of a cycle,
 `--first-candidate-of-cycle` is passed. The preparation report is uploaded as a workflow Actions artifact with
 30-day retention before enforcement exits. macOS signing cannot reach the
@@ -349,7 +369,7 @@ python -m scripts.qualify_release_scope \
   --candidate-sha "$GITHUB_SHA" \
   --release-stage "$CHANNEL" \
   --evidence docs/qualification/release-evidence-v1.json \
-  --qualification docs/qualification/stable-signed-qualification-v1.json \
+  --qualification "$RELEASE_QUALIFICATION_RECORD" \
   --workflow-phase preparation \
   [--first-candidate-of-cycle] \
   --output release-qualification-preparation.json \
@@ -361,7 +381,7 @@ python -m scripts.qualify_release_scope \
   --candidate-sha "$GITHUB_SHA" \
   --release-stage "$CHANNEL" \
   --evidence docs/qualification/release-evidence-v1.json \
-  --qualification docs/qualification/stable-signed-qualification-v1.json \
+  --qualification "$RELEASE_QUALIFICATION_RECORD" \
   --workflow-phase artifact \
   [--first-candidate-of-cycle] \
   --release-receipt release-receipt.json \

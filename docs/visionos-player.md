@@ -223,8 +223,8 @@ movie: choose **On My Vision Pro** in the sidebar, then **Start SBS Check** and
 silent. **Add Movie** opens the system file picker for the reviewer's own supported
 completed movies. **Mac Movies** requires the full **3D Blu-ray to Vision Pro**
 Mac app with Movie Sharing, one-time folder approval and pairing on the same
-trusted LAN. The [beta quick start](movie-sharing-beta.md) explains installation,
-the Beta updater route and the initial stereo checks. Include the matching
+trusted LAN. The [Movie Sharing quick start](movie-sharing-beta.md) explains installation,
+the Stable and optional Beta updater routes and the initial stereo checks. Include the matching
 signed Mac release link in TestFlight's beta description and review notes once
 it is published; a developer's local Current build is not a public Mac release.
 

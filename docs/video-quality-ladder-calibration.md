@@ -22,10 +22,13 @@ are explicit and have no values.
 The native profile schema persists all seven stable step identifiers. Runtime mapping version 2 resolves the active
 route only: direct routes expose seven steps, generated exposes only Balanced, and existing-artifact file upscale
 exposes Balanced and Detailed. `Custom` remains separate with independently retained exact route controls, so
-profile migration does not manufacture mappings or discard expert values. Worker protocol v12 sends exact direct
+profile migration does not manufacture mappings or discard expert values. Worker protocol v13 retains v12's exact direct
 quality and includes generated fallback only for Balanced or Custom. Non-Balanced direct capability failure stops
-before input instead of aliasing to generated Balanced. The candidate still requires #422 package, representative
-media, runtime, perceptual, physical Vision Pro, and signed-beta qualification before release.
+before input instead of aliasing to generated Balanced. Issue #422 records historical signed qualification,
+while the frozen candidate records below preserve their original pending status. Its Beta 12 publication claim
+conflicts with checked-in release history; reconciliation is tracked in
+[#857](https://github.com/cbusillo/BD_to_AVP/issues/857). Use exact-candidate release evidence rather than
+inferring current acceptance from either historical status alone.
 
 ## Direct Quality Sweep
 
@@ -564,7 +567,8 @@ uv run python scripts/validate_video_quality_route_table.py \
 
 This validator requires the exact mapping-version-2 values, explicit unsupported positions, immutable evidence
 receipt identities, and Balanced-only pre-input fallback. A successful result means the objective route table is
-complete; its status remains `candidate_pending_qualification` until #422 finishes downstream qualification.
+complete. Its immutable status remains `candidate_pending_qualification`; signed-candidate qualification is
+separate from this objective-selection record and the historical record discrepancy tracked in #857.
 
 ## Packaged Route-Table Qualification
 
@@ -574,7 +578,7 @@ SHA-256 `a1e3adf85f64a5a667d16ef4aa5a982183acece5af1cf7142e49da620982f97c`; the 
 65.649-second representative segment with SHA-256
 `da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec`.
 
-Build the ad-hoc qualification package and run every supported mapping through its packaged protocol-v12 worker:
+Build the ad-hoc qualification package and run every supported mapping through its packaged worker:
 
 ```bash
 BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com \
@@ -590,7 +594,7 @@ uv run python scripts/qualify_packaged_video_quality_routes.py \
 
 The harness performs `32` worker executions: full/finalized preview pairs for all seven ordinary-direct values, all
 seven direct MetalFX 2x values, and generated Balanced, followed by full-only stage-6 checks for file-upscale Balanced
-and Detailed. Protocol v12 does not permit previews to resume at stage 6, so those two receipts record
+and Detailed. The worker does not permit previews to resume at stage 6, so those two receipts record
 `preview_not_applicable` instead of overstating parity. Every emitted artifact must pass Apple media validation,
 spatial-box checks, duration, beginning/middle/end seeks, exact video/audio/subtitle stream checks, and expected
 dimensions. The receipt is bounded to 256 KiB and published mode `0444`; retained low/Balanced/high and upscale

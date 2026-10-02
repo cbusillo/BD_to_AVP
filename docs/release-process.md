@@ -51,11 +51,11 @@ feature freeze. Issue #614 closed published Stable `0.3.2`, public tag
 `v0.3.2`, and build `171`. Beta `0.3.3b1` / build `172` through Beta
 `0.3.3b5` / build `176` are published and immutable; Beta 5's qualification is
 complete in issue #793 and recorded in
-[the Beta 5 cut packet](0.3.3-beta.5-cut-packet.md). Issue #817 owns prepared
+[the Beta 5 cut packet](0.3.3-beta.5-cut-packet.md). Issue #817 completed
 Stable `0.3.3`, public tag `v0.3.3`, and build `177`, recorded in
-[the Stable cut packet](0.3.3-cut-packet.md). Its metadata and preregistered
-qualification are preparation-only; Stable dispatch, signing approval, and
-publication remain separately authorized boundaries.
+[the Stable cut packet](0.3.3-cut-packet.md) and its immutable publication and
+qualification records. Future dispatch, signing approval, and publication
+remain separately authorized boundaries.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
@@ -197,11 +197,19 @@ writing anything.
 
 ## Release Orchestration
 
+Qualification recovery's personal-account dispatch and evidence-write path
+below is a manual Director procedure, not an agent write path. Agents use
+`uv run python -m scripts.release_qualification_controller status --release-tag <tag>`
+for read-only observation and hand off those mutations until the bot path
+tracked in [#854](https://github.com/cbusillo/BD_to_AVP/issues/854) exists.
+The separate run-bound signing approval contract remains unchanged.
+
 > **RC 3 is published and immutable.** Guarded Prerelease run `30990186667`
 > published build `160` from source SHA
 > `0b06582a83a45bb38d851e62ccf38cd148c7bb95`. Do not rebuild, retag, re-sign,
-> replace, or describe the artifact as fully qualified: the checked targeted
-> receipt retains one blocking native-release-note link defect.
+> replace the artifact. Its targeted qualification is complete: the absent
+> issue-link category was explicitly not applicable, and every link present in
+> the immutable release notes passed. See [the RC 3 cut packet](0.3.0-rc.3-cut-packet.md).
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,
