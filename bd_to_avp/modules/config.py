@@ -342,13 +342,15 @@ class Config:
         source_group.add_argument(
             "--source",
             "-s",
-            help="Source for a single disc number, MKV file path, or ISO image path.",
+            dest="source_str",
+            help="Source for a single disc (disc:N), MKV file path, or ISO image path.",
         )
         source_group.add_argument(
             "--source-folder",
             "-f",
+            dest="source_folder_path",
             type=Path,
-            help="Directory containing multiple image files or MKVs for processing (will search recusively).",
+            help="Directory containing multiple image files or MKVs for processing (will search recursively).",
         )
 
         parser.add_argument(
@@ -366,7 +368,7 @@ class Config:
             "--output-root-folder",
             "-o",
             type=Path,
-            help="Output folder path. Defaults to current directory.",
+            help="Output folder path. Defaults to ~/Movies.",
         )
         parser.add_argument(
             "--transcode-audio",
@@ -502,11 +504,11 @@ class Config:
             "--no-keep-awake",
             dest="keep_awake",
             action="store_false",
-            help="Prevent the computer from sleeping during processing.",
+            help="Allow the computer to sleep during processing.",
         )
         args = parser.parse_args()
 
-        if not args.smoke_apple_vision_ocr and not args.source and not args.source_folder:
+        if not args.smoke_apple_vision_ocr and not args.source_str and not args.source_folder_path:
             parser.error("one of the arguments --source/-s --source-folder/-f is required")
 
         for key, value in vars(args).items():
@@ -514,8 +516,10 @@ class Config:
                 setattr(self, key, value)
 
         self.source_path = (
-            Path(args.source).expanduser() if args.source and not args.source.startswith("disc:") else None
+            Path(args.source_str).expanduser() if args.source_str and not args.source_str.startswith("disc:") else None
         )
+        self.source_str = args.source_str if args.source_str and args.source_str.startswith("disc:") else None
+        self.source_folder_path = args.source_folder_path.expanduser() if args.source_folder_path else None
         self.output_root_path = (
             Path(args.output_root_folder).expanduser() if args.output_root_folder else self.output_root_path
         )

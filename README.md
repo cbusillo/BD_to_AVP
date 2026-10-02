@@ -334,7 +334,7 @@ bd-to-avp --source-folder <source-folder> [options]
 
 ### Parameters
 
-- `--source`: Source for a single disc number, MKV file path, or ISO image path. Choose either this option or
+- `--source`: Source for a single disc (`disc:N`), MKV file path, or ISO image path. Choose either this option or
   `--source-folder`; the CLI rejects both together.
 - `--source-folder`: Source folder path. Recursively scans for image files or MKV files.
 - `--fx-upscale`: Upscale video to 4K resolution using fx-upscale (disabled by default).
