@@ -93,8 +93,9 @@ document it as an external dependency with preflight behavior.
 
 - The accepted SwiftUI application and bundled-worker architecture are the
   production GUI path. The protected-main release workflow builds that app with
-  the production name and bundle identifier on a pinned GitHub-hosted macOS 26
-  toolchain, then verifies the exact DMG again in a separate macOS 26 job.
+  the production name and bundle identifier on the pinned `xcode-27` runner,
+  then verifies the exact DMG again in a separate `macos-26` job. The Xcode
+  version and build are declared in `.github/workflows/release-engine.yml`.
 - Beta 4 (`v0.3.0-beta.4`, internal version `0.3.0b4`, build `149`) through
   Beta 8 (`v0.3.0-beta.8`, internal version `0.3.0b8`, build `153`) and Beta 10
   (`v0.3.0-beta.10`, internal version `0.3.0b10`, build `155`) are published and
@@ -106,9 +107,10 @@ document it as an external dependency with preflight behavior.
   published and immutable. RC 2 (`v0.3.0-rc.2`, internal version `0.3.0rc2`,
   build `159`) and RC 3 (`v0.3.0-rc.3`, internal version `0.3.0rc3`, build
   `160`) are also published and immutable. Stable `v0.3.0` build `161` is
-  published and immutable. The next prepared production-identity field build
-  is Stable `v0.3.1` build `162`; it remains unpublished until exact-SHA
-  signing and public verification complete. Beta 3 build `148` remains the
+  published and immutable. Stable `v0.3.1` build `162` and subsequent releases
+  through Stable `v0.3.3` build `177` are also published; see
+  [the release process](release-process.md) for their immutable evidence.
+  Beta 3 build `148` remains the
   manual-download seed and immutable appcast history below the later Beta
   releases.
 - Stable, RC, Beta, and Alpha are routes for the same product, bundle identifier,

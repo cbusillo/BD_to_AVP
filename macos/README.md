@@ -67,7 +67,7 @@ embedded conversion worker, verifies cooperative cancellation can reap a
 separate-session child and remove its preview workspace, and then performs
 strict deep signature validation.
 
-The app and engine use worker protocol v12. Audio and subtitle language controls
+The app and engine use worker protocol v13. Audio and subtitle language controls
 are independent: built-in and new profile options default to preferred-only
 English audio, while existing profile choices remain unchanged and version-1
 through version-3 profiles migrate to all-languages behavior. Profile document
@@ -82,14 +82,14 @@ defaults become `Balanced`, while every other combination remains `Custom`.
 Mapping version 2 resolves all seven checked direct positions, only `Balanced`
 for generated MV-HEVC, and `Balanced` plus `Detailed` for stage-6 file upscale.
 Unsupported positions remain visible but unavailable; `Custom` restores the
-independently retained expert settings. These mappings remain a candidate until
-#422 completes package, media, runtime, physical-device, and signed-beta gates.
+independently retained expert settings. The package, media, runtime,
+physical-device, and signed-beta qualification is recorded in completed issue #422.
 Expert edits activate `Custom`, while returning to a guided step preserves the
 retained snapshot. Direct-route summaries include exact direct quality and the
 concrete generated fallback only for `Balanced` or `Custom`; resolved fallback
 reports show separate requested and selected rows, and stage-6 existing-artifact
 upscale shows only its active quality.
-Protocol v12 projects exact direct quality plus a concrete generated fallback
+Protocol v13 retains v12's exact direct quality plus a concrete generated fallback
 only when direct capability selection can validly require it. Eligible
 automatic MV-HEVC jobs use the packaged direct encoder during stage 4, while
 reusable intermediates, software encoding, incompatible upscale geometry, and
@@ -108,11 +108,12 @@ capacity-checked per-job workspace on the selected destination so full-title
 preparation does not consume the Mac startup volume. The finalized result stays
 leased from that workspace while the embedded AVPlayer is open and is removed
 when the preview closes.
-See `docs/native-worker-protocol-v12.md` for the request, event, and ownership
-contract.
+See [Native Worker Protocol v13](../docs/native-worker-protocol-v13.md) for the
+current request, event, control, and process-ownership contract.
 
 The application targets Apple Silicon macOS 26 or later and uses the pinned
-Xcode 26.5 release toolchain for production packaging. Packaged validation rejects a Swift
+Xcode release toolchain declared in `.github/workflows/release-engine.yml` for
+production packaging. Packaged validation rejects a Swift
 binary, embedded engine, or bundled Mach-O that requires a newer system.
 
 See [macOS UI Acceptance](../docs/macos-ui-acceptance.md) for the current

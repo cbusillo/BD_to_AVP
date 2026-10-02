@@ -46,8 +46,8 @@ See the feasibility record before choosing experimental AV1 output.
 
 For a normal Stable install of `3D Blu-ray to Vision Pro`, download GitHub Latest
 from the [releases page]. Open the DMG file and drag the app to your Applications
-folder. Beta 3 is a prerelease rather than GitHub Latest; use only its exact
-tagged release as described below.
+folder. For prereleases, choose the intended tagged release and update route;
+the Beta 3 bootstrap below records the historical transition to the production identity.
 
 The GUI app does not install Homebrew or modify your shell setup. Runtime tools
 are bundled into the app where possible. MakeMKV remains an external
@@ -78,8 +78,8 @@ unchanged.
 
 ### Beta 3 manual bootstrap
 
-Published `v0.3.0-beta.3` is a one-time manual-download seed, not an
-update that currently shipped Stable or RC clients can discover. Those clients
+Published `v0.3.0-beta.3` was a one-time manual-download seed, not an
+update that pre-Beta-3 Stable or RC clients could discover. Those clients
 can select only Stable or RC, so they cannot select the Beta route or receive
 Beta 3 through Sparkle. Download that exact GitHub Release DMG, drag it into
 `/Applications`, and replace the existing production app.
@@ -323,14 +323,15 @@ Navigate to the tool's directory in your terminal and execute the command with t
 ### Command Syntax
 
 ```bash
-bd-to-avp --source <source> [--source-folder <source-folder>] [options]
+bd-to-avp --source <source> [options]
+bd-to-avp --source-folder <source-folder> [options]
 ```
 
 ### Parameters
 
-- `--source`: Source for a single disc number, MKV file path, or ISO image path (required).
-- `--source-folder`: Source folder path. This option will recurively scan for image files or mkv files. Will take
-  precedence over --source if both are provided.
+- `--source`: Source for a single disc number, MKV file path, or ISO image path. Choose either this option or
+  `--source-folder`; the CLI rejects both together.
+- `--source-folder`: Source folder path. Recursively scans for image files or MKV files.
 - `--fx-upscale`: Upscale video to 4K resolution using fx-upscale (disabled by default).
 - `--remove-original`: Remove the original source after processing completes successfully.
 - `--overwrite`: Overwrite existing output file.
@@ -348,7 +349,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--left-right-bitrate`: Bitrate for left and right views in Mb/s do not include unit (default: "20").
 - `--mv-hevc-quality`: Quality factor for MV-HEVC encoding (default: "75").
 - `--fov`: Horizontal field of view for MV-HEVC (default: "90").
-- `--frame-rate`: Video frame rate (auto-detected if not provided).
+- `--frame_rate`: Video frame rate (auto-detected if not provided).
 - `--resolution`: Video resolution (auto-detected if not provided).
 - `--swap-eyes`: Swap left and right views (disabled by default).
 - `--start-stage`: Start processing at a specific stage.
@@ -359,7 +360,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--language-code`: Preferred subtitle language (default: `eng`). Accepts ISO 639 alpha-2, alpha-3/B, and alpha-3/T
   codes. Subtitle and audio language choices are independent.
 - `--remove-extra-languages`: Remove subtitle languages other than `--language-code` (disabled by default).
-- `--no-keep-awake`: Prevent the system from sleeping during processing (disabled by default).
+- `--no-keep-awake`: Allow the system to sleep during processing. Without this flag, processing keeps the Mac awake.
 - `--version`: Show the version number and exit.
 
 #### Stage Names
@@ -368,8 +369,8 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - EXTRACT_MVC_AND_AUDIO
 - EXTRACT_SUBTITLES
 - CREATE_LEFT_RIGHT_FILES
-- UPSCALE_VIDEO
 - COMBINE_TO_MV_HEVC
+- UPSCALE_VIDEO
 - TRANSCODE_AUDIO (Prepare Audio)
 - CREATE_FINAL_FILE
 - MOVE_FILES

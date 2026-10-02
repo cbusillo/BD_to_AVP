@@ -132,11 +132,10 @@ older Stable and RC installations cannot discover it, while an installed Beta
   are published and immutable. Abandoned Beta 12 metadata build `157` has no
   public artifact. RC 1 (`0.3.0rc1`, build `158`), RC 2 (`0.3.0rc2`, build
   `159`), and RC 3 (`0.3.0rc3`, build `160`) are published and immutable.
-  Stable `0.3.0` build `161` is published and immutable. Stable `0.3.1` build
-  `162` is the next prepared target for the guarded exact-SHA Stable workflow.
-  Its future unchanneled cumulative item must sit above Stable `0.3.0` and all
-  earlier history, skip builds `147`, `154`, and `157`, and be visible to
-  Stable, RC, Beta, and Alpha.
+  Stable `0.3.0` build `161` and Stable `0.3.1` build `162` are published and
+  immutable. Later publication through Stable `0.3.3` build `177` is recorded
+  in [the release process](release-process.md) and the linked cut packets.
+  Unchanneled Stable items are eligible on Stable, RC, Beta, and Alpha.
 
 ## Release Workflow
 
@@ -186,7 +185,12 @@ no longer active. Genuine bounded Preview conversion jobs and implementation
 terms such as the native MVC splitter remain because they describe product
 behavior and engine architecture rather than release branding.
 
-## Remaining Field Evidence
+## Historical Field Evidence
+
+The following records the Beta 8 through RC 3 qualification sequence. RC 3's
+completed results are in [its cut packet](0.3.0-rc.3-cut-packet.md); these are
+not outstanding release tasks. Current release qualification is described in
+[the release process](release-process.md).
 
 Beta 3 through Beta 10 publication is complete, signed installed-app diagnostics
 qualification is complete, and #382's signed AAC/package/physical Vision Pro
