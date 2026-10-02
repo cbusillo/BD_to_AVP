@@ -43,12 +43,12 @@ class CLISourceTests(unittest.TestCase):
             self.assertIsNone(config.source_str)
 
     def test_file_and_image_sources_reach_makemkv(self) -> None:
-        for name in ("movie.mkv", "disc.iso"):
+        for name, prefix in (("movie.mkv", ""), ("disc.iso", "iso:")):
             with self.subTest(name=name):
                 config = self.parse("--source", f"~/Movies/{name}")
                 source = Path.home() / "Movies" / name
                 with patch.object(disc, "config", config):
-                    expected = f"iso:{source}" if source.suffix in config.IMAGE_EXTENSIONS else str(source)
+                    expected = f"{prefix}{source}"
                     self.assertEqual(disc.get_makemkv_source(), expected)
                 self.assertEqual(config.source_path, source)
                 self.assertIsNone(config.source_str)

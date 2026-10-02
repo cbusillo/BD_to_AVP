@@ -343,7 +343,7 @@ class Config:
             "--source",
             "-s",
             dest="source_str",
-            help="Source for a single disc number, MKV file path, or ISO image path.",
+            help="Source for a single disc (disc:N), MKV file path, or ISO image path.",
         )
         source_group.add_argument(
             "--source-folder",
