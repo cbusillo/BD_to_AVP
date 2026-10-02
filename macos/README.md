@@ -82,8 +82,10 @@ defaults become `Balanced`, while every other combination remains `Custom`.
 Mapping version 2 resolves all seven checked direct positions, only `Balanced`
 for generated MV-HEVC, and `Balanced` plus `Detailed` for stage-6 file upscale.
 Unsupported positions remain visible but unavailable; `Custom` restores the
-independently retained expert settings. The package, media, runtime,
-physical-device, and signed-beta qualification is recorded in completed issue #422.
+independently retained expert settings. Issue #422 records historical signed
+qualification; its Beta 12 publication claim conflicts with checked-in release
+history and is being reconciled in [#857](https://github.com/cbusillo/BD_to_AVP/issues/857).
+Use the current release qualification policy for exact-candidate evidence.
 Expert edits activate `Custom`, while returning to a guided step preserves the
 retained snapshot. Direct-route summaries include exact direct quality and the
 concrete generated fallback only for `Balanced` or `Custom`; resolved fallback

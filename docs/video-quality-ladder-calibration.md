@@ -24,9 +24,11 @@ route only: direct routes expose seven steps, generated exposes only Balanced, a
 exposes Balanced and Detailed. `Custom` remains separate with independently retained exact route controls, so
 profile migration does not manufacture mappings or discard expert values. Worker protocol v13 retains v12's exact direct
 quality and includes generated fallback only for Balanced or Custom. Non-Balanced direct capability failure stops
-before input instead of aliasing to generated Balanced. The package, representative-media, runtime, perceptual,
-physical Vision Pro, and signed-beta qualification was completed in #422. The frozen candidate records below
-preserve their original status and do not represent outstanding release gates.
+before input instead of aliasing to generated Balanced. Issue #422 records historical signed qualification,
+while the frozen candidate records below preserve their original pending status. Its Beta 12 publication claim
+conflicts with checked-in release history; reconciliation is tracked in
+[#857](https://github.com/cbusillo/BD_to_AVP/issues/857). Use exact-candidate release evidence rather than
+inferring current acceptance from either historical status alone.
 
 ## Direct Quality Sweep
 
@@ -565,8 +567,8 @@ uv run python scripts/validate_video_quality_route_table.py \
 
 This validator requires the exact mapping-version-2 values, explicit unsupported positions, immutable evidence
 receipt identities, and Balanced-only pre-input fallback. A successful result means the objective route table is
-complete. Its immutable status remains `candidate_pending_qualification`; downstream qualification completed in
-#422 rather than rewriting this objective-selection record.
+complete. Its immutable status remains `candidate_pending_qualification`; signed-candidate qualification is
+separate from this objective-selection record and the historical record discrepancy tracked in #857.
 
 ## Packaged Route-Table Qualification
 

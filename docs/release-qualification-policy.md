@@ -310,7 +310,8 @@ requires exactly one canonical checked release receipt on the idempotent
 (the macOS signing job). It checks the `preparation` phase using the exact
 `github.sha`, the committed Sparkle channel as the release stage, the checked
 `docs/qualification/release-evidence-v1.json` as evidence, and
-`docs/qualification/stable-signed-qualification-v1.json` as the candidate file.
+the candidate file selected by `releaseOperations.qualificationRecordPath` in
+`.github/github.json`.
 When committed metadata identifies the first candidate of a cycle,
 `--first-candidate-of-cycle` is passed. The preparation report is uploaded as a workflow Actions artifact with
 30-day retention before enforcement exits. macOS signing cannot reach the

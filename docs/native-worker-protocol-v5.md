@@ -1,6 +1,6 @@
 # Native Worker Protocol v5
 
-> Historical protocol. Current audio-mode behavior is documented in
+> Historical protocol. The app and worker now use
 > [Native Worker Protocol v13](native-worker-protocol-v13.md).
 
 Protocol v5 replaces the three legacy subtitle fields with one explicit,

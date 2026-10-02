@@ -1,5 +1,10 @@
 # Direct 4K MetalFX MV-HEVC release gate
 
+> Historical July 24–26, 2026 qualification record. The remaining notarization
+> and publication gate was subsequently completed in #377 with published Beta 7;
+> [its cut packet](0.3.0-beta.7-cut-packet.md) records that outcome. Pending
+> language below describes the original local candidate, not the current app.
+
 Issue #359 qualifies the in-process 2× MetalFX route integrated by #358. The July 24–26, 2026 local gate selects a
 separate Automatic compression quality of `0.6` for direct 4K output; the source-resolution direct route remains at
 `0.7`, and Custom remains an exact user-owned average-bitrate target.

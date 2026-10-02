@@ -1,6 +1,6 @@
 # Native Worker Protocol v3
 
-> Historical protocol. Current title-aware behavior is documented in
+> Historical protocol. The app and worker now use
 > [Native Worker Protocol v13](native-worker-protocol-v13.md).
 
 Protocol v3 adds immutable conversion-preview child jobs while preserving the
