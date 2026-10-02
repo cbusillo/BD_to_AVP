@@ -38,6 +38,7 @@ from scripts.signed_artifact_receipt import build_receipt as build_signed_artifa
 from scripts.signed_artifact_receipt import SignedArtifactReceiptExpectation
 from scripts.tier3_receipt import build_receipt as build_tier3_receipt
 from scripts.tier3_receipt import receipt_sha256 as tier3_receipt_sha256
+from scripts.tier3_clean_machine import PROFILE_FIXTURE_V5_PATH, PROFILE_FIXTURE_V6_PATH
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -499,6 +500,62 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         result = self.result_for(report, "gui-preview-cancel-cleanup")
         self.assertEqual(result["status"], "retest")
         self.assertEqual(result["invalidating_paths"], ["bd_to_avp/modules/preview.py"])
+
+    def test_clean_machine_profile_inputs_invalidate_carried_evidence(self) -> None:
+        for case_id, fixture in (
+            (case_id, fixture)
+            for case_id in ("clean-machine-signed-update", "installed-ui-accessibility")
+            for fixture in (PROFILE_FIXTURE_V5_PATH, PROFILE_FIXTURE_V6_PATH)
+        ):
+            path = fixture.relative_to(REPO_ROOT).as_posix()
+            with self.subTest(case_id=case_id, path=path), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                evidence = self.tier3_evidence(root, case_id)
+                before = self.result_for(self.classify(evidence, root), case_id)
+                after = self.result_for(self.classify(evidence, root, changed={path}), case_id)
+            self.assertEqual(before["status"], "carry")
+            self.assertEqual(after["status"], "retest")
+            self.assertEqual(after["invalidating_paths"], [path])
+
+    def test_unrelated_fixture_preserves_clean_machine_and_profile_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            for case_id in (
+                "clean-machine-signed-update",
+                "installed-ui-accessibility",
+                "profile-save-action-accessibility",
+            ):
+                with self.subTest(case_id=case_id):
+                    evidence = (
+                        self.tier3_evidence(root, case_id)
+                        if case_id != "profile-save-action-accessibility"
+                        else self.evidence(root, case_id)
+                    )
+                    result = self.result_for(
+                        self.classify(evidence, root, changed={"tests/fixtures/unrelated-example.json"}), case_id
+                    )
+                    self.assertEqual(result["status"], "carry")
+                    self.assertEqual(result["invalidating_paths"], [])
+
+    def test_queue_ownership_changes_invalidate_cancel_and_network_evidence(self) -> None:
+        paths = (
+            "macos/BluRayToVisionPro/Feature/AppWorkCoordinator.swift",
+            "macos/BluRayToVisionPro/Feature/ConversionQueueStore.swift",
+            "macos/BluRayToVisionPro/Models/ConversionQueue.swift",
+            "macos/BluRayToVisionPro/Models/DurableConversionQueue.swift",
+            "macos/BluRayToVisionPro/Models/PersistentQueue.swift",
+            "macos/BluRayToVisionPro/Models/QueueResolution.swift",
+        )
+        for case_id in ("overwrite-and-conversion-cancel", "network-generated-final-output"):
+            with tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                evidence = self.evidence(root, case_id)
+                self.assertEqual(self.result_for(self.classify(evidence, root), case_id)["status"], "carry")
+                for path in paths:
+                    with self.subTest(case_id=case_id, path=path):
+                        result = self.result_for(self.classify(evidence, root, changed={path}), case_id)
+                        self.assertEqual(result["status"], "retest")
+                        self.assertEqual(result["invalidating_paths"], [path])
 
     def test_direct_path_pattern_forces_retest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
