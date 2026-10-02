@@ -103,13 +103,14 @@ PACKAGED_FIXTURE_GATE_LINES = (
         "The verifier rejects package-policy drift, requires failure coverage to match the declared rejection "
         "semantics, binds every source to the generator receipt, validates each fixture before and after execution, "
         "terminates the packaged worker on interruption, rechecks the package after the matrix, runs the packaged "
-        "worker with protocol v12, checks structured layout decisions and visible rejections, verifies final AAC "
-        "layout and metadata, runs Apple passthrough across the complete output, isolates each selected audio track "
+        "worker with its current protocol, checks structured layout decisions and visible rejections, verifies final "
+        "AAC layout and metadata, runs Apple passthrough across the complete output, isolates each selected audio track "
         "before Apple LPCM identity analysis, and records bounded package/source/output hashes. Final-output checks "
         "own handler-title and default-disposition assertions; the Apple passthrough evidence names those fields as "
         "not compared because Core Media normalizes them. An ad-hoc package run is deterministic package evidence "
         "only. It does not establish Developer ID/notarization provenance, physical Vision Pro surround placement, "
-        "repeated device seeks, or perceptual lip-sync; those remain exact signed-candidate gates under #382."
+        "repeated device seeks, or perceptual lip-sync. Historical signed-package and physical acceptance for "
+        "Beta 8 is recorded in #382; that evidence does not qualify changed candidates."
     ),
 )
 
@@ -736,7 +737,8 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                 "",
                 (
                     "The production runtime imports this same policy for Automatic and Convert-to-AAC processing. "
-                    "Signed-package and physical Vision Pro validation remains in #382."
+                    "Historical signed-package and physical Vision Pro acceptance for Beta 8 is recorded in #382; "
+                    "it does not qualify changed candidates."
                 ),
                 "",
                 "## Evidence Method",
@@ -802,8 +804,9 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                     "Automatic copies only the six qualified preserve layouts; any selected remap or downmix causes "
                     "the whole selected set to be encoded with per-output policy filters. Missing, unknown, custom, "
                     "discrete, or unlisted layouts stop before FFmpeg with a structured failure, and resumed prepared "
-                    "AAC is requalified before final muxing. #382 must validate the exact signed package on Vision Pro "
-                    "before this policy is considered physically validated."
+                    "AAC is requalified before final muxing. #382 records physical acceptance of the exact signed "
+                    "Beta 8 package on Vision Pro. Changed candidates need their own applicable qualification; "
+                    "the historical receipt does not establish fresh acceptance."
                 ),
                 "",
                 *PACKAGED_FIXTURE_GATE_LINES,
