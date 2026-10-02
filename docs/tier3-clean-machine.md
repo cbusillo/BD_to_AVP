@@ -42,8 +42,8 @@ checked signed-artifact UI receipt and original one-file Actions ZIP captured
 by Release Evidence while the artifact was unexpired. It cannot push, edit a release, approve an
 environment, or access release secrets.
 
-Dispatch it only after its workflow definition is present on the canonical
-evidence branch:
+Dispatch it from protected `main` only after its workflow definition is present
+there and the canonical evidence branch contains the checked manifest:
 
 ```sh
 gh workflow run milestone-qualification.yml \

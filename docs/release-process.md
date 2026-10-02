@@ -200,8 +200,9 @@ writing anything.
 > **RC 3 is published and immutable.** Guarded Prerelease run `30990186667`
 > published build `160` from source SHA
 > `0b06582a83a45bb38d851e62ccf38cd148c7bb95`. Do not rebuild, retag, re-sign,
-> replace, or describe the artifact as fully qualified: the checked targeted
-> receipt retains one blocking native-release-note link defect.
+> replace the artifact. Its targeted qualification is complete: the absent
+> issue-link category was explicitly not applicable, and every link present in
+> the immutable release notes passed. See [the RC 3 cut packet](0.3.0-rc.3-cut-packet.md).
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,

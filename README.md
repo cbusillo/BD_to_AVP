@@ -120,10 +120,9 @@ release artifact and dependency policy.
 See [Production Release Routes](docs/release-routes.md) for Stable, RC, Beta,
 and Alpha update eligibility, version mapping, and publication policy.
 
-Prerelease testers evaluating the new repetition-first setup workflow should use
-the [Conversion Setup Beta Test Guide](docs/conversion-setup-beta-test-guide.md)
-so feedback covers the same setup, repeat-run, editing, conflict, queue, and
-rollback scenarios.
+The [Conversion Setup Beta Test Guide](docs/conversion-setup-beta-test-guide.md)
+preserves the earlier source-first interface checklist. Use the current queue
+instructions below for the shipped Mac app.
 
 See [Direct Pipeline Contracts](docs/direct-pipeline-contracts.md) for the
 automatic minimum-materialization behavior and the durable `--keep-files`
@@ -216,6 +215,10 @@ bd-to-avp
 ```
 
 As long as you provide no arguments, the GUI will open.
+
+## Native Mac App Workflow
+
+The signed DMG provides the SwiftUI Mac app described below.
 
 The GUI locks configuration load/save actions while a job is active so each
 run uses the settings captured at startup. Choosing **Stop Processing**
@@ -338,7 +341,7 @@ bd-to-avp --source-folder <source-folder> [options]
 - `--keep-files`: Use durable stage boundaries and keep retained intermediates. This affects retention only; it does
   not change the selected audio policy. An explicit `--remove-original` still removes the selected source after a
   successful conversion.
-- `--output-root-folder`: Output folder path. Defaults to the current directory.
+- `--output-root-folder`: Output folder path. Defaults to `~/Movies`.
 - `--audio-mode`: Audio handling mode: `automatic`, `convert_aac`, or `pcm` (default: `automatic`). Automatic copies
   qualified AAC audio to an owned M4A, and converts the whole selected set to AAC if any selected stream is unqualified.
   Sources without audio produce a video-only movie; the app does not synthesize a silent track.

@@ -1,5 +1,10 @@
 # Conversion Setup Beta Test Guide
 
+> Historical source-first interface checklist, before the persistent queue
+> shipped. Its control labels, window size, and non-goals describe that earlier
+> interface. Use the [README's native Mac workflow](../README.md#native-mac-app-workflow)
+> for the current queue and [Movie Sharing guide](movie-sharing-beta.md) for pairing.
+
 ## Purpose
 
 This Beta keeps the source-first Conversion Setup checks and adds focused

@@ -1,10 +1,10 @@
-# Movie Sharing beta quick start
+# Movie Sharing quick start
 
 The full **3D Blu-ray to Vision Pro** Mac app converts movies and shares completed files. **Shiny 3D Cinema** on Vision Pro lets you browse the shared folder and choose what to play.
 
-Use the latest published **3D Blu-ray to Vision Pro** Mac beta, **0.3.3b2 (173) or later**, with **Shiny 3D Cinema 0.1.0 (3)**. The Mac app requires Apple Silicon and macOS 26 or later; the player requires visionOS 26 or later.
+Use published **3D Blu-ray to Vision Pro 0.3.3 Stable or later** with **Shiny 3D Cinema 0.1.0 (3)**. Compatible Mac prereleases start at **0.3.3b2 (173)**. The Mac app requires Apple Silicon and macOS 26 or later; the player requires visionOS 26 or later.
 
-1. On the Mac, open **Settings → Updates**, set **Update route** to **Beta**, then choose **Check for Updates…**. If this is your first Mac install, download the DMG for the newest published beta from [Mac releases](https://github.com/cbusillo/BD_to_AVP/releases) and install the app. Keep Beta selected for subsequent updates.
+1. On the Mac, open **Settings → Updates**, keep **Update route** on **Stable**, then choose **Check for Updates…**. If this is your first Mac install, download the Stable DMG from [Mac releases](https://github.com/cbusillo/BD_to_AVP/releases) and install the app. Choose Beta only when you intend to test Mac prereleases; the Vision Pro TestFlight beta does not require that Mac route.
 2. On Vision Pro, install **Shiny 3D Cinema** through [TestFlight](https://testflight.apple.com/join/2qERGYYg).
 3. Put a small completed MOV, MP4 or M4V movie in a folder on the Mac. For a common starting point, download the [side-by-side sample](../macos/BDToAVPPlayer/Resources/Stereo-Check-SBS.mov) or [over-under sample](../macos/BDToAVPPlayer/Resources/Stereo-Check-OU.mov). Both synthetic samples last 45 seconds and are intentionally silent.
 4. In the Mac app's toolbar, open **Movie Sharing**, choose **Add Folder…**, select that folder, and enable **Share movies on this Mac**. Keep the Mac app open and the Mac awake.

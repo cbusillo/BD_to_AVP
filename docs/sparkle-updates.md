@@ -69,7 +69,8 @@ Each new appcast item embeds the digest-bound draft release body as Markdown, so
 Sparkle uses its adaptive native text view without loading GitHub page chrome or
 making a second release-note request. A full-release link remains available for
 downloads and extended context, and historical external-link items remain valid.
-The live feed carries cumulative production history through RC 3 build `160`.
+Published cumulative production history includes Stable `0.3.3` build `177`;
+its snapshot and verification are recorded in [the cut packet](0.3.3-cut-packet.md).
 Failed Beta 9 build `154` and abandoned Beta 12 metadata build `157` never
 entered the feed. RC 3 is an immutable `rc`-channel item and remains excluded
 from Stable.
@@ -257,7 +258,7 @@ Sparkle continues to include default Stable items automatically. The updater
 selects the greatest eligible global build, so choosing a safer route affects
 future updates only and never downgrades the installed application. Published
 `v0.3.0-beta.3` (`0.3.0b3`, build `148`) is an immutable `beta` item in the
-cumulative feed and a manual-download seed. Currently shipped Stable and
+cumulative feed and a manual-download seed. Pre-Beta-3 Stable and
 RC clients cannot select Beta, so they cannot discover it through Sparkle; do
 not claim otherwise. Its `beta` item is eligible only to Beta and Alpha, not
 Stable or RC. After manually installing the production
@@ -271,16 +272,17 @@ the Beta lineage above Beta 10 and Beta 8 through Beta 3. Failed Beta 9
 build `154` and abandoned Beta 12 metadata build `157` are omitted from public
 history. Published `v0.3.0-rc.1` (`0.3.0rc1`, build `158`),
 `v0.3.0-rc.2` (`0.3.0rc2`, build `159`), and `v0.3.0-rc.3`
-(`0.3.0rc3`, build `160`) are immutable; RC 3 is the current head. RC 3 is
+(`0.3.0rc3`, build `160`) are immutable; RC 3 was the head of that RC lineage. RC 3 is
 excluded from Stable and admitted on RC, Beta, and Alpha. Its updater path and
 content-aware native release-note link qualification passed. The immutable notes
 contain no issue URL, so that category is explicitly not applicable; every PR,
 comparison, and full-release link present in the source notes opened externally.
 Stable `v0.3.0` build `161` is published and immutable. Its item omits
-`sparkle:channel` and is the current head for every route. Stable `v0.3.1`
-build `162` is the next prepared target; its unchanneled cumulative item must
-supersede Stable `v0.3.0` without entering the live feed before guarded
-publication succeeds.
+`sparkle:channel`. Stable `v0.3.1` build `162` and subsequent releases through
+Stable `v0.3.3` build `177` are also published. An unchanneled Stable item is
+eligible on every route; a new item enters the feed only after guarded
+publication succeeds. Current publication evidence is linked from
+[the release process](release-process.md).
 
 ## Runtime Integration and UX
 
@@ -288,14 +290,15 @@ The runtime integration loads the bundled framework on the main thread and
 retains `SPUStandardUpdaterController` and its delegate for the application
 lifetime.
 
-A live packaged-app test must prove that Qt's macOS event loop delivers
-Sparkle's timers, windows, and delegate callbacks. Resolving the Objective-C
-class alone is not sufficient evidence.
+A live packaged-app test must prove that the SwiftUI/AppKit host delivers
+Sparkle's timers, windows, and delegate callbacks. Initializing the controller
+alone is not sufficient evidence. Source and PyPI builds retain the manual
+GitHub Releases fallback rather than initializing Sparkle.
 
 The direct-DMG user experience is:
 
 - Help contains `Check for Updates…`.
-- Help contains an `Update Route` submenu with Stable, RC, Beta, and Alpha; the
+- Help contains an `Update Channel` picker with Stable, RC, Beta, and Alpha; the
   preference is persisted in the app's `NSUserDefaults` domain and defaults to
   Stable.
 - Sparkle uses its standard permission and update windows.
