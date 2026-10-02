@@ -14,6 +14,13 @@ The classifier never performs signing, notarization, publication, or remote
 GitHub reads. It validates checked receipt references and compares their source
 SHAs with the candidate using the local Git repository.
 
+The clean-machine update case also invalidates when its seed or expected
+profile fixture changes. Those fixture inputs affect that case alone;
+unrelated test fixtures do not require new evidence. Queue persistence,
+resolution, and work coordination belong to the conversion-ownership
+contract, so changes there require affected cancellation and network-output
+evidence to be re-established through the existing qualification workflow.
+
 ## Validate The Policy
 
 For commands that take `--qualification`, select the current candidate record

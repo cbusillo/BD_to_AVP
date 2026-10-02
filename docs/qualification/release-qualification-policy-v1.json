@@ -95,8 +95,14 @@
       "bd_to_avp/process_runner.py",
       "bd_to_avp/worker/operations.py",
       "bd_to_avp/worker/ownership.py",
+      "macos/BluRayToVisionPro/Feature/AppWorkCoordinator.swift",
+      "macos/BluRayToVisionPro/Feature/ConversionQueueStore.swift",
       "macos/BluRayToVisionPro/Feature/ConversionViewModel.swift",
+      "macos/BluRayToVisionPro/Models/ConversionQueue.swift",
       "macos/BluRayToVisionPro/Models/ConversionWorkflow.swift",
+      "macos/BluRayToVisionPro/Models/DurableConversionQueue.swift",
+      "macos/BluRayToVisionPro/Models/PersistentQueue.swift",
+      "macos/BluRayToVisionPro/Models/QueueResolution.swift",
       "macos/BluRayToVisionPro/Worker/WorkerProcessClient.swift"
     ],
     "subtitle-recovery": [
@@ -271,7 +277,9 @@
           "docs/release-routes.md",
           "docs/tier3-clean-machine.md",
           "pyproject.toml",
-          "scripts/tier3_clean_machine.py"
+          "scripts/tier3_clean_machine.py",
+          "tests/fixtures/profile_library_v5.json",
+          "tests/fixtures/profile_library_v6.json"
         ],
         "contracts": ["release-engine", "sparkle-update", "packaged-worker", "profile-storage", "tier3-evidence"]
       },
