@@ -197,6 +197,12 @@ writing anything.
 
 ## Release Orchestration
 
+Qualification recovery's personal-account dispatch and evidence-write path
+below is a manual Director procedure, not an agent write path. Agents use
+read-only `status` or preflight and hand off those mutations until the bot path
+tracked in [#854](https://github.com/cbusillo/BD_to_AVP/issues/854) exists.
+The separate run-bound signing approval contract remains unchanged.
+
 > **RC 3 is published and immutable.** Guarded Prerelease run `30990186667`
 > published build `160` from source SHA
 > `0b06582a83a45bb38d851e62ccf38cd148c7bb95`. Do not rebuild, retag, re-sign,

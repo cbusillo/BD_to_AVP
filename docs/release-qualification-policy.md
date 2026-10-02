@@ -16,6 +16,23 @@ SHAs with the candidate using the local Git repository.
 
 ## Validate The Policy
 
+For commands that take `--qualification`, select the current candidate record
+from `releaseOperations.qualificationRecordPath` in `.github/github.json`:
+
+```sh
+export RELEASE_QUALIFICATION_RECORD="$(jq -r '.releaseOperations.qualificationRecordPath' .github/github.json)"
+```
+
+For a historical candidate, explicitly select its archived qualification record
+instead. The generic original Stable record is not the current candidate.
+
+Qualification dispatch and evidence writes requiring the personal GitHub identity
+are manual Director procedures. Agents can use read-only `status` and preflight;
+the supported automation write path is tracked in
+[#854](https://github.com/cbusillo/BD_to_AVP/issues/854). Do not use the personal
+account to work around that missing path. Signing approval keeps its separate
+run-bound human identity requirement.
+
 ```sh
 uv run python -m scripts.qualify_release_scope --validate-policy
 ```
@@ -25,7 +42,7 @@ uv run python -m scripts.qualify_release_scope --validate-policy
 ```sh
 uv run python -m scripts.qualify_release_scope \
   --candidate-sha "$CANDIDATE_SHA" \
-  --qualification docs/qualification/stable-signed-qualification-v1.json \
+  --qualification "$RELEASE_QUALIFICATION_RECORD" \
   --evidence path/to/checked-evidence.json \
   --release-stage stable
 ```
@@ -83,7 +100,7 @@ artifact and milestone receipts.
 ```sh
 uv run python -m scripts.qualify_release_scope \
   --candidate-sha "$CANDIDATE_SHA" \
-  --qualification docs/qualification/stable-signed-qualification-v1.json \
+  --qualification "$RELEASE_QUALIFICATION_RECORD" \
   --evidence path/to/checked-evidence.json \
   --release-stage stable \
   --workflow-phase preparation \
@@ -349,7 +366,7 @@ python -m scripts.qualify_release_scope \
   --candidate-sha "$GITHUB_SHA" \
   --release-stage "$CHANNEL" \
   --evidence docs/qualification/release-evidence-v1.json \
-  --qualification docs/qualification/stable-signed-qualification-v1.json \
+  --qualification "$RELEASE_QUALIFICATION_RECORD" \
   --workflow-phase preparation \
   [--first-candidate-of-cycle] \
   --output release-qualification-preparation.json \
@@ -361,7 +378,7 @@ python -m scripts.qualify_release_scope \
   --candidate-sha "$GITHUB_SHA" \
   --release-stage "$CHANNEL" \
   --evidence docs/qualification/release-evidence-v1.json \
-  --qualification docs/qualification/stable-signed-qualification-v1.json \
+  --qualification "$RELEASE_QUALIFICATION_RECORD" \
   --workflow-phase artifact \
   [--first-candidate-of-cycle] \
   --release-receipt release-receipt.json \
