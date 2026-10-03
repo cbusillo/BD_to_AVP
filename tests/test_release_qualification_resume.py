@@ -711,7 +711,11 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertEqual(client.posts, [])
 
     def test_run_from_unapproved_actor_is_not_adopted(self) -> None:
-        for actor, triggering_actor in (("other-writer", None), (AUTOMATION_ACTOR, "other-writer")):
+        for actor, triggering_actor in (
+            ("other-writer", None),
+            ("other-writer", AUTOMATION_ACTOR),
+            (AUTOMATION_ACTOR, "other-writer"),
+        ):
             with self.subTest(actor=actor, triggering_actor=triggering_actor):
                 client = self.configured_client()
                 foreign = workflow_run(
