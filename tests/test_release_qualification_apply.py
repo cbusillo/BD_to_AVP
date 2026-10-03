@@ -539,13 +539,15 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not allowed", result.stderr)
 
-    def test_push_ignores_personal_git_and_netrc_configuration(self) -> None:
+    def test_push_ignores_personal_git_netrc_and_tls_configuration(self) -> None:
         caller_home = os.environ["HOME"]
         _options, environment = self.push_configuration(
             {
                 "PATH": os.environ["PATH"],
                 "HOME": caller_home,
                 "GH_TOKEN": FIXTURE_TOKEN,
+                "NETRC": f"{caller_home}/.netrc",
+                "GIT_SSL_NO_VERIFY": "1",
                 "GIT_CONFIG_GLOBAL": f"{caller_home}/.gitconfig",
                 "GIT_CONFIG_COUNT": "1",
                 "GIT_CONFIG_KEY_0": "credential.helper",
@@ -554,9 +556,37 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
         )
 
         self.assertNotEqual(environment["HOME"], caller_home)
-        self.assertEqual(environment["XDG_CONFIG_HOME"], environment["HOME"])
-        self.assertEqual(environment["GIT_CONFIG_NOSYSTEM"], "1")
-        self.assertFalse(any(name.startswith("GIT_CONFIG_") and name != "GIT_CONFIG_NOSYSTEM" for name in environment))
+        for name in ("NETRC", "GIT_SSL_NO_VERIFY", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GH_TOKEN"):
+            self.assertNotIn(name, environment)
+
+    def test_push_verifies_tls_despite_repository_configuration(self) -> None:
+        options, environment = self.push_configuration({"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN})
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            subprocess.run(["git", "init", "-q"], cwd=temporary_directory, check=True)
+            for url in ("https://github.com/", "https://github.com/cbusillo/BD_to_AVP.git"):
+                subprocess.run(
+                    ["git", "config", f"http.{url}.sslVerify", "false"],
+                    cwd=temporary_directory,
+                    check=True,
+                )
+            ssl_verify = subprocess.run(
+                [
+                    "git",
+                    *options,
+                    "config",
+                    "--type=bool",
+                    "--get-urlmatch",
+                    "http.sslVerify",
+                    "https://github.com/cbusillo/BD_to_AVP.git",
+                ],
+                cwd=temporary_directory,
+                env={**environment, "HOME": temporary_directory},
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+        self.assertEqual(ssl_verify, "true")
 
     def test_inherited_git_identity_does_not_change_commit_attribution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

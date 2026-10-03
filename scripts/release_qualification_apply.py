@@ -610,9 +610,22 @@ def _automation_token() -> str:
     return token
 
 
+# Only these are inherited, so NETRC, TLS overrides, and global, system, or injected git config cannot reach the push.
+PUSH_INHERITED_ENVIRONMENT = (
+    "PATH",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+)
+
+
 def _authenticated_git_environment(home: Path) -> dict[str, str]:
-    # An empty HOME and no global, system, or injected config keep ~/.netrc and personal git settings out of the push.
-    environment = {name: value for name, value in os.environ.items() if not name.startswith("GIT_CONFIG")}
+    environment = {name: os.environ[name] for name in PUSH_INHERITED_ENVIRONMENT if name in os.environ}
     environment.update(
         {
             "HOME": str(home),
@@ -666,6 +679,12 @@ def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
                     "http.https://github.com/.extraHeader=",
                     "-c",
                     f"http.{HTTPS_REPOSITORY_URL}.extraHeader=",
+                    "-c",
+                    "http.sslVerify=true",
+                    "-c",
+                    "http.https://github.com/.sslVerify=true",
+                    "-c",
+                    f"http.{HTTPS_REPOSITORY_URL}.sslVerify=true",
                     "push",
                     HTTPS_REPOSITORY_URL,
                     f"{commit_sha}:refs/heads/{evidence_ref}",
