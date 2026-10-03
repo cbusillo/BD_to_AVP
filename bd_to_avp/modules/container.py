@@ -270,7 +270,7 @@ def mux_video_audio_subs(
             "-add",
             f"{audio_path}#{index}{audio_track_options}",
             "-udta",
-            f"{output_track_index}:type=name:str='{track_name}'",
+            f"{output_track_index}:type=name:str={track_name}",
         ]
         output_track_index += 1
 
@@ -287,7 +287,7 @@ def mux_video_audio_subs(
             "-add",
             f"{sub_file}#1{subtitle_options}",
             "-udta",
-            f"{output_track_index}:type=name:str='{subtitle_language_name} Subtitles'",
+            f"{output_track_index}:type=name:str={subtitle_language_name} Subtitles",
         ]
         output_track_index += 1
 
