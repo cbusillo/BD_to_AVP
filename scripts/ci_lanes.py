@@ -71,15 +71,17 @@ def lanes_for(changed_paths: Iterable[str], player_prefixes: Iterable[str]) -> d
     return lanes
 
 
-def changed_paths(base: str) -> list[str]:
+def changed_paths(base: str, repository: Path = REPOSITORY_ROOT) -> list[str]:
+    # A rename removes an input as surely as a deletion, so list both of its paths
+    # whatever diff.renames says. NUL separation keeps unusual file names whole.
     output = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...HEAD"],
-        cwd=REPOSITORY_ROOT,
+        ["git", "diff", "--name-only", "--no-renames", "-z", f"{base}...HEAD"],
+        cwd=repository,
         check=True,
         capture_output=True,
         text=True,
     ).stdout
-    return [line for line in output.splitlines() if line]
+    return [path for path in output.split("\0") if path]
 
 
 def main() -> int:
