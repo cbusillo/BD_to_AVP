@@ -45,6 +45,9 @@ PGS_CUES = (("HELLO THERE", 500, 1500), ("GENERAL KENOBI", 2000, 3000))
 FORCED_PGS_CUES = (("FORCED WORDS", 500, 1500),)
 # Generous bound for a cold Vision OCR model load on a fresh runner.
 SUBTITLE_RIP_TIMEOUT_SECONDS = 180
+# A source audio title with a space and a colon, which MP4Box option strings use
+# as a separator; the final mux must carry it through unchanged.
+SOURCE_AUDIO_TITLE = "Main: English Stereo"
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,11 @@ def stream_languages(path: Path) -> list[tuple[str, str | None]]:
     ]
 
 
+def stream_names(path: Path) -> list[str | None]:
+    """Return the track name a player shows for each stream (the MP4 udta name)."""
+    return [stream.get("tags", {}).get("name") for stream in probe_streams(path)]
+
+
 def probe_streams(path: Path) -> list[dict[str, Any]]:
     probe = run_tool(
         [
@@ -99,7 +107,7 @@ def probe_streams(path: Path) -> list[dict[str, Any]]:
             "-v",
             "error",
             "-show_entries",
-            "stream=index,codec_type:stream_tags=language",
+            "stream=index,codec_type:stream_tags=language,name",
             "-of",
             "json",
             path,
@@ -207,7 +215,14 @@ def make_source_mkv(path: Path, *, with_audio: bool) -> None:
         command += ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"]
     command += ["-t", SOURCE_SECONDS, "-c:v", "mpeg4"]
     if with_audio:
-        command += ["-c:a", "pcm_s16le", "-metadata:s:a:0", "language=eng"]
+        command += [
+            "-c:a",
+            "pcm_s16le",
+            "-metadata:s:a:0",
+            "language=eng",
+            "-metadata:s:a:0",
+            f"title={SOURCE_AUDIO_TITLE}",
+        ]
     command += ["-y", path]
     run_tool(command)
 
@@ -343,6 +358,11 @@ class FinalMuxRealToolTests(unittest.TestCase):
                     self.assertIn(cue, text, f"subtitle track {subtitle_index} (forced={forced})")
             # Only the track ripped from a forced source track is marked forced.
             self.assertEqual(sorted(forced_flags), [False, True])
+
+            # Players list tracks by these names; they must read back exactly,
+            # with no quote marks from the mux command (#846).
+            subtitle_names = ["English Forced Subtitles" if forced else "English Subtitles" for forced in forced_flags]
+            self.assertEqual(stream_names(muxed_path), [None, SOURCE_AUDIO_TITLE, *subtitle_names])
 
     def test_real_probe_reports_audio_streams_only_when_the_source_has_audio(self) -> None:
         self.assertEqual(container.get_audio_stream_data(self.silent_mkv_path), [])
