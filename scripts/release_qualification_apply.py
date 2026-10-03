@@ -17,6 +17,7 @@ from scripts.release_qualification_artifact import ReconciliationBundle
 
 
 HTTPS_REPOSITORY_URL = "https://github.com/cbusillo/BD_to_AVP.git"
+PUSH_PROTOCOL = "https"
 APPLY_CHECKPOINT_TYPE = "bd_to_avp.release_qualification_apply_checkpoint"
 APPLY_SCHEMA_VERSION = 2
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -609,15 +610,23 @@ def _automation_token() -> str:
     return token
 
 
-def _authenticated_git_environment() -> dict[str, str]:
-    environment = dict(os.environ)
-    environment[PUSH_TOKEN_VARIABLE] = _automation_token()
-    environment["GIT_TERMINAL_PROMPT"] = "0"
+def _authenticated_git_environment(home: Path) -> dict[str, str]:
+    # An empty HOME and no global, system, or injected config keep ~/.netrc and personal git settings out of the push.
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("GIT_CONFIG")}
+    environment.update(
+        {
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            PUSH_TOKEN_VARIABLE: _automation_token(),
+        }
+    )
     return environment
 
 
 def _require_no_url_rewrite(repo_root: Path, environment: Mapping[str, str]) -> None:
-    # insteadOf/pushInsteadOf could send the push over SSH or elsewhere, bypassing the token credential.
+    # insteadOf/pushInsteadOf could send the push elsewhere; an empty prefix rewrites every URL.
     rewrites = cast(
         subprocess.CompletedProcess[str],
         _run_git(
@@ -630,35 +639,40 @@ def _require_no_url_rewrite(repo_root: Path, environment: Mapping[str, str]) -> 
         raise QualificationApplyError("Unable to inspect git URL rewrites before the qualification push.")
     for line in rewrites.stdout.splitlines():
         _key, _separator, prefix = line.partition(" ")
-        if prefix and HTTPS_REPOSITORY_URL.startswith(prefix):
+        if HTTPS_REPOSITORY_URL.startswith(prefix):
             raise QualificationApplySafetyError(
                 "Qualification apply push refuses a git URL rewrite of the evidence repository URL."
             )
 
 
 def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
-    environment = _authenticated_git_environment()
-    _require_no_url_rewrite(repo_root, environment)
-    push = cast(
-        subprocess.CompletedProcess[str],
-        _run_git(
-            repo_root,
-            [
-                "-c",
-                "credential.helper=",
-                "-c",
-                f"credential.helper={PUSH_CREDENTIAL_HELPER}",
-                "-c",
-                "http.https://github.com/.extraHeader=",
-                "-c",
-                f"http.{HTTPS_REPOSITORY_URL}.extraHeader=",
-                "push",
-                HTTPS_REPOSITORY_URL,
-                f"{commit_sha}:refs/heads/{evidence_ref}",
-            ],
-            env=environment,
-        ),
-    )
+    with tempfile.TemporaryDirectory() as home:
+        environment = _authenticated_git_environment(Path(home))
+        _require_no_url_rewrite(repo_root, environment)
+        push = cast(
+            subprocess.CompletedProcess[str],
+            _run_git(
+                repo_root,
+                [
+                    "-c",
+                    "protocol.allow=never",
+                    "-c",
+                    f"protocol.{PUSH_PROTOCOL}.allow=always",
+                    "-c",
+                    "credential.helper=",
+                    "-c",
+                    f"credential.helper={PUSH_CREDENTIAL_HELPER}",
+                    "-c",
+                    "http.https://github.com/.extraHeader=",
+                    "-c",
+                    f"http.{HTTPS_REPOSITORY_URL}.extraHeader=",
+                    "push",
+                    HTTPS_REPOSITORY_URL,
+                    f"{commit_sha}:refs/heads/{evidence_ref}",
+                ],
+                env=environment,
+            ),
+        )
     if push.returncode != 0:
         raise QualificationApplyError("Unable to push the qualification reconciliation commit.")
 

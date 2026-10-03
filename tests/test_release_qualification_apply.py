@@ -156,6 +156,7 @@ class ApplyFixture:
         with (
             patch("scripts.release_qualification_apply._validate_origin"),
             patch("scripts.release_qualification_apply.HTTPS_REPOSITORY_URL", str(self.remote)),
+            patch("scripts.release_qualification_apply.PUSH_PROTOCOL", "file"),
             patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
         ):
             return start_reconciliation_apply(
@@ -174,6 +175,7 @@ class ApplyFixture:
         with (
             patch("scripts.release_qualification_apply._validate_origin"),
             patch("scripts.release_qualification_apply.HTTPS_REPOSITORY_URL", str(self.remote)),
+            patch("scripts.release_qualification_apply.PUSH_PROTOCOL", "file"),
             patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
         ):
             return continue_reconciliation_apply(
@@ -507,6 +509,54 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
                     self.assertRaisesRegex(QualificationApplySafetyError, "URL rewrite"),
                 ):
                     _push_commit(Path(temporary_directory), EVIDENCE_REF, "9" * 40)
+
+    def test_push_refuses_a_rewrite_with_an_empty_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            subprocess.run(["git", "init", "-q"], cwd=temporary_directory, check=True)
+            subprocess.run(
+                ["git", "config", "url.ssh://git@example.invalid/.pushInsteadOf", ""],
+                cwd=temporary_directory,
+                check=True,
+            )
+            with (
+                patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
+                self.assertRaisesRegex(QualificationApplySafetyError, "URL rewrite"),
+            ):
+                _push_commit(Path(temporary_directory), EVIDENCE_REF, "9" * 40)
+
+    def test_push_allows_only_https_transport(self) -> None:
+        options, environment = self.push_configuration({"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN})
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = subprocess.run(
+                ["git", *options, "ls-remote", "ssh://git@example.invalid/cbusillo/BD_to_AVP.git"],
+                cwd=temporary_directory,
+                env={**environment, "HOME": temporary_directory},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not allowed", result.stderr)
+
+    def test_push_ignores_personal_git_and_netrc_configuration(self) -> None:
+        caller_home = os.environ["HOME"]
+        _options, environment = self.push_configuration(
+            {
+                "PATH": os.environ["PATH"],
+                "HOME": caller_home,
+                "GH_TOKEN": FIXTURE_TOKEN,
+                "GIT_CONFIG_GLOBAL": f"{caller_home}/.gitconfig",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "credential.helper",
+                "GIT_CONFIG_VALUE_0": "store",
+            }
+        )
+
+        self.assertNotEqual(environment["HOME"], caller_home)
+        self.assertEqual(environment["XDG_CONFIG_HOME"], environment["HOME"])
+        self.assertEqual(environment["GIT_CONFIG_NOSYSTEM"], "1")
+        self.assertFalse(any(name.startswith("GIT_CONFIG_") and name != "GIT_CONFIG_NOSYSTEM" for name in environment))
 
     def test_inherited_git_identity_does_not_change_commit_attribution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
