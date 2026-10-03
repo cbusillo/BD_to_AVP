@@ -317,6 +317,26 @@ class ProofCatalogTests(unittest.TestCase):
                         text = (REPO_ROOT / source).read_text(encoding="utf-8")
                         self.assertRegex(text, rf"\bdef {re.escape(name)}\(")
 
+    def test_prior_evidence_references_name_committed_records(self) -> None:
+        for case_id, entry in PROOF_CATALOG.items():
+            for key, reference in entry.get("scope", {}).items():
+                if not key.endswith("_evidence"):
+                    continue
+                with self.subTest(case_id=case_id, key=key):
+                    self.assertTrue((REPO_ROOT / reference).is_file())
+
+    def test_prior_network_evidence_proves_a_network_destination(self) -> None:
+        reference = PROOF_CATALOG["network-generated-final-output"]["scope"]["prior_real_network_evidence"]
+        record = json.loads((REPO_ROOT / reference).read_text(encoding="utf-8"))
+        network_cases = [
+            case
+            for case in record["cases"]
+            if case.get("id") == "network-generated-final-output"
+            and case.get("result") == "passed"
+            and case.get("observations", {}).get("network_destination") is True
+        ]
+        self.assertEqual(len(network_cases), 1)
+
 
 class SwiftProofResolutionTests(unittest.TestCase):
     def test_resolves_the_type_enclosing_the_test_method(self) -> None:
