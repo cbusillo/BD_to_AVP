@@ -493,6 +493,21 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
 
                 run_git.assert_not_called()
 
+    def test_push_refuses_url_rewrites_of_the_evidence_repository(self) -> None:
+        for key in ("insteadOf", "pushInsteadOf"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary_directory:
+                subprocess.run(["git", "init", "-q"], cwd=temporary_directory, check=True)
+                subprocess.run(
+                    ["git", "config", f"url.git@github.com:.{key}", "https://github.com/"],
+                    cwd=temporary_directory,
+                    check=True,
+                )
+                with (
+                    patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
+                    self.assertRaisesRegex(QualificationApplySafetyError, "URL rewrite"),
+                ):
+                    _push_commit(Path(temporary_directory), EVIDENCE_REF, "9" * 40)
+
     def test_inherited_git_identity_does_not_change_commit_attribution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory) / "work"

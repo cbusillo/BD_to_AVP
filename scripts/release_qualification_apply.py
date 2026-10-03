@@ -616,8 +616,29 @@ def _authenticated_git_environment() -> dict[str, str]:
     return environment
 
 
+def _require_no_url_rewrite(repo_root: Path, environment: Mapping[str, str]) -> None:
+    # insteadOf/pushInsteadOf could send the push over SSH or elsewhere, bypassing the token credential.
+    rewrites = cast(
+        subprocess.CompletedProcess[str],
+        _run_git(
+            repo_root,
+            ["config", "--get-regexp", r"^url\..*\.(push)?insteadof$"],
+            env=environment,
+        ),
+    )
+    if rewrites.returncode not in {0, 1}:
+        raise QualificationApplyError("Unable to inspect git URL rewrites before the qualification push.")
+    for line in rewrites.stdout.splitlines():
+        _key, _separator, prefix = line.partition(" ")
+        if prefix and HTTPS_REPOSITORY_URL.startswith(prefix):
+            raise QualificationApplySafetyError(
+                "Qualification apply push refuses a git URL rewrite of the evidence repository URL."
+            )
+
+
 def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
     environment = _authenticated_git_environment()
+    _require_no_url_rewrite(repo_root, environment)
     push = cast(
         subprocess.CompletedProcess[str],
         _run_git(
