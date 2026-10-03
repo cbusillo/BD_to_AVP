@@ -307,6 +307,23 @@ Developer ID signing, notarization, or a created release identity.
 `uv run python -m scripts.beta_change_scoped_evidence` produces the document and
 receipts for this lane; see `release-process.md`.
 
+These receipts appear in `release-evidence-v1.json` with
+`source: signed_artifact_receipt` because that is the evidence-source name the
+policy admits for these cases, not because a production-signed artifact was
+tested. The referenced document records `packaged_candidate.signing:
+ad_hoc_local` and `evidence_source_semantics.developer_id_or_notarization_claimed:
+false`; capacity cases record `capacity_readings: controlled_test_fixtures`.
+Do not read one of these receipts as Developer ID, notarization, or
+physical-condition proof. The milestone context check accepts them only for
+release-candidate Tier 2 cases that are not artifact-owned and need no live
+publication. The network case does not rerun a mounted-network conversion; its
+`scope.prior_real_network_evidence` names the RC 3 targeted record, whose
+`network-generated-final-output` case observed a network destination. Documents
+produced before October 2026 name the `v0.3.1` MKV audio record there instead.
+That record holds audio-layout and no-audio regression results from an ad-hoc
+package and is not network-destination proof. Those documents stay unchanged as
+immutable evidence.
+
 Any mutation under `docs/release-evidence/`, any other evidence-index change
 without a validated preparation transition, or any qualification record carrying
 release IDs, run IDs, source SHA, artifact digests, or appcast digest still

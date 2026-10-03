@@ -306,6 +306,19 @@ results tied to their exact receipt file digests.
 all three terminal identity-preservation flags. A failed disposition therefore
 cannot silently be reused for a different source, release, or signed artifact.
 
+### Capture-Only Releases
+
+`v0.3.3-beta.4` is `v2-captured` in `index-v2.json`, with no terminal record.
+Its four milestone cases passed in Milestone Qualification run `35473335450`,
+and the accepted receipts are recorded in
+`docs/qualification/release-evidence-v1.json`. The frozen signed qualification
+record for Beta 5 describes Beta 4 as "reconciled in Release Evidence v2". For
+Beta 4 that means accepted in the v1 evidence index, not `v2-qualified`. A
+terminal record cannot be bound to the merged Beta 4 bundle: its
+`qualification-manifest.json` was regenerated after qualification, and the live
+receipt binds the earlier manifest digest. `v0.3.3-beta.5` had the same gap
+until its terminal record was added from run `35516255552` in October 2026.
+
 ## Compatibility
 
 V1 evidence remains read-only and is reported with explicit historical classes
