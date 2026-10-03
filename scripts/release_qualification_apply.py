@@ -593,9 +593,13 @@ def _create_or_adopt_commit(
 
 
 PUSH_TOKEN_VARIABLE = "BD_TO_AVP_QUALIFICATION_PUSH_TOKEN"
-# Reads the token from the environment so it never appears in git arguments or configuration.
+# Reads the token from the environment so it never appears in git arguments or configuration, and answers only
+# github.com over HTTPS so a proxy or other host asking for credentials never receives it.
 PUSH_CREDENTIAL_HELPER = (
-    f'!f() {{ test "$1" = get || exit 0; echo username=x-access-token; echo "password=${PUSH_TOKEN_VARIABLE}"; }}; f'
+    '!f() { test "$1" = get || exit 0; p=; h=; '
+    'while IFS== read -r k v; do case "$k" in protocol) p=$v;; host) h=$v;; esac; done; '
+    'test "$p" = https && test "$h" = github.com || exit 0; '
+    f'echo username=x-access-token; echo "password=${PUSH_TOKEN_VARIABLE}"; }}; f'
 )
 
 

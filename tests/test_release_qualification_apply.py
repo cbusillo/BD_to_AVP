@@ -432,25 +432,37 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
         arguments = list(run_git.call_args.args[1])
         return arguments[: arguments.index("push")], dict(run_git.call_args.kwargs["env"])
 
-    def test_push_supplies_the_automation_token_and_no_other_credential(self) -> None:
+    def credential_returned(self, request: str) -> str:
         options, environment = self.push_configuration(
             {"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN, "GITHUB_TOKEN": "other-token"}
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             # Ask git for credentials through the exact configuration the push received.
-            credential = subprocess.run(
+            return subprocess.run(
                 ["git", *options, "credential", "fill"],
                 cwd=temporary_directory,
-                input="protocol=https\nhost=github.com\npath=cbusillo/BD_to_AVP.git\n\n",
+                input=request,
                 env={**environment, "GIT_CONFIG_NOSYSTEM": "1", "HOME": temporary_directory},
                 capture_output=True,
                 text=True,
-                check=True,
+                check=False,
             ).stdout
+
+    def test_push_supplies_the_automation_token_and_no_other_credential(self) -> None:
+        credential = self.credential_returned("protocol=https\nhost=github.com\npath=cbusillo/BD_to_AVP.git\n\n")
 
         self.assertIn("username=x-access-token\n", credential)
         self.assertIn(f"password={FIXTURE_TOKEN}\n", credential)
         self.assertNotIn("other-token", credential)
+
+    def test_push_token_is_never_offered_to_another_host_or_proxy(self) -> None:
+        for request in (
+            "protocol=http\nhost=proxy.example:8080\nusername=developer\n\n",
+            "protocol=https\nhost=example.invalid\n\n",
+            "protocol=http\nhost=github.com\n\n",
+        ):
+            with self.subTest(request=request.splitlines()[:2]):
+                self.assertNotIn(FIXTURE_TOKEN, self.credential_returned(request))
 
     def test_push_ignores_configured_authorization_headers(self) -> None:
         options, environment = self.push_configuration({"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN})
