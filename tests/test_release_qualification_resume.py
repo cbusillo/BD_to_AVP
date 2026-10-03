@@ -42,6 +42,8 @@ CANDIDATE_SHA = "c" * 40
 MANIFEST_SHA = "d" * 64
 BASE_SHA = "e" * 40
 RELEASE_TAG = "v1.0.0"
+AUTOMATION_ACTOR = "shiny-code-app[bot]"
+AUTOMATION_ACTOR_ID = 332303085
 EVIDENCE_REF = f"automation/release-evidence-{RELEASE_TAG}"
 RUNS_ENDPOINT = (
     "repos/cbusillo/BD_to_AVP/actions/workflows/milestone-qualification.yml/runs"
@@ -58,12 +60,17 @@ class FakeGitHubAPI:
         self.gets: list[tuple[str, bool]] = []
         self.byte_gets: list[tuple[str, bool, int, float]] = []
         self.posts: list[tuple[str, MappingProxy, bool]] = []
+        self.viewer: object | None = None
+        self.viewer_queries: list[bool] = []
 
-    def set(self, endpoint: str, payload: object, *, active_auth: bool = True) -> None:
+    def set(self, endpoint: str, payload: object, *, active_auth: bool = False) -> None:
         self.responses[(endpoint, active_auth)] = payload
 
-    def set_sequence(self, endpoint: str, payloads: list[object], *, active_auth: bool = True) -> None:
+    def set_sequence(self, endpoint: str, payloads: list[object], *, active_auth: bool = False) -> None:
         self.sequences[(endpoint, active_auth)] = deque(payloads)
+
+    def set_viewer(self, login: str, database_id: int = AUTOMATION_ACTOR_ID) -> None:
+        self.viewer = {"data": {"viewer": {"login": login, "databaseId": database_id}}}
 
     def get_json(self, endpoint: str, *, active_auth: bool = False) -> object:
         key = (endpoint, active_auth)
@@ -84,6 +91,11 @@ class FakeGitHubAPI:
         *,
         active_auth: bool = False,
     ) -> object:
+        if endpoint == "graphql":
+            self.viewer_queries.append(active_auth)
+            if self.viewer is None:
+                raise AssertionError("Unexpected GitHub viewer query.")
+            return self.viewer
         self.posts.append((endpoint, MappingProxy(dict(payload)), active_auth))
         return None
 
@@ -189,6 +201,8 @@ def workflow_run(
     run_attempt: int = 1,
     main_sha: str = MAIN_SHA,
     manifest_sha: str = MANIFEST_SHA,
+    actor: str = AUTOMATION_ACTOR,
+    triggering_actor: str | None = None,
 ) -> dict[str, object]:
     return {
         "id": run_id,
@@ -199,8 +213,8 @@ def workflow_run(
         "event": "workflow_dispatch",
         "head_branch": "main",
         "head_sha": main_sha,
-        "actor": {"login": "cbusillo"},
-        "triggering_actor": {"login": "cbusillo"},
+        "actor": {"login": actor},
+        "triggering_actor": {"login": triggering_actor or actor},
         "status": status,
         "conclusion": conclusion,
         "updated_at": "2026-08-10T12:00:00Z",
@@ -379,7 +393,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertEqual(result.payload["state"], "dispatch_ready")
         self.assertEqual(client.posts, [])
         self.assertTrue(client.gets)
-        self.assertTrue(all(active_auth for _endpoint, active_auth in client.gets))
+        self.assertFalse(any(active_auth for _endpoint, active_auth in client.gets))
         self.assertFalse(checkpoint.exists())
 
     def test_active_exact_run_on_second_page_blocks_apply(self) -> None:
@@ -442,7 +456,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             RUNS_ENDPOINT,
             [{"workflow_runs": []}, {"workflow_runs": [running]}],
         )
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         with tempfile.TemporaryDirectory() as temporary_directory:
             checkpoint = Path(temporary_directory) / "checkpoint.json"
             result = self.run_blocked(
@@ -471,12 +485,13 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             payload,
             {"ref": "main", "inputs": {"candidate_tag": RELEASE_TAG, "manifest_sha256": MANIFEST_SHA}},
         )
-        self.assertTrue(active_auth)
+        self.assertFalse(active_auth)
+        self.assertEqual(client.viewer_queries, [False])
 
     def test_accepted_dispatch_without_visible_run_requires_later_observation(self) -> None:
         client = self.configured_client()
         client.set_sequence(RUNS_ENDPOINT, [{"workflow_runs": []}, {"workflow_runs": []}])
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         with tempfile.TemporaryDirectory() as temporary_directory:
             checkpoint = Path(temporary_directory) / "checkpoint.json"
             result = self.run_blocked(
@@ -516,7 +531,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
 
     def test_dispatch_race_reports_prepared_checkpoint_as_operator_required(self) -> None:
         client = self.configured_client()
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         with tempfile.TemporaryDirectory() as temporary_directory:
             checkpoint = Path(temporary_directory) / "checkpoint.json"
             _write_checkpoint(
@@ -554,7 +569,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             RUNS_ENDPOINT,
             [{"workflow_runs": []}, {"workflow_runs": [running]}],
         )
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         with tempfile.TemporaryDirectory() as temporary_directory:
             checkpoint = Path(temporary_directory) / "checkpoint.json"
             payload = _checkpoint_payload(
@@ -605,7 +620,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             result = self.run_blocked(client, checkpoint)
 
         self.assertEqual(result.payload["state"], "failed")
-        self.assertIn(("repos/cbusillo/BD_to_AVP/actions/runs/101", True), client.gets)
+        self.assertIn(("repos/cbusillo/BD_to_AVP/actions/runs/101", False), client.gets)
 
     def test_checkpoint_self_digest_rejects_tampering(self) -> None:
         client = self.configured_client()
@@ -666,22 +681,56 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertFalse(any("/pulls?" in endpoint for endpoint, _active_auth in client.gets))
         self.assertEqual(client.posts, [])
 
-    def test_wrong_active_identity_fails_before_checkpoint_or_dispatch(self) -> None:
-        client = self.configured_client()
-        client.set(RUNS_ENDPOINT, {"workflow_runs": []})
-        client.set("user", {"login": "shiny-code-bot"}, active_auth=True)
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            checkpoint = Path(temporary_directory) / "checkpoint.json"
-            with self.assertRaisesRegex(QualificationResumeSafetyError, "active GitHub identity"):
-                self.run_blocked(
-                    client,
-                    checkpoint,
-                    expected_main_sha=MAIN_SHA,
-                    expected_manifest_sha256=MANIFEST_SHA,
-                )
-            self.assertFalse(checkpoint.exists())
+    def test_non_automation_identity_fails_before_checkpoint_or_dispatch(self) -> None:
+        for login in ("cbusillo", "shiny-code-bot"):
+            with self.subTest(login=login):
+                client = self.configured_client()
+                client.set(RUNS_ENDPOINT, {"workflow_runs": []})
+                client.set_viewer(login, 1)
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    checkpoint = Path(temporary_directory) / "checkpoint.json"
+                    with self.assertRaisesRegex(QualificationResumeSafetyError, "automation GitHub identity"):
+                        self.run_blocked(
+                            client,
+                            checkpoint,
+                            expected_main_sha=MAIN_SHA,
+                            expected_manifest_sha256=MANIFEST_SHA,
+                        )
+                    self.assertFalse(checkpoint.exists())
 
+                self.assertEqual(client.posts, [])
+
+    def test_owner_dispatched_run_remains_observable(self) -> None:
+        client = self.configured_client()
+        running = workflow_run(101, status="in_progress", conclusion=None, actor="cbusillo")
+        client.set(RUNS_ENDPOINT, {"workflow_runs": [running]})
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
+
+        self.assertEqual(result.payload["state"], "running")
         self.assertEqual(client.posts, [])
+
+    def test_run_from_unapproved_actor_is_not_adopted(self) -> None:
+        for actor, triggering_actor in (
+            ("other-writer", None),
+            ("other-writer", AUTOMATION_ACTOR),
+            (AUTOMATION_ACTOR, "other-writer"),
+        ):
+            with self.subTest(actor=actor, triggering_actor=triggering_actor):
+                client = self.configured_client()
+                foreign = workflow_run(
+                    101,
+                    status="in_progress",
+                    conclusion=None,
+                    actor=actor,
+                    triggering_actor=triggering_actor,
+                )
+                client.set(RUNS_ENDPOINT, {"workflow_runs": [foreign]})
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    result = self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
+
+                self.assertEqual(result.payload["state"], "dispatch_ready")
+                self.assertEqual(client.posts, [])
 
     def test_failed_run_requires_exact_retry_run_id(self) -> None:
         client = self.configured_client()
@@ -703,7 +752,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             RUNS_ENDPOINT,
             [{"workflow_runs": [failed]}, {"workflow_runs": [running, failed]}],
         )
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         with tempfile.TemporaryDirectory() as temporary_directory:
             result = self.run_blocked(
                 client,
@@ -800,7 +849,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             ],
         )
         client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", failed)
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         old_manifest = manifest()
         old_manifest["manifest_sha256"] = old_manifest_sha
         old_manifest["runner_sha"] = old_main_sha
@@ -893,7 +942,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
                 ],
             )
             client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", successful)
-            client.set("user", {"login": "cbusillo"}, active_auth=True)
+            client.set_viewer(AUTOMATION_ACTOR)
             with (
                 patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
                 patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
@@ -935,7 +984,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
                 ],
             )
             client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", successful)
-            client.set("user", {"login": "cbusillo"}, active_auth=True)
+            client.set_viewer(AUTOMATION_ACTOR)
             with (
                 patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
                 patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
@@ -970,7 +1019,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             changed["conclusion"] = "failure"
             client.set_sequence(RUNS_ENDPOINT, [{"workflow_runs": [successful]}, {"workflow_runs": [successful]}])
             client.set_sequence("repos/cbusillo/BD_to_AVP/actions/runs/101", [successful, changed])
-            client.set("user", {"login": "cbusillo"}, active_auth=True)
+            client.set_viewer(AUTOMATION_ACTOR)
             with (
                 patch("scripts.release_qualification_resume._git", return_value=Mock(returncode=0)),
                 patch("scripts.release_qualification_resume._manifest_at_revision", return_value=old_manifest),
@@ -1022,7 +1071,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             ],
         )
         client.set("repos/cbusillo/BD_to_AVP/actions/runs/101", failed)
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         old_manifest = manifest()
         old_manifest["manifest_sha256"] = old_manifest_sha
         old_manifest["runner_sha"] = old_main_sha
@@ -1129,7 +1178,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         client = self.configured_client()
         client.set(RUNS_ENDPOINT, {"workflow_runs": [failed]})
         client.set_sequence("repos/cbusillo/BD_to_AVP/actions/runs/101", [failed, rerun])
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         old_manifest = manifest()
         old_manifest["manifest_sha256"] = old_manifest_sha
         old_manifest["runner_sha"] = old_main_sha
@@ -1455,7 +1504,7 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             [{"object": {"sha": MAIN_SHA}}, {"object": {"sha": "f" * 40}}],
         )
         client.set(RUNS_ENDPOINT, {"workflow_runs": []})
-        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        client.set_viewer(AUTOMATION_ACTOR)
         with tempfile.TemporaryDirectory() as temporary_directory:
             checkpoint = Path(temporary_directory) / "checkpoint.json"
             with self.assertRaisesRegex(QualificationResumeSafetyError, "Protected main moved"):

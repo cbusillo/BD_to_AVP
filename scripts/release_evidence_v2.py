@@ -35,7 +35,7 @@ from scripts.release_qualification_manifest import (
     load_validated_manifest,
     manifest_sha256,
 )
-from scripts.release_workflow_policy import RECEIPT_ACTORS
+from scripts.release_workflow_policy import RECEIPT_ACTORS, REQUIRED_ACTOR
 from scripts.signed_artifact_receipt import (
     MAX_RECEIPT_BYTES,
     PROFILE_CASE_ID,
@@ -61,7 +61,8 @@ QUALIFICATION_RECORD_NAME = "qualification-record.json"
 QUALIFICATION_MANIFEST_NAME = "qualification-manifest.json"
 LIVE_QUALIFICATION_NAME = "live-qualification-v1.json"
 SCHEMA_VERSION = 2
-EXPECTED_MILESTONE_ACTOR = EXPECTED_REPOSITORY.partition("/")[0]
+# The automation identity runs Milestone Qualification; earlier evidence was recorded under the owner's account.
+MILESTONE_ACTORS = frozenset({EXPECTED_REPOSITORY.partition("/")[0], REQUIRED_ACTOR})
 EVIDENCE_WORKFLOW_PATH = ".github/workflows/release-evidence.yml"
 MILESTONE_WORKFLOW_PATH = ".github/workflows/milestone-qualification.yml"
 SOURCE_INPUT_PATHS = {
@@ -1807,8 +1808,8 @@ def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], ca
         "qualification-v2 successful milestone",
         expected_path=MILESTONE_WORKFLOW_PATH,
     )
-    if milestone_workflow.actor != EXPECTED_MILESTONE_ACTOR:
-        raise ReleaseEvidenceV2Error("qualification-v2 milestone actor is not the repository owner.")
+    if milestone_workflow.actor not in MILESTONE_ACTORS:
+        raise ReleaseEvidenceV2Error("qualification-v2 milestone actor is not an approved qualification actor.")
     artifact = _mapping(record.get("artifact"), "qualification-v2 artifact")
     _exact_keys(
         artifact,
@@ -1962,8 +1963,8 @@ def _validate_disposition(reader: _BundleReader, record: Mapping[str, Any], capt
         "disposition-v2 failed workflow",
         expected_path=MILESTONE_WORKFLOW_PATH,
     )
-    if workflow.actor != EXPECTED_MILESTONE_ACTOR:
-        raise ReleaseEvidenceV2Error("disposition-v2 failed workflow actor is not the repository owner.")
+    if workflow.actor not in MILESTONE_ACTORS:
+        raise ReleaseEvidenceV2Error("disposition-v2 failed workflow actor is not an approved qualification actor.")
     failure = _mapping(record.get("failure"), "disposition-v2 failure")
     _exact_keys(failure, frozenset({"code", "expected", "observed", "subject"}), "disposition-v2 failure")
     _identifier(failure.get("code"), "disposition-v2 failure code")

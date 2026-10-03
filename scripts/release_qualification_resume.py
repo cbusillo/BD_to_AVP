@@ -42,10 +42,16 @@ from scripts.release_qualification_status import (
     resolve_evidence_binding,
 )
 from scripts.release_qualification_manifest import ReleaseQualificationManifestError, manifest_sha256
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 
 
 REPOSITORY = "cbusillo/BD_to_AVP"
 REPOSITORY_OWNER = "cbusillo"
+AUTOMATION_ACTOR = REQUIRED_ACTOR
+# Runs dispatched before the automation path existed used the owner's account; observing them stays supported.
+# Only AUTOMATION_ACTOR may dispatch, commit, or push.
+QUALIFICATION_RUN_ACTORS = frozenset({AUTOMATION_ACTOR, REPOSITORY_OWNER})
+VIEWER_QUERY = "query { viewer { login databaseId } }"
 MAIN_BRANCH = "main"
 WORKFLOW_FILE = "milestone-qualification.yml"
 WORKFLOW_NAME = "Milestone Qualification"
@@ -512,7 +518,7 @@ def _workflow_dispatch_endpoint() -> str:
 
 def _ref_sha(client: GitHubAPI, branch: str) -> str:
     reference = _mapping(
-        client.get_json(_ref_endpoint(branch), active_auth=True),
+        client.get_json(_ref_endpoint(branch)),
         f"GitHub branch {branch}",
     )
     return _sha(_mapping(reference.get("object"), f"GitHub branch {branch} object").get("sha"), f"GitHub {branch} SHA")
@@ -520,7 +526,7 @@ def _ref_sha(client: GitHubAPI, branch: str) -> str:
 
 def _validate_repository(client: GitHubAPI) -> None:
     repository = _mapping(
-        client.get_json(f"repos/{REPOSITORY}", active_auth=True),
+        client.get_json(f"repos/{REPOSITORY}"),
         "GitHub repository",
     )
     if repository.get("full_name") != REPOSITORY:
@@ -624,7 +630,7 @@ def _workflow_runs(client: GitHubAPI, identity: ResumeIdentity) -> tuple[list[Ma
     runs: list[Mapping[str, Any]] = []
     for page in range(1, MAX_WORKFLOW_RUN_PAGES + 1):
         payload = _mapping(
-            client.get_json(_workflow_runs_endpoint(page), active_auth=True),
+            client.get_json(_workflow_runs_endpoint(page)),
             "Milestone Qualification workflow runs",
         )
         page_runs = [
@@ -655,9 +661,9 @@ def _run_matches(run: Mapping[str, Any], identity: ResumeIdentity) -> bool:
         and run.get("head_branch") == MAIN_BRANCH
         and run.get("head_sha") == identity.runner_sha
         and isinstance(actor, Mapping)
-        and actor.get("login") == REPOSITORY_OWNER
+        and actor.get("login") in QUALIFICATION_RUN_ACTORS
         and isinstance(triggering_actor, Mapping)
-        and triggering_actor.get("login") == REPOSITORY_OWNER
+        and triggering_actor.get("login") in QUALIFICATION_RUN_ACTORS
         and isinstance(run.get("id"), int)
         and not isinstance(run.get("id"), bool)
     )
@@ -681,7 +687,7 @@ def _run_identity(run: Mapping[str, Any], identity: ResumeIdentity) -> dict[str,
 
 def _workflow_run(client: GitHubAPI, run_id: int, identity: ResumeIdentity) -> Mapping[str, Any]:
     run = _mapping(
-        client.get_json(f"repos/{REPOSITORY}/actions/runs/{run_id}", active_auth=True),
+        client.get_json(f"repos/{REPOSITORY}/actions/runs/{run_id}"),
         "Milestone Qualification workflow run",
     )
     _run_identity(run, identity)
@@ -692,7 +698,6 @@ def _run_jobs_succeeded(client: GitHubAPI, run_id: int) -> bool:
     payload = _mapping(
         client.get_json(
             f"repos/{REPOSITORY}/actions/runs/{run_id}/jobs?per_page=100",
-            active_auth=True,
         ),
         "workflow jobs",
     )
@@ -714,7 +719,6 @@ def _artifact_state(client: GitHubAPI, identity: ResumeIdentity, run: Mapping[st
     payload = _mapping(
         client.get_json(
             f"repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100",
-            active_auth=True,
         ),
         "run artifacts",
     )
@@ -827,21 +831,25 @@ def _validate_expected_mutation(
     return True
 
 
-def _require_mutation_actor(client: GitHubAPI) -> tuple[str, int]:
-    user = _mapping(client.get_json("user", active_auth=True), "active GitHub user")
-    if user.get("login") != REPOSITORY_OWNER:
+def _automation_actor(client: GitHubAPI, description: str) -> tuple[str, int]:
+    # GraphQL viewer identifies GitHub App installation tokens, which cannot read /user.
+    response = _mapping(client.post_json("graphql", {"query": VIEWER_QUERY}), "GitHub viewer response")
+    data = _mapping(response.get("data"), "GitHub viewer data")
+    viewer = _mapping(data.get("viewer"), "GitHub viewer")
+    if viewer.get("login") != AUTOMATION_ACTOR:
         raise QualificationResumeSafetyError(
-            f"Qualification mutation requires active GitHub identity {REPOSITORY_OWNER!r}."
+            f"{description} requires the automation GitHub identity {AUTOMATION_ACTOR!r}; "
+            "provide its installation token through GH_TOKEN."
         )
-    return REPOSITORY_OWNER, _integer(user.get("id"), "active GitHub user ID")
+    return AUTOMATION_ACTOR, _integer(viewer.get("databaseId"), "automation GitHub user ID")
+
+
+def _require_mutation_actor(client: GitHubAPI) -> tuple[str, int]:
+    return _automation_actor(client, "Qualification mutation")
 
 
 def _require_dispatch_actor(client: GitHubAPI) -> None:
-    user = _mapping(client.get_json("user", active_auth=True), "active GitHub user")
-    if user.get("login") != REPOSITORY_OWNER:
-        raise QualificationResumeSafetyError(
-            f"Milestone Qualification dispatch requires active GitHub identity {REPOSITORY_OWNER!r}."
-        )
+    _automation_actor(client, "Milestone Qualification dispatch")
 
 
 def _revalidate_remote_identity(
@@ -1005,7 +1013,7 @@ def _dispatch_locked(
             "manifest_sha256": identity.manifest_sha256,
         },
     }
-    client.post_json(_workflow_dispatch_endpoint(), dispatch_payload, active_auth=True)
+    client.post_json(_workflow_dispatch_endpoint(), dispatch_payload)
     for attempt in range(max(1, poll_attempts)):
         matches, _high_water = _workflow_runs(client, identity)
         new_matches = [run for run in matches if cast(int, run["id"]) > high_water_run_id]

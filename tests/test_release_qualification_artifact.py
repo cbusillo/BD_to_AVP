@@ -914,7 +914,7 @@ class ReleaseQualificationArtifactTests(unittest.TestCase):
             [
                 (
                     f"repos/cbusillo/BD_to_AVP/actions/artifacts/{ARTIFACT_ID}/zip",
-                    True,
+                    False,
                     MAX_ARCHIVE_BYTES,
                     300.0,
                 )

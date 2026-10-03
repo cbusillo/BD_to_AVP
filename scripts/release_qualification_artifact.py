@@ -1188,7 +1188,7 @@ def download_reconciliation_bundle(
     run_attempt = _integer(run.get("run_attempt"), "workflow run attempt")
     expected_name = f"milestone-qualification-{identity.release_tag}-{run_attempt}"
     metadata = _mapping(
-        client.get_json(f"repos/{REPOSITORY}/actions/artifacts/{artifact_id}", active_auth=True),
+        client.get_json(f"repos/{REPOSITORY}/actions/artifacts/{artifact_id}"),
         "Milestone Qualification artifact metadata",
     )
     workflow_run = _mapping(metadata.get("workflow_run"), "Milestone Qualification artifact workflow run")
@@ -1209,7 +1209,6 @@ def download_reconciliation_bundle(
         )
     archive_bytes = client.get_bytes(
         f"repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip",
-        active_auth=True,
         max_bytes=MAX_ARCHIVE_BYTES,
         timeout_seconds=300.0,
     )

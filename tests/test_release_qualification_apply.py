@@ -27,7 +27,9 @@ from scripts.release_qualification_resume import ResumeIdentity
 
 RELEASE_TAG = "v1.0.0"
 EVIDENCE_REF = f"automation/release-evidence-{RELEASE_TAG}"
-ACTOR_ID = 1_875_516
+ACTOR_LOGIN = "shiny-code-app[bot]"
+ACTOR_ID = 332_303_085
+FIXTURE_TOKEN = "fixture-automation-token"
 
 
 class ApplyFixture:
@@ -148,12 +150,14 @@ class ApplyFixture:
 
     @staticmethod
     def require_actor() -> tuple[str, int]:
-        return "cbusillo", ACTOR_ID
+        return ACTOR_LOGIN, ACTOR_ID
 
     def start(self):
         with (
             patch("scripts.release_qualification_apply._validate_origin"),
             patch("scripts.release_qualification_apply.HTTPS_REPOSITORY_URL", str(self.remote)),
+            patch("scripts.release_qualification_apply.PUSH_PROTOCOL", "file"),
+            patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
         ):
             return start_reconciliation_apply(
                 repo_root=self.root,
@@ -171,6 +175,8 @@ class ApplyFixture:
         with (
             patch("scripts.release_qualification_apply._validate_origin"),
             patch("scripts.release_qualification_apply.HTTPS_REPOSITORY_URL", str(self.remote)),
+            patch("scripts.release_qualification_apply.PUSH_PROTOCOL", "file"),
+            patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
         ):
             return continue_reconciliation_apply(
                 repo_root=self.root,
@@ -385,12 +391,12 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
             subprocess.run(["git", "add", "--", *(file.path for file in fixture.files)], cwd=root, check=True)
             tree_sha = fixture.git("write-tree")
             environment = dict(os.environ)
-            expected_email = f"{ACTOR_ID}+cbusillo@users.noreply.github.com"
+            expected_email = f"{ACTOR_ID}+{ACTOR_LOGIN}@users.noreply.github.com"
             environment.update(
                 {
-                    "GIT_AUTHOR_NAME": "cbusillo",
+                    "GIT_AUTHOR_NAME": ACTOR_LOGIN,
                     "GIT_AUTHOR_EMAIL": expected_email,
-                    "GIT_COMMITTER_NAME": "cbusillo",
+                    "GIT_COMMITTER_NAME": ACTOR_LOGIN,
                     "GIT_COMMITTER_EMAIL": expected_email,
                 }
             )
@@ -412,24 +418,208 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
                     base_sha=fixture.base_sha,
                     plan=fixture.bundle.plan,
                     files={file.path: file.content for file in fixture.files},
-                    actor_login="cbusillo",
+                    actor_login=ACTOR_LOGIN,
                     actor_id=ACTOR_ID,
                 )
 
-    def test_push_uses_active_gh_credential_without_token_environment(self) -> None:
+    def push_configuration(self, environment: dict[str, str]) -> tuple[list[str], dict[str, str]]:
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
         with (
             patch("scripts.release_qualification_apply._run_git", return_value=completed) as run_git,
-            patch.dict(os.environ, {"GH_TOKEN": "wrong-token", "GITHUB_TOKEN": "wrong-token"}),
+            patch.dict(os.environ, environment, clear=True),
         ):
             _push_commit(Path("/tmp/repo"), EVIDENCE_REF, "9" * 40)
+        arguments = list(run_git.call_args.args[1])
+        return arguments[: arguments.index("push")], dict(run_git.call_args.kwargs["env"])
 
-        arguments = run_git.call_args.args[1]
-        environment = run_git.call_args.kwargs["env"]
-        self.assertIn("credential.helper=!gh auth git-credential", arguments)
-        self.assertIn("https://github.com/cbusillo/BD_to_AVP.git", arguments)
-        self.assertNotIn("GH_TOKEN", environment)
-        self.assertNotIn("GITHUB_TOKEN", environment)
+    def credential_returned(self, request: str) -> str:
+        options, environment = self.push_configuration(
+            {"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN, "GITHUB_TOKEN": "other-token"}
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            # Ask git for credentials through the exact configuration the push received.
+            return subprocess.run(
+                ["git", *options, "credential", "fill"],
+                cwd=temporary_directory,
+                input=request,
+                env={**environment, "GIT_CONFIG_NOSYSTEM": "1", "HOME": temporary_directory},
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+
+    def test_push_supplies_the_automation_token_and_no_other_credential(self) -> None:
+        credential = self.credential_returned("protocol=https\nhost=github.com\npath=cbusillo/BD_to_AVP.git\n\n")
+
+        self.assertIn("username=x-access-token\n", credential)
+        self.assertIn(f"password={FIXTURE_TOKEN}\n", credential)
+        self.assertNotIn("other-token", credential)
+
+    def test_push_token_is_never_offered_to_another_host_or_proxy(self) -> None:
+        for request in (
+            "protocol=http\nhost=proxy.example:8080\nusername=developer\n\n",
+            "protocol=https\nhost=example.invalid\n\n",
+            "protocol=http\nhost=github.com\n\n",
+        ):
+            with self.subTest(request=request.splitlines()[:2]):
+                self.assertNotIn(FIXTURE_TOKEN, self.credential_returned(request))
+
+    def test_push_ignores_configured_authorization_headers(self) -> None:
+        options, environment = self.push_configuration({"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN})
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            subprocess.run(["git", "init", "-q"], cwd=temporary_directory, check=True)
+            for url in ("https://github.com/", "https://github.com/cbusillo/BD_to_AVP.git"):
+                subprocess.run(
+                    ["git", "config", f"http.{url}.extraHeader", "AUTHORIZATION: basic fixture"],
+                    cwd=temporary_directory,
+                    check=True,
+                )
+            headers = subprocess.run(
+                [
+                    "git",
+                    *options,
+                    "config",
+                    "--get-urlmatch",
+                    "http.extraHeader",
+                    "https://github.com/cbusillo/BD_to_AVP.git",
+                ],
+                cwd=temporary_directory,
+                env={**environment, "GIT_CONFIG_NOSYSTEM": "1", "HOME": temporary_directory},
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+
+        self.assertNotIn("fixture", headers)
+
+    def test_push_without_automation_token_fails_closed(self) -> None:
+        for environment in (
+            {},
+            {"GH_TOKEN": "", "CODEX_GITHUB_TOKEN": "other-token", "GITHUB_TOKEN": "other-token"},
+        ):
+            with self.subTest(environment=sorted(environment)):
+                with (
+                    patch("scripts.release_qualification_apply._run_git") as run_git,
+                    patch.dict(os.environ, {"PATH": os.environ["PATH"], **environment}, clear=True),
+                ):
+                    with self.assertRaisesRegex(QualificationApplySafetyError, "automation GitHub token"):
+                        _push_commit(Path("/tmp/repo"), EVIDENCE_REF, "9" * 40)
+
+                run_git.assert_not_called()
+
+    def test_push_refuses_url_rewrites_of_the_evidence_repository(self) -> None:
+        for key in ("insteadOf", "pushInsteadOf"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary_directory:
+                subprocess.run(["git", "init", "-q"], cwd=temporary_directory, check=True)
+                subprocess.run(
+                    ["git", "config", f"url.git@github.com:.{key}", "https://github.com/"],
+                    cwd=temporary_directory,
+                    check=True,
+                )
+                with (
+                    patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
+                    self.assertRaisesRegex(QualificationApplySafetyError, "URL rewrite"),
+                ):
+                    _push_commit(Path(temporary_directory), EVIDENCE_REF, "9" * 40)
+
+    def test_push_refuses_a_rewrite_with_an_empty_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            subprocess.run(["git", "init", "-q"], cwd=temporary_directory, check=True)
+            subprocess.run(
+                ["git", "config", "url.ssh://git@example.invalid/.pushInsteadOf", ""],
+                cwd=temporary_directory,
+                check=True,
+            )
+            with (
+                patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
+                self.assertRaisesRegex(QualificationApplySafetyError, "URL rewrite"),
+            ):
+                _push_commit(Path(temporary_directory), EVIDENCE_REF, "9" * 40)
+
+    def test_push_allows_only_https_transport(self) -> None:
+        options, environment = self.push_configuration({"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN})
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = subprocess.run(
+                ["git", *options, "ls-remote", "ssh://git@example.invalid/cbusillo/BD_to_AVP.git"],
+                cwd=temporary_directory,
+                env={**environment, "HOME": temporary_directory},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not allowed", result.stderr)
+
+    def test_push_ignores_personal_git_netrc_and_tls_configuration(self) -> None:
+        caller_home = os.environ["HOME"]
+        _options, environment = self.push_configuration(
+            {
+                "PATH": os.environ["PATH"],
+                "HOME": caller_home,
+                "GH_TOKEN": FIXTURE_TOKEN,
+                "NETRC": f"{caller_home}/.netrc",
+                "GIT_SSL_NO_VERIFY": "1",
+                "GIT_CONFIG_GLOBAL": f"{caller_home}/.gitconfig",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "credential.helper",
+                "GIT_CONFIG_VALUE_0": "store",
+            }
+        )
+
+        self.assertNotEqual(environment["HOME"], caller_home)
+        for name in ("NETRC", "GIT_SSL_NO_VERIFY", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GH_TOKEN"):
+            self.assertNotIn(name, environment)
+
+    def test_push_verifies_tls_despite_repository_configuration(self) -> None:
+        options, environment = self.push_configuration({"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN})
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            subprocess.run(["git", "init", "-q"], cwd=temporary_directory, check=True)
+            for url in ("https://github.com/", "https://github.com/cbusillo/BD_to_AVP.git"):
+                subprocess.run(
+                    ["git", "config", f"http.{url}.sslVerify", "false"],
+                    cwd=temporary_directory,
+                    check=True,
+                )
+            ssl_verify = subprocess.run(
+                [
+                    "git",
+                    *options,
+                    "config",
+                    "--type=bool",
+                    "--get-urlmatch",
+                    "http.sslVerify",
+                    "https://github.com/cbusillo/BD_to_AVP.git",
+                ],
+                cwd=temporary_directory,
+                env={**environment, "HOME": temporary_directory},
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+        self.assertEqual(ssl_verify, "true")
+
+    def test_inherited_git_identity_does_not_change_commit_attribution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "work"
+            root.mkdir()
+            fixture = ApplyFixture(root)
+            inherited = {
+                "GIT_AUTHOR_NAME": "Someone Else",
+                "GIT_AUTHOR_EMAIL": "someone@example.invalid",
+                "GIT_COMMITTER_NAME": "Someone Else",
+                "GIT_COMMITTER_EMAIL": "someone@example.invalid",
+            }
+            with patch.dict(os.environ, inherited):
+                outcome = fixture.start()
+
+            self.assertEqual(outcome.state, "reconciliation_applied")
+            self.assertEqual(
+                fixture.git("show", "-s", "--format=%an <%ae> %cn <%ce>", outcome.commit_sha),
+                f"{ACTOR_LOGIN} <{ACTOR_ID}+{ACTOR_LOGIN}@users.noreply.github.com> "
+                f"{ACTOR_LOGIN} <{ACTOR_ID}+{ACTOR_LOGIN}@users.noreply.github.com>",
+            )
 
 
 if __name__ == "__main__":

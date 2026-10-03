@@ -17,6 +17,7 @@ from scripts.release_qualification_artifact import ReconciliationBundle
 
 
 HTTPS_REPOSITORY_URL = "https://github.com/cbusillo/BD_to_AVP.git"
+PUSH_PROTOCOL = "https"
 APPLY_CHECKPOINT_TYPE = "bd_to_avp.release_qualification_apply_checkpoint"
 APPLY_SCHEMA_VERSION = 2
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -565,6 +566,13 @@ def _create_or_adopt_commit(
                 "--",
                 *paths,
             ],
+            env={
+                **os.environ,
+                "GIT_AUTHOR_NAME": actor_login,
+                "GIT_AUTHOR_EMAIL": expected_email,
+                "GIT_COMMITTER_NAME": actor_login,
+                "GIT_COMMITTER_EMAIL": expected_email,
+            },
         ),
     )
     if commit.returncode != 0:
@@ -584,39 +592,110 @@ def _create_or_adopt_commit(
     return commit_sha
 
 
-def _authenticated_git_environment() -> dict[str, str]:
-    environment = dict(os.environ)
-    for name in (
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "CODEX_GITHUB_TOKEN",
-        "GH_ENTERPRISE_TOKEN",
-        "GITHUB_ENTERPRISE_TOKEN",
-        "GH_HOST",
-        "GH_REPO",
-    ):
-        environment.pop(name, None)
-    environment["GIT_TERMINAL_PROMPT"] = "0"
+PUSH_TOKEN_VARIABLE = "BD_TO_AVP_QUALIFICATION_PUSH_TOKEN"
+# Reads the token from the environment so it never appears in git arguments or configuration, and answers only
+# github.com over HTTPS so a proxy or other host asking for credentials never receives it.
+PUSH_CREDENTIAL_HELPER = (
+    '!f() { test "$1" = get || exit 0; p=; h=; '
+    'while IFS== read -r k v; do case "$k" in protocol) p=$v;; host) h=$v;; esac; done; '
+    'test "$p" = https && test "$h" = github.com || exit 0; '
+    f'echo username=x-access-token; echo "password=${PUSH_TOKEN_VARIABLE}"; }}; f'
+)
+
+
+def _automation_token() -> str:
+    # A non-empty GH_TOKEN is the credential gh uses for the verified API identity, so the push uses the same one.
+    token = os.environ.get("GH_TOKEN")
+    if not token:
+        raise QualificationApplySafetyError(
+            "Qualification apply push requires the automation GitHub token in GH_TOKEN; "
+            "it never falls back to another credential."
+        )
+    return token
+
+
+# Only these are inherited, so NETRC, TLS overrides, and global, system, or injected git config cannot reach the push.
+PUSH_INHERITED_ENVIRONMENT = (
+    "PATH",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+)
+
+
+def _authenticated_git_environment(home: Path) -> dict[str, str]:
+    environment = {name: os.environ[name] for name in PUSH_INHERITED_ENVIRONMENT if name in os.environ}
+    environment.update(
+        {
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            PUSH_TOKEN_VARIABLE: _automation_token(),
+        }
+    )
     return environment
 
 
-def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
-    push = cast(
+def _require_no_url_rewrite(repo_root: Path, environment: Mapping[str, str]) -> None:
+    # insteadOf/pushInsteadOf could send the push elsewhere; an empty prefix rewrites every URL.
+    rewrites = cast(
         subprocess.CompletedProcess[str],
         _run_git(
             repo_root,
-            [
-                "-c",
-                "credential.helper=",
-                "-c",
-                "credential.helper=!gh auth git-credential",
-                "push",
-                HTTPS_REPOSITORY_URL,
-                f"{commit_sha}:refs/heads/{evidence_ref}",
-            ],
-            env=_authenticated_git_environment(),
+            ["config", "--get-regexp", r"^url\..*\.(push)?insteadof$"],
+            env=environment,
         ),
     )
+    if rewrites.returncode not in {0, 1}:
+        raise QualificationApplyError("Unable to inspect git URL rewrites before the qualification push.")
+    for line in rewrites.stdout.splitlines():
+        _key, _separator, prefix = line.partition(" ")
+        if HTTPS_REPOSITORY_URL.startswith(prefix):
+            raise QualificationApplySafetyError(
+                "Qualification apply push refuses a git URL rewrite of the evidence repository URL."
+            )
+
+
+def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
+    with tempfile.TemporaryDirectory() as home:
+        environment = _authenticated_git_environment(Path(home))
+        _require_no_url_rewrite(repo_root, environment)
+        push = cast(
+            subprocess.CompletedProcess[str],
+            _run_git(
+                repo_root,
+                [
+                    "-c",
+                    "protocol.allow=never",
+                    "-c",
+                    f"protocol.{PUSH_PROTOCOL}.allow=always",
+                    "-c",
+                    "credential.helper=",
+                    "-c",
+                    f"credential.helper={PUSH_CREDENTIAL_HELPER}",
+                    "-c",
+                    "http.https://github.com/.extraHeader=",
+                    "-c",
+                    f"http.{HTTPS_REPOSITORY_URL}.extraHeader=",
+                    "-c",
+                    "http.sslVerify=true",
+                    "-c",
+                    "http.https://github.com/.sslVerify=true",
+                    "-c",
+                    f"http.{HTTPS_REPOSITORY_URL}.sslVerify=true",
+                    "push",
+                    HTTPS_REPOSITORY_URL,
+                    f"{commit_sha}:refs/heads/{evidence_ref}",
+                ],
+                env=environment,
+            ),
+        )
     if push.returncode != 0:
         raise QualificationApplyError("Unable to push the qualification reconciliation commit.")
 
