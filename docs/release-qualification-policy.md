@@ -582,7 +582,8 @@ evidence ref, the `shiny-code-app[bot]` identity, and the absence of an active e
 Milestone Qualification run. It writes only the planned qualification receipts
 and append-only evidence index, creates one commit authored and committed as
 `shiny-code-app[bot]` with its noreply address, performs a non-force
-fast-forward push with the same token and no other credential helper, and revalidates the exact remote commit and content.
+fast-forward HTTPS push with the same token from an isolated git configuration
+(no personal git config, credential helper, `.netrc`, or URL rewrite), and revalidates the exact remote commit and content.
 Prepared, files-written, committed, and pushed states are adopted after
 interruption rather than repeated. Conflicting local content, unrelated
 worktree changes, moved refs, or a non-fast-forward push fail closed. Once the
