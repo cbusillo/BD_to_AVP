@@ -1,6 +1,6 @@
 import signal
 
-from bd_to_avp.modules.process import start_process
+from bd_to_avp.modules.process import CLIBatchProcessingError, start_process
 from bd_to_avp.modules.config import config
 from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr
 
@@ -35,7 +35,10 @@ def main() -> None:
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         _start_gui()
     else:
-        start_process()
+        try:
+            start_process(cli_batch=True)
+        except CLIBatchProcessingError as error:
+            raise SystemExit(str(error)) from None
 
 
 if __name__ == "__main__":

@@ -71,9 +71,9 @@ making a second release-note request. A full-release link remains available for
 downloads and extended context, and historical external-link items remain valid.
 Published cumulative production history includes Stable `0.3.3` build `177`;
 its snapshot and verification are recorded in [the cut packet](0.3.3-cut-packet.md).
-Failed Beta 9 build `154` and abandoned Beta 12 metadata build `157` never
-entered the feed. RC 3 is an immutable `rc`-channel item and remains excluded
-from Stable.
+Failed Beta 9 build `154` never entered the feed; published Beta 12 build
+`157` is a `beta`-channel item. RC 3 is an immutable `rc`-channel item and
+remains excluded from Stable.
 See [release-process.md](release-process.md) for the operator sequence.
 
 Stable `0.2.143` remains compatible with macOS 14. The production SwiftUI line
@@ -267,10 +267,9 @@ select Beta or Alpha for future prereleases. Retired `v0.3.0-beta.1` and
 `v0.3.0-beta.2` Preview identities remain separate, immutable, and unable to
 Sparkle-upgrade into Beta 3.
 
-Published `v0.3.0-beta.11` (`0.3.0b11`, build `156`) is the immutable head of
-the Beta lineage above Beta 10 and Beta 8 through Beta 3. Failed Beta 9
-build `154` and abandoned Beta 12 metadata build `157` are omitted from public
-history. Published `v0.3.0-rc.1` (`0.3.0rc1`, build `158`),
+Published `v0.3.0-beta.12` (`0.3.0b12`, build `157`) is the immutable head of
+the `0.3.0` Beta lineage above Beta 11, Beta 10, and Beta 8 through Beta 3.
+Failed Beta 9 build `154` is omitted from public history. Published `v0.3.0-rc.1` (`0.3.0rc1`, build `158`),
 `v0.3.0-rc.2` (`0.3.0rc2`, build `159`), and `v0.3.0-rc.3`
 (`0.3.0rc3`, build `160`) are immutable; RC 3 was the head of that RC lineage. RC 3 is
 excluded from Stable and admitted on RC, Beta, and Alpha. Its updater path and

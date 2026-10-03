@@ -17,7 +17,7 @@ history, [the Beta 9 cut packet](0.3.0-beta.9-cut-packet.md) records the failed
 unpublished attempt, [the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md)
 records immutable publication history, [the Beta 11 cut packet](0.3.0-beta.11-cut-packet.md)
 records historical preparation, [the Beta 12 cut packet](0.3.0-beta.12-cut-packet.md)
-records abandoned Beta metadata, [the RC 1 cut packet](0.3.0-rc.1-cut-packet.md)
+records immutable publication and corrects the earlier abandoned-metadata claim, [the RC 1 cut packet](0.3.0-rc.1-cut-packet.md)
 records immutable publication, [the RC 2 cut packet](0.3.0-rc.2-cut-packet.md)
 records immutable publication, and [the RC 3 cut packet](0.3.0-rc.3-cut-packet.md)
 records immutable publication plus its targeted qualification result. Stable

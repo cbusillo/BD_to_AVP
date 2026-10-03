@@ -6,10 +6,12 @@ closed when it cannot satisfy this contract.
 
 The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded release entrypoints implement
-this four-route contract. Beta 3 through Beta 8, Beta 10, and Beta 11 are
-published and immutable at builds `148` through `156`, excluding permanently
-burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
-(`0.3.0b9`, build `154`) was never published. RC 1 (`0.3.0rc1`, build `158`),
+this four-route contract. Beta 3 through Beta 8 and Beta 10 through Beta 12
+are published and immutable at builds `148` through `157`, excluding
+permanently burned builds `147` and `154`. Failed Beta 9 (`0.3.0b9`, build
+`154`) was never published. Beta 12 (`0.3.0b12`, build `157`) is a published
+`beta` item; earlier text calling it abandoned metadata was wrong, as recorded
+in [the Beta 12 cut packet](0.3.0-beta.12-cut-packet.md). RC 1 (`0.3.0rc1`, build `158`),
 RC 2 (`0.3.0rc2`, build `159`), and RC 3 (`0.3.0rc3`, build `160`) are
 published and immutable. Stable `0.3.0` build `161` is also published and
 immutable. Stable `0.3.1` build `162`, Beta `0.3.2b1` build `163`, and Beta
@@ -302,8 +304,8 @@ Published `v0.3.0-rc.3` is immutable production history:
   `e1d936cc3231aea4f9d87fde1fd9e7792c1189254fc85bfc10fea382ffce690f`.
 
 The cumulative appcast places RC 3 above immutable RC 2 build `159` and all
-earlier history, with burned builds `147` and `154` and abandoned build `157`
-absent. Stable excludes the RC; RC, Beta, and Alpha admit it. Its updater,
+earlier history, including Beta 12 build `157`, with burned builds `147` and
+`154` absent. Stable excludes the RC; RC, Beta, and Alpha admit it. Its updater,
 native release-note links, accessibility, malformed-PGS recovery, and
 privacy-safe subtitle diagnostics are fully qualified.
 
@@ -324,8 +326,8 @@ Stable `v0.3.0` is published and immutable:
   endpoint as RC 3.
 
 Publication placed Stable above immutable RC 3 build `160` and all earlier
-history, with burned builds `147` and `154` and abandoned build `157` absent.
-Stable, RC, Beta, and Alpha clients can all select the newer Stable item without
+history, including Beta 12 build `157`, with burned builds `147` and `154`
+absent. Stable, RC, Beta, and Alpha clients can all select the newer Stable item without
 changing their saved route. The release targets exact source SHA
 `a9abbcf6cd1281d2c701e0c050b68fdafc5b9522`; its checked receipt and publication
 record remain immutable.
