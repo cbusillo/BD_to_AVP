@@ -308,16 +308,16 @@ cannot silently be reused for a different source, release, or signed artifact.
 
 ### Capture-Only Releases
 
-`v0.3.3-beta.4` and `v0.3.3-beta.5` are `v2-captured` in `index-v2.json`, with
-no terminal record. Their four milestone cases passed in Milestone
-Qualification runs `35473335450` and `35516255552`. The accepted receipts are
-recorded in `docs/qualification/release-evidence-v1.json`. The frozen signed
-qualification records for Beta 5 and Stable `0.3.3` describe their updater
-source as "reconciled in Release Evidence v2". For these two releases that
-means accepted in the v1 evidence index, not `v2-qualified`. A terminal record
-cannot be bound to the merged Beta 4 bundle: its `qualification-manifest.json`
-was regenerated after qualification, and the live receipt binds the earlier
-manifest digest. Issue #859 tracks the remaining reconciliation.
+`v0.3.3-beta.4` is `v2-captured` in `index-v2.json`, with no terminal record.
+Its four milestone cases passed in Milestone Qualification run `35473335450`,
+and the accepted receipts are recorded in
+`docs/qualification/release-evidence-v1.json`. The frozen signed qualification
+record for Beta 5 describes Beta 4 as "reconciled in Release Evidence v2". For
+Beta 4 that means accepted in the v1 evidence index, not `v2-qualified`. A
+terminal record cannot be bound to the merged Beta 4 bundle: its
+`qualification-manifest.json` was regenerated after qualification, and the live
+receipt binds the earlier manifest digest. `v0.3.3-beta.5` had the same gap
+until its terminal record was added from run `35516255552` in October 2026.
 
 ## Compatibility
 
