@@ -336,7 +336,11 @@ bd-to-avp --source-folder <source-folder> [options]
 
 - `--source`: Source for a single disc (`disc:N`), MKV file path, or ISO image path. Choose either this option or
   `--source-folder`; the CLI rejects both together.
-- `--source-folder`: Source folder path. Recursively scans for image files or MKV files.
+- `--source-folder`: Source folder path. Recursively scans for disc images, MTS/M2TS and MKV files.
+  Missing or non-directory paths and scans without supported files return an error.
+  Folder conversions report each failed source, attempt the remaining files and exit
+  with a failure status if any conversion failed. Existing outputs are reported as
+  skipped unless `--overwrite` is enabled.
 - `--fx-upscale`: Upscale video to 4K resolution using fx-upscale (disabled by default).
 - `--remove-original`: Remove the original source after processing completes successfully.
 - `--overwrite`: Overwrite existing output file.

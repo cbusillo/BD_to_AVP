@@ -73,6 +73,10 @@ class BatchProcessingError(Exception):
         self.batch_sources = batch_sources
 
 
+class CLIBatchProcessingError(Exception):
+    """A folder conversion could not complete successfully in the CLI."""
+
+
 class ActivityReporter(Protocol):
     def set_stage_plan(self, stages: tuple[str, ...]) -> None:
         raise NotImplementedError
@@ -234,6 +238,7 @@ def process(
     activity: ActivityReporter | None = None,
     run_context: RunContext | None = None,
     video_route: ResolvedVideoRoute | None = None,
+    cli_batch: bool = False,
 ) -> Path | None:
     cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     raise_if_cancelled(cancellation_event)
@@ -241,10 +246,24 @@ def process(
     waiting_for_resume = resume_source_path is not None
     final_output_path = None
     if config.source_folder_path:
+        if cli_batch and not config.source_folder_path.is_dir():
+            raise CLIBatchProcessingError(
+                f"Source folder is missing or is not a directory: {config.source_folder_path}. "
+                "Use --source for a single file."
+            )
         batch_sources = batch_sources if batch_sources is not None else find_batch_sources(config.source_folder_path)
+        if cli_batch and not batch_sources:
+            raise CLIBatchProcessingError(
+                f"No supported sources found in {config.source_folder_path}. "
+                "Choose a folder containing disc images, MTS/M2TS or MKV files."
+            )
+        failed_sources: list[Path] = []
         for source in batch_sources:
             raise_if_cancelled(cancellation_event)
             if not source.is_file():
+                if cli_batch:
+                    cli_message(f"Failed source {source}: file is missing or is not a regular file.")
+                    failed_sources.append(source)
                 continue
             is_resume_source = waiting_for_resume and source == resume_source_path
             if waiting_for_resume and not is_resume_source:
@@ -267,19 +286,30 @@ def process(
             except preflight.DependencyPreflightError:
                 raise
             except (MKVCreationError, SRTCreationError) as error:
-                raise BatchProcessingError(source, error, batch_sources) from error
-            except FileExistsError:
+                if not cli_batch:
+                    raise BatchProcessingError(source, error, batch_sources) from error
+                cli_message(f"Failed source {source}: {error}")
+                failed_sources.append(source)
+            except FileExistsError as error:
+                if cli_batch:
+                    cli_message(f"Skipped source {source}: {error}")
                 continue
             except ProcessCancelled as error:
                 raise ProcessingCancelled("Processing was cancelled.") from error
-            except (RuntimeError, ValueError, subprocess.CalledProcessError):
+            except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:
                 raise_if_cancelled(cancellation_event)
                 if is_resume_source:
                     raise
+                if cli_batch:
+                    cli_message(f"Failed source {source}: {error}")
+                    failed_sources.append(source)
                 continue
             finally:
                 config.source_path = None
                 config.start_stage = batch_start_stage
+
+        if failed_sources:
+            raise CLIBatchProcessingError(f"Folder conversion failed for {len(failed_sources)} source(s).")
 
         if waiting_for_resume:
             raise FileNotFoundError(f"Could not resume batch source: {resume_source_path}")
@@ -725,6 +755,7 @@ def start_process(
     activity: ActivityReporter | None = None,
     run_context: RunContext | None = None,
     video_route: ResolvedVideoRoute | None = None,
+    cli_batch: bool = False,
 ) -> Path | None:
     cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     gui_start_stage = gui_start_stage or config.start_stage
@@ -741,6 +772,7 @@ def start_process(
                     activity=activity,
                     run_context=run_context,
                     video_route=video_route,
+                    cli_batch=cli_batch,
                 )
         return process(
             gui_start_stage,
@@ -752,6 +784,7 @@ def start_process(
             activity=activity,
             run_context=run_context,
             video_route=video_route,
+            cli_batch=cli_batch,
         )
     except ProcessCancelled as error:
         raise ProcessingCancelled("Processing was cancelled.") from error
