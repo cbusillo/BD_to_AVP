@@ -49,7 +49,7 @@ NATIVE_TEST_COMMAND = ("uv", "run", "python", "scripts/native_app.py", "test")
 PACKAGE_COMMAND = ("uv", "run", "python", "scripts/native_app.py", "package")
 ADHOC_SIGNATURE_SUMMARY = "codesign -dv reports Signature=adhoc and no TeamIdentifier"
 EVIDENCE_MEANING = (
-    "Change-scoped evidence from the exact locally packaged, code-signed app tree; "
+    "Change-scoped evidence from the exact locally packaged, ad-hoc code-signed app tree; "
     "production Developer ID signing remains owned by the guarded release run."
 )
 
@@ -158,7 +158,7 @@ PROOF_CATALOG: Mapping[str, Mapping[str, Any]] = {
         ],
         "scope": {
             "mounted_network_conversion_rerun": False,
-            "prior_real_network_evidence": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json",
+            "prior_real_network_evidence": "docs/qualification/rc3-targeted-qualification-v1.json",
             "qualification_kind": "exact_candidate_change_scoped_regression",
         },
     },
