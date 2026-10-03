@@ -32,6 +32,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 READ_ONLY_GIT_COMMANDS = {"diff", "ls-files", "merge-base", "show"}
 
 
+def git_output(repo: Path, *arguments: str) -> str:
+    return subprocess.run(["git", *arguments], cwd=repo, capture_output=True, text=True, check=True).stdout
+
+
 class ReleaseQualificationControllerTests(unittest.TestCase):
     def test_collect_operator_parser_accepts_controller_and_collection_arguments(self) -> None:
         args = build_parser().parse_args(
@@ -195,27 +199,27 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
         self.assertNotIn("/Users/", json.dumps(payload))
 
     def test_reports_v031_legacy_evidence_without_mutation(self) -> None:
-        before_status = subprocess.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
+        # Every linked worktree shares REPO_ROOT's refs, so another checkout fetching or
+        # pushing would change them mid-test. Check for mutation in a clone this test owns.
+        temporary_directory = tempfile.TemporaryDirectory(prefix="release-status-")
+        self.addCleanup(temporary_directory.cleanup)
+        repo = Path(temporary_directory.name) / "repo"
+        subprocess.run(
+            ["git", "clone", "--quiet", "--shared", "--no-checkout", REPO_ROOT.as_posix(), repo.as_posix()],
             check=True,
-        ).stdout
-        before_head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=REPO_ROOT,
             capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        before_refs = subprocess.run(
-            ["git", "show-ref"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
+        )
+        head = git_output(REPO_ROOT, "rev-parse", "HEAD")
+        subprocess.run(["git", "checkout", "--quiet", "--detach", head.strip()], cwd=repo, check=True)
+
+        def repository_state() -> tuple[str, str, str]:
+            return (
+                git_output(repo, "status", "--porcelain=v1", "--untracked-files=all"),
+                git_output(repo, "rev-parse", "HEAD"),
+                git_output(repo, "show-ref"),
+            )
+
+        before = repository_state()
         original_run = subprocess.run
         observed_commands: list[tuple[str, ...]] = []
 
@@ -226,34 +230,10 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             return original_run(command, *args, **kwargs)
 
         with patch("subprocess.run", side_effect=guarded_run):
-            payload = build_status(REPO_ROOT, "v0.3.1", as_of=date(2026, 8, 10))
-
-        after_status = subprocess.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        after_head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        after_refs = subprocess.run(
-            ["git", "show-ref"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
+            payload = build_status(repo, "v0.3.1", as_of=date(2026, 8, 10))
 
         self.assertTrue(observed_commands)
-        self.assertEqual(before_status, after_status)
-        self.assertEqual(before_head, after_head)
-        self.assertEqual(before_refs, after_refs)
+        self.assertEqual(repository_state(), before)
         self.assertIn(payload["evidence_binding"]["mode"], {"legacy", "manifest"})
         self.assertEqual(payload["overall_status"], "ready_with_optional_actions")
         self.assertTrue(payload["passed"])
