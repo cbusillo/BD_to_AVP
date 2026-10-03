@@ -557,6 +557,70 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                         self.assertEqual(result["status"], "retest")
                         self.assertEqual(result["invalidating_paths"], [path])
 
+    def test_worker_lifecycle_changes_invalidate_cancel_and_network_evidence(self) -> None:
+        path = "macos/BluRayToVisionPro/Models/WorkerLifecycle.swift"
+        for case_id in ("overwrite-and-conversion-cancel", "network-generated-final-output"):
+            with self.subTest(case_id=case_id), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                evidence = self.evidence(root, case_id)
+                self.assertEqual(self.result_for(self.classify(evidence, root), case_id)["status"], "carry")
+                result = self.result_for(self.classify(evidence, root, changed={path}), case_id)
+                self.assertEqual(result["status"], "retest")
+                self.assertEqual(result["invalidating_paths"], [path])
+
+    def test_git_renames_preserve_both_paths_and_classify_evidence(self) -> None:
+        mapped_path = "macos/BluRayToVisionPro/Models/QueueResolution.swift"
+        unrelated_path = "notes/queue routing\twith\nnewlines.txt"
+        unrelated_destination = "notes/renamed routing.txt"
+        for source, destination, invalidating in (
+            (mapped_path, unrelated_path, [mapped_path]),
+            (unrelated_path, mapped_path, [mapped_path]),
+            (unrelated_path, unrelated_destination, []),
+        ):
+            with self.subTest(source=source, destination=destination), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+
+                def git(*arguments: str, cwd: Path = root) -> str:
+                    return subprocess.run(
+                        ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", *arguments],
+                        cwd=cwd,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip()
+
+                git("init", "-q")
+                git("config", "diff.renames", "true")
+                original = root / source
+                original.parent.mkdir(parents=True, exist_ok=True)
+                original.write_bytes(b"queue resolution fixture\n")
+                git("add", "-A")
+                git("commit", "-q", "-m", "base")
+                base_sha = git("rev-parse", "HEAD")
+                renamed = root / destination
+                renamed.parent.mkdir(parents=True, exist_ok=True)
+                original.rename(renamed)
+                git("add", "-A")
+                git("commit", "-q", "-m", "rename")
+                candidate_sha = git("rev-parse", "HEAD")
+
+                changed = git_changed_paths(root)(base_sha, candidate_sha)
+                self.assertEqual(changed, {source, destination})
+                evidence = self.evidence(root, "overwrite-and-conversion-cancel", source_sha=base_sha)
+                report = classify_release_scope(
+                    self.policy,
+                    evidence,
+                    candidate_sha=candidate_sha,
+                    changed_paths=git_changed_paths(root),
+                    is_ancestor=lambda base, candidate: git("merge-base", base, candidate) == base,
+                    repo=root,
+                    reference_content=lambda reference, root=root: (root / reference).read_bytes(),
+                    as_of=date(2026, 8, 5),
+                )
+                result = self.result_for(report, "overwrite-and-conversion-cancel")
+                self.assertEqual(result["status"], "retest" if invalidating else "carry")
+                self.assertEqual(result["invalidating_paths"], invalidating)
+
     def test_direct_path_pattern_forces_retest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

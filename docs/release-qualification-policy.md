@@ -17,9 +17,11 @@ SHAs with the candidate using the local Git repository.
 The clean-machine update and installed-UI cases also invalidate when their
 seed or expected profile fixture changes. Unrelated test fixtures do not
 require new evidence. Queue persistence,
-resolution, and work coordination belong to the conversion-ownership
+resolution, work coordination, and worker cancellation/stopping state belong to the conversion-ownership
 contract, so changes there require evidence for every case that depends on
 that contract to be re-established through the existing qualification workflow.
+Renames are compared as a deletion and an addition: both the old and new paths
+are checked against invalidation mappings, even when the file bytes stay the same.
 
 ## Validate The Policy
 
