@@ -103,6 +103,7 @@
       "macos/BluRayToVisionPro/Models/DurableConversionQueue.swift",
       "macos/BluRayToVisionPro/Models/PersistentQueue.swift",
       "macos/BluRayToVisionPro/Models/QueueResolution.swift",
+      "macos/BluRayToVisionPro/Models/WorkerLifecycle.swift",
       "macos/BluRayToVisionPro/Worker/WorkerProcessClient.swift"
     ],
     "subtitle-recovery": [
