@@ -173,7 +173,7 @@ class MuxCommandTests(unittest.TestCase):
         self.assertIn("Movie_audio_AAC.m4a#1:lang=eng:group=1:alternate_group=1:enabled", command)
         self.assertIn("Movie_audio_AAC.m4a#2:lang=eng:group=1:alternate_group=1:disable", command)
         self.assertLess(
-            command.index("2:type=name:str='English 5.1'"), command.index("3:type=name:str='English Commentary'")
+            command.index("2:type=name:str=English 5.1"), command.index("3:type=name:str=English Commentary")
         )
 
     def test_final_mux_restart_filters_non_contiguous_pcm_tracks(self) -> None:
@@ -417,9 +417,9 @@ class MuxCommandTests(unittest.TestCase):
 
         command = run_command.call_args.args[0]
         self.assertIn("Movie_audio_AAC.m4a#1:lang=eng:group=1:alternate_group=1:disable", command)
-        self.assertIn("2:type=name:str='Commentary'", command)
+        self.assertIn("2:type=name:str=Commentary", command)
         self.assertIn("Movie_audio_AAC.m4a#2:lang=jpn:group=1:alternate_group=1:enabled", command)
-        self.assertIn("3:type=name:str='Main Japanese'", command)
+        self.assertIn("3:type=name:str=Main Japanese", command)
 
     def test_final_mux_uses_m4a_name_tag_as_audio_title(self) -> None:
         with (
@@ -446,7 +446,7 @@ class MuxCommandTests(unittest.TestCase):
             )
 
         command = run_command.call_args.args[0]
-        self.assertIn("2:type=name:str='Director Commentary'", command)
+        self.assertIn("2:type=name:str=Director Commentary", command)
 
     def test_final_mux_uses_preserved_handler_name_as_audio_title(self) -> None:
         with (
@@ -473,7 +473,7 @@ class MuxCommandTests(unittest.TestCase):
             )
 
         command = run_command.call_args.args[0]
-        self.assertIn("2:type=name:str='Main 5.1'", command)
+        self.assertIn("2:type=name:str=Main 5.1", command)
 
     def test_final_mux_uses_channel_count_when_layout_and_title_are_missing(self) -> None:
         with (
@@ -500,7 +500,7 @@ class MuxCommandTests(unittest.TestCase):
             )
 
         command = run_command.call_args.args[0]
-        self.assertIn("2:type=name:str='English 6-channel Audio'", command)
+        self.assertIn("2:type=name:str=English 6-channel Audio", command)
 
     def test_final_mux_normalizes_bibliographic_audio_language(self) -> None:
         with (
@@ -522,7 +522,7 @@ class MuxCommandTests(unittest.TestCase):
 
         command = run_command.call_args.args[0]
         self.assertIn("Movie_audio_AAC.m4a#1:lang=deu:group=1:alternate_group=1", command)
-        self.assertIn("2:type=name:str='German 5.1 Audio'", command)
+        self.assertIn("2:type=name:str=German 5.1 Audio", command)
 
     def test_final_mux_uses_unknown_for_invalid_audio_language(self) -> None:
         with (
@@ -544,7 +544,7 @@ class MuxCommandTests(unittest.TestCase):
 
         command = run_command.call_args.args[0]
         self.assertIn("Movie_audio_AAC.m4a#1:lang=und:group=1:alternate_group=1", command)
-        self.assertIn("2:type=name:str='Unknown stereo Audio'", command)
+        self.assertIn("2:type=name:str=Unknown stereo Audio", command)
 
     def test_final_mux_uses_unknown_when_audio_language_is_missing(self) -> None:
         with (
@@ -566,7 +566,7 @@ class MuxCommandTests(unittest.TestCase):
 
         command = run_command.call_args.args[0]
         self.assertIn("Movie_audio_AAC.m4a#1:lang=und:group=1:alternate_group=1", command)
-        self.assertIn("2:type=name:str='Unknown stereo Audio'", command)
+        self.assertIn("2:type=name:str=Unknown stereo Audio", command)
 
     def test_final_mux_marks_forced_subtitles_for_quicktime(self) -> None:
         with (
@@ -595,9 +595,9 @@ class MuxCommandTests(unittest.TestCase):
             "movie.forced.en.srt#1:hdlr=sbtl:lang=eng:group=2:name=English Subtitles:tx3g:txtflags=0xC0000000",
             command,
         )
-        self.assertIn("3:type=name:str='English Forced Subtitles'", command)
+        self.assertIn("3:type=name:str=English Forced Subtitles", command)
         self.assertIn("movie.en.srt#1:hdlr=sbtl:lang=eng:group=2:name=English Subtitles:tx3g", command)
-        self.assertIn("4:type=name:str='English Subtitles'", command)
+        self.assertIn("4:type=name:str=English Subtitles", command)
 
     def test_final_mux_supports_alpha3_only_subtitle_filenames(self) -> None:
         with (
