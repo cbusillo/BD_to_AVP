@@ -129,9 +129,9 @@ older Stable and RC installations cannot discover it, while an installed Beta
 (`0.3.0b8`, build `153`) are published and immutable. Beta 9 (`0.3.0b9`, build
 `154`) failed after production signing and is burned without a public appcast
   item. Beta 10 (`0.3.0b10`, build `155`) and Beta 11 (`0.3.0b11`, build `156`)
-  are published and immutable. Abandoned Beta 12 metadata build `157` has no
-  public artifact. RC 1 (`0.3.0rc1`, build `158`), RC 2 (`0.3.0rc2`, build
-  `159`), and RC 3 (`0.3.0rc3`, build `160`) are published and immutable.
+  are published and immutable, as is Beta 12 (`0.3.0b12`, build `157`). RC 1
+  (`0.3.0rc1`, build `158`), RC 2 (`0.3.0rc2`, build `159`), and RC 3
+  (`0.3.0rc3`, build `160`) are published and immutable.
   Stable `0.3.0` build `161` and Stable `0.3.1` build `162` are published and
   immutable. Later publication through Stable `0.3.3` build `177` is recorded
   in [the release process](release-process.md) and the linked cut packets.
