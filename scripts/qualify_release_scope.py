@@ -542,7 +542,8 @@ def git_changed_paths(repo: Path) -> ChangedPaths:
         key = (base_sha, candidate_sha)
         if key not in cache:
             result = subprocess.run(
-                ["git", "diff", "--name-only", "-z", f"{base_sha}..{candidate_sha}"],
+                # A rename must invalidate mappings for both the removed and added paths.
+                ["git", "diff", "--no-renames", "--name-only", "-z", f"{base_sha}..{candidate_sha}"],
                 cwd=repo,
                 check=False,
                 capture_output=True,
