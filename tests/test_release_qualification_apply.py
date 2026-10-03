@@ -420,7 +420,7 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
                     actor_id=ACTOR_ID,
                 )
 
-    def credential_supplied_to_push(self, environment: dict[str, str]) -> str:
+    def push_configuration(self, environment: dict[str, str]) -> tuple[list[str], dict[str, str]]:
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
         with (
             patch("scripts.release_qualification_apply._run_git", return_value=completed) as run_git,
@@ -428,37 +428,91 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
         ):
             _push_commit(Path("/tmp/repo"), EVIDENCE_REF, "9" * 40)
         arguments = list(run_git.call_args.args[1])
-        push_index = arguments.index("push")
+        return arguments[: arguments.index("push")], dict(run_git.call_args.kwargs["env"])
+
+    def test_push_supplies_the_automation_token_and_no_other_credential(self) -> None:
+        options, environment = self.push_configuration(
+            {"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN, "GITHUB_TOKEN": "other-token"}
+        )
         with tempfile.TemporaryDirectory() as temporary_directory:
             # Ask git for credentials through the exact configuration the push received.
-            return subprocess.run(
-                ["git", *arguments[:push_index], "credential", "fill"],
+            credential = subprocess.run(
+                ["git", *options, "credential", "fill"],
                 cwd=temporary_directory,
                 input="protocol=https\nhost=github.com\npath=cbusillo/BD_to_AVP.git\n\n",
-                env={**run_git.call_args.kwargs["env"], "GIT_CONFIG_NOSYSTEM": "1", "HOME": temporary_directory},
+                env={**environment, "GIT_CONFIG_NOSYSTEM": "1", "HOME": temporary_directory},
                 capture_output=True,
                 text=True,
                 check=True,
             ).stdout
 
-    def test_push_supplies_the_automation_token_and_no_other_credential(self) -> None:
-        credential = self.credential_supplied_to_push(
-            {"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN, "GITHUB_TOKEN": "other-token"}
-        )
-
         self.assertIn("username=x-access-token\n", credential)
         self.assertIn(f"password={FIXTURE_TOKEN}\n", credential)
         self.assertNotIn("other-token", credential)
 
-    def test_push_without_automation_token_fails_closed(self) -> None:
-        with (
-            patch("scripts.release_qualification_apply._run_git") as run_git,
-            patch.dict(os.environ, {"PATH": os.environ["PATH"]}, clear=True),
-        ):
-            with self.assertRaisesRegex(QualificationApplySafetyError, "automation GitHub token"):
-                _push_commit(Path("/tmp/repo"), EVIDENCE_REF, "9" * 40)
+    def test_push_ignores_configured_authorization_headers(self) -> None:
+        options, environment = self.push_configuration({"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN})
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            subprocess.run(["git", "init", "-q"], cwd=temporary_directory, check=True)
+            for url in ("https://github.com/", "https://github.com/cbusillo/BD_to_AVP.git"):
+                subprocess.run(
+                    ["git", "config", f"http.{url}.extraHeader", "AUTHORIZATION: basic fixture"],
+                    cwd=temporary_directory,
+                    check=True,
+                )
+            headers = subprocess.run(
+                [
+                    "git",
+                    *options,
+                    "config",
+                    "--get-urlmatch",
+                    "http.extraHeader",
+                    "https://github.com/cbusillo/BD_to_AVP.git",
+                ],
+                cwd=temporary_directory,
+                env={**environment, "GIT_CONFIG_NOSYSTEM": "1", "HOME": temporary_directory},
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
 
-        run_git.assert_not_called()
+        self.assertNotIn("fixture", headers)
+
+    def test_push_without_automation_token_fails_closed(self) -> None:
+        for environment in (
+            {},
+            {"GH_TOKEN": "", "CODEX_GITHUB_TOKEN": "other-token", "GITHUB_TOKEN": "other-token"},
+        ):
+            with self.subTest(environment=sorted(environment)):
+                with (
+                    patch("scripts.release_qualification_apply._run_git") as run_git,
+                    patch.dict(os.environ, {"PATH": os.environ["PATH"], **environment}, clear=True),
+                ):
+                    with self.assertRaisesRegex(QualificationApplySafetyError, "automation GitHub token"):
+                        _push_commit(Path("/tmp/repo"), EVIDENCE_REF, "9" * 40)
+
+                run_git.assert_not_called()
+
+    def test_inherited_git_identity_does_not_change_commit_attribution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "work"
+            root.mkdir()
+            fixture = ApplyFixture(root)
+            inherited = {
+                "GIT_AUTHOR_NAME": "Someone Else",
+                "GIT_AUTHOR_EMAIL": "someone@example.invalid",
+                "GIT_COMMITTER_NAME": "Someone Else",
+                "GIT_COMMITTER_EMAIL": "someone@example.invalid",
+            }
+            with patch.dict(os.environ, inherited):
+                outcome = fixture.start()
+
+            self.assertEqual(outcome.state, "reconciliation_applied")
+            self.assertEqual(
+                fixture.git("show", "-s", "--format=%an <%ae> %cn <%ce>", outcome.commit_sha),
+                f"{ACTOR_LOGIN} <{ACTOR_ID}+{ACTOR_LOGIN}@users.noreply.github.com> "
+                f"{ACTOR_LOGIN} <{ACTOR_ID}+{ACTOR_LOGIN}@users.noreply.github.com>",
+            )
 
 
 if __name__ == "__main__":

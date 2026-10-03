@@ -565,6 +565,13 @@ def _create_or_adopt_commit(
                 "--",
                 *paths,
             ],
+            env={
+                **os.environ,
+                "GIT_AUTHOR_NAME": actor_login,
+                "GIT_AUTHOR_EMAIL": expected_email,
+                "GIT_COMMITTER_NAME": actor_login,
+                "GIT_COMMITTER_EMAIL": expected_email,
+            },
         ),
     )
     if commit.returncode != 0:
@@ -584,7 +591,6 @@ def _create_or_adopt_commit(
     return commit_sha
 
 
-AUTOMATION_TOKEN_VARIABLES = ("GH_TOKEN", "CODEX_GITHUB_TOKEN", "GITHUB_TOKEN")
 PUSH_TOKEN_VARIABLE = "BD_TO_AVP_QUALIFICATION_PUSH_TOKEN"
 # Reads the token from the environment so it never appears in git arguments or configuration.
 PUSH_CREDENTIAL_HELPER = (
@@ -593,15 +599,14 @@ PUSH_CREDENTIAL_HELPER = (
 
 
 def _automation_token() -> str:
-    # Same precedence as the GitHub API client, so the push uses the token whose identity was verified.
-    for name in AUTOMATION_TOKEN_VARIABLES:
-        token = os.environ.get(name)
-        if token:
-            return token
-    raise QualificationApplySafetyError(
-        "Qualification apply push requires the automation GitHub token in GH_TOKEN; "
-        "it never falls back to a personal credential."
-    )
+    # A non-empty GH_TOKEN is the credential gh uses for the verified API identity, so the push uses the same one.
+    token = os.environ.get("GH_TOKEN")
+    if not token:
+        raise QualificationApplySafetyError(
+            "Qualification apply push requires the automation GitHub token in GH_TOKEN; "
+            "it never falls back to another credential."
+        )
+    return token
 
 
 def _authenticated_git_environment() -> dict[str, str]:
@@ -624,6 +629,8 @@ def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
                 f"credential.helper={PUSH_CREDENTIAL_HELPER}",
                 "-c",
                 "http.https://github.com/.extraHeader=",
+                "-c",
+                f"http.{HTTPS_REPOSITORY_URL}.extraHeader=",
                 "push",
                 HTTPS_REPOSITORY_URL,
                 f"{commit_sha}:refs/heads/{evidence_ref}",
