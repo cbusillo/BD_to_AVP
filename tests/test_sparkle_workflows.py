@@ -13,6 +13,7 @@ from pathlib import Path
 from scripts import release
 from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
 from scripts.release_evidence_v2 import qualification_template_path
+from scripts.release_workflow_policy import REQUIRED_ACTOR
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1110,7 +1111,11 @@ printf '%s' "$CODESIGN_METADATA"
         )
         self.assertEqual(workflow["permissions"], {})
         self.assertEqual(qualify["permissions"], {"actions": "read", "contents": "read"})
-        self.assertEqual(qualify["if"], "github.actor == github.repository_owner")
+        # Only the automation identity, or the repository owner, may start a qualification job.
+        self.assertEqual(
+            {clause.strip() for clause in qualify["if"].split("||")},
+            {f"github.actor == '{REQUIRED_ACTOR}'", "github.actor == github.repository_owner"},
+        )
         self.assertNotIn("environment", qualify)
         self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
         self.assertEqual(checkout["with"]["fetch-depth"], "0")

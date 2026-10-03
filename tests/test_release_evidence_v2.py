@@ -620,8 +620,15 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             qualification = with_self_digest(qualification)
             (bundle / QUALIFICATION_NAME).unlink()
             write_record(bundle / QUALIFICATION_NAME, qualification)
-            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "actor is not the repository owner"):
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "actor is not an approved qualification actor"):
                 validate_v2_bundle(root, TAG, worktree=True)
+
+            qualification = self.qualification_record(root, capture)
+            qualification["successful_milestone"]["actor"] = "shiny-code-app[bot]"
+            qualification = with_self_digest(qualification)
+            (bundle / QUALIFICATION_NAME).unlink()
+            write_record(bundle / QUALIFICATION_NAME, qualification)
+            validate_v2_bundle(root, TAG, worktree=True)
 
     def test_disposition_binds_structured_failed_run_and_terminal_preservation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -584,23 +584,35 @@ def _create_or_adopt_commit(
     return commit_sha
 
 
+AUTOMATION_TOKEN_VARIABLES = ("GH_TOKEN", "CODEX_GITHUB_TOKEN", "GITHUB_TOKEN")
+PUSH_TOKEN_VARIABLE = "BD_TO_AVP_QUALIFICATION_PUSH_TOKEN"
+# Reads the token from the environment so it never appears in git arguments or configuration.
+PUSH_CREDENTIAL_HELPER = (
+    f'!f() {{ test "$1" = get || exit 0; echo username=x-access-token; echo "password=${PUSH_TOKEN_VARIABLE}"; }}; f'
+)
+
+
+def _automation_token() -> str:
+    # Same precedence as the GitHub API client, so the push uses the token whose identity was verified.
+    for name in AUTOMATION_TOKEN_VARIABLES:
+        token = os.environ.get(name)
+        if token:
+            return token
+    raise QualificationApplySafetyError(
+        "Qualification apply push requires the automation GitHub token in GH_TOKEN; "
+        "it never falls back to a personal credential."
+    )
+
+
 def _authenticated_git_environment() -> dict[str, str]:
     environment = dict(os.environ)
-    for name in (
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "CODEX_GITHUB_TOKEN",
-        "GH_ENTERPRISE_TOKEN",
-        "GITHUB_ENTERPRISE_TOKEN",
-        "GH_HOST",
-        "GH_REPO",
-    ):
-        environment.pop(name, None)
+    environment[PUSH_TOKEN_VARIABLE] = _automation_token()
     environment["GIT_TERMINAL_PROMPT"] = "0"
     return environment
 
 
 def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
+    environment = _authenticated_git_environment()
     push = cast(
         subprocess.CompletedProcess[str],
         _run_git(
@@ -609,12 +621,14 @@ def _push_commit(repo_root: Path, evidence_ref: str, commit_sha: str) -> None:
                 "-c",
                 "credential.helper=",
                 "-c",
-                "credential.helper=!gh auth git-credential",
+                f"credential.helper={PUSH_CREDENTIAL_HELPER}",
+                "-c",
+                "http.https://github.com/.extraHeader=",
                 "push",
                 HTTPS_REPOSITORY_URL,
                 f"{commit_sha}:refs/heads/{evidence_ref}",
             ],
-            env=_authenticated_git_environment(),
+            env=environment,
         ),
     )
     if push.returncode != 0:

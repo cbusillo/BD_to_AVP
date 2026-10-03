@@ -45,17 +45,19 @@ environment, or access release secrets.
 Dispatch it from protected `main` only after its workflow definition is present
 there and the canonical evidence branch contains the checked manifest:
 
-This is a manual Director step: the workflow requires the repository owner's
-personal GitHub identity. Agents use
-`uv run python -m scripts.release_qualification_controller status --release-tag <tag>`
-for read-only observation and hand off dispatch until the bot path in
-[#854](https://github.com/cbusillo/BD_to_AVP/issues/854) is implemented.
+Prefer the qualification controller's `resume` command in
+[the release process](release-process.md#release-orchestration), which dispatches
+through the `shiny-code-app[bot]` automation identity with checkpointed run
+adoption. The job runs only for that identity or the repository owner, and the
+controller never dispatches with the personal account. A direct dispatch must
+use the automation credentials:
 
 ```sh
-gh workflow run milestone-qualification.yml \
-  --ref main \
-  -f candidate_tag=v0.3.0 \
-  -f manifest_sha256=<qualification-manifest-self-sha256>
+GH_TOKEN=<shiny-code-app[bot] installation token> \
+  gh workflow run milestone-qualification.yml \
+    --ref main \
+    -f candidate_tag=v0.3.0 \
+    -f manifest_sha256=<qualification-manifest-self-sha256>
 ```
 
 The successful run uploads the validated signed-artifact UI receipt, both Tier

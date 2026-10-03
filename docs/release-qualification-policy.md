@@ -33,14 +33,10 @@ export RELEASE_QUALIFICATION_RECORD="$(jq -r '.releaseOperations.qualificationRe
 For a historical candidate, explicitly select its archived qualification record
 instead. The generic original Stable record is not the current candidate.
 
-Qualification dispatch and evidence writes requiring the personal GitHub identity
-are manual Director procedures. Agents can use
-`uv run python -m scripts.release_qualification_controller status --release-tag <tag>`
-for read-only observation;
-the supported automation write path is tracked in
-[#854](https://github.com/cbusillo/BD_to_AVP/issues/854). Do not use the personal
-account to work around that missing path. Signing approval keeps its separate
-run-bound human identity requirement.
+Qualification dispatch and evidence writes run as the `shiny-code-app[bot]`
+automation identity through `resume`, described below; the controller refuses
+the personal account for them. Signing approval keeps its separate run-bound
+human identity requirement.
 
 ```sh
 uv run python -m scripts.qualify_release_scope --validate-policy
@@ -535,7 +531,7 @@ Before offering dispatch, the controller verifies the repository identity,
 remote `main`, evidence ref and SHA, docs-only branch diff, manifest self digest,
 runner SHA, candidate and release identities, signed UI artifact,
 policy/checkpoint/route/controller digests, and existing exact workflow runs
-through the same active GitHub identity used for dispatch. The branch commit and
+through the automation token used for dispatch. The branch commit and
 its validated v2 `CAPTURED` bundle are durable without an open pull request. The
 workflow display title includes
 the release tag and full manifest digest because `workflow_dispatch` returns no
@@ -545,11 +541,14 @@ evidence-branch change fails closed.
 
 The initial command reports `dispatch_ready` and the exact values required for
 authorization. Dispatch occurs only when both `--expected-main-sha` and
-`--expected-manifest-sha256` match the preflight identity and the active local
-GitHub login is `cbusillo`. Before the API call, the controller atomically writes
+`--expected-manifest-sha256` match the preflight identity and the GraphQL viewer
+for the `GH_TOKEN` credential is `shiny-code-app[bot]`. Before the API call, the
+controller atomically writes
 a mode-`0600` prepared checkpoint under the shared git directory. It records the
 observed run only after exactly one newer run with the expected workflow path,
-branch, head SHA, actors, tag, and manifest digest appears. A prepared checkpoint
+branch, head SHA, actors, tag, and manifest digest appears. Both run actors must
+be `shiny-code-app[bot]` or, for runs dispatched before the automation path, the
+repository owner. A prepared checkpoint
 with no visible run blocks redispatch, and a local checkpoint lock rejects
 concurrent controller processes. Once the visibility window expires, retrying
 that unresolved dispatch requires its exact checkpoint self digest through
@@ -579,10 +578,11 @@ files, or commits.
 Apply freezes the full authorized plan and exact target file bytes in a separate
 mode-`0600`, self-digested checkpoint while sharing the per-release dispatch
 lock. Before every mutation it revalidates protected `main`, the canonical
-evidence ref, the active `cbusillo` identity, and the absence of an active exact
+evidence ref, the `shiny-code-app[bot]` identity, and the absence of an active exact
 Milestone Qualification run. It writes only the planned qualification receipts
-and append-only evidence index, creates one identity-bound commit, performs a
-non-force fast-forward push, and revalidates the exact remote commit and content.
+and append-only evidence index, creates one commit authored and committed as
+`shiny-code-app[bot]` with its noreply address, performs a non-force
+fast-forward push with the same token and no other credential helper, and revalidates the exact remote commit and content.
 Prepared, files-written, committed, and pushed states are adopted after
 interruption rather than repeated. Conflicting local content, unrelated
 worktree changes, moved refs, or a non-fast-forward push fail closed. Once the

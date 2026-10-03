@@ -197,12 +197,13 @@ writing anything.
 
 ## Release Orchestration
 
-Qualification recovery's personal-account dispatch and evidence-write path
-below is a manual Director procedure, not an agent write path. Agents use
-`uv run python -m scripts.release_qualification_controller status --release-tag <tag>`
-for read-only observation and hand off those mutations until the bot path
-tracked in [#854](https://github.com/cbusillo/BD_to_AVP/issues/854) exists.
-The separate run-bound signing approval contract remains unchanged.
+Qualification dispatch, evidence commits, and evidence pushes below run as the
+`shiny-code-app[bot]` automation identity, never the personal account. Run the
+controller with that App's installation token in `GH_TOKEN`; agents obtain it
+from their automation credential helper. Without that identity the controller
+stops before any mutation. The separate run-bound signing approval contract
+remains unchanged: `macos-signing` approval still uses the active human identity
+through `scripts.github_release_run approve`.
 
 > **RC 3 is published and immutable.** Guarded Prerelease run `30990186667`
 > published build `160` from source SHA
@@ -517,7 +518,10 @@ The workflow performs these ordered boundaries:
      --expected-manifest-sha256 <manifest-sha256>
    ```
 
-   Dispatch requires the active local GitHub identity `cbusillo`. The controller
+   Dispatch requires the `shiny-code-app[bot]` token in `GH_TOKEN`; the
+   controller verifies it through the GraphQL viewer before writing anything
+   and refuses any other identity. Runs already dispatched by the repository
+   owner stay observable. The controller
    writes a mode-`0600` checkpoint under the shared git directory before the
    API call, then adopts only the exact run whose display title binds the tag
    and full manifest digest. An unresolved prepared checkpoint prevents a
@@ -550,7 +554,7 @@ The workflow performs these ordered boundaries:
    checkpoint merely because its workflow run is slow to appear.
 
    After a successful run, `resume` automatically revalidates and downloads the
-   exact retained artifact through the active GitHub identity. The byte-bounded
+   exact retained artifact through the automation token. The byte-bounded
    ZIP is digest-checked, admitted without filesystem extraction, validated
    against the runner-pinned policy and checked manifest, and converted into a
    deterministic reconciliation plan. Use `--observe-only` to retain the prior
@@ -568,7 +572,7 @@ The workflow performs these ordered boundaries:
      --apply-plan-sha256 <plan-sha256>
    ```
 
-   Apply requires the active GitHub identity `cbusillo`, the exact canonical
+   Apply requires the `shiny-code-app[bot]` token, the exact canonical
    evidence worktree, an unchanged protected `main`, no active exact Milestone
    Qualification run, and a clean worktree. Before changing
    files it freezes the authorized plan and exact target bytes in a mode-`0600`,

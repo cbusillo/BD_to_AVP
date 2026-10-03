@@ -27,7 +27,9 @@ from scripts.release_qualification_resume import ResumeIdentity
 
 RELEASE_TAG = "v1.0.0"
 EVIDENCE_REF = f"automation/release-evidence-{RELEASE_TAG}"
-ACTOR_ID = 1_875_516
+ACTOR_LOGIN = "shiny-code-app[bot]"
+ACTOR_ID = 332_303_085
+FIXTURE_TOKEN = "fixture-automation-token"
 
 
 class ApplyFixture:
@@ -148,12 +150,13 @@ class ApplyFixture:
 
     @staticmethod
     def require_actor() -> tuple[str, int]:
-        return "cbusillo", ACTOR_ID
+        return ACTOR_LOGIN, ACTOR_ID
 
     def start(self):
         with (
             patch("scripts.release_qualification_apply._validate_origin"),
             patch("scripts.release_qualification_apply.HTTPS_REPOSITORY_URL", str(self.remote)),
+            patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
         ):
             return start_reconciliation_apply(
                 repo_root=self.root,
@@ -171,6 +174,7 @@ class ApplyFixture:
         with (
             patch("scripts.release_qualification_apply._validate_origin"),
             patch("scripts.release_qualification_apply.HTTPS_REPOSITORY_URL", str(self.remote)),
+            patch.dict(os.environ, {"GH_TOKEN": FIXTURE_TOKEN}),
         ):
             return continue_reconciliation_apply(
                 repo_root=self.root,
@@ -385,12 +389,12 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
             subprocess.run(["git", "add", "--", *(file.path for file in fixture.files)], cwd=root, check=True)
             tree_sha = fixture.git("write-tree")
             environment = dict(os.environ)
-            expected_email = f"{ACTOR_ID}+cbusillo@users.noreply.github.com"
+            expected_email = f"{ACTOR_ID}+{ACTOR_LOGIN}@users.noreply.github.com"
             environment.update(
                 {
-                    "GIT_AUTHOR_NAME": "cbusillo",
+                    "GIT_AUTHOR_NAME": ACTOR_LOGIN,
                     "GIT_AUTHOR_EMAIL": expected_email,
-                    "GIT_COMMITTER_NAME": "cbusillo",
+                    "GIT_COMMITTER_NAME": ACTOR_LOGIN,
                     "GIT_COMMITTER_EMAIL": expected_email,
                 }
             )
@@ -412,24 +416,49 @@ class ReleaseQualificationApplyTests(unittest.TestCase):
                     base_sha=fixture.base_sha,
                     plan=fixture.bundle.plan,
                     files={file.path: file.content for file in fixture.files},
-                    actor_login="cbusillo",
+                    actor_login=ACTOR_LOGIN,
                     actor_id=ACTOR_ID,
                 )
 
-    def test_push_uses_active_gh_credential_without_token_environment(self) -> None:
+    def credential_supplied_to_push(self, environment: dict[str, str]) -> str:
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
         with (
             patch("scripts.release_qualification_apply._run_git", return_value=completed) as run_git,
-            patch.dict(os.environ, {"GH_TOKEN": "wrong-token", "GITHUB_TOKEN": "wrong-token"}),
+            patch.dict(os.environ, environment, clear=True),
         ):
             _push_commit(Path("/tmp/repo"), EVIDENCE_REF, "9" * 40)
+        arguments = list(run_git.call_args.args[1])
+        push_index = arguments.index("push")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            # Ask git for credentials through the exact configuration the push received.
+            return subprocess.run(
+                ["git", *arguments[:push_index], "credential", "fill"],
+                cwd=temporary_directory,
+                input="protocol=https\nhost=github.com\npath=cbusillo/BD_to_AVP.git\n\n",
+                env={**run_git.call_args.kwargs["env"], "GIT_CONFIG_NOSYSTEM": "1", "HOME": temporary_directory},
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
 
-        arguments = run_git.call_args.args[1]
-        environment = run_git.call_args.kwargs["env"]
-        self.assertIn("credential.helper=!gh auth git-credential", arguments)
-        self.assertIn("https://github.com/cbusillo/BD_to_AVP.git", arguments)
-        self.assertNotIn("GH_TOKEN", environment)
-        self.assertNotIn("GITHUB_TOKEN", environment)
+    def test_push_supplies_the_automation_token_and_no_other_credential(self) -> None:
+        credential = self.credential_supplied_to_push(
+            {"PATH": os.environ["PATH"], "GH_TOKEN": FIXTURE_TOKEN, "GITHUB_TOKEN": "other-token"}
+        )
+
+        self.assertIn("username=x-access-token\n", credential)
+        self.assertIn(f"password={FIXTURE_TOKEN}\n", credential)
+        self.assertNotIn("other-token", credential)
+
+    def test_push_without_automation_token_fails_closed(self) -> None:
+        with (
+            patch("scripts.release_qualification_apply._run_git") as run_git,
+            patch.dict(os.environ, {"PATH": os.environ["PATH"]}, clear=True),
+        ):
+            with self.assertRaisesRegex(QualificationApplySafetyError, "automation GitHub token"):
+                _push_commit(Path("/tmp/repo"), EVIDENCE_REF, "9" * 40)
+
+        run_git.assert_not_called()
 
 
 if __name__ == "__main__":

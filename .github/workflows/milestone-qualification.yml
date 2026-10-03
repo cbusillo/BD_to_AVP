@@ -30,7 +30,7 @@ env:
 jobs:
   qualify:
     name: Collect exact post-publication qualification receipts
-    if: github.actor == github.repository_owner
+    if: github.actor == 'shiny-code-app[bot]' || github.actor == github.repository_owner
     runs-on: macos-26
     timeout-minutes: 90
     permissions:
