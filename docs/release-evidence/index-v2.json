@@ -423,11 +423,23 @@
       "release_tag": "v0.3.3-beta.4"
     },
     {
-      "evidence_class": "v2-captured",
+      "evidence_class": "v2-qualified",
       "files": [
         {
           "path": "docs/release-evidence/v0.3.3-beta.5/capture-v2.json",
           "sha256": "14e6873a22a684cb30a6014ba9fa9d52ddfd40a724afa46ddf81260e29b3b69a"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.5/clean-machine-signed-update-receipt.json",
+          "sha256": "8937b2ec47a234e15520961ab02def387ff909f18edc77948775b5161e75c0ee"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.5/installed-ui-accessibility-receipt.json",
+          "sha256": "f2f6675c19fd027723fed73c7ae064d527438385205d20ac176c3a6e2f2cf540"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.5/live-qualification-v1.json",
+          "sha256": "e7d229b85232e8fa8e7ab1071eae06578e859d68f5b19145a6fa2e89eb64e593"
         },
         {
           "path": "docs/release-evidence/v0.3.3-beta.5/publication-record.json",
@@ -440,6 +452,10 @@
         {
           "path": "docs/release-evidence/v0.3.3-beta.5/qualification-record.json",
           "sha256": "c54a8a588be24dc793620ed2bba098b9ce9fbeea418d6cd99e2afb16f0ecd836"
+        },
+        {
+          "path": "docs/release-evidence/v0.3.3-beta.5/qualification-v2.json",
+          "sha256": "9893409956c6455fa2711772c99a71597f8b478bb7e15684069e46aa364f2c6a"
         },
         {
           "path": "docs/release-evidence/v0.3.3-beta.5/release-receipt.json",
