@@ -22,6 +22,9 @@ This Movie Sharing beta supports compatible MV-HEVC and full side-by-side or ove
 
 If the Mac is missing, check the network, Local Network permission, sharing switch and whether the Mac is awake. If the folder is unavailable, reconnect its drive or choose the folder again on the Mac. Use **Refresh** after adding a movie. To remove a pairing, use **Forget** under Paired Devices on the Mac and **Forget This Mac** on the headset, then pair again.
 
-The player's **On My Vision Pro** section and bundled **Start SBS Check** / **Start Over-Under Check** samples also work without the Mac. That is a useful first check if Mac sharing is unavailable.
+The player's **On My Vision Pro** section and bundled **Start SBS Check** / **Start Over-Under Check** samples also work without the Mac. Those built-in samples are useful for playback and eye-label checks if Mac
+sharing is unavailable. The supported player build listed above predates the
+corrected fixtures, so use freshly downloaded samples from step 3 when judging
+the corrected blue-behind/red-in-front depth convention.
 
 Send player feedback through TestFlight. Include both app versions, device OS versions, the movie format and the steps that failed; do not attach private movie content. Mac conversion or updater problems can be reported through the Mac app's existing support flow.

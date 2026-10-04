@@ -26,7 +26,7 @@ FFMPEG = str(config.FFMPEG_PATH)
 FFPROBE = str(config.FFPROBE_PATH)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def require_fixture_decoders() -> None:
     missing = [tool for tool in (FFMPEG, FFPROBE) if not Path(tool).is_file() or not os.access(tool, os.X_OK)]
     if missing:
@@ -34,7 +34,7 @@ def require_fixture_decoders() -> None:
             "FFmpeg and FFprobe are needed to decode fixtures. Install FFmpeg as described in README.md, "
             "or set BD_TO_AVP_FFMPEG_PATH and BD_TO_AVP_FFPROBE_PATH to the installed tools."
         )
-        if os.environ.get("CI"):
+        if os.environ.get("CI", "").casefold() in {"true", "1"}:
             pytest.fail(message)
         pytest.skip(message)
 
@@ -76,6 +76,7 @@ def assert_depth_order(left: dict[str, float], right: dict[str, float]) -> None:
 
 
 @pytest.mark.parametrize("layout", ["SBS", "OU"])
+@pytest.mark.usefixtures("require_fixture_decoders")
 def test_bundled_packed_checks_have_blue_behind_red_in_front(layout: str) -> None:
     path = ROOT / "macos" / "BDToAVPPlayer" / "Resources" / f"Stereo-Check-{layout}.mov"
     document = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-of", "json", path]))
@@ -103,6 +104,7 @@ def audio_eye(left_eye: bool, timestamp: float) -> np.ndarray:
     )
 
 
+@pytest.mark.usefixtures("require_fixture_decoders")
 def test_audio_visuals_have_three_depth_planes_and_synchronized_flash() -> None:
     images = [audio_eye(eye, 0.5) for eye in (True, False)]
     centers = []
@@ -139,6 +141,7 @@ def test_audio_warning_gate_detects_missing_fallback_and_unexpected_warning() ->
         validate_warnings(fallback, streams, recorder)
 
 
+@pytest.mark.usefixtures("require_fixture_decoders")
 def test_decoded_audio_comparison_preserves_onset_while_allowing_tail_padding(tmp_path: Path) -> None:
     from scripts.create_spatial_audio_validation_fixtures import decoded_audio_fingerprint
 
@@ -172,6 +175,7 @@ def test_decoded_audio_comparison_preserves_onset_while_allowing_tail_padding(tm
     assert fingerprint != decoded_audio_fingerprint(delayed, 0, duration_seconds=0.95)
 
 
+@pytest.mark.usefixtures("require_fixture_decoders")
 def test_final_spatial_depth_gate_rejects_swapped_views(tmp_path: Path) -> None:
     from scripts.create_spatial_audio_validation_fixtures import validate_spatial_depth
 
@@ -202,6 +206,7 @@ def test_final_spatial_depth_gate_rejects_swapped_views(tmp_path: Path) -> None:
         validate_spatial_depth(*reversed(paths))
 
 
+@pytest.mark.usefixtures("require_fixture_decoders")
 def test_decoded_audio_comparison_detects_changed_aac_priming_edit(tmp_path: Path) -> None:
     from scripts.create_spatial_audio_validation_fixtures import decoded_audio_fingerprint
 
