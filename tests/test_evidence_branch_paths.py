@@ -52,6 +52,7 @@ class EvidenceBranchPathTests(unittest.TestCase):
 
     def change(self, source: str, destination: str | None) -> None:
         if destination is None:
+            (self.root / source).parent.mkdir(parents=True, exist_ok=True)
             (self.root / source).write_text("updated documentation\n", encoding="utf-8")
         else:
             (self.root / destination).parent.mkdir(parents=True, exist_ok=True)
@@ -69,12 +70,19 @@ class EvidenceBranchPathTests(unittest.TestCase):
             with self.assertRaisesRegex(QualificationResumeSafetyError, "non-documentation changes"):
                 _require_local_evidence_checkout(self.root, checked)
 
+        self.assert_workflow_boundaries(accepted=accepted)
+
+    def assert_workflow_boundaries(self, *, accepted: bool) -> None:
         workflow = load_workflows()["release-evidence.yml"]
         guards = [
             guard
             for job in workflow["jobs"].values()
             for step in job.get("steps", [])
-            for guard in re.findall(r"if git diff\b.*?\bfi\b", step.get("run", ""), flags=re.DOTALL)
+            for guard in re.findall(
+                r"EVIDENCE_DIFF=\$\(git diff\b.*?\)\n\s*if\b.*?\bfi\b|if git diff\b.*?\bfi\b",
+                step.get("run", ""),
+                flags=re.DOTALL,
+            )
         ]
         self.assertTrue(guards, "No executable branch-diff guards were selected")
         for guard in guards:
@@ -111,3 +119,28 @@ class EvidenceBranchPathTests(unittest.TestCase):
         self.git("rm", "scripts/example.py")
         self.change("docs/example.py", None)
         self.assert_boundaries(accepted=False)
+
+    def test_empty_diff_is_accepted(self) -> None:
+        for ref in ("release-evidence-existing", "release-evidence-verified"):
+            self.git("update-ref", f"refs/remotes/origin/{ref}", "HEAD")
+        self.assert_workflow_boundaries(accepted=True)
+
+    def test_missing_base_is_rejected(self) -> None:
+        self.change("docs/example.py", None)
+        self.git("branch", "-D", "main")
+        self.base_sha = "missing-ref"
+        self.assert_workflow_boundaries(accepted=False)
+
+    def test_missing_evidence_ref_is_rejected(self) -> None:
+        self.change("docs/example.py", None)
+        # Every guard's right-hand ref is unavailable, including the local HEAD.
+        for ref in ("release-evidence-existing", "release-evidence-verified"):
+            self.git("update-ref", "-d", f"refs/remotes/origin/{ref}")
+        self.git("symbolic-ref", "HEAD", "refs/heads/missing-evidence")
+        self.assert_workflow_boundaries(accepted=False)
+
+    def test_unrelated_histories_are_rejected(self) -> None:
+        self.git("switch", "--orphan", "unrelated")
+        self.git("commit", "--allow-empty", "-qm", "unrelated root")
+        self.change("docs/example.py", None)
+        self.assert_workflow_boundaries(accepted=False)
