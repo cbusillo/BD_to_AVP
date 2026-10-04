@@ -76,7 +76,7 @@ jobs:
             echo "Evidence branch does not contain the current protected main commit." >&2
             exit 1
           fi
-          EVIDENCE_DIFF=$(git -C evidence diff --name-only origin/main...HEAD)
+          EVIDENCE_DIFF=$(git -C evidence diff --no-renames --name-only origin/main...HEAD)
           UNTRUSTED_PATHS=$(printf '%s\n' "$EVIDENCE_DIFF" | grep -Ev '^docs/' || true)
           if [ -n "$UNTRUSTED_PATHS" ]; then
             echo "Evidence branch contains non-documentation changes:" >&2
