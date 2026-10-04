@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+import numpy as np
+
 from bd_to_avp.modules.audio import create_prepared_audio_file, enforce_aac_layout_policy, plan_aac_layouts
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage, config
@@ -383,31 +385,56 @@ def packet_fingerprint(path: Path, audio_index: int) -> dict[str, object]:
     return {"packet_count": len(packet_hashes), "sha256": digest}
 
 
-def decoded_audio_fingerprint(path: Path, audio_index: int) -> str:
-    result = run(
-        [
-            config.FFMPEG_PATH,
-            "-v",
-            "error",
-            # Compare codec samples independently of container edit-list trimming.
-            # Presentation timing is checked separately from stream start/duration.
-            "-ignore_editlist",
-            "1",
-            "-i",
-            path,
-            "-map",
-            f"0:a:{audio_index}",
-            "-c:a",
-            "pcm_s24le",
-            "-f",
-            "hash",
-            "-hash",
-            "sha256",
-            "-",
-        ],
-        capture_output=True,
-    )
+def decoded_audio_fingerprint(path: Path, audio_index: int, *, duration_seconds: float | None = None) -> str:
+    command: list[str | Path] = [config.FFMPEG_PATH, "-v", "error", "-i", path, "-map", f"0:a:{audio_index}"]
+    if duration_seconds is not None:
+        command.extend(["-t", str(duration_seconds)])
+    command.extend(["-c:a", "pcm_s24le", "-f", "hash", "-hash", "sha256", "-"])
+    result = run(command, capture_output=True)
     return result.stdout.strip().removeprefix("SHA256=")
+
+
+def validate_spatial_depth(left_path: Path, right_path: Path) -> dict[str, dict[str, float]]:
+    centers = {}
+    for eye, path in (("left", left_path), ("right", right_path)):
+        result = subprocess.run(
+            [
+                str(config.FFMPEG_PATH),
+                "-v",
+                "error",
+                "-ss",
+                "0.5",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        pixels = np.frombuffer(result.stdout, dtype=np.uint8).reshape(VIDEO_HEIGHT, VIDEO_WIDTH, 3).astype(int)
+        red, green, blue = pixels.transpose(2, 0, 1)
+        masks = {
+            "blue": (blue > red * 2) & (blue > green * 1.5) & (blue > 120),
+            "green": (green > red * 2) & (green > blue * 1.5) & (green > 100),
+            "red": (red > blue * 2) & (red > green * 1.5) & (red > 120),
+        }
+        centers[eye] = {}
+        for color, mask in masks.items():
+            _, xs = np.nonzero(mask)
+            if len(xs) < 100:
+                raise RuntimeError(f"{path.name}: missing {color} depth marker")
+            centers[eye][color] = float(xs.mean())
+    disparity = {color: centers["left"][color] - centers["right"][color] for color in centers["left"]}
+    if not (disparity["blue"] < -2 and abs(disparity["green"]) < 1 and disparity["red"] > 2):
+        raise RuntimeError(f"Final spatial views have incorrect depth order: {disparity}")
+    return centers
 
 
 def file_sha256(path: Path) -> str:
@@ -518,8 +545,16 @@ def validate_fixture(
     source_fingerprints = [packet_fingerprint(source_path, index) for index in range(2)]
     prepared_fingerprints = [packet_fingerprint(prepared_audio_path, index) for index in range(2)]
     final_fingerprints = [packet_fingerprint(final_path, index) for index in range(2)]
-    prepared_decoded_fingerprints = [decoded_audio_fingerprint(prepared_audio_path, index) for index in range(2)]
-    final_decoded_fingerprints = [decoded_audio_fingerprint(final_path, index) for index in range(2)]
+    # AAC muxers differ in final-frame padding. Compare presentation samples through
+    # all beep bursts, excluding only the last video frame (which has no beep).
+    # Keep the full AAC packet check below; PCM compares every decoded sample.
+    decoded_duration = DURATION_SECONDS - 1 / FRAME_RATE if case.mode is not AudioMode.PCM else None
+    prepared_decoded_fingerprints = [
+        decoded_audio_fingerprint(prepared_audio_path, index, duration_seconds=decoded_duration) for index in range(2)
+    ]
+    final_decoded_fingerprints = [
+        decoded_audio_fingerprint(final_path, index, duration_seconds=decoded_duration) for index in range(2)
+    ]
     if prepared_decoded_fingerprints != final_decoded_fingerprints:
         raise RuntimeError(f"{case.filename}: final mux changed decoded audio samples")
     if case.mode is not AudioMode.PCM and prepared_fingerprints != final_fingerprints:
@@ -547,6 +582,11 @@ def validate_fixture(
     if len(split_outputs) != 2:
         raise RuntimeError(f"{case.filename}: spatial split did not produce left and right views")
 
+    depth_centers = validate_spatial_depth(
+        split_directory / f"{final_path.stem}_LEFT.mov",
+        split_directory / f"{final_path.stem}_RIGHT.mov",
+    )
+
     return {
         "file": final_path.name,
         "label": case.label,
@@ -560,10 +600,12 @@ def validate_fixture(
         "final_audio": [stream_summary(stream) for stream in final_audio_streams],
         "source_packet_fingerprints": source_fingerprints,
         "prepared_packet_fingerprints": prepared_fingerprints,
+        "decoded_comparison_duration_seconds": decoded_duration,
         "prepared_decoded_fingerprints": prepared_decoded_fingerprints,
         "final_decoded_fingerprints": final_decoded_fingerprints,
         "warnings": [asdict(warning) for warning in recorder.warnings],
         "spatial_split_outputs": split_outputs,
+        "decoded_depth_marker_centers": depth_centers,
         "mp4box_audio_tracks_verified": True,
     }
 
@@ -606,7 +648,7 @@ Generated fixtures are {DURATION_SECONDS} seconds long. A white flash occurs onc
 1. Open the movie in **BD to AVP Playback Check** and select **Run Playback Check**.
 2. Watch the beginning, middle, and end sequence, then answer the three visible playback questions:
    picture visibility, three-dimensional appearance, and correct comfortable depth direction.
-3. Confirm the automatic result passes. Blue (upper left) should be behind the screen plane,
+3. Confirm the automatic checks pass. Blue (upper left) should be behind the screen plane,
    green (center) on it, and red (lower right) in front; the left eye must remain primary.
    Answer **Not sure** if foreground/background is unclear; that is a result needing review,
    not a full spatial pass. Record the audio observations separately.
@@ -665,7 +707,7 @@ def main() -> None:
         for case in FIXTURE_CASES
     ]
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "duration_seconds": DURATION_SECONDS,
         "video": {
             "codec": "MV-HEVC",

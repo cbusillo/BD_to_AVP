@@ -121,3 +121,66 @@ def test_audio_warning_gate_detects_missing_fallback_and_unexpected_warning() ->
     recorder.warning("unexpected", code="unexpected_audio_warning")
     with pytest.raises(RuntimeError, match="expected warnings"):
         validate_warnings(fallback, streams, recorder)
+
+
+def test_decoded_audio_comparison_preserves_onset_while_allowing_tail_padding(tmp_path: Path) -> None:
+    from scripts.create_spatial_audio_validation_fixtures import decoded_audio_fingerprint
+
+    original, shorter, delayed = (tmp_path / name for name in ("original.wav", "shorter.wav", "delayed.wav"))
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:sample_rate=48000:duration=1",
+            "-af",
+            "volume=enable='gte(t,0.12)':volume=0",
+            "-c:a",
+            "pcm_s24le",
+            str(original),
+        ],
+        check=True,
+        timeout=30,
+    )
+    for path, options in ((shorter, ["-t", "0.99"]), (delayed, ["-af", "adelay=21:all=1"])):
+        subprocess.run(
+            [FFMPEG, "-v", "error", "-i", str(original), *options, "-c:a", "pcm_s24le", str(path)],
+            check=True,
+            timeout=30,
+        )
+    fingerprint = decoded_audio_fingerprint(original, 0, duration_seconds=0.95)
+    assert fingerprint == decoded_audio_fingerprint(shorter, 0, duration_seconds=0.95)
+    assert fingerprint != decoded_audio_fingerprint(delayed, 0, duration_seconds=0.95)
+
+
+def test_final_spatial_depth_gate_rejects_swapped_views(tmp_path: Path) -> None:
+    from scripts.create_spatial_audio_validation_fixtures import validate_spatial_depth
+
+    paths = [tmp_path / name for name in ("left.mov", "right.mov")]
+    for path, left_eye in zip(paths, (True, False), strict=True):
+        subprocess.run(
+            [
+                FFMPEG,
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=0x080c12:size={VIDEO_WIDTH}x{VIDEO_HEIGHT}:rate={FRAME_RATE}",
+                "-t",
+                "1",
+                "-vf",
+                spatial_eye_filter(left_eye=left_eye),
+                "-c:v",
+                "mpeg4",
+                str(path),
+            ],
+            check=True,
+            timeout=30,
+        )
+    validate_spatial_depth(*paths)
+    with pytest.raises(RuntimeError, match="incorrect depth order"):
+        validate_spatial_depth(*reversed(paths))

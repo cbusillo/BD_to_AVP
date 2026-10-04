@@ -545,7 +545,7 @@ appear behind the screen, green on the screen plane, and red in front. In SBS,
 the left half is the left eye; in over-under, the top half is the left eye.
 Cover the right eye to see only `LEFT EYE ONLY`, then cover the left eye to see
 only `RIGHT EYE ONLY`. Reversed eye order should invert the depth and swap those
-labels; return to Normal afterward. These expectations are checked from decoded
+labels; return to Normal afterward. The depth-marker disparities are checked from decoded
 bundled pixels, but the corrected fixtures still need hands-on Vision Pro
 confirmation. The checks are silent; use the audio validation matrix for sound.
 The app copies the fixtures into
