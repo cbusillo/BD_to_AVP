@@ -552,7 +552,7 @@ def _require_local_evidence_checkout(repo_root: Path, identity: ResumeIdentity) 
         raise QualificationResumeSafetyError("Evidence branch must contain the current protected main commit.")
     changed = cast(
         subprocess.CompletedProcess[bytes],
-        _git(repo_root, ["diff", "--name-only", "-z", f"{identity.main_sha}...HEAD"], text=False),
+        _git(repo_root, ["diff", "--no-renames", "--name-only", "-z", f"{identity.main_sha}...HEAD"], text=False),
     )
     if changed.returncode != 0:
         raise QualificationResumeError("Unable to inspect evidence branch changes against protected main.")
