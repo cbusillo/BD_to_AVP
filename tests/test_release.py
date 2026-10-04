@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
-from scripts import embedded_python, release
+from scripts import embedded_python, qualify_release_scope, release, release_evidence_v2
 from scripts.beta3_recovery_evidence import BETA3_RECOVERY_EVIDENCE_PATH, Beta3RecoveryEvidenceError
 from scripts.production_identity import PRODUCTION_SPARKLE_PUBLIC_KEY
 
@@ -291,79 +291,14 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(previous_stable_artifacts["dmg"]["sha256"], previous_stable["dmg_sha256"])
         self.assertEqual(previous_stable_artifacts["appcast"]["sha256"], previous_stable["appcast_sha256"])
 
-        # Two matrix cases are named after the candidate: the updater route ends with this
-        # candidate's tag, and the release-notes case carries its beta number. Derive both from the
-        # record itself so a new candidate does not fail this test.
-        matrix_by_policy = {case["policy_case_id"]: case["id"] for case in qualification["matrix"]}
-        updater_case_id = matrix_by_policy["sparkle-update-route"]
-        release_notes_case_id = matrix_by_policy["native-sparkle-release-notes"]
-        self.assertTrue(updater_case_id.startswith("updater-route-"))
-        self.assertTrue(updater_case_id.endswith(f"-to-{metadata.release_tag}"))
-        self.assertTrue(release_notes_case_id.startswith("native-sparkle-notes-"))
-
-        expected_case_ids = {
-            "release-workflow-identity",
-            updater_case_id,
-            release_notes_case_id,
-            "profile-save-action-accessibility",
-            "signed-packaged-route-parity",
-            "gui-preview-low-local-ample-destination",
-            "gui-preview-cancel-cleanup",
-            "gui-preview-failure-cleanup",
-            "capacity-known-low",
-            "capacity-unknown-and-conflicting",
-            "network-generated-final-output",
-            "overwrite-and-conversion-cancel",
-            "malformed-pgs-parser-recovery",
-            "subtitle-partial-output-diagnostics",
-            "clean-machine-signed-update",
-            "installed-ui-accessibility",
-            "usb-bluray-makemkv",
-            "protected-real-media-conversion",
-            "vision-pro-physical-playback",
-            "public-diagnostics-and-field-closure",
-        }
-        self.assertEqual({case["id"] for case in qualification["matrix"]}, expected_case_ids)
-        self.assertEqual(
-            set(qualification["acceptance"]["required_case_ids"]),
-            {
-                "release-workflow-identity",
-                "sparkle-update-route",
-                "profile-save-action-accessibility",
-                "signed-packaged-route-parity",
-                "gui-preview-low-local-ample-destination",
-                "gui-preview-cancel-cleanup",
-                "gui-preview-failure-cleanup",
-                "capacity-known-low",
-                "capacity-unknown-and-conflicting",
-                "network-generated-final-output",
-                "overwrite-and-conversion-cancel",
-                "malformed-pgs-parser-recovery",
-                "subtitle-partial-output-diagnostics",
-                "clean-machine-signed-update",
-                "installed-ui-accessibility",
-            },
+        # Use the policy's validator for acceptance membership and migration rules.
+        # Matrix coverage must also include every policy case, rather than a copied list.
+        policy = qualify_release_scope.load_policy(REPO_ROOT / qualification["qualification_policy"]["path"])
+        qualification_id, overrides = qualify_release_scope.load_qualification_overrides(
+            REPO_ROOT / qualification_relative, policy
         )
-        self.assertEqual(set(qualification["acceptance"]["preregistered_matrix_case_ids"]), expected_case_ids)
-        self.assertEqual(
-            set(qualification["acceptance"]["nonblocking_case_ids"]),
-            {
-                "native-sparkle-release-notes",
-                "usb-bluray-makemkv",
-                "protected-real-media-conversion",
-                "vision-pro-physical-playback",
-                "public-diagnostics-and-field-closure",
-            },
-        )
-        self.assertEqual(
-            set(qualification["acceptance"]["blocking_case_ids"]),
-            {"sparkle-update-route", "clean-machine-signed-update", "installed-ui-accessibility"},
-        )
-        self.assertEqual(qualification["qualification_policy"]["id"], "release-qualification-policy-v1")
-        self.assertEqual(
-            {case["migration"] for case in qualification["matrix"]},
-            {"release_run_receipt", "fresh_retest", "scope_evaluated", "external_nonblocking"},
-        )
+        self.assertEqual(qualification_id, qualification["qualification_id"])
+        self.assertEqual(set(overrides), {case["id"] for case in policy["cases"]})
         candidate_identity_fields = (
             "source_git_sha",
             "dmg_sha256",
@@ -392,10 +327,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn(candidate_identity, valid_identities)
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(qualification["execution_policy"]["release_stage"], metadata.channel)
-        self.assertEqual(
-            set(qualification["acceptance"]["blocking_case_ids"]),
-            {"sparkle-update-route", "clean-machine-signed-update", "installed-ui-accessibility"},
-        )
         self.assertFalse(qualification["acceptance"]["milestone_complete"])
         self.assertTrue(
             qualification["execution_policy"]["macos_signing_requires_fresh_explicit_run_bound_authorization"]
@@ -403,34 +334,53 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(qualification["execution_policy"]["approval_required_exit_code"], 20)
         self.assertFalse(qualification["acceptance"]["passed"])
 
+    def test_historical_rc_qualification_agrees_with_its_evidence(self) -> None:
+        qualification = json.loads(
+            (REPO_ROOT / "docs/qualification/rc3-signed-qualification-v1.json").read_text(encoding="utf-8")
+        )
         targeted = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "rc3-targeted-qualification-v1.json").read_text(encoding="utf-8")
+            (REPO_ROOT / qualification["immutable_publication"]["targeted_qualification"]).read_text(encoding="utf-8")
         )
+        candidate = qualification["candidate"]
+        for field, value in targeted["candidate"].items():
+            qualification_field = {"build": "build_version", "source_sha": "source_git_sha"}.get(field, field)
+            self.assertEqual(value, candidate[qualification_field], field)
         self.assertEqual(targeted["result"], "passed")
-        self.assertEqual(targeted["acceptance"]["blocking_case_ids"], [])
-        self.assertFalse(targeted["acceptance"]["field_case_open"])
-        notes_case = next(case for case in targeted["cases"] if case["id"] == "native-sparkle-notes-rc3")
-        self.assertEqual(notes_case["result"], "passed")
         self.assertEqual(
-            notes_case["observations"]["content_aware_link_qualification"]["issue_result"], "not_applicable"
+            targeted["acceptance"]["blocking_case_ids"], qualification["immutable_publication"]["blocking_case_ids"]
         )
+        self.assertFalse(targeted["acceptance"]["field_case_open"])
+        matrix_by_id = {case["id"]: case for case in qualification["matrix"]}
+        for case in targeted["cases"]:
+            matrix_case = matrix_by_id[case["id"]]
+            self.assertEqual(case["result"], matrix_case["result"].removesuffix("_nonblocking"), case["id"])
+            link_qualification = case.get("observations", {}).get("content_aware_link_qualification")
+            if link_qualification is not None:
+                link_path = REPO_ROOT / link_qualification["reference"]
+                links = json.loads(link_path.read_text(encoding="utf-8"))
+                self.assertEqual(link_qualification["sha256"], hashlib.sha256(link_path.read_bytes()).hexdigest())
+                self.assertEqual(link_qualification["issue_result"], links["categories"]["issue"]["result"])
 
-        publication = json.loads(
-            (REPO_ROOT / "docs" / "release-evidence" / "v0.3.0-rc.3" / "publication-record.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(publication["receipt_origin"], "post_publication_generated_from_verified_public_facts")
-        self.assertFalse(publication["immutable_release_receipt_asset"])
-        self.assertIsNone(publication["receipt_asset_id"])
+        # The evidence verifier checks the publication against the receipt, including
+        # the backfill's non-asset status; it does not pin its explanatory wording.
+        release_evidence_v2.verify_tag(REPO_ROOT, candidate["release_tag"], worktree=True)
 
         sparkle_qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "rc1-to-rc2-sparkle-qualification-v2.json").read_text(
-                encoding="utf-8"
-            )
+            (REPO_ROOT / "docs/qualification/rc1-to-rc2-sparkle-qualification-v2.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(sparkle_qualification["status"], "passed_exact_signed_artifacts")
-        self.assertEqual(sparkle_qualification["candidate"]["to"]["build_version"], "159")
+        for endpoint, record_name in (("from", "rc1"), ("to", "rc2")):
+            record = json.loads(
+                (REPO_ROOT / f"docs/qualification/{record_name}-signed-qualification-v1.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            for field, value in sparkle_qualification["candidate"][endpoint].items():
+                self.assertEqual(value, record["candidate"][field], f"{endpoint}.{field}")
+        observations = sparkle_qualification["observations"]
+        updated = sparkle_qualification["candidate"]["to"]
+        self.assertEqual(observations["post_update_bundle_version"], updated["package_version"])
+        self.assertEqual(observations["post_update_bundle_build"], updated["build_version"])
+        self.assertEqual(sparkle_qualification["result"], observations["install_and_relaunch"])
         self.assertEqual(sparkle_qualification["result"], "passed")
 
     def test_configured_qualification_record_requires_unique_matching_identity(self) -> None:
