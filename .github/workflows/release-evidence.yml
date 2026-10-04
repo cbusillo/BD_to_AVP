@@ -54,33 +54,14 @@ jobs:
       - name: Resolve release evidence source
         id: source
         env:
-          COMPLETED_DISPLAY_TITLE: ${{ github.event.workflow_run.display_title }}
           COMPLETED_RUN_ID: ${{ github.event.workflow_run.id }}
           COMPLETED_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ "$COMPLETED_DISPLAY_TITLE" = "Stable PyPI recovery" ]; then
-            python -m scripts.stable_pypi_recovery outputs --github-output "$GITHUB_OUTPUT"
-            {
-              echo "recovery=true"
-              echo "recovery_run_id=$COMPLETED_RUN_ID"
-            } >> "$GITHUB_OUTPUT"
-            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COMPLETED_RUN_ID" > recovery-workflow-run.json
-            python -m scripts.stable_pypi_recovery verify-pypi \
-              --state published \
-              --retries 6 \
-              --delay 10
-            RELEASE_SOURCE_SHA=$(sed -n 's/^release_source_sha=//p' "$GITHUB_OUTPUT" | tail -1)
-            git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" HEAD
-          else
-            {
-              echo "release_run_id=$COMPLETED_RUN_ID"
-              echo "release_source_sha=$COMPLETED_SOURCE_SHA"
-              echo "recovery=false"
-              echo "recovery_run_id="
-            } >> "$GITHUB_OUTPUT"
-          fi
+          {
+            echo "release_run_id=$COMPLETED_RUN_ID"
+            echo "release_source_sha=$COMPLETED_SOURCE_SHA"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve the immutable release and receipt
         id: publication
@@ -337,14 +318,8 @@ jobs:
         if: >-
           steps.reuse.outputs.checkpoint_source != 'main'
           && steps.reuse.outputs.terminal != 'true'
-        env:
-          RECOVERY: ${{ steps.source.outputs.recovery }}
         run: |
           set -euo pipefail
-          RECOVERY_ARGS=()
-          if [ "$RECOVERY" = "true" ]; then
-            RECOVERY_ARGS+=(--recovery-workflow-run recovery-workflow-run.json)
-          fi
           python -m scripts.release_evidence \
             --workflow-run workflow-run.json \
             --release release.json \
@@ -361,7 +336,6 @@ jobs:
             --runner-sha "${{ steps.base.outputs.sha }}" \
             --sparkle-route "${{ steps.signed-ui.outputs.sparkle_route }}" \
             --repo-root "$GITHUB_WORKSPACE" \
-            "${RECOVERY_ARGS[@]}" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Generate or validate durable capture-v2

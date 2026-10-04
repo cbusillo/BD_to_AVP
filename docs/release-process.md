@@ -696,14 +696,14 @@ uv run python -m scripts.stable_pypi_recovery verify-pypi --state published
 It exits `0` with no output when the published file set matches.
 
 The [Stable cut packet](0.3.0-cut-packet.md#post-publication-pypi-recovery)
-preserves the original contract. Obsolete workflow-path cleanup is tracked in
-[#866](https://github.com/cbusillo/BD_to_AVP/issues/866); immutable recovery and
-qualification evidence stays preserved.
-Treat the frozen `remove_after_verified_recovery` flag as historical. Retain
-the pinned evidence file, the helper's `load_evidence`/`verify-pypi` support,
-and historical recovery validation in `scripts/release_evidence.py` and the
-release-evidence workflow; any refactor must ship equivalent read-only and
-historical replay paths alongside removal.
+preserves the original contract. The obsolete Stable dispatch input/job and
+workflow-run recovery routing were removed in [#866](https://github.com/cbusillo/BD_to_AVP/issues/866).
+Normal Stable publication still runs through the guarded release engine.
+Immutable recovery, publication and qualification evidence remains preserved.
+Treat the frozen `remove_after_verified_recovery` flag as historical. The helper
+retains `load_evidence`/`verify-pypi`, and `scripts.release_evidence` retains the
+`--recovery-workflow-run` CLI option for offline historical validation and
+reconciliation; it is no longer invoked by the release-evidence workflow.
 
 For the Beta 3 seed, a pre-publication failure leaves the existing feed and all
 published assets unchanged: retain the matching draft for an exact retry or stop
