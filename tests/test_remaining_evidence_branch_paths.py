@@ -10,11 +10,16 @@ from pathlib import Path
 
 from scripts.release_evidence_reconcile import ReleaseEvidenceReconciliationError, _verify_docs_only_diff
 from scripts.release_milestone_context import (
+    RELEASE_EVIDENCE_RECEIPT_NAME,
+    RELEASE_EVIDENCE_ROOT,
+    RELEASE_V2_INDEX_PATH,
     ReleaseMilestoneContextError,
     discover_milestone_manifest,
     discover_milestone_receipt,
     discover_terminal_v2_qualification,
 )
+from scripts.release_evidence_v2 import QUALIFICATION_NAME
+from scripts.release_qualification_manifest import MANIFEST_NAME
 from tests.test_workflow_security_policy import load_workflows
 
 
@@ -26,7 +31,7 @@ class RemainingEvidenceBranchPathTests(unittest.TestCase):
         self.root.mkdir()
         self.environment = {"PATH": os.defpath, "HOME": temporary.name, "GIT_CONFIG_NOSYSTEM": "1"}
         self.tag = "v1.0.0"
-        self.bundle = f"docs/release-evidence/{self.tag}"
+        self.bundle = (RELEASE_EVIDENCE_ROOT / self.tag).as_posix()
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.com")
@@ -34,7 +39,8 @@ class RemainingEvidenceBranchPathTests(unittest.TestCase):
         self.git("config", "diff.renames", "true")
         self.write("scripts/example.py", "example content\n")
         self.write("docs/example.py", "example content\n")
-        self.write("docs/release-evidence/v0.9.0/release-receipt.json", "{}\n")
+        self.historical_receipt = (RELEASE_EVIDENCE_ROOT / "v0.9.0" / RELEASE_EVIDENCE_RECEIPT_NAME).as_posix()
+        self.write(self.historical_receipt, "{}\n")
         self.write("docs/qualification/policy.json", "{}\n")
         self.write("docs/qualification/qualification.json", "{}\n")
         self.write(
@@ -53,9 +59,9 @@ class RemainingEvidenceBranchPathTests(unittest.TestCase):
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.git("switch", "-qc", f"automation/release-evidence-{self.tag}")
         # Discovery admits paths; artifact verification is a separate boundary.
-        for name in ("qualification-manifest.json", "qualification-v2.json", "release-receipt.json"):
+        for name in (MANIFEST_NAME, QUALIFICATION_NAME, RELEASE_EVIDENCE_RECEIPT_NAME):
             self.write(f"{self.bundle}/{name}", "{}\n")
-        self.write("docs/release-evidence/index-v2.json", "{}\n")
+        self.write(RELEASE_V2_INDEX_PATH, "{}\n")
 
     def write(self, relative: str, contents: str) -> None:
         path = self.root / relative
@@ -92,8 +98,8 @@ class RemainingEvidenceBranchPathTests(unittest.TestCase):
                 if accepted:
                     result = discover(self.root, **options)
                     expected = {
-                        discover_milestone_manifest: self.root / self.bundle / "qualification-manifest.json",
-                        discover_milestone_receipt: self.root / self.bundle / "release-receipt.json",
+                        discover_milestone_manifest: self.root / self.bundle / MANIFEST_NAME,
+                        discover_milestone_receipt: self.root / self.bundle / RELEASE_EVIDENCE_RECEIPT_NAME,
                         discover_terminal_v2_qualification: self.tag,
                     }
                     self.assertEqual(result, expected[discover])
@@ -140,7 +146,7 @@ class RemainingEvidenceBranchPathTests(unittest.TestCase):
         self.assert_workflow(accepted=False)
 
     def test_historical_receipt_move_is_rejected_by_single_tag_boundaries(self) -> None:
-        self.move("docs/release-evidence/v0.9.0/release-receipt.json", f"{self.bundle}/moved-receipt.json")
+        self.move(self.historical_receipt, f"{self.bundle}/moved-receipt.json")
         self.commit("historical receipt moved into bundle")
         self.assert_discovery(accepted=False)
         self.assert_reconciliation(accepted=False)
