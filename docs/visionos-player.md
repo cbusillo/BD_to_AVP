@@ -539,11 +539,11 @@ rendered frame before restoration completes.
 The Library always exposes a **Built-in stereo checks** panel with bundled,
 reproducibly generated HEVC fixtures for side-by-side and over-under playback.
 No import or filename preparation is required. Each eye image carries an
-exclusive `LEFT EYE ONLY` or `RIGHT EYE ONLY` label, an instruction to cover the
+exclusive `LEFT EYE ONLY` or `RIGHT EYE ONLY` label, an instruction to close the
 other eye, and asymmetric depth markers. With **Eye Order: Normal**, blue should
 appear behind the screen, green on the screen plane, and red in front. In SBS,
 the left half is the left eye; in over-under, the top half is the left eye.
-Cover the right eye to see only `LEFT EYE ONLY`, then cover the left eye to see
+Close the right eye to see only `LEFT EYE ONLY`, then close the left eye to see
 only `RIGHT EYE ONLY`. Reversed eye order should invert the depth and swap those
 labels; return to Normal afterward. The depth-marker disparities are checked from decoded
 bundled pixels, but the corrected fixtures still need hands-on Vision Pro

@@ -219,7 +219,7 @@ If foreground/background is unclear, choose **Not sure** and keep the spatial
 result needing review; audio/track observations can still be recorded separately.
 Decoded audio fingerprints retain edit-list timing. AAC compares presentation
 samples through every beep burst, excluding only the last silent video frame to
-allow differing encoder tail padding; all AAC packet payloads are compared too.
+allow differing container tail padding; all AAC packet payloads are compared too.
 PCM compares every decoded sample. Schema-2 manifests record the comparison
 duration and depth-marker centers decoded from the final split views. These
 synthetic checks do not replace hands-on acceptance or alter past receipts.

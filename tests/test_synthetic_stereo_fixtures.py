@@ -1,7 +1,8 @@
 """Check decoded pixels, rather than generator text or encoder byte identity."""
 
 import json
-import shutil
+import os
+import struct
 import subprocess
 
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from scripts.create_spatial_audio_validation_fixtures import (
     FIXTURE_CASES,
     FRAME_RATE,
+    config,
     WarningRecorder,
     validate_warnings,
     VIDEO_HEIGHT,
@@ -20,9 +22,23 @@ from scripts.create_spatial_audio_validation_fixtures import (
 )
 
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
-pytestmark = pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="FFmpeg and FFprobe are needed to decode fixtures")
+FFMPEG = str(config.FFMPEG_PATH)
+FFPROBE = str(config.FFPROBE_PATH)
+
+
+@pytest.fixture(autouse=True)
+def require_fixture_decoders() -> None:
+    missing = [tool for tool in (FFMPEG, FFPROBE) if not Path(tool).is_file() or not os.access(tool, os.X_OK)]
+    if missing:
+        message = (
+            "FFmpeg and FFprobe are needed to decode fixtures. Install FFmpeg as described in README.md, "
+            "or set BD_TO_AVP_FFMPEG_PATH and BD_TO_AVP_FFPROBE_PATH to the installed tools."
+        )
+        if os.environ.get("CI"):
+            pytest.fail(message)
+        pytest.skip(message)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -184,3 +200,44 @@ def test_final_spatial_depth_gate_rejects_swapped_views(tmp_path: Path) -> None:
     validate_spatial_depth(*paths)
     with pytest.raises(RuntimeError, match="incorrect depth order"):
         validate_spatial_depth(*reversed(paths))
+
+
+def test_decoded_audio_comparison_detects_changed_aac_priming_edit(tmp_path: Path) -> None:
+    from scripts.create_spatial_audio_validation_fixtures import decoded_audio_fingerprint
+
+    original, shifted = (tmp_path / name for name in ("original.m4a", "shifted.m4a"))
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:sample_rate=48000:duration=1",
+            "-c:a",
+            "aac",
+            str(original),
+        ],
+        check=True,
+        timeout=30,
+    )
+    probe = json.loads(subprocess.check_output([FFPROBE, "-v", "error", "-show_streams", "-of", "json", original]))
+    sample_rate = int(probe["streams"][0]["sample_rate"])
+    data = bytearray(original.read_bytes())
+    offset = data.index(b"elst")
+    version = data[offset + 4]
+    width, entry_size, integer_format = (8, 20, ">q") if version == 1 else (4, 12, ">i")
+    entry_count = struct.unpack_from(">I", data, offset + 8)[0]
+    for index in range(entry_count):
+        position = offset + 12 + index * entry_size + width
+        media_time = struct.unpack_from(integer_format, data, position)[0]
+        if media_time >= 0:
+            struct.pack_into(integer_format, data, position, media_time + round(sample_rate * 0.021))
+            break
+    else:
+        pytest.fail("Generated AAC has no media edit to exercise priming")
+    shifted.write_bytes(data)
+    assert decoded_audio_fingerprint(original, 0, duration_seconds=0.95) != decoded_audio_fingerprint(
+        shifted, 0, duration_seconds=0.95
+    )

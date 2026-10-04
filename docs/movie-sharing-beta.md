@@ -11,6 +11,11 @@ Use published **3D Blu-ray to Vision Pro 0.3.3 Stable or later** with **Shiny 3D
 5. Connect both devices to the same trusted network. In Shiny 3D Cinema, choose **Mac Movies**, then **Find Macs**. Allow Local Network access when prompted and select your Mac.
 6. Compare the pairing code on both devices and choose **Codes Match** on each. Choose a movie from the headset's list to begin playback.
 
+For the corrected depth convention, use fresh copies of the linked samples:
+blue behind the screen, green on it, red in front. Older downloaded or bundled
+copies may still have the earlier inverted geometry. Close one eye at a time to
+check the eye labels before judging depth.
+
 Check depth and eye order, pause and seek, then use **Done** to return to the library. Open the same movie again to check resume. Quit and reopen the Mac app, confirm sharing is enabled, and reconnect from the headset. With one of your own completed movies, also check audio and subtitle selection when tracks are present.
 
 This Movie Sharing beta supports compatible MV-HEVC and full side-by-side or over-under SDR HEVC movies. Complete a conversion on the Mac before sharing its output; direct ISO/BDMV playback is a separate workstream.
