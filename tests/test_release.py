@@ -293,12 +293,20 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         # Use the policy's validator for acceptance membership and migration rules.
         # Matrix coverage must also include every policy case, rather than a copied list.
-        policy = qualify_release_scope.load_policy(REPO_ROOT / qualification["qualification_policy"]["path"])
+        policy_path = github_config["releaseOperations"]["qualificationPolicyPath"]
+        self.assertEqual(qualification["qualification_policy"]["path"], policy_path)
+        policy = qualify_release_scope.load_policy(REPO_ROOT / policy_path)
         qualification_id, overrides = qualify_release_scope.load_qualification_overrides(
             REPO_ROOT / qualification_relative, policy
         )
         self.assertEqual(qualification_id, qualification["qualification_id"])
-        self.assertEqual(set(overrides), {case["id"] for case in policy["cases"]})
+        required_cases = set(qualification["acceptance"]["required_case_ids"])
+        nonblocking_cases = set(qualification["acceptance"]["nonblocking_case_ids"])
+        self.assertTrue(required_cases.isdisjoint(nonblocking_cases))
+        self.assertEqual(required_cases | nonblocking_cases, set(overrides))
+        if not candidate_receipt.is_file():
+            # Published records are immutable; later policy additions apply to the next candidate.
+            self.assertEqual(set(overrides), {case["id"] for case in policy["cases"]})
         candidate_identity_fields = (
             "source_git_sha",
             "dmg_sha256",
@@ -363,7 +371,16 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         # The evidence verifier checks the publication against the receipt, including
         # the backfill's non-asset status; it does not pin its explanatory wording.
-        release_evidence_v2.verify_tag(REPO_ROOT, candidate["release_tag"], worktree=True)
+        publication_result = release_evidence_v2.verify_tag(REPO_ROOT, candidate["release_tag"], worktree=True)
+        self.assertEqual(publication_result["class"], "legacy-publication-v1")
+        publication = json.loads(
+            (REPO_ROOT / "docs/release-evidence" / candidate["release_tag"] / "publication-record.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        # RC3 was reconstructed after publication, so it cannot claim an uploaded receipt asset.
+        self.assertFalse(publication["immutable_release_receipt_asset"])
+        self.assertIsNone(publication["receipt_asset_id"])
 
         sparkle_qualification = json.loads(
             (REPO_ROOT / "docs/qualification/rc1-to-rc2-sparkle-qualification-v2.json").read_text(encoding="utf-8")
