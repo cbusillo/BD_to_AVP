@@ -222,6 +222,8 @@ def test_decoded_audio_comparison_detects_changed_aac_priming_edit(tmp_path: Pat
             "sine=frequency=880:sample_rate=48000:duration=1",
             "-c:a",
             "aac",
+            "-use_editlist",
+            "1",
             str(original),
         ],
         check=True,

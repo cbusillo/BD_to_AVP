@@ -122,7 +122,12 @@ jobs:
       - name: Install fixture decoders
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
-        run: brew install ffmpeg
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install ffmpeg
+          ffmpeg -version
+          ffprobe -version
 
       - name: Unit smoke tests
         # One worker per core; each test class stays on one worker.
