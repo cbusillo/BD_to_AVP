@@ -1,0 +1,27 @@
+{
+  "clean": {
+    "stream": "clean.264",
+    "stream_sha256": "b131f20cf93055fc4880c0ad7774e5a38790cfcde79cf29ebdf969f3c1201660",
+    "width": 640,
+    "height": 480,
+    "frames": 9,
+    "frame_rate": "24000/1001",
+    "left_sha256": "48b72ec40987d5df6983af8c3d2c0c4f83747ac32c272c92d76ce56ee2542a46",
+    "right_sha256": "fef757e7cdf77385eede0f5afe791fb19ffd2c85c9758a45e4dd45ab499c5eca"
+  },
+  "damaged": {
+    "stream": "damaged.264",
+    "stream_sha256": "784e05e51ab0f3493e6acacac0e3ec0240b90f73cc2afb452dd83b2da6961251",
+    "width": 256,
+    "height": 256,
+    "frames": 40,
+    "frame_rate": "24000/1001"
+  },
+  "provenance": {
+    "repository": "https://github.com/jens-duttke/edge264-mvc",
+    "revision": "44e30b66d43a17418e0b342eba54d69d0c3be829",
+    "clean": "tests/conformance/mvc/MVCDS-4.264",
+    "damaged": "tests/liveness/mvc_corrupt_dep_slice.264",
+    "reference": "Clean raw YUV hashes match both per-view FNV hashes in the pinned upstream conformance manifest. Damaged frame count is the accepted 40-pair liveness fixture."
+  }
+}
