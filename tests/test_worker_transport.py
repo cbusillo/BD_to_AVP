@@ -76,7 +76,7 @@ class WorkerEventTransportTests(unittest.TestCase):
                 self._wait_for_child(process, marker)
                 assert process.stdout is not None
                 process.stdout.close()
-                self.assertEqual(process.wait(timeout=6), TRANSPORT_FAILURE_EXIT_CODE)
+                self.assertEqual(self._wait_for_exit(process, marker, timeout=6), TRANSPORT_FAILURE_EXIT_CODE)
                 self.assertFalse(psutil.pid_exists(int(marker.read_text())))
             finally:
                 self._stop_silent_worker(process, marker)
@@ -89,12 +89,14 @@ class WorkerEventTransportTests(unittest.TestCase):
 import pathlib, sys
 from bd_to_avp.process_runner import ChildProcessRunner, ProcessArtifactProbe, ProcessCancelled, ProcessSpec
 from bd_to_avp.worker.__main__ import run_worker
+fixture_ready()
 child_code = (
     'import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); '
     'output=open(sys.argv[2], "ab", buffering=0)\\n'
     'while True: output.write(b"x"*4096); time.sleep(.01)\\n'
 )
 def operation(job, owner, activity):
+    fixture_phase('operation entered')
     # All operation output is silent. Only the real heartbeat or control reader
     # can fail the worker transport while this child continues healthy growth.
     try:
@@ -112,25 +114,82 @@ raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=
                             isolate_process_stdin=True, event_write_timeout_seconds=.2,
                             heartbeat_interval=.001 if sys.argv[3]=='heartbeat' else 30))
 """
-        process = subprocess.Popen(
-            [sys.executable, "-c", script, str(marker), str(growing_output), origin],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        process = self._start_fixture(script, marker, str(growing_output), origin)
         assert process.stdin is not None
         process.stdin.write(request_line(Path("/tmp/movie.mkv")))
         process.stdin.flush()
         return process
 
+    def _start_fixture(self, script: str, marker: Path, *arguments: str) -> "subprocess.Popen[str]":
+        bootstrap = """
+import pathlib, sys, time
+fixture_marker = pathlib.Path(sys.argv[1])
+fixture_started = time.monotonic()
+def fixture_phase(name):
+    with fixture_marker.with_suffix('.startup').open('a') as output:
+        print(f'{time.monotonic() - fixture_started:.3f}s {name}', file=output)
+def fixture_ready():
+    fixture_phase('imports complete')
+    fixture_marker.with_suffix('.imported').write_text('ready')
+fixture_phase('bootstrap entered')
+"""
+        process = subprocess.Popen(
+            [sys.executable, "-c", bootstrap + script, str(marker), *arguments],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            # Import/setup time is separate from the short child/transport deadlines.
+            # Never drain stdout: these tests intentionally leave the event pipe full.
+            self._wait_for_marker(process, marker.with_suffix(".imported"), timeout=10, phase="fixture imports")
+        except BaseException:
+            self._stop_silent_worker(process, marker)
+            raise
+        return process
+
+    def _fixture_diagnostics(self, process: "subprocess.Popen[str]", marker: Path, phase: str) -> str:
+        result = process.poll()
+        state = "alive" if result is None else f"exited with code {result}"
+        startup = marker.with_suffix(".startup")
+        stages = startup.read_text() if startup.exists() else "bootstrap not observed"
+        diagnostic = b""
+        if process.stderr is not None and not process.stderr.closed:
+            descriptor = process.stderr.fileno()
+            blocking = os.get_blocking(descriptor)
+            try:
+                os.set_blocking(descriptor, False)
+                try:
+                    diagnostic = os.read(descriptor, 8192)
+                except BlockingIOError:
+                    pass
+            finally:
+                os.set_blocking(descriptor, blocking)
+        return (
+            f"{phase}: worker {process.pid} {state}; startup: {stages}; stderr: {diagnostic.decode(errors='replace')}"
+        )
+
+    def _wait_for_marker(self, process: "subprocess.Popen[str]", marker: Path, *, timeout: float, phase: str) -> str:
+        started = time.monotonic()
+        while True:
+            value = marker.read_text() if marker.exists() else ""
+            if value:
+                return value
+            if process.poll() is not None or time.monotonic() - started >= timeout:
+                self.fail(
+                    self._fixture_diagnostics(process, marker, f"{phase} after {time.monotonic() - started:.3f}s")
+                )
+            time.sleep(0.01)
+
     def _wait_for_child(self, process: "subprocess.Popen[str]", marker: Path) -> None:
-        deadline = time.monotonic() + 2
-        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.01)
-        self.assertTrue(marker.exists())
-        while not marker.read_text() and time.monotonic() < deadline:
-            time.sleep(0.01)
+        self._wait_for_marker(process, marker, timeout=2, phase="child readiness")
+
+    def _wait_for_exit(self, process: "subprocess.Popen[str]", marker: Path, *, timeout: float) -> int:
+        try:
+            return process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.fail(self._fixture_diagnostics(process, marker, f"transport exit after {timeout}s"))
 
     def _stop_silent_worker(self, process: "subprocess.Popen[str]", marker: Path) -> None:
         if process.poll() is None:
@@ -161,7 +220,7 @@ raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=
                     # host keeps both pipes open and deliberately does not read.
                     process.stdin.write("\n" * 4096)
                     process.stdin.flush()
-                self.assertEqual(process.wait(timeout=4), TRANSPORT_FAILURE_EXIT_CODE)
+                self.assertEqual(self._wait_for_exit(process, marker, timeout=4), TRANSPORT_FAILURE_EXIT_CODE)
                 self.assertGreater(growing_output.stat().st_size, 4096)
                 self.assertFalse(psutil.pid_exists(int(marker.read_text())))
                 assert process.stdout is not None and process.stderr is not None
@@ -170,6 +229,28 @@ raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=
                 self.assertNotIn('"type":"job.cancelled"', delivered)
                 self.assertNotIn('"type":"job.completed"', delivered)
                 self.assertEqual(process.stderr.read(), "")
+            finally:
+                self._stop_silent_worker(process, marker)
+
+    def test_fixture_import_failure_reports_exit_and_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child.pid"
+            with self.assertRaisesRegex(AssertionError, "fixture imports.*exited with code") as failure:
+                self._start_fixture("raise ImportError('fixture dependency unavailable')", marker)
+            self.assertIn("fixture dependency unavailable", str(failure.exception))
+            self.assertIn("bootstrap entered", str(failure.exception))
+
+    def test_unready_live_fixture_and_transport_exit_report_distinct_phases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child.pid"
+            process = self._start_fixture("fixture_ready(); time.sleep(30)", marker)
+            try:
+                with self.assertRaisesRegex(AssertionError, "child readiness.*alive") as failure:
+                    self._wait_for_marker(process, marker, timeout=0.05, phase="child readiness")
+                self.assertIn("imports complete", str(failure.exception))
+                with self.assertRaisesRegex(AssertionError, "transport exit.*alive"):
+                    self._wait_for_exit(process, marker, timeout=0.05)
+                self.assertIsNone(process.poll())
             finally:
                 self._stop_silent_worker(process, marker)
 
@@ -340,14 +421,19 @@ raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "child.pid"
             script = """
-import pathlib, subprocess, sys
+import pathlib, subprocess, sys, time
 from bd_to_avp.worker.__main__ import run_worker
+fixture_ready()
 children = []
 def operation(job, owner, activity):
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     children.append(child)
     pathlib.Path(sys.argv[1]).write_text(str(child.pid))
+    fixture_phase('child spawned; waiting for host')
+    while not pathlib.Path(sys.argv[1]).with_suffix('.go').exists():
+        time.sleep(.01)
+    fixture_phase('host released blocked output')
     for _ in range(8):
         activity.log('x' * 65536)
     return {'name': 'fixture'}
@@ -357,19 +443,16 @@ for child in children:
     child.wait(timeout=1)
 raise SystemExit(result)
 """
-            process = subprocess.Popen(
-                [sys.executable, "-c", script, str(marker)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            process = self._start_fixture(script, marker)
             try:
                 assert process.stdin is not None
                 process.stdin.write(request_line(Path("/tmp/movie.mkv")))
                 process.stdin.flush()
-                self.assertEqual(process.wait(timeout=4), TRANSPORT_FAILURE_EXIT_CODE)
+                self._wait_for_child(process, marker)
                 child_pid = int(marker.read_text())
+                self.assertTrue(psutil.pid_exists(child_pid))
+                marker.with_suffix(".go").touch()
+                self.assertEqual(self._wait_for_exit(process, marker, timeout=4), TRANSPORT_FAILURE_EXIT_CODE)
                 self.assertFalse(psutil.pid_exists(child_pid))
                 assert process.stdout is not None and process.stderr is not None
                 delivered = process.stdout.read()
