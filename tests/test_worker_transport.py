@@ -188,11 +188,16 @@ fixture_phase('bootstrap entered')
 
     def _wait_for_exit(self, process: "subprocess.Popen[str]", marker: Path, *, timeout: float) -> int:
         try:
-            return process.wait(timeout=timeout)
+            result = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             raise AssertionError(
                 self._fixture_diagnostics(process, marker, f"transport exit after {timeout}s")
             ) from None
+        if result != TRANSPORT_FAILURE_EXIT_CODE:
+            raise AssertionError(
+                self._fixture_diagnostics(process, marker, f"transport exit (expected {TRANSPORT_FAILURE_EXIT_CODE})")
+            )
+        return result
 
     def _stop_silent_worker(self, process: "subprocess.Popen[str]", marker: Path) -> None:
         if process.poll() is None:
@@ -242,6 +247,17 @@ fixture_phase('bootstrap entered')
                 self._start_fixture("raise ImportError('fixture dependency unavailable')", marker)
             self.assertIn("fixture dependency unavailable", str(failure.exception))
             self.assertIn("bootstrap entered", str(failure.exception))
+
+    def test_unexpected_transport_exit_reports_fixture_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child.pid"
+            process = self._start_fixture("fixture_ready(); raise RuntimeError('operation fixture failure')", marker)
+            try:
+                with self.assertRaisesRegex(AssertionError, "transport exit.*exited with code") as failure:
+                    self._wait_for_exit(process, marker, timeout=1)
+                self.assertIn("operation fixture failure", str(failure.exception))
+            finally:
+                self._stop_silent_worker(process, marker)
 
     def test_unready_live_fixture_and_transport_exit_report_distinct_phases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
