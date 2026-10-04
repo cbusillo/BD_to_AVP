@@ -174,10 +174,11 @@ fixture_phase('bootstrap entered')
     def _wait_for_marker(self, process: "subprocess.Popen[str]", marker: Path, *, timeout: float, phase: str) -> str:
         started = time.monotonic()
         while True:
+            result = process.poll()
             value = marker.read_text() if marker.exists() else ""
             if value:
                 return value
-            if process.poll() is not None or time.monotonic() - started >= timeout:
+            if result is not None or time.monotonic() - started >= timeout:
                 self.fail(
                     self._fixture_diagnostics(process, marker, f"{phase} after {time.monotonic() - started:.3f}s")
                 )
@@ -258,6 +259,40 @@ fixture_phase('bootstrap entered')
                 self.assertIn("operation fixture failure", str(failure.exception))
             finally:
                 self._stop_silent_worker(process, marker)
+
+    def test_ready_marker_published_during_worker_exit_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "ready.marker"
+            release = Path(directory) / "release"
+            script = """
+import pathlib, sys, time
+marker, release = map(pathlib.Path, sys.argv[1:])
+while not release.exists():
+    time.sleep(.001)
+marker.write_text('ready')
+"""
+            process = subprocess.Popen(
+                [sys.executable, "-c", script, str(marker), str(release)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            original_poll = process.poll
+
+            def worker_exits_during_poll() -> int | None:
+                # Model the host being descheduled while the worker publishes readiness and exits.
+                release.touch()
+                process.wait(timeout=1)
+                return original_poll()
+
+            try:
+                with patch.object(process, "poll", worker_exits_during_poll):
+                    self.assertEqual(
+                        self._wait_for_marker(process, marker, timeout=1, phase="fixture imports"), "ready"
+                    )
+            finally:
+                self._stop_silent_worker(process, Path(directory) / "child.pid")
 
     def test_unready_live_fixture_and_transport_exit_report_distinct_phases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
