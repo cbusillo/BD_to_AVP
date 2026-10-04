@@ -211,7 +211,15 @@ uv run python scripts/create_spatial_audio_validation_fixtures.py \
 
 The generator exercises production audio preparation and final muxing. It produces Automatic AAC copy, Automatic AAC fallback, Convert AAC, and PCM cases with English 5.1 audio, French stereo audio, English subtitles, synchronized flashes, and a machine-readable `manifest.json`.
 
-Run **Playback Check** for each fixture. After the guided result, expand **Technical details** to switch audio and subtitle choices using the generated `CHECKLIST.md`.
+Run **Playback Check** for each fixture. After the guided result, expand **Technical details** to switch audio and subtitle choices using the generated `CHECKLIST.md`. The visuals now
+have three distinct disparity planes: blue at upper left behind the screen,
+green in the center on the screen, and red at lower right in front. Answer all
+three observations (visibility, 3D appearance, and comfortable depth direction).
+If foreground/background is unclear, choose **Not sure** and keep the spatial
+result needing review; audio/track observations can still be recorded separately.
+Decoded audio fingerprints compare codec samples without container edit-list
+trimming; stream timing and AAC packet payloads are checked separately. These
+synthetic checks do not replace hands-on acceptance or alter past receipts.
 
 ## Structured Evidence
 

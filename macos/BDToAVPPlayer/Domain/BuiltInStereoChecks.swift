@@ -8,7 +8,7 @@ struct InstalledStereoCheck: Equatable, Sendable {
 enum BuiltInStereoChecks {
     static let sideBySideID = "builtin:stereo-check-sbs"
     static let overUnderID = "builtin:stereo-check-ou"
-    private static let fixtureSetVersion = "2"
+    private static let fixtureSetVersion = "3"
     private static let versionFileName = ".fixture-version"
 
     private struct Descriptor {
