@@ -562,6 +562,10 @@ The controller and Release Evidence workflow check renames as a deletion plus
 an addition. Moving a source file into `docs/` is rejected because its removed
 source path is outside `docs/`; edits and moves entirely within `docs/` remain
 supported through the existing evidence refresh and protected pull-request path.
+Release Evidence also requires the Git diff read to succeed before checking its
+paths. Missing refs or an unavailable merge base stop the job with Git's error;
+they cannot be treated as an empty documentation-only diff. Restore the expected
+refs and rerun the existing evidence preparation or reconciliation path.
 
 The initial command reports `dispatch_ready` and the exact values required for
 authorization. Dispatch occurs only when both `--expected-main-sha` and

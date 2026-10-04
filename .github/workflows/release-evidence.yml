@@ -166,8 +166,8 @@ jobs:
           fi
           git fetch --no-tags origin "refs/heads/$BRANCH_NAME:refs/remotes/origin/release-evidence-existing"
           echo "existing_branch_sha=$(git rev-parse refs/remotes/origin/release-evidence-existing)" >> "$GITHUB_OUTPUT"
-          if git diff --no-renames --name-only main...refs/remotes/origin/release-evidence-existing \
-            | grep -Ev '^docs/' | grep -q .; then
+          EVIDENCE_DIFF=$(git diff --no-renames --name-only main...refs/remotes/origin/release-evidence-existing)
+          if grep -Ev '^docs/' <<< "$EVIDENCE_DIFF" | grep -q .; then
             echo "Existing evidence branch contains changes outside docs/." >&2
             exit 1
           fi
@@ -477,8 +477,8 @@ jobs:
           fi
           if [ -n "$REMOTE_BRANCH_SHA" ]; then
             git fetch --no-tags origin "refs/heads/$BRANCH_NAME:refs/remotes/origin/release-evidence-existing"
-            if git diff --no-renames --name-only "$EXPECTED_MAIN_SHA"...refs/remotes/origin/release-evidence-existing \
-              | grep -Ev '^docs/' | grep -q .; then
+            EVIDENCE_DIFF=$(git diff --no-renames --name-only "$EXPECTED_MAIN_SHA"...refs/remotes/origin/release-evidence-existing)
+            if grep -Ev '^docs/' <<< "$EVIDENCE_DIFF" | grep -q .; then
               echo "Existing evidence branch contains changes outside docs/." >&2
               exit 1
             fi
@@ -554,7 +554,8 @@ jobs:
           else
             git switch -c "$EVIDENCE_REF" "$EXPECTED_MAIN_SHA"
           fi
-          if git diff --no-renames --name-only "$EXPECTED_MAIN_SHA"...HEAD | grep -Ev '^docs/' | grep -q .; then
+          EVIDENCE_DIFF=$(git diff --no-renames --name-only "$EXPECTED_MAIN_SHA"...HEAD)
+          if grep -Ev '^docs/' <<< "$EVIDENCE_DIFF" | grep -q .; then
             echo "Prepared evidence branch contains changes outside docs/." >&2
             exit 1
           fi
@@ -637,8 +638,8 @@ jobs:
             echo "Fetched evidence branch does not match the pushed commit." >&2
             exit 1
           fi
-          if git diff --no-renames --name-only "$EXPECTED_MAIN_SHA"...refs/remotes/origin/release-evidence-verified \
-            | grep -Ev '^docs/' | grep -q .; then
+          EVIDENCE_DIFF=$(git diff --no-renames --name-only "$EXPECTED_MAIN_SHA"...refs/remotes/origin/release-evidence-verified)
+          if grep -Ev '^docs/' <<< "$EVIDENCE_DIFF" | grep -q .; then
             echo "Published evidence branch contains changes outside docs/." >&2
             exit 1
           fi
