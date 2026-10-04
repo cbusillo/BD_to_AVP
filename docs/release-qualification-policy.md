@@ -558,6 +558,11 @@ run ID. More than one active exact run, a moved ref, a mismatched checkpoint, a
 skipped qualification job, partial identity, or any non-documentation
 evidence-branch change fails closed.
 
+The controller and Release Evidence workflow check renames as a deletion plus
+an addition. Moving a source file into `docs/` is rejected because its removed
+source path is outside `docs/`; edits and moves entirely within `docs/` remain
+supported through the existing evidence refresh and protected pull-request path.
+
 The initial command reports `dispatch_ready` and the exact values required for
 authorization. Dispatch occurs only when both `--expected-main-sha` and
 `--expected-manifest-sha256` match the preflight identity and the GraphQL viewer
