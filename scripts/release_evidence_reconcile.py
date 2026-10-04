@@ -259,7 +259,7 @@ def _verify_evidence_lineage(repo_root: Path, main_sha: str, evidence_sha: str) 
 def _verify_docs_only_diff(repo_root: Path, main_sha: str, evidence_sha: str, release_tag: str) -> None:
     changed = _git_output(
         repo_root,
-        ["diff", "--name-only", main_sha, evidence_sha],
+        ["diff", "--no-renames", "--name-only", main_sha, evidence_sha],
         "list evidence branch changes",
     ).splitlines()
     bundle_prefix = f"docs/release-evidence/{release_tag}/"

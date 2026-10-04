@@ -1919,7 +1919,7 @@ def discover_terminal_v2_qualification(
             "Release evidence qualification requires a same-repository pull request targeting protected main."
         )
     changed = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+        ["git", "diff", "--no-renames", "--name-only", f"{base_sha}...{head_sha}"],
         cwd=repo_root,
         capture_output=True,
         text=True,
@@ -2133,7 +2133,7 @@ def discover_milestone_receipt(
             "Release evidence qualification requires a same-repository pull request targeting protected main."
         )
     changed = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+        ["git", "diff", "--no-renames", "--name-only", f"{base_sha}...{head_sha}"],
         cwd=repo_root,
         capture_output=True,
         text=True,
@@ -2371,7 +2371,7 @@ def discover_milestone_manifest(
             "Release evidence qualification requires a same-repository pull request targeting protected main."
         )
     changed = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+        ["git", "diff", "--no-renames", "--name-only", f"{base_sha}...{head_sha}"],
         cwd=repo_root,
         capture_output=True,
         text=True,

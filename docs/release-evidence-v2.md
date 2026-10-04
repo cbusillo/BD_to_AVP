@@ -185,6 +185,12 @@ merge the docs-only branch into `main`; branch protection, required CI,
 review, and conversation-resolution rules remain unchanged. The secret-free
 workflow never receives pull-request write permission.
 
+Milestone Qualification, pull-request evidence discovery, and reconciliation
+check both the removed and added paths of a rename. Moving source files into a
+release bundle or moving a historical tag's evidence into the current tag is
+rejected. Additions and moves within the allowed bundle remain supported through
+the existing evidence preparation and protected pull-request path.
+
 ## Operator Reconciliation
 
 Run the observational preflight first. It reads the active local `gh` operator,
