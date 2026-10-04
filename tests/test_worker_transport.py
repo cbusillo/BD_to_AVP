@@ -116,8 +116,13 @@ raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr, operation_runner=
 """
         process = self._start_fixture(script, marker, str(growing_output), origin)
         assert process.stdin is not None
-        process.stdin.write(request_line(Path("/tmp/movie.mkv")))
-        process.stdin.flush()
+        try:
+            process.stdin.write(request_line(Path("/tmp/movie.mkv")))
+            process.stdin.flush()
+        except OSError as error:
+            diagnostic = self._fixture_diagnostics(process, marker, f"job request ({error})")
+            self._stop_silent_worker(process, marker)
+            raise AssertionError(diagnostic) from None
         return process
 
     def _start_fixture(self, script: str, marker: Path, *arguments: str) -> "subprocess.Popen[str]":
@@ -206,7 +211,11 @@ fixture_phase('bootstrap entered')
             process.wait(timeout=2)
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None and not stream.closed:
-                stream.close()
+                try:
+                    stream.close()
+                except BrokenPipeError:
+                    # A dead worker may leave an unflushed request; still close the other pipes.
+                    pass
         if marker.exists() and marker.read_text():
             try:
                 child = psutil.Process(int(marker.read_text()))
@@ -248,6 +257,31 @@ fixture_phase('bootstrap entered')
                 self._start_fixture("raise ImportError('fixture dependency unavailable')", marker)
             self.assertIn("fixture dependency unavailable", str(failure.exception))
             self.assertIn("bootstrap entered", str(failure.exception))
+
+    def test_worker_death_before_job_request_reports_diagnostics_and_closes_pipes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child.pid"
+            workers = []
+            start = self._start_fixture
+
+            def die_before_request(script: str, marker: Path, *arguments: str) -> "subprocess.Popen[str]":
+                process = start(script, marker, *arguments)
+                workers.append(process)
+                process.kill()
+                process.wait(timeout=2)
+                return process
+
+            try:
+                with patch.object(self, "_start_fixture", die_before_request):
+                    with self.assertRaisesRegex(AssertionError, "job request.*exited with code") as failure:
+                        self._start_silent_worker(marker, Path(directory) / "growing.mov", "heartbeat")
+                self.assertIn("imports complete", str(failure.exception))
+                self.assertTrue(
+                    all(stream.closed for stream in (workers[0].stdin, workers[0].stdout, workers[0].stderr))
+                )
+            finally:
+                for process in workers:
+                    self._stop_silent_worker(process, marker)
 
     def test_unexpected_transport_exit_reports_fixture_exception(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
