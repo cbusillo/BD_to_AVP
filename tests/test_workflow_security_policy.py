@@ -88,6 +88,27 @@ class WorkflowSecurityPolicyTests(unittest.TestCase):
         config = json.loads((WORKFLOW_DIRECTORY.parent / "github.json").read_text(encoding="utf-8"))
         self.assertEqual(config["releaseOperations"]["releaseActor"], REQUIRED_ACTOR)
 
+    def test_python_publication_requires_the_guarded_release_engine(self) -> None:
+        publishers = 0
+        for workflow_name, workflow in self.workflows.items():
+            jobs = workflow["jobs"]
+            for job_name, job in jobs.items():
+                if not any(
+                    str(step.get("uses", "")).startswith("pypa/gh-action-pypi-publish@")
+                    for step in job.get("steps", [])
+                ):
+                    continue
+                publishers += 1
+                with self.subTest(workflow=workflow_name, job=job_name):
+                    engines = [
+                        jobs[parent]
+                        for parent in ancestors(jobs, job_name)
+                        if jobs[parent].get("uses") == f"./{ENGINE_WORKFLOW_PATH}"
+                    ]
+                    self.assertEqual(len(engines), 1)
+                    self.assertNotIn("if", engines[0])
+        self.assertGreater(publishers, 0)
+
     def test_external_actions_are_pinned_to_commit_shas(self) -> None:
         for workflow_name, _, job_name, job in self.jobs():
             uses = [job["uses"]] if "uses" in job else []
@@ -413,6 +434,36 @@ class StablePublicationGuardTests(unittest.TestCase):
             for actor in {"cbusillo", "untrusted-app[bot]", *RECEIPT_ACTORS} - {REQUIRED_ACTOR}:
                 with self.subTest(field=field, actor=actor):
                     self.assertNotEqual(self.run_guard(**{field: actor}), 0)
+
+
+class EvidenceCompletionSourceTests(unittest.TestCase):
+    def test_evidence_uses_the_completed_run_identity(self) -> None:
+        workflow = load_workflows()["release-evidence.yml"]
+        steps = [
+            step
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if "COMPLETED_RUN_ID" in step.get("env", {})
+        ]
+        self.assertEqual(len(steps), 1)
+        step = steps[0]
+        for title in ("Stable", "Prerelease", "Stable PyPI recovery"):
+            with self.subTest(title=title), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "outputs"
+                environment = {
+                    "PATH": "/usr/bin:/bin",
+                    "GITHUB_OUTPUT": str(output),
+                    "COMPLETED_RUN_ID": "123",
+                    "COMPLETED_SOURCE_SHA": "a" * 40,
+                    "COMPLETED_DISPLAY_TITLE": title,
+                }
+                result = subprocess.run(
+                    ["/bin/bash", "-c", step["run"]], env=environment, capture_output=True, check=False
+                )
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                self.assertEqual(values["release_run_id"], environment["COMPLETED_RUN_ID"])
+                self.assertEqual(values["release_source_sha"], environment["COMPLETED_SOURCE_SHA"])
 
 
 class EvidenceBranchIdentityTests(unittest.TestCase):

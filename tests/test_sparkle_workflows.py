@@ -83,10 +83,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
         for name, operator in operators.items():
             with self.subTest(operator=name):
                 self.assertEqual(set(operator["on"]), {"workflow_dispatch"})
-                expected_inputs = (
-                    {"release_notes", "pypi_recovery_evidence_sha256"} if name == "Stable" else {"release_notes"}
-                )
-                self.assertEqual(set(operator["on"]["workflow_dispatch"]["inputs"]), expected_inputs)
                 self.assertEqual(operator["concurrency"]["group"], "release")
                 self.assertEqual(operator["concurrency"]["cancel-in-progress"], "false")
         self.assertEqual(set(workflow["on"]), {"workflow_call"})
@@ -195,10 +191,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         policy_checkout = policy["steps"][1]
         policy_step = next(step for step in policy["steps"] if step.get("id") == "policy")
 
-        self.assertEqual(set(stable["jobs"]), {"release", "publish-pypi", "recover-pypi"})
         self.assertEqual(set(prerelease["jobs"]), {"release"})
         stable_release = dict(release)
-        stable_release.pop("if")
         self.assertEqual(prerelease["jobs"]["release"], stable_release)
         self.assertEqual(release["uses"], "./.github/workflows/release-engine.yml")
         self.assertEqual(declared_secret_names, macos_secret_names | sparkle_secret_names)
@@ -1234,36 +1228,6 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(download["with"]["merge-multiple"], "true")
         self.assertNotIn("publish-pypi", workflow["jobs"])
         self.assertNotIn("publish-pypi", prerelease["jobs"])
-        recovery = operator["jobs"]["recover-pypi"]
-        recovery_input = operator["on"]["workflow_dispatch"]["inputs"]["pypi_recovery_evidence_sha256"]
-        self.assertEqual(recovery_input["required"], "false")
-        self.assertEqual(operator["jobs"]["release"]["if"], "inputs.pypi_recovery_evidence_sha256 == ''")
-        self.assertEqual(recovery["if"], "inputs.pypi_recovery_evidence_sha256 != ''")
-        self.assertEqual(recovery["environment"]["name"], "pypi")
-        self.assertEqual(recovery["permissions"], {"actions": "read", "contents": "read", "id-token": "write"})
-        recovery_steps = {step["name"]: step for step in recovery["steps"]}
-        self.assertEqual(
-            recovery_steps["Publish exact original bytes with PyPI trusted publishing and attestations"]["if"],
-            "steps.pypi.outputs.publish_required == 'true'",
-        )
-        self.assertEqual(
-            recovery_steps["Publish exact original bytes with PyPI trusted publishing and attestations"]["with"][
-                "skip-existing"
-            ],
-            "true",
-        )
-        recovery_download = next(
-            step for step in recovery["steps"] if step["name"] == "Download exact failed-run Python artifact"
-        )
-        self.assertEqual(recovery_download["with"]["github-token"], "${{ github.token }}")
-        self.assertEqual(recovery_download["with"]["repository"], "${{ github.repository }}")
-        self.assertEqual(recovery_download["with"]["run-id"], "${{ steps.evidence.outputs.release_run_id }}")
-        self.assertEqual(
-            next(step for step in recovery["steps"] if "pypa/gh-action-pypi-publish@" in step.get("uses", ""))["with"][
-                "packages-dir"
-            ],
-            "python-distributions/dist",
-        )
         self.assertEqual(
             release_operations["workflows"]["Stable"]["path"],
             ".github/workflows/briefcase.yml",
