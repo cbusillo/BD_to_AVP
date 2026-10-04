@@ -163,6 +163,7 @@ fixture_phase('bootstrap entered')
                 try:
                     diagnostic = os.read(descriptor, 8192)
                 except BlockingIOError:
+                    # No stderr is available yet; diagnostics must never wait for it.
                     pass
             finally:
                 os.set_blocking(descriptor, blocking)
@@ -189,7 +190,9 @@ fixture_phase('bootstrap entered')
         try:
             return process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            self.fail(self._fixture_diagnostics(process, marker, f"transport exit after {timeout}s"))
+            raise AssertionError(
+                self._fixture_diagnostics(process, marker, f"transport exit after {timeout}s")
+            ) from None
 
     def _stop_silent_worker(self, process: "subprocess.Popen[str]", marker: Path) -> None:
         if process.poll() is None:
