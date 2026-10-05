@@ -8,6 +8,7 @@ subtitles) only show up in real tool output.
 """
 
 import json
+import os
 import platform
 import shutil
 import struct
@@ -29,6 +30,7 @@ from bd_to_avp.modules import audio, container, sub
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrError, OcrWord
 from scripts import build_mv_hevc_encoder_macos
 
 
@@ -238,10 +240,6 @@ def real_tools_available() -> bool:
     )
 
 
-@unittest.skipUnless(
-    real_tools_available(),
-    "real final mux tests require macOS arm64, Xcode, MP4Box, ffmpeg and ffprobe",
-)
 class FinalMuxRealToolTests(unittest.TestCase):
     temporary_directory: tempfile.TemporaryDirectory[str]
     mv_hevc_path: Path
@@ -251,6 +249,12 @@ class FinalMuxRealToolTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        required = os.environ.get("BD_TO_AVP_REQUIRE_REAL_PGS_TESTS") == "1"
+        if not real_tools_available():
+            reason = "real final mux tests require macOS arm64, Xcode, MP4Box, ffmpeg and ffprobe"
+            if required:
+                raise RuntimeError(reason)
+            raise unittest.SkipTest(reason)
         cls.temporary_directory = tempfile.TemporaryDirectory(prefix="final-mux-real-tools-")
         try:
             root = Path(cls.temporary_directory.name)
@@ -262,6 +266,8 @@ class FinalMuxRealToolTests(unittest.TestCase):
                 timeout=TOOL_TIMEOUT_SECONDS,
             )
             if probe.returncode == 2 and json.loads(probe.stdout).get("stereo_mv_hevc_encode_supported") is False:
+                if required:
+                    raise RuntimeError("required real PGS/mux tests need MV-HEVC fixture encoding")
                 raise unittest.SkipTest("this Mac cannot create the bounded MV-HEVC fixture")
             if probe.returncode != 0:
                 raise RuntimeError(f"MV-HEVC capability probe failed:\n{probe.stderr.decode(errors='replace')}")
@@ -396,6 +402,48 @@ class FinalMuxRealToolTests(unittest.TestCase):
                 self.assertEqual(stream_languages(muxed_path), [("video", None), ("audio", "eng")])
 
     def test_pgs_subtitles_rip_to_srt_and_reach_the_final_mux_with_forced_flag(self) -> None:
+        # Probe actual OCR even on the affected runner, so a recovered image
+        # resumes full coverage. Only its recorded false/no-NSError failure
+        # may skip; other failures remain fatal.
+        reason = os.environ.get("BD_TO_AVP_HOSTED_VISION_OCR_SKIP_REASON")
+        if not reason or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
+            self.check_pgs_subtitles_reach_final_mux()
+            return
+
+        outcomes: list[Exception | None] = []
+        recognize = AppleVisionOcr.image_to_data
+
+        def capture_outcome(backend: AppleVisionOcr, image: np.ndarray, language: Any = None) -> dict[str, list[Any]]:
+            try:
+                data = recognize(backend, image, language)
+            except Exception as error:
+                outcomes.append(error)
+                raise
+            outcomes.append(None)
+            return data
+
+        with patch.object(AppleVisionOcr, "image_to_data", new=capture_outcome):
+            self.check_pgs_subtitles_reach_final_mux(hosted_skip_reason=reason, ocr_outcomes=outcomes)
+
+    def test_real_pgs_extraction_and_mux_with_bitmap_checked_ocr(self) -> None:
+        # Keep the real PGS container, decode, SRT and mux path exercised even
+        # where the OS OCR backend cannot run. Only recognition is substituted;
+        # its answer depends on receiving the exact decoded fixture bitmap.
+        def recognize(image: np.ndarray, _language: object = None) -> dict[str, list[Any]]:
+            for text, _, _ in (*PGS_CUES, *FORCED_PGS_CUES):
+                bitmap = np.zeros((80, 640), np.uint8)
+                cv2.putText(bitmap, text, (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 1.5, 1, 3, cv2.LINE_8)
+                expected = np.where(bitmap, 235, 255).astype(np.uint8)
+                if np.array_equal(image, expected):
+                    return AppleVisionOcr._tsv_data_from_words([OcrWord(text, 100, 10, 10, 600, 60, 1, 1)])
+            raise AssertionError("OCR received an unexpected decoded PGS bitmap")
+
+        with patch.object(AppleVisionOcr, "image_to_data", side_effect=recognize):
+            self.check_pgs_subtitles_reach_final_mux()
+
+    def check_pgs_subtitles_reach_final_mux(
+        self, *, hosted_skip_reason: str | None = None, ocr_outcomes: list[Exception | None] | None = None
+    ) -> None:
         # Subtitle tracks went missing between the disc and the output (#19, #21,
         # #28, #458); follow real PGS tracks through rip, OCR and mux.
         with tempfile.TemporaryDirectory(dir=self.temporary_directory.name) as folder:
@@ -464,9 +512,21 @@ class FinalMuxRealToolTests(unittest.TestCase):
             self.assertFalse(rip_thread.is_alive(), "PGS subtitle rip did not finish")
             if failures:
                 raise failures[0]
+            srt_files = sorted(output_folder.glob("*.srt"))
+            if (
+                hosted_skip_reason
+                and warnings
+                and not srt_files
+                and ocr_outcomes is not None
+                and len(ocr_outcomes) == len((regular_sup, forced_sup))
+                and all(
+                    isinstance(error, OcrError) and str(error) == "Apple Vision OCR failed: None"
+                    for error in ocr_outcomes
+                )
+            ):
+                self.skipTest(hosted_skip_reason)
             self.assertEqual(warnings, [])
 
-            srt_files = sorted(output_folder.glob("*.srt"))
             forced_files = [path for path in srt_files if ".forced." in path.stem]
             regular_files = [path for path in srt_files if ".forced." not in path.stem]
             self.assertEqual(len(forced_files), 1, srt_files)
@@ -478,13 +538,16 @@ class FinalMuxRealToolTests(unittest.TestCase):
 
             tracks = muxed_tracks(muxed_path)
             self.assertEqual([track.handler for track in tracks], ["vide", "sbtl", "sbtl"])
+            forced_flags = []
             for subtitle_index, track in enumerate(tracks[1:]):
                 assert track.tx3g_display_flags is not None
                 forced = bool(track.tx3g_display_flags & TX3G_ALL_SAMPLES_FORCED)
+                forced_flags.append(forced)
                 expected_cues = FORCED_PGS_CUES if forced else PGS_CUES
                 text = subtitle_text(muxed_path, subtitle_index).upper()
                 for cue, _, _ in expected_cues:
                     self.assertIn(cue, text, f"subtitle track {subtitle_index} (forced={forced})")
+            self.assertEqual(sorted(forced_flags), [False, True])
 
 
 if __name__ == "__main__":

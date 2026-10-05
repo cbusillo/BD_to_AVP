@@ -11,12 +11,20 @@ Use published **3D Blu-ray to Vision Pro 0.3.3 Stable or later** with **Shiny 3D
 5. Connect both devices to the same trusted network. In Shiny 3D Cinema, choose **Mac Movies**, then **Find Macs**. Allow Local Network access when prompted and select your Mac.
 6. Compare the pairing code on both devices and choose **Codes Match** on each. Choose a movie from the headset's list to begin playback.
 
+For the corrected depth convention, use fresh copies of the linked samples:
+blue behind the screen, green on it, red in front. Older downloaded or bundled
+copies may still have the earlier inverted geometry. Close one eye at a time to
+check the eye labels before judging depth.
+
 Check depth and eye order, pause and seek, then use **Done** to return to the library. Open the same movie again to check resume. Quit and reopen the Mac app, confirm sharing is enabled, and reconnect from the headset. With one of your own completed movies, also check audio and subtitle selection when tracks are present.
 
 This Movie Sharing beta supports compatible MV-HEVC and full side-by-side or over-under SDR HEVC movies. Complete a conversion on the Mac before sharing its output; direct ISO/BDMV playback is a separate workstream.
 
 If the Mac is missing, check the network, Local Network permission, sharing switch and whether the Mac is awake. If the folder is unavailable, reconnect its drive or choose the folder again on the Mac. Use **Refresh** after adding a movie. To remove a pairing, use **Forget** under Paired Devices on the Mac and **Forget This Mac** on the headset, then pair again.
 
-The player's **On My Vision Pro** section and bundled **Start SBS Check** / **Start Over-Under Check** samples also work without the Mac. That is a useful first check if Mac sharing is unavailable.
+The player's **On My Vision Pro** section and bundled **Start SBS Check** / **Start Over-Under Check** samples also work without the Mac. Those built-in samples are useful for playback and eye-label checks if Mac
+sharing is unavailable. The supported player build listed above predates the
+corrected fixtures, so use freshly downloaded samples from step 3 when judging
+the corrected blue-behind/red-in-front depth convention.
 
 Send player feedback through TestFlight. Include both app versions, device OS versions, the movie format and the steps that failed; do not attach private movie content. Mac conversion or updater problems can be reported through the Mac app's existing support flow.

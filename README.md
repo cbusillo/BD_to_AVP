@@ -441,6 +441,9 @@ This method has been effective in resolving compatibility issues.
 
 ## Contribution
 
+For subtitle integration checks and the recorded hosted Vision limitation, see
+[real PGS subtitle tests](docs/pgs-ocr-testing.md).
+
 Contribute to the project by submitting pull requests or opening issues for bugs and feature requests.
 
 ## Acknowledgements

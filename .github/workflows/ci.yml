@@ -119,9 +119,28 @@ jobs:
       - name: Type check
         run: uv run mypy bd_to_avp
 
+      - name: Install fixture decoders
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
       - name: Unit smoke tests
         # One worker per core; each test class stays on one worker.
-        run: uv run pytest -n auto --dist loadscope -p no:cacheprovider --durations 20 tests
+        env:
+          BD_TO_AVP_REQUIRE_REAL_PGS_TESTS: "1"
+          # #892: four xcode-27 attempts failed both real PGS tracks with
+          # performRequests returning false and no NSError. The backend cause
+          # is unproven; the full OCR test remains enabled outside this runner.
+          BD_TO_AVP_HOSTED_VISION_OCR_SKIP_REASON: >-
+            xcode-27 hosted Vision OCR returns false without NSError (#892,
+            CI 37229434438 attempts 1-4); real PGS extraction/mux still runs
+            with bitmap-checked recognition. Run locally for actual OCR.
+        run: uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs --durations 20 tests
 
       - name: Verify committed release evidence
         env:
