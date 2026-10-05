@@ -3,11 +3,13 @@
   "projectType": "python-desktop-app",
   "pullRequests": {
     "preferredMergeMethod": "merge",
-    "allowedMergeMethods": ["merge"]
+    "allowedMergeMethods": [
+      "merge"
+    ]
   },
   "branchProtection": {
     "main": {
-      "system": "classic",
+      "system": "classic-and-rulesets",
       "requiresPullRequest": true,
       "requiredStatusChecks": [
         "validate",
@@ -18,14 +20,29 @@
       "enforceAdmins": true,
       "blocksForcePushes": true,
       "blocksDeletion": true,
-      "requiresConversationResolution": true
+      "requiresConversationResolution": true,
+      "requiresStrictStatusChecks": true,
+      "rulesets": [
+        {
+          "name": "Code-owner review for DIRECTION.md",
+          "enforcement": "active"
+        },
+        {
+          "name": "Only the owner and automation update the default branch",
+          "enforcement": "active"
+        }
+      ]
     }
   },
   "releaseEnvironments": {
     "macos-signing": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": true,
-      "reviewers": ["cbusillo"],
+      "reviewers": [
+        "cbusillo"
+      ],
       "preventSelfReview": true,
       "canAdminsBypass": false,
       "secrets": [
@@ -38,22 +55,32 @@
       ]
     },
     "sparkle-release": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": false,
-      "secrets": ["SPARKLE_EDDSA_PRIVATE_KEY"]
+      "secrets": [
+        "SPARKLE_EDDSA_PRIVATE_KEY"
+      ]
     },
     "sparkle-feed-ops": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": true,
       "secrets": []
     },
     "pypi": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": false,
       "secrets": []
     },
     "github-pages": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": false,
       "secrets": []
     }
@@ -81,7 +108,10 @@
     "evidenceOrphanAuditCommand": "uv run python -m scripts.release_evidence_orphan_audit --repository cbusillo/BD_to_AVP --threshold-hours 72 --owner cbusillo",
     "evidenceOrphanAuditThresholdHours": 72,
     "evidenceOrphanAuditOwner": "cbusillo",
-    "evidenceOrphanAuditPermissions": ["contents: read", "issues: write"],
+    "evidenceOrphanAuditPermissions": [
+      "contents: read",
+      "issues: write"
+    ],
     "evidenceOrphanAuditSemantics": "github_rest_tree_blob_inspection_only_no_automation_ref_checkout_fetch_or_execution",
     "evidenceReconcilePreflightCommand": "uv run python -m scripts.release_evidence_reconcile preflight --release-tag <tag>",
     "evidenceReconcileCommand": "uv run python -m scripts.release_evidence_reconcile reconcile --release-tag <tag> --evidence-sha <preflight-evidence-sha> --main-sha <preflight-main-sha> --plan-digest <preflight-plan-digest>",
@@ -112,14 +142,8 @@
     }
   },
   "visionosTestFlight": {
-    "appName": "Shiny 3D Cinema",
-    "bundleID": "com.shinycomputers.bd-to-avp.player",
-    "appStoreConnectID": "6811956508",
-    "internalGroup": "AVP Internal",
-    "automaticDistribution": false,
     "exportOptionsPath": "macos/TestFlightInternalExportOptions.plist",
     "externalExportOptionsPath": "macos/TestFlightExternalExportOptions.plist",
-    "externalGroup": "AVP External",
     "toolchainEnvironment": "BD_TO_AVP_XCODE_DEVELOPER_DIR",
     "archiveCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" /usr/bin/xcodebuild archive -project macos/BluRayToVisionPro.xcodeproj -scheme BDToAVPPlayer -configuration Release -destination 'generic/platform=visionOS' -derivedDataPath build/testflight/DerivedData -archivePath build/testflight/BDToAVPPlayer.xcarchive -allowProvisioningUpdates",
     "exportCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive -archivePath build/testflight/BDToAVPPlayer.xcarchive -exportPath build/testflight/export-internal -exportOptionsPlist macos/TestFlightInternalExportOptions.plist -allowProvisioningUpdates",
@@ -130,6 +154,7 @@
   "docs": {
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
+    "macosAppPackaging": "docs/macos-app-packaging.md",
     "lockfile": "uv.lock",
     "releaseRoutes": "docs/release-routes.md",
     "releaseProcess": "docs/release-process.md",
@@ -203,12 +228,16 @@
       "pythonPackage": "uv build",
       "embeddedPythonBuild": "uv run python scripts/embedded_python.py",
       "macosPackage": "uv run python scripts/native_app.py package",
-      "macosCurrent": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py publish-current"
+      "macosCurrent": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=\"${BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT:?Set the diagnostics endpoint per docs/macos-app-packaging.md}\" uv run python scripts/native_app.py publish-current"
     },
     "inspection": {
       "tool": "jetbrains",
       "ide": "IntelliJ IDEA",
-      "scopePreference": ["changed_files", "directory", "whole_project"]
+      "scopePreference": [
+        "changed_files",
+        "directory",
+        "whole_project"
+      ]
     },
     "docsRequiredWhen": [
       "behavior changes",
@@ -232,11 +261,14 @@
     "Manage Sparkle Pages",
     "Update FFmpeg Vendor Pins"
   ],
-  "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
-  "qaLabels": [],
-  "deployLabels": [],
-  "healthUrls": ["https://cbusillo.github.io/BD_to_AVP/appcast.xml"],
-  "relatedRepos": ["cbusillo/homebrew-tap"],
+  "requiredStatusChecks": [
+    "validate",
+    "Analyze (actions)",
+    "Analyze (python)"
+  ],
+  "relatedRepos": [
+    "cbusillo/homebrew-tap"
+  ],
   "githubSignals": {
     "postMerge": {
       "waitForActions": true,
@@ -272,5 +304,10 @@
       "release workflow changes",
       "runtime dependency changes"
     ]
+  },
+  "githubSettings": {
+    "expected": {
+      "deleteBranchOnMerge": true
+    }
   }
 }
