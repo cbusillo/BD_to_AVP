@@ -343,6 +343,8 @@ if [ "$1" = -dv ]; then
   echo "inspect-$target" >> "$CALLS"
   if [ "$BAD_TARGET" = "$target" ]; then authority=wrong; else authority="$DEV_ID"; fi
   printf 'Authority=%s\\nTeamIdentifier=%s\\n' "$authority" "$PRODUCTION_TEAM_ID"
+elif [ "$1" = --force ]; then
+  echo sign-dmg >> "$CALLS"
 fi
 """,
                 }
@@ -387,6 +389,7 @@ fi
                     self.assertEqual(result.returncode, 0, result.stderr.decode())
                     self.assertLess(events.index("package"), events.index("inspect-app"))
                     self.assertLess(events.index("inspect-app"), events.index("notarize-app"))
+                    self.assertLess(events.index("sign-dmg"), events.index("inspect-dmg"))
                     self.assertLess(events.index("inspect-dmg"), events.index("notarize-dmg"))
                     self.assertEqual(events[-1], "verify")
 
