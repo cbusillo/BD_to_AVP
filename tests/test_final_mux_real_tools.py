@@ -240,10 +240,6 @@ def real_tools_available() -> bool:
     )
 
 
-@unittest.skipUnless(
-    real_tools_available(),
-    "real final mux tests require macOS arm64, Xcode, MP4Box, ffmpeg and ffprobe",
-)
 class FinalMuxRealToolTests(unittest.TestCase):
     temporary_directory: tempfile.TemporaryDirectory[str]
     mv_hevc_path: Path
@@ -253,6 +249,12 @@ class FinalMuxRealToolTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        required = os.environ.get("BD_TO_AVP_REQUIRE_REAL_PGS_TESTS") == "1"
+        if not real_tools_available():
+            reason = "real final mux tests require macOS arm64, Xcode, MP4Box, ffmpeg and ffprobe"
+            if required:
+                raise RuntimeError(reason)
+            raise unittest.SkipTest(reason)
         cls.temporary_directory = tempfile.TemporaryDirectory(prefix="final-mux-real-tools-")
         try:
             root = Path(cls.temporary_directory.name)
@@ -264,6 +266,8 @@ class FinalMuxRealToolTests(unittest.TestCase):
                 timeout=TOOL_TIMEOUT_SECONDS,
             )
             if probe.returncode == 2 and json.loads(probe.stdout).get("stereo_mv_hevc_encode_supported") is False:
+                if required:
+                    raise RuntimeError("required real PGS/mux tests need MV-HEVC fixture encoding")
                 raise unittest.SkipTest("this Mac cannot create the bounded MV-HEVC fixture")
             if probe.returncode != 0:
                 raise RuntimeError(f"MV-HEVC capability probe failed:\n{probe.stderr.decode(errors='replace')}")
@@ -406,23 +410,18 @@ class FinalMuxRealToolTests(unittest.TestCase):
             self.check_pgs_subtitles_reach_final_mux()
             return
 
-        failures: list[OcrError] = []
+        failures: list[Exception] = []
         recognize = AppleVisionOcr.image_to_data
 
         def capture_failure(backend: AppleVisionOcr, image: np.ndarray, language: Any = None) -> dict[str, list[Any]]:
             try:
                 return recognize(backend, image, language)
-            except OcrError as error:
+            except Exception as error:
                 failures.append(error)
                 raise
 
         with patch.object(AppleVisionOcr, "image_to_data", new=capture_failure):
-            try:
-                self.check_pgs_subtitles_reach_final_mux()
-            except AssertionError:
-                if failures and all(str(error) == "Apple Vision OCR failed: None" for error in failures):
-                    self.skipTest(reason)
-                raise
+            self.check_pgs_subtitles_reach_final_mux(hosted_skip_reason=reason, ocr_failures=failures)
 
     def test_real_pgs_extraction_and_mux_with_bitmap_checked_ocr(self) -> None:
         # Keep the real PGS container, decode, SRT and mux path exercised even
@@ -440,7 +439,9 @@ class FinalMuxRealToolTests(unittest.TestCase):
         with patch.object(AppleVisionOcr, "image_to_data", side_effect=recognize):
             self.check_pgs_subtitles_reach_final_mux()
 
-    def check_pgs_subtitles_reach_final_mux(self) -> None:
+    def check_pgs_subtitles_reach_final_mux(
+        self, *, hosted_skip_reason: str | None = None, ocr_failures: list[Exception] | None = None
+    ) -> None:
         # Subtitle tracks went missing between the disc and the output (#19, #21,
         # #28, #458); follow real PGS tracks through rip, OCR and mux.
         with tempfile.TemporaryDirectory(dir=self.temporary_directory.name) as folder:
@@ -509,9 +510,21 @@ class FinalMuxRealToolTests(unittest.TestCase):
             self.assertFalse(rip_thread.is_alive(), "PGS subtitle rip did not finish")
             if failures:
                 raise failures[0]
+            srt_files = sorted(output_folder.glob("*.srt"))
+            if (
+                hosted_skip_reason
+                and warnings
+                and not srt_files
+                and ocr_failures is not None
+                and len(ocr_failures) == len((regular_sup, forced_sup))
+                and all(
+                    isinstance(error, OcrError) and str(error) == "Apple Vision OCR failed: None"
+                    for error in ocr_failures
+                )
+            ):
+                self.skipTest(hosted_skip_reason)
             self.assertEqual(warnings, [])
 
-            srt_files = sorted(output_folder.glob("*.srt"))
             forced_files = [path for path in srt_files if ".forced." in path.stem]
             regular_files = [path for path in srt_files if ".forced." not in path.stem]
             self.assertEqual(len(forced_files), 1, srt_files)

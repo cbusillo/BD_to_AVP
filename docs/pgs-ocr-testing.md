@@ -5,6 +5,8 @@ through real FFmpeg extraction, bitmap decoding, SRT creation and MP4Box muxing.
 It checks the decoded subtitle text and requires exactly one regular and one
 forced output track. The tools require macOS arm64, Xcode, the bundled MP4Box,
 FFmpeg and FFprobe. CI installs the two decoders before running the suite.
+The checks step sets `BD_TO_AVP_REQUIRE_REAL_PGS_TESTS=1`, so missing tools or
+an unavailable MV-HEVC fixture encoder fail instead of skipping this class.
 
 Run the full test with actual Apple Vision recognition on a supported Mac:
 
@@ -16,7 +18,8 @@ The `xcode-27` hosted checks job records
 `BD_TO_AVP_HOSTED_VISION_OCR_SKIP_REASON` for the actual Apple Vision test.
 The actual OCR test still runs. On a GitHub-hosted runner only, that explicit
 reason permits a skip if recognition reproduces the recorded false/no-NSError
-failure. Other failures remain fatal, and pytest prints the skip reason.
+failure on both tracks, with no subtitle output and a completed rip. Other
+failures remain fatal, and pytest prints the skip reason.
 A recovered runner automatically resumes full OCR coverage. Without the reason,
 including local and self-hosted runs, every OCR failure fails the test.
 

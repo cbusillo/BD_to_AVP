@@ -132,6 +132,7 @@ jobs:
       - name: Unit smoke tests
         # One worker per core; each test class stays on one worker.
         env:
+          BD_TO_AVP_REQUIRE_REAL_PGS_TESTS: "1"
           # #892: four xcode-27 attempts failed both real PGS tracks with
           # performRequests returning false and no NSError. The backend cause
           # is unproven; the full OCR test remains enabled outside this runner.
