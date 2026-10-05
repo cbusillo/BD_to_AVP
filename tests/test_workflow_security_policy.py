@@ -16,7 +16,6 @@ from typing import Any, ClassVar
 import yaml
 
 from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
-from scripts.tier3_clean_machine import RESETTABLE_VM_ENVIRONMENT_CLASS
 from scripts.release_workflow_policy import (
     APPROVAL_ENVIRONMENT,
     ENGINE_WORKFLOW_PATH,
@@ -27,6 +26,7 @@ from scripts.release_workflow_policy import (
     STABLE_OPERATOR_WORKFLOW_PATH,
     STABLE_ROUTE,
 )
+from scripts.tier3_clean_machine import RESETTABLE_VM_ENVIRONMENT_CLASS
 
 WORKFLOW_DIRECTORY = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 UNTRUSTED_TRIGGERS = {"pull_request", "pull_request_target", "push", "schedule", "issue_comment"}
@@ -434,7 +434,7 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         self.assertEqual(context["env"], {"GH_TOKEN": "${{ github.token }}"})
         for step in (classify, upload, summarize, enforce):
             self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
-        self.assertTrue(classify["continue-on-error"])
+        self.assertEqual(classify["continue-on-error"], "true")
         self.assertEqual(upload["with"]["if-no-files-found"], "error")
         self.assertIn("release-qualification-milestone-${{ github.run_attempt }}", upload["with"]["name"])
 

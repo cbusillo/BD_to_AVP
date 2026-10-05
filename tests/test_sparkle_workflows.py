@@ -34,6 +34,11 @@ def load_release_engine() -> dict:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_important_workflow_names_match_repository_metadata(self) -> None:
+        paths = REPO_ROOT / ".github" / "workflows"
+        names = {load_workflow(path.name)["name"] for path in [*paths.glob("*.yml"), *paths.glob("*.yaml")]}
+        self.assertLessEqual(set(load_github_config()["importantWorkflows"]), names)
+
     def test_release_evidence_configuration_records_durable_capture(self) -> None:
         release_operations = load_github_config()["releaseOperations"]
         self.assertEqual(release_operations["evidenceBranchPattern"], "automation/release-evidence-<tag>")
@@ -425,6 +430,7 @@ fi
                 self.assertIn("inspect-app", events)
                 if bad_target:
                     self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"inspect-{bad_target}", events)
                     self.assertNotIn(f"notarize-{bad_target}", events)
                     if bad_target == "app":
                         self.assertNotIn("inspect-dmg", events)
