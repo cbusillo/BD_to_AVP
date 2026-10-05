@@ -117,6 +117,7 @@ jobs:
           path: python-distributions
 
       - name: Verify Python distribution transfer
+        id: python-transfer
         run: |
           set -euo pipefail
           cd python-distributions
@@ -132,6 +133,7 @@ jobs:
           fi
 
       - name: Reconfirm protected main before PyPI publication
+        id: python-freshness
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

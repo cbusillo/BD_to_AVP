@@ -13,7 +13,6 @@ from pathlib import Path
 from scripts import release
 from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
 from scripts.release_evidence_v2 import qualification_template_path
-from scripts.release_workflow_policy import REQUIRED_ACTOR
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +34,54 @@ def load_release_engine() -> dict:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_important_workflow_names_match_repository_metadata(self) -> None:
+        paths = REPO_ROOT / ".github" / "workflows"
+        names = {load_workflow(path.name)["name"] for path in [*paths.glob("*.yml"), *paths.glob("*.yaml")]}
+        self.assertLessEqual(set(load_github_config()["importantWorkflows"]), names)
+
+    def test_release_evidence_configuration_records_durable_capture(self) -> None:
+        release_operations = load_github_config()["releaseOperations"]
+        self.assertEqual(release_operations["evidenceBranchPattern"], "automation/release-evidence-<tag>")
+        self.assertEqual(
+            release_operations["evidenceCapturePath"],
+            "docs/release-evidence/<tag>/capture-v2.json",
+        )
+        self.assertEqual(release_operations["evidenceCheckpointSemantics"], "branch_commit_plus_captured_v2")
+        self.assertEqual(release_operations["evidenceMergeSemantics"], "operator_opened_protected_pull_request")
+
+    def test_milestone_qualification_configuration_routes_durable_evidence(self) -> None:
+        config = load_github_config()
+        self.assertIn("Milestone Qualification", config["importantWorkflows"])
+        self.assertEqual(
+            config["releaseOperations"]["milestoneQualificationWorkflowPath"],
+            ".github/workflows/milestone-qualification.yml",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationManifestPath"],
+            "docs/release-evidence/<tag>/qualification-manifest.json",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationSnapshotPath"],
+            "docs/release-evidence/<tag>/qualification-record.json",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationManifestCommand"],
+            "uv run python -m scripts.release_qualification_manifest",
+        )
+
+    def test_release_operator_configuration_matches_workflow_paths(self) -> None:
+        release_operations = load_github_config()["releaseOperations"]
+        self.assertFalse((REPO_ROOT / ".github" / "workflows" / "publish-to-pypi.yml").exists())
+        self.assertEqual(
+            release_operations["workflows"]["Stable"]["path"],
+            ".github/workflows/briefcase.yml",
+        )
+        self.assertEqual(
+            release_operations["workflows"]["Prerelease"],
+            {"path": ".github/workflows/prerelease.yml", "route": "prerelease"},
+        )
+        self.assertEqual(release_operations["engineWorkflowPath"], ".github/workflows/release-engine.yml")
+
     def test_ci_fetches_full_history_for_recovery_provenance(self) -> None:
         workflow = load_workflow("ci.yml")
         checkouts = [
@@ -98,73 +145,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
         self.assertEqual(pre_signing["with"]["source_sha"], "${{ inputs.release_sha }}")
         self.assertIn("pre-signing-package", package["needs"])
-
-    def test_release_independent_production_preflight_is_secret_free_and_non_publishing(self) -> None:
-        manual = load_workflow("production-preflight.yml")
-        shared = load_workflow("production-preflight-engine.yml")
-        release_engine = load_release_engine()
-        manual_job = manual["jobs"]["preflight"]
-        shared_call = shared["on"]["workflow_call"]
-        shared_job = shared["jobs"]["preflight"]
-        release_job = release_engine["jobs"]["pre-signing-package"]
-
-        self.assertEqual(manual["name"], "Production Preflight")
-        self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
-        source_input = manual["on"]["workflow_dispatch"]["inputs"]["source_sha"]
-        self.assertEqual(source_input["required"], "true")
-        self.assertEqual(source_input["type"], "string")
-        self.assertEqual(manual["permissions"], {})
-        self.assertEqual(manual_job["uses"], "./.github/workflows/production-preflight-engine.yml")
-        self.assertEqual(manual_job["with"]["source_sha"], "${{ inputs.source_sha }}")
-        self.assertEqual(manual_job["permissions"], {"contents": "read"})
-        self.assertNotIn("environment", manual_job)
-        self.assertNotIn("secrets", manual_job)
-
-        self.assertEqual(set(shared["on"]), {"workflow_call"})
-        self.assertEqual(set(shared_call["inputs"]), {"source_sha", "support_diagnostics_endpoint"})
-        self.assertNotIn("secrets", shared_call)
-        self.assertEqual(shared["permissions"], {"contents": "read"})
-        self.assertEqual(shared_job["permissions"], {"contents": "read"})
-        self.assertNotIn("environment", shared_job)
-        self.assertNotIn("secrets", shared_job)
-        checkout = next(step for step in shared_job["steps"] if step.get("id") == "checkout")
-        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-        self.assertNotEqual(checkout["with"]["ref"], "${{ inputs.source_sha }}")
-
-        self.assertEqual(release_job["uses"], manual_job["uses"])
-        self.assertEqual(release_job["with"]["source_sha"], "${{ inputs.release_sha }}")
-        self.assertEqual(release_job["permissions"], {"contents": "read"})
-        self.assertEqual(set(release_job["needs"]), {"pre-signing-policy"})
-        self.assertNotIn("environment", release_job)
-        self.assertNotIn("secrets", release_job)
-
-        step_names = [step["name"] for step in shared_job["steps"]]
-        required_order = [
-            "Require an exact protected main input",
-            "Checkout requested main commit",
-            "Bind source and workflow identity",
-            "Verify pinned production runner",
-            "Install pinned XcodeGen",
-            "Set up uv",
-            "Install Python and locked dependencies",
-            "Build the production-shaped app with ad-hoc signing",
-            "Smoke exact packaged worker identity and protocol",
-            "Create, install, and qualify the preventive DMG",
-            "Bind bounded success evidence",
-        ]
-        self.assertEqual([name for name in step_names if name in required_order], required_order)
-
-        success_upload = next(step for step in shared_job["steps"] if step["name"] == "Retain bounded success evidence")
-        failure_upload = next(
-            step for step in shared_job["steps"] if step["name"] == "Retain bounded failure diagnostics"
-        )
-        self.assertEqual(success_upload["with"]["retention-days"], "7")
-        self.assertEqual(failure_upload["with"]["retention-days"], "7")
-        self.assertNotIn(".dmg", success_upload["with"]["path"])
-        self.assertNotIn(".app", success_upload["with"]["path"])
-        self.assertIn("${{ inputs.source_sha }}", success_upload["with"]["name"])
-        self.assertIn("${{ github.run_id }}", success_upload["with"]["name"])
-        self.assertIn("${{ github.run_id }}", failure_upload["with"]["name"])
 
     def test_reusable_engine_rejects_direct_invocation_and_policy_bypass(self) -> None:
         stable = load_workflow("briefcase.yml")
@@ -273,9 +253,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         workflow = load_release_engine()
         prepare = workflow["jobs"]["prepare"]
         next(step for step in prepare["steps"] if step.get("id") == "release_history")
-        route_validation = next(
-            step for step in prepare["steps"] if step["name"] == "Validate route and summarize publication effects"
-        )
+        route_validation = next(step for step in prepare["steps"] if step.get("id") == "route-validation")
 
         self.assertEqual(prepare["permissions"], {"actions": "read", "contents": "write"})
         self.assertEqual(
@@ -294,7 +272,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_release_freeze_retains_release_preflight_guards(self) -> None:
         workflow = load_release_engine()
         prepare_steps = workflow["jobs"]["prepare"]["steps"]
-        [step["name"] for step in prepare_steps]
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
 
         self.assertEqual(freeze_policy["schema"], "bd_to_avp.release_freezes")
@@ -310,7 +287,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 }
             },
         )
-        recovery_step = next(step for step in prepare_steps if step["name"] == "Revalidate Beta 3 recovery premise")
+        recovery_step = next(step for step in prepare_steps if step.get("id") == "beta3-recovery")
         self.assertEqual(recovery_step["if"], "steps.metadata.outputs.release_tag == 'v0.3.0-beta.3'")
         self.assertEqual(recovery_step["env"]["GH_TOKEN"], "${{ github.token }}")
 
@@ -319,64 +296,34 @@ class ReleaseWorkflowTests(unittest.TestCase):
         inspections = (
             (
                 workflow["jobs"]["package"],
-                "Package application for GitHub",
+                "package_artifact",
             ),
             (
                 workflow["jobs"]["compatibility"],
-                "Validate the packaged app on macOS 26",
+                "compatibility",
             ),
             (
                 workflow["jobs"]["publish-appcast"],
-                "Inspect draft DMG",
+                "bundle",
             ),
             (
                 workflow["jobs"]["verify-draft"],
-                "Re-download and verify every release boundary",
+                "verify_assets",
             ),
         )
-        for job, step_name in inspections:
-            with self.subTest(step=step_name):
-                step = next(step for step in job["steps"] if step["name"] == step_name)
+        for job, step_id in inspections:
+            with self.subTest(step=step_id):
+                step = next(step for step in job["steps"] if step.get("id") == step_id)
                 self.assertEqual(
                     step["env"]["BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT"],
                     "${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}",
                 )
 
-    def test_package_preserves_dmg_validation_without_write_token(self) -> None:
-        workflow = load_release_engine()
-        package = workflow["jobs"]["package"]
-        next(
-            step for step in package["steps"] if step["name"] == "Install signing certificate in an ephemeral keychain"
-        )
-        next(step for step in package["steps"] if step["name"] == "Remove temporary signing material")
-        package_step = next(step for step in package["steps"] if step["name"] == "Package application for GitHub")
-
-        self.assertEqual(
-            set(package["needs"]),
-            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
-        )
-        self.assertEqual(package["environment"], "macos-signing")
-        self.assertEqual(package["permissions"]["contents"], "read")
-        self.assertIn("dmg_sha256", package["outputs"])
-        self.assertIn("dmg_size", package["outputs"])
-        self.assertEqual(package_step["env"]["DMG_NAME"], "${{ needs.prepare.outputs.dmg_name }}")
-        next(
-            step
-            for step in package["steps"]
-            if step["name"] == "Store notarization credentials in the ephemeral keychain"
-        )
-
     def test_certificate_install_binds_developer_id_identity_to_team_id(self) -> None:
         workflow = load_release_engine()
         package = workflow["jobs"]["package"]
-        certificate_step = next(
-            step for step in package["steps"] if step["name"] == "Install signing certificate in an ephemeral keychain"
-        )
+        certificate_step = next(step for step in package["steps"] if step.get("id") == "signing-certificate")
         certificate_script = certificate_step["run"]
-
-        self.assertEqual(certificate_step["env"]["TEAM_ID"], "${{ secrets.TEAM_ID }}")
-        self.assertEqual(certificate_step["env"]["PRODUCTION_TEAM_ID"], PRODUCTION_TEAM_ID)
-        self.assertEqual(certificate_step["env"]["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
 
         validation_script = certificate_script[
             certificate_script.index('case "$TEAM_ID" in') : certificate_script.index("BUILD_KEYCHAIN_PASSWORD=")
@@ -386,23 +333,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_package_inspects_signed_app_and_dmg_identity_metadata(self) -> None:
         workflow = load_release_engine()
         package = workflow["jobs"]["package"]
-        package_step = next(step for step in package["steps"] if step["name"] == "Package application for GitHub")
+        package_step = next(step for step in package["steps"] if step.get("id") == "package_artifact")
         package_script = package_step["run"]
-
-        self.assertEqual(package_step["env"]["TEAM_ID"], "${{ secrets.TEAM_ID }}")
-        self.assertEqual(package_step["env"]["PRODUCTION_TEAM_ID"], PRODUCTION_TEAM_ID)
-        self.assertEqual(package_step["env"]["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
-
-        package_command_index = package_script.index("uv run python scripts/native_app.py package")
-        app_metadata_index = package_script.index('"$RUNNER_TEMP/bd-to-avp-app-codesign-$GITHUB_RUN_ID.txt"')
-        app_notary_index = package_script.index("--log dist/notary/app-notary.json")
-        dmg_sign_index = package_script.index('codesign --force --timestamp --sign "$DEV_ID"')
-        dmg_metadata_index = package_script.index('"$RUNNER_TEMP/bd-to-avp-dmg-codesign-$GITHUB_RUN_ID.txt"')
-        dmg_notary_index = package_script.index("--log dist/notary/dmg-notary.json")
-        self.assertLess(package_command_index, app_metadata_index)
-        self.assertLess(app_metadata_index, app_notary_index)
-        self.assertLess(dmg_sign_index, dmg_metadata_index)
-        self.assertLess(dmg_metadata_index, dmg_notary_index)
 
         identity_validation = (
             package_script[
@@ -418,6 +350,97 @@ class ReleaseWorkflowTests(unittest.TestCase):
             package_script.index("verify_codesign_metadata() {") : package_script.index("validate_signing_identity() {")
         ]
         self._assert_codesign_metadata_validation(metadata_validation)
+
+    def test_package_rejects_bad_signature_metadata_before_notarizing(self) -> None:
+        package = load_release_engine()["jobs"]["package"]
+        script = next(step["run"] for step in package["steps"] if step.get("id") == "package_artifact")
+        for bad_target in ("", "app", "dmg"):
+            with self.subTest(bad_target=bad_target), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                tools = root / "tools"
+                tools.mkdir()
+                calls = root / "calls"
+                stubs = {
+                    "git": 'if [ "$1" = rev-parse ]; then echo "$GITHUB_SHA"; fi',
+                    "security": ":",
+                    "ditto": ":",
+                    "stat": "echo 7",
+                    "uv": """
+case "$*" in
+  *"scripts/native_app.py package"*) echo package >> "$CALLS" ;;
+  *"scripts.macos_release verify-app"*|*"scripts.macos_release verify-dmg"*)
+    echo verify >> "$CALLS"
+    printf '{"short_version":"%s","build_version":"%s"}\\n' "$PACKAGE_VERSION" "$BUILD_VERSION" ;;
+  *"scripts.macos_release create-dmg"*) printf fixture > "dist/$DMG_NAME" ;;
+  *"scripts.macos_release notarize"*)
+    case "$*" in
+      *"app-notary.json"*) echo notarize-app >> "$CALLS" ;;
+      *"dmg-notary.json"*) echo notarize-dmg >> "$CALLS" ;;
+    esac ;;
+  *"app_tree_sha256"*) printf '%064d\\n' 0 ;;
+  *) exit 99 ;;
+esac
+""",
+                    "codesign": """
+if [ "$1" = -dv ]; then
+  case "$3" in
+    *.app) target=app ;;
+    *.dmg) target=dmg ;;
+    *) exit 99 ;;
+  esac
+  echo "inspect-$target" >> "$CALLS"
+  if [ "$BAD_TARGET" = "$target" ]; then authority=wrong; else authority="$DEV_ID"; fi
+  printf 'Authority=%s\\nTeamIdentifier=%s\\n' "$authority" "$PRODUCTION_TEAM_ID"
+elif [ "$1" = --force ]; then
+  echo sign-dmg >> "$CALLS"
+fi
+""",
+                }
+                for command, body in stubs.items():
+                    path = tools / command
+                    path.write_text(f"#!/bin/sh\nset -eu\n{body}\n", encoding="utf-8")
+                    path.chmod(0o700)
+                result = subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    cwd=root,
+                    env={
+                        "PATH": f"{tools}:/usr/bin:/bin",
+                        "CALLS": str(calls),
+                        "BAD_TARGET": bad_target,
+                        "GITHUB_SHA": "a" * 40,
+                        "GITHUB_RUN_ID": "100",
+                        "GITHUB_OUTPUT": str(root / "output"),
+                        "RUNNER_TEMP": str(root),
+                        "KEYCHAIN_PATH": str(root / "keychain"),
+                        "BUILD_KEYCHAIN_PASSWORD": "fixture",
+                        "NOTARY_PROFILE": "fixture",
+                        "DEV_ID": PRODUCTION_DEVELOPER_IDENTITY,
+                        "PRODUCTION_DEV_ID": PRODUCTION_DEVELOPER_IDENTITY,
+                        "TEAM_ID": PRODUCTION_TEAM_ID,
+                        "PRODUCTION_TEAM_ID": PRODUCTION_TEAM_ID,
+                        "DMG_NAME": "fixture.dmg",
+                        "PACKAGE_VERSION": "1.0.0",
+                        "BUILD_VERSION": "1",
+                    },
+                    capture_output=True,
+                    check=False,
+                )
+                events = calls.read_text(encoding="utf-8").splitlines()
+                self.assertIn("package", events)
+                self.assertIn("inspect-app", events)
+                if bad_target:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"inspect-{bad_target}", events)
+                    self.assertNotIn(f"notarize-{bad_target}", events)
+                    if bad_target == "app":
+                        self.assertNotIn("inspect-dmg", events)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
+                    self.assertLess(events.index("package"), events.index("inspect-app"))
+                    self.assertLess(events.index("inspect-app"), events.index("notarize-app"))
+                    self.assertLess(events.index("sign-dmg"), events.index("inspect-dmg"))
+                    self.assertLess(events.index("inspect-dmg"), events.index("notarize-dmg"))
+                    self.assertEqual(events[-1], "verify")
 
     def test_keychain_search_list_empty_array_branch_is_bash_3_2_safe(self) -> None:
         shell_script = (
@@ -467,7 +490,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     ) -> tuple[subprocess.CompletedProcess[str], str, dict[str, Path]]:
         workflow = load_release_engine()
         package = workflow["jobs"]["package"]
-        cleanup_step = next(step for step in package["steps"] if step["name"] == "Remove temporary signing material")
+        cleanup_step = next(step for step in package["steps"] if step.get("id") == "signing-cleanup")
         cleanup_script = cleanup_step["run"]
 
         temporary_directory = tempfile.TemporaryDirectory()
@@ -861,59 +884,11 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("receipt_file_sha256", receipt["outputs"])
         self.assertIn("signed_app_tree_sha256", jobs["package"]["outputs"])
 
-    def test_post_release_evidence_workflow_is_secret_free_and_idempotent(self) -> None:
-        workflow = load_workflow("release-evidence.yml")
-        jobs = workflow["jobs"]
-        prepare = jobs["validate-and-prepare"]
-        publish = jobs["publish-evidence-branch"]
-
-        self.assertEqual(set(workflow["on"]["workflow_run"]["workflows"]), {"Stable", "Prerelease"})
-        self.assertEqual(prepare["permissions"], {"actions": "read", "contents": "read"})
-        self.assertEqual(publish["permissions"], {"contents": "write"})
-        self.assertNotIn("environment", prepare)
-        self.assertNotIn("environment", publish)
-        evidence_writers = [
-            step for step in prepare["steps"] if step.get("id") in {"signed-ui", "reconcile", "capture-v2"}
-        ]
-        self.assertEqual(len(evidence_writers), 3)
-        self.assertEqual(len({step["if"] for step in evidence_writers}), 1)
-        conflict_step = next(
-            step for step in publish["steps"] if step["name"] == "Reject conflicting evidence on the idempotent branch"
-        )
-        self.assertEqual(
-            conflict_step["env"]["EXPECTED_MAIN_SHA"],
-            "${{ needs.validate-and-prepare.outputs.base_main_sha }}",
-        )
-        actor_step = next(
-            step
-            for step in publish["steps"]
-            if step["name"] == "Prepare exact evidence branch parent and actor identity"
-        )
-        self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_ID"], "${{ github.actor_id }}")
-        self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_LOGIN"], "${{ github.actor }}")
-        release_operations = load_github_config()["releaseOperations"]
-        self.assertEqual(release_operations["evidenceBranchPattern"], "automation/release-evidence-<tag>")
-        self.assertEqual(
-            release_operations["evidenceCapturePath"],
-            "docs/release-evidence/<tag>/capture-v2.json",
-        )
-        self.assertEqual(release_operations["evidenceCheckpointSemantics"], "branch_commit_plus_captured_v2")
-        self.assertEqual(release_operations["evidenceMergeSemantics"], "operator_opened_protected_pull_request")
-
-        publish_steps = [step["name"] for step in publish["steps"]]
-        publish_steps.index("Commit and push exact docs-only evidence")
-
     def test_release_evidence_direct_push_publishes_exact_actor_bound_capture(self) -> None:
         workflow = load_workflow("release-evidence.yml")
         publish_steps = workflow["jobs"]["publish-evidence-branch"]["steps"]
-        prepare_script = next(
-            step["run"]
-            for step in publish_steps
-            if step["name"] == "Prepare exact evidence branch parent and actor identity"
-        )
-        publish_script = next(
-            step["run"] for step in publish_steps if step["name"] == "Commit and push exact docs-only evidence"
-        )
+        prepare_script = next(step["run"] for step in publish_steps if step.get("id") == "evidence-parent")
+        publish_script = next(step["run"] for step in publish_steps if step.get("id") == "publish")
         release_tag = "v1.0.0"
         evidence_ref = f"automation/release-evidence-{release_tag}"
         actor_id = "1875516"
@@ -1030,9 +1005,7 @@ printf '%s' "$CODESIGN_METADATA"
     def test_release_evidence_stage_is_noop_for_current_evidence_branch(self) -> None:
         workflow = load_workflow("release-evidence.yml")
         stage_script = next(
-            step["run"]
-            for step in workflow["jobs"]["validate-and-prepare"]["steps"]
-            if step["name"] == "Stage only generated evidence files"
+            step["run"] for step in workflow["jobs"]["validate-and-prepare"]["steps"] if step.get("id") == "stage"
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1088,84 +1061,6 @@ printf '%s' "$CODESIGN_METADATA"
                 branch_only_paths,
             )
 
-    def test_milestone_qualification_is_hosted_secret_free_and_read_only(self) -> None:
-        workflow = load_workflow("milestone-qualification.yml")
-        dispatch = workflow["on"]["workflow_dispatch"]
-        qualify = workflow["jobs"]["qualify"]
-        steps = qualify["steps"]
-        checkout = steps[0]
-        upload = steps[-1]
-        by_name = {step["name"]: step for step in steps}
-        diagnostics_upload = by_name["Retain bounded Sparkle installer diagnostics"]
-        workflow_text = str(workflow)
-
-        self.assertEqual(
-            set(dispatch["inputs"]),
-            {"candidate_tag", "manifest_sha256"},
-        )
-        self.assertEqual(workflow["permissions"], {})
-        self.assertEqual(qualify["permissions"], {"actions": "read", "contents": "read"})
-        # Only the automation identity, or the repository owner, may start a qualification job.
-        self.assertEqual(
-            {clause.strip() for clause in qualify["if"].split("||")},
-            {f"github.actor == '{REQUIRED_ACTOR}'", "github.actor == github.repository_owner"},
-        )
-        self.assertNotIn("environment", qualify)
-        self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
-        self.assertEqual(checkout["with"]["fetch-depth"], "0")
-        self.assertEqual(checkout["with"]["persist-credentials"], "false")
-        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-        self.assertEqual(workflow_text.count("--environment-class resettable-vm"), 2)
-        self.assertNotRegex(workflow_text, r"\b(git push|git commit|gh release (upload|edit|delete))\b")
-        self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
-        self.assertEqual(upload["with"]["retention-days"], "30")
-        self.assertRegex(diagnostics_upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
-        self.assertEqual(
-            diagnostics_upload["if"],
-            "${{ failure() && hashFiles('qualification-output/sparkle-install-diagnostics.json') != '' }}",
-        )
-        self.assertEqual(
-            diagnostics_upload["with"]["path"],
-            "qualification-output/sparkle-install-diagnostics.json",
-        )
-        self.assertEqual(diagnostics_upload["with"]["retention-days"], "30")
-
-        config = load_github_config()
-        self.assertIn("Milestone Qualification", config["importantWorkflows"])
-        self.assertEqual(
-            config["releaseOperations"]["milestoneQualificationWorkflowPath"],
-            ".github/workflows/milestone-qualification.yml",
-        )
-        self.assertEqual(
-            config["releaseOperations"]["qualificationManifestPath"],
-            "docs/release-evidence/<tag>/qualification-manifest.json",
-        )
-        self.assertEqual(
-            config["releaseOperations"]["qualificationSnapshotPath"],
-            "docs/release-evidence/<tag>/qualification-record.json",
-        )
-        self.assertEqual(
-            config["releaseOperations"]["qualificationManifestCommand"],
-            "uv run python -m scripts.release_qualification_manifest",
-        )
-
-    def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:
-        workflow = load_workflow("ci.yml")
-        by_name = {step["name"]: step for job in workflow["jobs"].values() for step in job["steps"]}
-        context = by_name["Resolve post-publication milestone context"]
-        classify = by_name["Classify post-publication milestone evidence"]
-        upload = by_name["Upload post-publication milestone report"]
-        summarize = by_name["Summarize post-publication operational evidence"]
-        enforce = by_name["Enforce post-publication milestone evidence"]
-
-        self.assertEqual(context["if"], "github.event_name == 'pull_request'")
-        self.assertEqual(context["env"], {"GH_TOKEN": "${{ github.token }}"})
-        for step in (classify, upload, summarize, enforce):
-            self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
-        self.assertTrue(classify["continue-on-error"])
-        self.assertEqual(upload["with"]["if-no-files-found"], "error")
-        self.assertIn("release-qualification-milestone-${{ github.run_attempt }}", upload["with"]["name"])
-
     def test_release_package_provenance_is_attested_and_verified(self) -> None:
         workflow = load_release_engine()
         attest = workflow["jobs"]["attest-package"]
@@ -1185,58 +1080,6 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(publish["permissions"]["contents"], "read")
         self.assertEqual(len(matching_steps), 1)
         self.assertEqual(matching_steps[0]["name"], "Sign DMG and build appcast")
-
-    def test_stable_pypi_publish_uses_oidc_trusted_publishing(self) -> None:
-        operator = load_workflow("briefcase.yml")
-        prerelease = load_workflow("prerelease.yml")
-        workflow = load_release_engine()
-        build = workflow["jobs"]["build-python"]
-        publish = operator["jobs"]["publish-pypi"]
-        release_operations = load_github_config()["releaseOperations"]
-
-        self.assertFalse((REPO_ROOT / ".github" / "workflows" / "publish-to-pypi.yml").exists())
-        self.assertEqual(publish["needs"], "release")
-        self.assertIn("needs.release.result == 'success'", publish["if"])
-        self.assertIn("needs.release.outputs.publish_pypi == 'true'", publish["if"])
-        self.assertEqual(publish["environment"]["name"], "pypi")
-        self.assertEqual(publish["permissions"]["actions"], "read")
-        self.assertEqual(publish["permissions"]["id-token"], "write")
-        self.assertEqual(
-            next(step for step in publish["steps"] if "pypa/gh-action-pypi-publish@" in step.get("uses", ""))["with"][
-                "packages-dir"
-            ],
-            "python-distributions/dist",
-        )
-        self.assertIn("artifact_digest", build["outputs"])
-        self.assertIn("artifact_id", build["outputs"])
-        steps = publish["steps"]
-        transfer_index = next(
-            index for index, step in enumerate(steps) if step["name"] == "Verify Python distribution transfer"
-        )
-        freshness_index = next(
-            index
-            for index, step in enumerate(steps)
-            if step["name"] == "Reconfirm protected main before PyPI publication"
-        )
-        publisher_index = next(
-            index for index, step in enumerate(steps) if "pypa/gh-action-pypi-publish@" in step.get("uses", "")
-        )
-        self.assertLess(transfer_index, freshness_index)
-        self.assertEqual(freshness_index + 1, publisher_index)
-        download = next(step for step in publish["steps"] if "actions/download-artifact@" in step.get("uses", ""))
-        self.assertEqual(download["with"]["artifact-ids"], "${{ needs.release.outputs.python_artifact_id }}")
-        self.assertEqual(download["with"]["merge-multiple"], "true")
-        self.assertNotIn("publish-pypi", workflow["jobs"])
-        self.assertNotIn("publish-pypi", prerelease["jobs"])
-        self.assertEqual(
-            release_operations["workflows"]["Stable"]["path"],
-            ".github/workflows/briefcase.yml",
-        )
-        self.assertEqual(
-            release_operations["workflows"]["Prerelease"],
-            {"path": ".github/workflows/prerelease.yml", "route": "prerelease"},
-        )
-        self.assertEqual(release_operations["engineWorkflowPath"], ".github/workflows/release-engine.yml")
 
     def test_release_deploy_uses_resumable_pages_workflow(self) -> None:
         workflow = load_release_engine()

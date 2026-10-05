@@ -233,6 +233,7 @@ jobs:
           uv run python -m scripts.qualify_release_scope "${ARGS[@]}"
 
       - name: Upload post-publication milestone report
+        id: milestone-report
         if: always() && steps.milestone-context.outputs.required == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -242,6 +243,7 @@ jobs:
           retention-days: 30
 
       - name: Summarize post-publication operational evidence
+        id: milestone-summary
         if: always() && steps.milestone-context.outputs.required == 'true'
         run: |
           set -euo pipefail
@@ -257,6 +259,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce post-publication milestone evidence
+        id: milestone-enforce
         if: always() && steps.milestone-context.outputs.required == 'true'
         env:
           MILESTONE_OUTCOME: ${{ steps.milestone-qualification.outcome }}

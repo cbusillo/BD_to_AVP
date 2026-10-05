@@ -1,8 +1,8 @@
 """Security rules every GitHub workflow must satisfy.
 
-These are rules over the parsed workflows, not statements about one job or one
-line of shell. Renaming a job, moving a step or changing a runner must not
-fail them; weakening the release's trust boundaries must.
+These rules check parsed permissions, trust relationships and executed guards.
+Display labels and runner upgrades must not fail them. Release-specific wiring
+and ordering are checked where they enforce a trust boundary.
 """
 
 import json
@@ -26,6 +26,7 @@ from scripts.release_workflow_policy import (
     STABLE_OPERATOR_WORKFLOW_PATH,
     STABLE_ROUTE,
 )
+from scripts.tier3_clean_machine import RESETTABLE_VM_ENVIRONMENT_CLASS
 
 WORKFLOW_DIRECTORY = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 UNTRUSTED_TRIGGERS = {"pull_request", "pull_request_target", "push", "schedule", "issue_comment"}
@@ -38,6 +39,19 @@ def load_workflows() -> dict[str, dict[str, Any]]:
         path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
         for path in sorted([*WORKFLOW_DIRECTORY.glob("*.yml"), *WORKFLOW_DIRECTORY.glob("*.yaml")])
     }
+
+
+def load_workflow(name: str) -> dict:
+    # Keep expression and scalar values as strings for structural wiring checks.
+    return yaml.load((WORKFLOW_DIRECTORY / name).read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+
+
+def load_release_engine() -> dict:
+    return load_workflow(Path(ENGINE_WORKFLOW_PATH).name)
+
+
+def load_github_config() -> dict:
+    return json.loads((WORKFLOW_DIRECTORY.parent / "github.json").read_text(encoding="utf-8"))
 
 
 def triggers(workflow: dict[str, Any]) -> set[str]:
@@ -191,6 +205,273 @@ class WorkflowSecurityPolicyTests(unittest.TestCase):
                             self.assertEqual(step.get("with", {}).get("ref"), "${{ github.sha }}")
                             self.assertIs(step["with"].get("persist-credentials"), False)
         self.assertGreater(checkouts, 0)
+
+
+class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
+    def test_preflight_qualification_and_evidence_never_receive_secrets(self) -> None:
+        for name in (
+            "production-preflight.yml",
+            "production-preflight-engine.yml",
+            "milestone-qualification.yml",
+            "release-evidence.yml",
+        ):
+            with self.subTest(workflow=name):
+                workflow = load_workflow(name)
+                self.assertEqual(secrets_read_by(workflow), set())
+                for job in workflow["jobs"].values():
+                    self.assertNotIn("environment", job)
+                    self.assertNotIn("secrets", job)
+
+    def test_signing_steps_bind_identity_to_the_production_constants(self) -> None:
+        steps = load_release_engine()["jobs"]["package"]["steps"]
+        for ident in ("signing-certificate", "package_artifact"):
+            with self.subTest(step=ident):
+                environment = next(step["env"] for step in steps if step.get("id") == ident)
+                self.assertEqual(environment["TEAM_ID"], "${{ secrets.TEAM_ID }}")
+                self.assertEqual(environment["PRODUCTION_TEAM_ID"], PRODUCTION_TEAM_ID)
+                self.assertEqual(environment["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
+
+    def test_clean_machine_commands_select_the_ephemeral_runner_contract(self) -> None:
+        steps = load_workflow("milestone-qualification.yml")["jobs"]["qualify"]["steps"]
+        for ident in ("clean-machine-preflight", "clean-machine-run"):
+            step = next(step for step in steps if step.get("id") == ident)
+            with self.subTest(step=ident), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                inputs = root / "qualification-inputs"
+                inputs.mkdir()
+                (inputs / "paths.env").write_text(
+                    "CANDIDATE_DMG=candidate.dmg\nPRIOR_TAG=v1.0.0\nPRIOR_DMG=prior.dmg\nROUTE=stable\n",
+                    encoding="utf-8",
+                )
+                calls = root / "calls"
+                uv = root / "uv"
+                uv.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$CALLS"\n', encoding="utf-8")
+                uv.chmod(0o700)
+                result = subprocess.run(
+                    ["/bin/bash", "-c", step["run"]],
+                    cwd=root,
+                    env={
+                        "PATH": f"{root}:/usr/bin:/bin",
+                        "CALLS": str(calls),
+                        "RUNNER_TEMP": str(root),
+                        "GITHUB_RUN_ID": "100",
+                        "GITHUB_RUN_ATTEMPT": "1",
+                        "CANDIDATE_TAG": "v1.1.0",
+                    },
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                arguments = calls.read_text(encoding="utf-8").splitlines()
+                self.assertIn("scripts.tier3_clean_machine", arguments)
+                self.assertEqual(arguments.count("--environment-class"), 1)
+                self.assertEqual(arguments[arguments.index("--environment-class") + 1], RESETTABLE_VM_ENVIRONMENT_CLASS)
+                self.assertEqual(step["env"]["BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT"], "${{ runner.environment }}")
+
+    def test_release_independent_production_preflight_is_secret_free_and_non_publishing(self) -> None:
+        manual = load_workflow("production-preflight.yml")
+        shared = load_workflow("production-preflight-engine.yml")
+        release_engine = load_release_engine()
+        manual_job = manual["jobs"]["preflight"]
+        shared_call = shared["on"]["workflow_call"]
+        shared_job = shared["jobs"]["preflight"]
+        release_job = release_engine["jobs"]["pre-signing-package"]
+
+        self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
+        source_input = manual["on"]["workflow_dispatch"]["inputs"]["source_sha"]
+        self.assertEqual(source_input["required"], "true")
+        self.assertEqual(source_input["type"], "string")
+        self.assertEqual(manual["permissions"], {})
+        self.assertEqual(manual_job["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertEqual(manual_job["with"]["source_sha"], "${{ inputs.source_sha }}")
+        self.assertEqual(manual_job["permissions"], {"contents": "read"})
+        self.assertNotIn("environment", manual_job)
+        self.assertNotIn("secrets", manual_job)
+
+        self.assertEqual(set(shared["on"]), {"workflow_call"})
+        self.assertEqual(set(shared_call["inputs"]), {"source_sha", "support_diagnostics_endpoint"})
+        self.assertNotIn("secrets", shared_call)
+        self.assertEqual(shared["permissions"], {"contents": "read"})
+        self.assertEqual(shared_job["permissions"], {"contents": "read"})
+        self.assertNotIn("environment", shared_job)
+        self.assertNotIn("secrets", shared_job)
+        checkout = next(step for step in shared_job["steps"] if step.get("id") == "checkout")
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertNotEqual(checkout["with"]["ref"], "${{ inputs.source_sha }}")
+
+        self.assertEqual(release_job["uses"], manual_job["uses"])
+        self.assertEqual(release_job["with"]["source_sha"], "${{ inputs.release_sha }}")
+        self.assertEqual(release_job["permissions"], {"contents": "read"})
+        self.assertEqual(set(release_job["needs"]), {"pre-signing-policy"})
+        self.assertNotIn("environment", release_job)
+        self.assertNotIn("secrets", release_job)
+
+        step_ids = [step.get("id") for step in shared_job["steps"]]
+        required_order = [
+            "input",
+            "checkout",
+            "source",
+            "runner",
+            "xcodegen",
+            "uv",
+            "dependencies",
+            "package",
+            "smoke",
+            "installed-ui",
+            "evidence",
+        ]
+        self.assertEqual([ident for ident in step_ids if ident in required_order], required_order)
+
+        success_upload = next(step for step in shared_job["steps"] if step.get("id") == "success-evidence")
+        failure_upload = next(step for step in shared_job["steps"] if step.get("id") == "failure-diagnostics")
+        self.assertEqual(success_upload["with"]["retention-days"], "7")
+        self.assertEqual(failure_upload["with"]["retention-days"], "7")
+        self.assertNotIn(".dmg", success_upload["with"]["path"])
+        self.assertNotIn(".app", success_upload["with"]["path"])
+        self.assertIn("${{ inputs.source_sha }}", success_upload["with"]["name"])
+        self.assertIn("${{ github.run_id }}", success_upload["with"]["name"])
+        self.assertIn("${{ github.run_id }}", failure_upload["with"]["name"])
+
+    def test_package_preserves_dmg_validation_without_write_token(self) -> None:
+        workflow = load_release_engine()
+        package = workflow["jobs"]["package"]
+        next(step for step in package["steps"] if step.get("id") == "signing-certificate")
+        next(step for step in package["steps"] if step.get("id") == "signing-cleanup")
+        package_step = next(step for step in package["steps"] if step.get("id") == "package_artifact")
+
+        self.assertEqual(
+            set(package["needs"]),
+            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
+        )
+        self.assertEqual(package["environment"], "macos-signing")
+        self.assertEqual(package["permissions"]["contents"], "read")
+        self.assertIn("dmg_sha256", package["outputs"])
+        self.assertIn("dmg_size", package["outputs"])
+        self.assertEqual(package_step["env"]["DMG_NAME"], "${{ needs.prepare.outputs.dmg_name }}")
+        next(step for step in package["steps"] if step.get("id") == "notary-credentials")
+
+    def test_post_release_evidence_workflow_is_secret_free_and_idempotent(self) -> None:
+        workflow = load_workflow("release-evidence.yml")
+        jobs = workflow["jobs"]
+        prepare = jobs["validate-and-prepare"]
+        publish = jobs["publish-evidence-branch"]
+
+        self.assertEqual(set(workflow["on"]["workflow_run"]["workflows"]), {"Stable", "Prerelease"})
+        self.assertEqual(prepare["permissions"], {"actions": "read", "contents": "read"})
+        self.assertEqual(publish["permissions"], {"contents": "write"})
+        self.assertNotIn("environment", prepare)
+        self.assertNotIn("environment", publish)
+        evidence_writers = [
+            step for step in prepare["steps"] if step.get("id") in {"signed-ui", "reconcile", "capture-v2"}
+        ]
+        self.assertEqual(len(evidence_writers), 3)
+        self.assertEqual(len({step["if"] for step in evidence_writers}), 1)
+        conflict_step = next(step for step in publish["steps"] if step.get("id") == "evidence-conflict")
+        self.assertEqual(
+            conflict_step["env"]["EXPECTED_MAIN_SHA"],
+            "${{ needs.validate-and-prepare.outputs.base_main_sha }}",
+        )
+        actor_step = next(step for step in publish["steps"] if step.get("id") == "evidence-parent")
+        self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_ID"], "${{ github.actor_id }}")
+        self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_LOGIN"], "${{ github.actor }}")
+
+        next(step for step in publish["steps"] if step.get("id") == "publish")
+
+    def test_milestone_qualification_is_hosted_secret_free_and_read_only(self) -> None:
+        workflow = load_workflow("milestone-qualification.yml")
+        dispatch = workflow["on"]["workflow_dispatch"]
+        qualify = workflow["jobs"]["qualify"]
+        steps = qualify["steps"]
+        by_id = {step.get("id"): step for step in steps}
+        checkout = by_id["checkout"]
+        upload = by_id["qualification-receipts"]
+        diagnostics_upload = by_id["sparkle-diagnostics"]
+
+        self.assertEqual(
+            set(dispatch["inputs"]),
+            {"candidate_tag", "manifest_sha256"},
+        )
+        self.assertEqual(workflow["permissions"], {})
+        self.assertEqual(qualify["permissions"], {"actions": "read", "contents": "read"})
+        # Only the automation identity, or the repository owner, may start a qualification job.
+        self.assertEqual(
+            {clause.strip() for clause in qualify["if"].split("||")},
+            {f"github.actor == '{REQUIRED_ACTOR}'", "github.actor == github.repository_owner"},
+        )
+        self.assertNotIn("environment", qualify)
+        self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
+        self.assertEqual(checkout["with"]["fetch-depth"], "0")
+        self.assertEqual(checkout["with"]["persist-credentials"], "false")
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+        self.assertEqual(upload["with"]["retention-days"], "30")
+        self.assertRegex(diagnostics_upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+        self.assertEqual(
+            diagnostics_upload["if"],
+            "${{ failure() && hashFiles('qualification-output/sparkle-install-diagnostics.json') != '' }}",
+        )
+        self.assertEqual(
+            diagnostics_upload["with"]["path"],
+            "qualification-output/sparkle-install-diagnostics.json",
+        )
+        self.assertEqual(diagnostics_upload["with"]["retention-days"], "30")
+
+    def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:
+        workflow = load_workflow("ci.yml")
+        job = next(
+            job
+            for job in workflow["jobs"].values()
+            if any(step.get("id") == "milestone-context" for step in job.get("steps", []))
+        )
+        by_id = {step.get("id"): step for step in job["steps"]}
+        context = by_id["milestone-context"]
+        classify = by_id["milestone-qualification"]
+        upload = by_id["milestone-report"]
+        summarize = by_id["milestone-summary"]
+        enforce = by_id["milestone-enforce"]
+
+        self.assertEqual(context["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(context["env"], {"GH_TOKEN": "${{ github.token }}"})
+        for step in (classify, upload, summarize, enforce):
+            self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
+        self.assertEqual(classify["continue-on-error"], "true")
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertIn("release-qualification-milestone-${{ github.run_attempt }}", upload["with"]["name"])
+
+    def test_stable_pypi_publish_uses_oidc_trusted_publishing(self) -> None:
+        operator = load_workflow("briefcase.yml")
+        prerelease = load_workflow("prerelease.yml")
+        workflow = load_release_engine()
+        build = workflow["jobs"]["build-python"]
+        publish = operator["jobs"]["publish-pypi"]
+        self.assertEqual(publish["needs"], "release")
+        self.assertIn("needs.release.result == 'success'", publish["if"])
+        self.assertIn("needs.release.outputs.publish_pypi == 'true'", publish["if"])
+        self.assertEqual(publish["environment"]["name"], "pypi")
+        self.assertEqual(publish["permissions"]["actions"], "read")
+        self.assertEqual(publish["permissions"]["id-token"], "write")
+        self.assertEqual(secrets_read_by(publish), set())
+        self.assertEqual(
+            next(step for step in publish["steps"] if "pypa/gh-action-pypi-publish@" in step.get("uses", ""))["with"][
+                "packages-dir"
+            ],
+            "python-distributions/dist",
+        )
+        self.assertIn("artifact_digest", build["outputs"])
+        self.assertIn("artifact_id", build["outputs"])
+        steps = publish["steps"]
+        transfer_index = next(index for index, step in enumerate(steps) if step.get("id") == "python-transfer")
+        freshness_index = next(index for index, step in enumerate(steps) if step.get("id") == "python-freshness")
+        publisher_index = next(
+            index for index, step in enumerate(steps) if "pypa/gh-action-pypi-publish@" in step.get("uses", "")
+        )
+        self.assertLess(transfer_index, freshness_index)
+        self.assertEqual(freshness_index + 1, publisher_index)
+        download = next(step for step in publish["steps"] if "actions/download-artifact@" in step.get("uses", ""))
+        self.assertEqual(download["with"]["artifact-ids"], "${{ needs.release.outputs.python_artifact_id }}")
+        self.assertEqual(download["with"]["merge-multiple"], "true")
+        self.assertNotIn("publish-pypi", workflow["jobs"])
+        self.assertNotIn("publish-pypi", prerelease["jobs"])
 
 
 class SigningCredentialMainGuardTests(unittest.TestCase):
