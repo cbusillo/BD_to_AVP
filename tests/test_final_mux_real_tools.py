@@ -410,18 +410,20 @@ class FinalMuxRealToolTests(unittest.TestCase):
             self.check_pgs_subtitles_reach_final_mux()
             return
 
-        failures: list[Exception] = []
+        outcomes: list[Exception | None] = []
         recognize = AppleVisionOcr.image_to_data
 
-        def capture_failure(backend: AppleVisionOcr, image: np.ndarray, language: Any = None) -> dict[str, list[Any]]:
+        def capture_outcome(backend: AppleVisionOcr, image: np.ndarray, language: Any = None) -> dict[str, list[Any]]:
             try:
-                return recognize(backend, image, language)
+                data = recognize(backend, image, language)
             except Exception as error:
-                failures.append(error)
+                outcomes.append(error)
                 raise
+            outcomes.append(None)
+            return data
 
-        with patch.object(AppleVisionOcr, "image_to_data", new=capture_failure):
-            self.check_pgs_subtitles_reach_final_mux(hosted_skip_reason=reason, ocr_failures=failures)
+        with patch.object(AppleVisionOcr, "image_to_data", new=capture_outcome):
+            self.check_pgs_subtitles_reach_final_mux(hosted_skip_reason=reason, ocr_outcomes=outcomes)
 
     def test_real_pgs_extraction_and_mux_with_bitmap_checked_ocr(self) -> None:
         # Keep the real PGS container, decode, SRT and mux path exercised even
@@ -440,7 +442,7 @@ class FinalMuxRealToolTests(unittest.TestCase):
             self.check_pgs_subtitles_reach_final_mux()
 
     def check_pgs_subtitles_reach_final_mux(
-        self, *, hosted_skip_reason: str | None = None, ocr_failures: list[Exception] | None = None
+        self, *, hosted_skip_reason: str | None = None, ocr_outcomes: list[Exception | None] | None = None
     ) -> None:
         # Subtitle tracks went missing between the disc and the output (#19, #21,
         # #28, #458); follow real PGS tracks through rip, OCR and mux.
@@ -515,11 +517,11 @@ class FinalMuxRealToolTests(unittest.TestCase):
                 hosted_skip_reason
                 and warnings
                 and not srt_files
-                and ocr_failures is not None
-                and len(ocr_failures) == len((regular_sup, forced_sup))
+                and ocr_outcomes is not None
+                and len(ocr_outcomes) == len((regular_sup, forced_sup))
                 and all(
                     isinstance(error, OcrError) and str(error) == "Apple Vision OCR failed: None"
-                    for error in ocr_failures
+                    for error in ocr_outcomes
                 )
             ):
                 self.skipTest(hosted_skip_reason)
