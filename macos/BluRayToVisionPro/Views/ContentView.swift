@@ -616,12 +616,14 @@ struct ContentView: View {
                 .accessibilityIdentifier("refresh-disc-drives")
 
             Divider()
-            Button("Queue Disc Image…") { chooseFile(.discImage) }
+            Button("Add Disc Image…") { chooseFile(.discImage) }
                 .accessibilityIdentifier("add-disc-image")
-            Button("Queue Blu-ray Folder…") { chooseFolder(.bluRayFolder) }
+            Button("Add Blu-ray Folder…") { chooseFolder(.bluRayFolder) }
                 .accessibilityIdentifier("add-blu-ray-folder")
-            Button("Queue Folder of Movies…") { chooseFolder(.sourceFolder) }
+            Button("Add Folder of Movies…") { chooseFolder(.sourceFolder) }
                 .accessibilityIdentifier("add-folder-of-movies")
+            Button("Add 3D MKV…") { chooseFile(.matroska) }
+                .accessibilityIdentifier("add-3d-mkv")
 
             Divider()
             Button("Add MTS or M2TS…") { chooseFile(.transportStream) }
