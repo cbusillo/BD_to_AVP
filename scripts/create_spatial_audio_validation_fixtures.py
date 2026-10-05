@@ -10,7 +10,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from bd_to_avp.modules.audio import create_prepared_audio_file
+import numpy as np
+
+from bd_to_avp.modules.audio import create_prepared_audio_file, enforce_aac_layout_policy, plan_aac_layouts
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.container import extract_mvc_and_audio, mux_video_audio_subs
@@ -118,13 +120,27 @@ def prepare_output_directory(output_directory: Path, force: bool) -> None:
     resolved_output.mkdir(parents=True)
 
 
+def spatial_eye_filter(*, left_eye: bool) -> str:
+    """Three disparity planes, with the flash shared by both eyes."""
+    blue_x = 52 if left_eye else 60
+    red_x = 430 if left_eye else 406
+    return ",".join(
+        (
+            "drawgrid=width=40:height=40:thickness=1:color=white@0.18",
+            f"drawbox=x={blue_x}:y=58:w=158:h=82:color=0x2878ff:t=fill",
+            "drawbox=x=241:y=151:w=158:h=82:color=0x20a45b:t=fill",
+            f"drawbox=x={red_x}:y=244:w=158:h=82:color=0xe34242:t=fill",
+            "drawbox=x=0:y=0:w=iw:h=ih:color=white@0.55:t=fill:enable='lt(mod(t,1),0.12)'",
+        )
+    )
+
+
 def create_spatial_video(work_directory: Path) -> Path:
     left_path = work_directory / "left.mov"
     right_path = work_directory / "right.mov"
     spatial_path = work_directory / "spatial-video.mov"
-    flash_filter = "drawbox=x=0:y=0:w=iw:h=ih:color=white@0.55:t=fill:enable='lt(mod(t,1),0.12)'"
 
-    for output_path, crop_x in ((left_path, 0), (right_path, 16)):
+    for output_path, left_eye in ((left_path, True), (right_path, False)):
         run(
             [
                 config.FFMPEG_PATH,
@@ -134,11 +150,11 @@ def create_spatial_video(work_directory: Path) -> Path:
                 "-f",
                 "lavfi",
                 "-i",
-                f"testsrc2=size={VIDEO_WIDTH + 16}x{VIDEO_HEIGHT}:rate={FRAME_RATE}",
+                f"color=c=0x080c12:size={VIDEO_WIDTH}x{VIDEO_HEIGHT}:rate={FRAME_RATE}",
                 "-t",
                 str(DURATION_SECONDS),
                 "-vf",
-                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:{crop_x}:0,{flash_filter}",
+                spatial_eye_filter(left_eye=left_eye),
                 "-c:v",
                 "hevc_videotoolbox",
                 "-tag:v",
@@ -369,27 +385,56 @@ def packet_fingerprint(path: Path, audio_index: int) -> dict[str, object]:
     return {"packet_count": len(packet_hashes), "sha256": digest}
 
 
-def decoded_audio_fingerprint(path: Path, audio_index: int) -> str:
-    result = run(
-        [
-            config.FFMPEG_PATH,
-            "-v",
-            "error",
-            "-i",
-            path,
-            "-map",
-            f"0:a:{audio_index}",
-            "-c:a",
-            "pcm_s24le",
-            "-f",
-            "hash",
-            "-hash",
-            "sha256",
-            "-",
-        ],
-        capture_output=True,
-    )
+def decoded_audio_fingerprint(path: Path, audio_index: int, *, duration_seconds: float | None = None) -> str:
+    command: list[str | Path] = [config.FFMPEG_PATH, "-v", "error", "-i", path, "-map", f"0:a:{audio_index}"]
+    if duration_seconds is not None:
+        command.extend(["-t", str(duration_seconds)])
+    command.extend(["-c:a", "pcm_s24le", "-f", "hash", "-hash", "sha256", "-"])
+    result = run(command, capture_output=True)
     return result.stdout.strip().removeprefix("SHA256=")
+
+
+def validate_spatial_depth(left_path: Path, right_path: Path) -> dict[str, dict[str, float]]:
+    centers = {}
+    for eye, path in (("left", left_path), ("right", right_path)):
+        result = subprocess.run(
+            [
+                str(config.FFMPEG_PATH),
+                "-v",
+                "error",
+                "-ss",
+                "0.5",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        pixels = np.frombuffer(result.stdout, dtype=np.uint8).reshape(VIDEO_HEIGHT, VIDEO_WIDTH, 3).astype(int)
+        red, green, blue = pixels.transpose(2, 0, 1)
+        masks = {
+            "blue": (blue > red * 2) & (blue > green * 1.5) & (blue > 120),
+            "green": (green > red * 2) & (green > blue * 1.5) & (green > 100),
+            "red": (red > blue * 2) & (red > green * 1.5) & (red > 120),
+        }
+        centers[eye] = {}
+        for color, mask in masks.items():
+            _, xs = np.nonzero(mask)
+            if len(xs) < 100:
+                raise RuntimeError(f"{path.name}: missing {color} depth marker")
+            centers[eye][color] = float(xs.mean())
+    disparity = {color: centers["left"][color] - centers["right"][color] for color in centers["left"]}
+    if not (disparity["blue"] < -2 and abs(disparity["green"]) < 1 and disparity["red"] > 2):
+        raise RuntimeError(f"Final spatial views have incorrect depth order: {disparity}")
+    return centers
 
 
 def file_sha256(path: Path) -> str:
@@ -427,6 +472,19 @@ def mp4box_track_section(path: Path, track_number: int) -> str:
     if not section:
         raise RuntimeError(f"{path.name}: MP4Box did not report track {track_number}")
     return section.partition("# Track ")[0]
+
+
+def validate_warnings(case: FixtureCase, source_streams: list[dict[str, Any]], recorder: WarningRecorder) -> None:
+    expected_codes: list[object] = []
+    if case.mode is AudioMode.AUTOMATIC and case.expected_action == "convert_aac":
+        expected_codes.append("audio_automatic_fallback_to_aac")
+    if case.expected_action == "convert_aac":
+        policy_recorder = WarningRecorder()
+        enforce_aac_layout_policy(plan_aac_layouts(source_streams), policy_recorder)
+        expected_codes.extend(warning.fields.get("code") for warning in policy_recorder.warnings)
+    warning_codes = [warning.fields.get("code") for warning in recorder.warnings]
+    if warning_codes != expected_codes:
+        raise RuntimeError(f"{case.filename}: expected warnings {expected_codes}, found {warning_codes}")
 
 
 def validate_fixture(
@@ -481,16 +539,22 @@ def validate_fixture(
         or "Alternate Group ID 1" not in alternate_track_info
     ):
         raise RuntimeError(f"{case.filename}: alternate audio track is not disabled in the audio alternate group")
-    if "name: 'Validation Main 5.1'" not in main_track_info:
-        raise RuntimeError(f"{case.filename}: final mux did not preserve the main audio title")
-    if "name: 'Validation Alternate Stereo'" not in alternate_track_info:
-        raise RuntimeError(f"{case.filename}: final mux did not preserve the alternate audio title")
+    if [stream_summary(stream)["title"] for stream in final_audio_streams] != expected_titles:
+        raise RuntimeError(f"{case.filename}: final mux did not preserve audio track titles")
 
     source_fingerprints = [packet_fingerprint(source_path, index) for index in range(2)]
     prepared_fingerprints = [packet_fingerprint(prepared_audio_path, index) for index in range(2)]
     final_fingerprints = [packet_fingerprint(final_path, index) for index in range(2)]
-    prepared_decoded_fingerprints = [decoded_audio_fingerprint(prepared_audio_path, index) for index in range(2)]
-    final_decoded_fingerprints = [decoded_audio_fingerprint(final_path, index) for index in range(2)]
+    # AAC muxers differ in final-frame padding. Compare presentation samples through
+    # all beep bursts, excluding only the last video frame (which has no beep).
+    # Keep the full AAC packet check below; PCM compares every decoded sample.
+    decoded_duration = DURATION_SECONDS - 1 / FRAME_RATE if case.mode is not AudioMode.PCM else None
+    prepared_decoded_fingerprints = [
+        decoded_audio_fingerprint(prepared_audio_path, index, duration_seconds=decoded_duration) for index in range(2)
+    ]
+    final_decoded_fingerprints = [
+        decoded_audio_fingerprint(final_path, index, duration_seconds=decoded_duration) for index in range(2)
+    ]
     if prepared_decoded_fingerprints != final_decoded_fingerprints:
         raise RuntimeError(f"{case.filename}: final mux changed decoded audio samples")
     if case.mode is not AudioMode.PCM and prepared_fingerprints != final_fingerprints:
@@ -500,12 +564,7 @@ def validate_fixture(
     if case.filename.startswith("02-") and source_fingerprints[1] == prepared_fingerprints[1]:
         raise RuntimeError(f"{case.filename}: Automatic fallback did not convert the qualified AAC sibling track")
 
-    warning_codes = [warning.fields.get("code") for warning in recorder.warnings]
-    if case.filename.startswith("02-"):
-        if warning_codes != ["audio_automatic_fallback_to_aac"]:
-            raise RuntimeError(f"{case.filename}: missing structured Automatic fallback warning")
-    elif warning_codes:
-        raise RuntimeError(f"{case.filename}: unexpected warnings: {warning_codes}")
+    validate_warnings(case, audio_streams(source_probe), recorder)
 
     split_directory = case_directory / "spatial-split"
     split_directory.mkdir()
@@ -523,6 +582,11 @@ def validate_fixture(
     if len(split_outputs) != 2:
         raise RuntimeError(f"{case.filename}: spatial split did not produce left and right views")
 
+    depth_centers = validate_spatial_depth(
+        split_directory / f"{final_path.stem}_LEFT.mov",
+        split_directory / f"{final_path.stem}_RIGHT.mov",
+    )
+
     return {
         "file": final_path.name,
         "label": case.label,
@@ -536,10 +600,12 @@ def validate_fixture(
         "final_audio": [stream_summary(stream) for stream in final_audio_streams],
         "source_packet_fingerprints": source_fingerprints,
         "prepared_packet_fingerprints": prepared_fingerprints,
+        "decoded_comparison_duration_seconds": decoded_duration,
         "prepared_decoded_fingerprints": prepared_decoded_fingerprints,
         "final_decoded_fingerprints": final_decoded_fingerprints,
         "warnings": [asdict(warning) for warning in recorder.warnings],
         "spatial_split_outputs": split_outputs,
+        "decoded_depth_marker_centers": depth_centers,
         "mp4box_audio_tracks_verified": True,
     }
 
@@ -580,8 +646,12 @@ Generated fixtures are {DURATION_SECONDS} seconds long. A white flash occurs onc
 ## Per-Fixture Gate
 
 1. Open the movie in **BD to AVP Playback Check** and select **Run Playback Check**.
-2. Watch the beginning, middle, and end sequence, then answer the two visible playback questions.
-3. Confirm the automatic result passes and depth is comfortable and not inverted; the left eye must remain primary.
+2. Watch the beginning, middle, and end sequence, then answer the three visible playback questions:
+   picture visibility, three-dimensional appearance, and correct comfortable depth direction.
+3. Confirm the automatic checks pass. Blue (upper left) should be behind the screen plane,
+   green (center) on it, and red (lower right) in front; the left eye must remain primary.
+   Answer **Not sure** if foreground/background is unclear; that is a result needing review,
+   not a full spatial pass. Record the audio observations separately.
 4. Expand **Technical details**, enable English subtitles, and play the default English 5.1 track.
    Each channel beep must align with the white flash.
 5. Switch to the French alternate stereo track. The sound must change to alternating left/right higher-pitched beeps.
@@ -604,7 +674,9 @@ Generated fixtures are {DURATION_SECONDS} seconds long. A white flash occurs onc
 
 ## Final Decision
 
-- [ ] All four fixtures pass spatial presentation, seeking, lip-sync, track switching, and audible surround checks.
+- [ ] All four fixtures have recorded visibility, depth, and eye-order answers plus seeking,
+  flash/beep sync, track switching, and audible surround observations.
+- [ ] Claim a full spatial pass only where all three observations are Yes; retain No/Not sure results.
 - [ ] No fixture produces a playback failure, unexplained silence, or mislabeled media option.
 
 Notes:
@@ -635,13 +707,14 @@ def main() -> None:
         for case in FIXTURE_CASES
     ]
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "duration_seconds": DURATION_SECONDS,
         "video": {
             "codec": "MV-HEVC",
             "dimensions": f"{VIDEO_WIDTH}x{VIDEO_HEIGHT}",
             "frame_rate": FRAME_RATE,
             "left_is_primary": True,
+            "depth_order": ["blue_behind", "green_screen", "red_in_front"],
             "horizontal_field_of_view": 90,
             "horizontal_disparity_adjustment": 0,
         },

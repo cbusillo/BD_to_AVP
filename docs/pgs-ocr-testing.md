@@ -14,10 +14,11 @@ uv run pytest -p no:cacheprovider -rs tests/test_final_mux_real_tools.py
 
 The `xcode-27` hosted checks job records
 `BD_TO_AVP_HOSTED_VISION_OCR_SKIP_REASON` for the actual Apple Vision test.
-On a GitHub-hosted runner only, that explicit reason skips that single test;
-pytest prints the reason in the CI log. Without the reason, including local
-and self-hosted runs, the actual OCR test runs and errors fail it. To probe a
-future hosted image, remove that variable from the test step's environment.
+The actual OCR test still runs. On a GitHub-hosted runner only, that explicit
+reason permits a skip if recognition reproduces the recorded false/no-NSError
+failure. Other failures remain fatal, and pytest prints the skip reason.
+A recovered runner automatically resumes full OCR coverage. Without the reason,
+including local and self-hosted runs, every OCR failure fails the test.
 
 The known limitation is recorded in [#892](https://github.com/cbusillo/BD_to_AVP/issues/892):
 run `37229434438`, attempts 1–4, failed both regular and forced recognition

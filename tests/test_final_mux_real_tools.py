@@ -30,7 +30,7 @@ from bd_to_avp.modules import audio, container, sub
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
-from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrWord
+from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrError, OcrWord
 from scripts import build_mv_hevc_encoder_macos
 
 
@@ -398,12 +398,31 @@ class FinalMuxRealToolTests(unittest.TestCase):
                 self.assertEqual(stream_languages(muxed_path), [("video", None), ("audio", "eng")])
 
     def test_pgs_subtitles_rip_to_srt_and_reach_the_final_mux_with_forced_flag(self) -> None:
-        # The checks workflow records its known runner limitation explicitly;
-        # local and other environments still run actual Apple Vision OCR.
+        # Probe actual OCR even on the affected runner, so a recovered image
+        # resumes full coverage. Only its recorded false/no-NSError failure
+        # may skip; other failures remain fatal.
         reason = os.environ.get("BD_TO_AVP_HOSTED_VISION_OCR_SKIP_REASON")
-        if reason and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted":
-            self.skipTest(reason)
-        self.check_pgs_subtitles_reach_final_mux()
+        if not reason or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
+            self.check_pgs_subtitles_reach_final_mux()
+            return
+
+        failures: list[OcrError] = []
+        recognize = AppleVisionOcr.image_to_data
+
+        def capture_failure(backend: AppleVisionOcr, image: np.ndarray, language: Any = None) -> dict[str, list[Any]]:
+            try:
+                return recognize(backend, image, language)
+            except OcrError as error:
+                failures.append(error)
+                raise
+
+        with patch.object(AppleVisionOcr, "image_to_data", new=capture_failure):
+            try:
+                self.check_pgs_subtitles_reach_final_mux()
+            except AssertionError:
+                if failures and all(str(error) == "Apple Vision OCR failed: None" for error in failures):
+                    self.skipTest(reason)
+                raise
 
     def test_real_pgs_extraction_and_mux_with_bitmap_checked_ocr(self) -> None:
         # Keep the real PGS container, decode, SRT and mux path exercised even
