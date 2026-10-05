@@ -8,6 +8,7 @@ subtitles) only show up in real tool output.
 """
 
 import json
+import os
 import platform
 import shutil
 import struct
@@ -29,6 +30,7 @@ from bd_to_avp.modules import audio, container, sub
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrWord
 from scripts import build_mv_hevc_encoder_macos
 
 
@@ -396,6 +398,30 @@ class FinalMuxRealToolTests(unittest.TestCase):
                 self.assertEqual(stream_languages(muxed_path), [("video", None), ("audio", "eng")])
 
     def test_pgs_subtitles_rip_to_srt_and_reach_the_final_mux_with_forced_flag(self) -> None:
+        # The checks workflow records its known runner limitation explicitly;
+        # local and other environments still run actual Apple Vision OCR.
+        reason = os.environ.get("BD_TO_AVP_HOSTED_VISION_OCR_SKIP_REASON")
+        if reason and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted":
+            self.skipTest(reason)
+        self.check_pgs_subtitles_reach_final_mux()
+
+    def test_real_pgs_extraction_and_mux_with_bitmap_checked_ocr(self) -> None:
+        # Keep the real PGS container, decode, SRT and mux path exercised even
+        # where the OS OCR backend cannot run. Only recognition is substituted;
+        # its answer depends on receiving the exact decoded fixture bitmap.
+        def recognize(image: np.ndarray, _language: object = None) -> dict[str, list[Any]]:
+            for text, _, _ in (*PGS_CUES, *FORCED_PGS_CUES):
+                bitmap = np.zeros((80, 640), np.uint8)
+                cv2.putText(bitmap, text, (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 1.5, 1, 3, cv2.LINE_8)
+                expected = np.where(bitmap, 235, 255).astype(np.uint8)
+                if np.array_equal(image, expected):
+                    return AppleVisionOcr._tsv_data_from_words([OcrWord(text, 100, 10, 10, 600, 60, 1, 1)])
+            raise AssertionError("OCR received an unexpected decoded PGS bitmap")
+
+        with patch.object(AppleVisionOcr, "image_to_data", side_effect=recognize):
+            self.check_pgs_subtitles_reach_final_mux()
+
+    def check_pgs_subtitles_reach_final_mux(self) -> None:
         # Subtitle tracks went missing between the disc and the output (#19, #21,
         # #28, #458); follow real PGS tracks through rip, OCR and mux.
         with tempfile.TemporaryDirectory(dir=self.temporary_directory.name) as folder:
@@ -478,13 +504,16 @@ class FinalMuxRealToolTests(unittest.TestCase):
 
             tracks = muxed_tracks(muxed_path)
             self.assertEqual([track.handler for track in tracks], ["vide", "sbtl", "sbtl"])
+            forced_flags = []
             for subtitle_index, track in enumerate(tracks[1:]):
                 assert track.tx3g_display_flags is not None
                 forced = bool(track.tx3g_display_flags & TX3G_ALL_SAMPLES_FORCED)
+                forced_flags.append(forced)
                 expected_cues = FORCED_PGS_CUES if forced else PGS_CUES
                 text = subtitle_text(muxed_path, subtitle_index).upper()
                 for cue, _, _ in expected_cues:
                     self.assertIn(cue, text, f"subtitle track {subtitle_index} (forced={forced})")
+            self.assertEqual(sorted(forced_flags), [False, True])
 
 
 if __name__ == "__main__":
