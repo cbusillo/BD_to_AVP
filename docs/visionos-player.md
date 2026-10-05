@@ -231,9 +231,9 @@ it is published; a developer's local Current build is not a public Mac release.
 ### Point the TestFlight text at each new Mac Beta
 
 After every published Mac Beta, update the player's TestFlight text so it names
-the new Mac build. The app is `visionosTestFlight.appStoreConnectID` in
-`.github/github.json`. Two fields carry the Mac version, release link and guide
-link:
+the new Mac build. Use the App Store Connect record identified in
+[Private internal TestFlight delivery](#private-internal-testflight-delivery).
+Two fields carry the Mac version, release link and guide link:
 
 - the en-US `betaAppLocalizations` `description`
 - the `betaAppReviewDetails` `notes`
