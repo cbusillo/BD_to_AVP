@@ -133,6 +133,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
 
         XCTAssertTrue(lightApp.descendants(matching: .any)["persistent-queue-sidebar"].exists)
+        assertAddSourceMenu(in: lightApp)
         let sourceURL = context.syntheticHome.appendingPathComponent("installed-ui-source.m2ts")
         XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path), "The runner did not provide the source fixture.")
         openSourceSettings(in: lightApp, sourceURL: sourceURL)
@@ -240,6 +241,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
         let mainContent = app.descendants(matching: .any)["main-window-content"]
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
+        assertAddSourceMenu(in: app)
         XCTAssertTrue(app.descendants(matching: .any)["ready-source"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["ready-profile-picker"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["ready-destination"].exists)
@@ -265,11 +267,32 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         attachScreenshot(window.screenshot(), name: "setup-editor-light.png")
     }
 
+    private func assertAddSourceMenu(in app: XCUIApplication) {
+        let sourceMenu = app.menuButtons["add-sources-menu"]
+        XCTAssertTrue(sourceMenu.waitForExistence(timeout: 20))
+        XCTAssertTrue(sourceMenu.isEnabled)
+        sourceMenu.click()
+        for identifier in [
+            "refresh-disc-drives", "add-disc-image", "add-blu-ray-folder", "add-folder-of-movies",
+            "add-3d-mkv", "add-transport-stream", "configure-source",
+        ] {
+            let action = app.menuItems[identifier]
+            XCTAssertTrue(action.waitForExistence(timeout: 5), "Missing add-source action: \(identifier)")
+            XCTAssertTrue(action.isEnabled, "Disabled add-source action: \(identifier)")
+            XCTAssertTrue(action.isHittable, "Unreachable add-source action: \(identifier)")
+        }
+        attachScreenshot(app.screenshot(), name: "add-source-menu.png")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            !app.menuItems["configure-source"].exists
+        })
+    }
+
     private func openSourceSettings(in app: XCUIApplication, sourceURL: URL) {
         let sourceMenu = app.menuButtons["add-sources-menu"]
         XCTAssertTrue(sourceMenu.waitForExistence(timeout: 20))
         sourceMenu.click()
-        let configureAction = app.menuItems["Configure Source…"]
+        let configureAction = app.menuItems["configure-source"]
         XCTAssertTrue(configureAction.waitForExistence(timeout: 20))
         configureAction.click()
 
