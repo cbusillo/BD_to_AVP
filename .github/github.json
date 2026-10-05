@@ -3,7 +3,9 @@
   "projectType": "python-desktop-app",
   "pullRequests": {
     "preferredMergeMethod": "merge",
-    "allowedMergeMethods": ["merge"]
+    "allowedMergeMethods": [
+      "merge"
+    ]
   },
   "branchProtection": {
     "main": {
@@ -34,9 +36,13 @@
   },
   "releaseEnvironments": {
     "macos-signing": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": true,
-      "reviewers": ["cbusillo"],
+      "reviewers": [
+        "cbusillo"
+      ],
       "preventSelfReview": true,
       "canAdminsBypass": false,
       "secrets": [
@@ -49,22 +55,32 @@
       ]
     },
     "sparkle-release": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": false,
-      "secrets": ["SPARKLE_EDDSA_PRIVATE_KEY"]
+      "secrets": [
+        "SPARKLE_EDDSA_PRIVATE_KEY"
+      ]
     },
     "sparkle-feed-ops": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": true,
       "secrets": []
     },
     "pypi": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": false,
       "secrets": []
     },
     "github-pages": {
-      "branches": ["main"],
+      "branches": [
+        "main"
+      ],
       "requiredReview": false,
       "secrets": []
     }
@@ -92,7 +108,10 @@
     "evidenceOrphanAuditCommand": "uv run python -m scripts.release_evidence_orphan_audit --repository cbusillo/BD_to_AVP --threshold-hours 72 --owner cbusillo",
     "evidenceOrphanAuditThresholdHours": 72,
     "evidenceOrphanAuditOwner": "cbusillo",
-    "evidenceOrphanAuditPermissions": ["contents: read", "issues: write"],
+    "evidenceOrphanAuditPermissions": [
+      "contents: read",
+      "issues: write"
+    ],
     "evidenceOrphanAuditSemantics": "github_rest_tree_blob_inspection_only_no_automation_ref_checkout_fetch_or_execution",
     "evidenceReconcilePreflightCommand": "uv run python -m scripts.release_evidence_reconcile preflight --release-tag <tag>",
     "evidenceReconcileCommand": "uv run python -m scripts.release_evidence_reconcile reconcile --release-tag <tag> --evidence-sha <preflight-evidence-sha> --main-sha <preflight-main-sha> --plan-digest <preflight-plan-digest>",
@@ -214,7 +233,11 @@
     "inspection": {
       "tool": "jetbrains",
       "ide": "IntelliJ IDEA",
-      "scopePreference": ["changed_files", "directory", "whole_project"]
+      "scopePreference": [
+        "changed_files",
+        "directory",
+        "whole_project"
+      ]
     },
     "docsRequiredWhen": [
       "behavior changes",
@@ -238,8 +261,14 @@
     "Manage Sparkle Pages",
     "Update FFmpeg Vendor Pins"
   ],
-  "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
-  "relatedRepos": ["cbusillo/homebrew-tap"],
+  "requiredStatusChecks": [
+    "validate",
+    "Analyze (actions)",
+    "Analyze (python)"
+  ],
+  "relatedRepos": [
+    "cbusillo/homebrew-tap"
+  ],
   "githubSignals": {
     "postMerge": {
       "waitForActions": true,
