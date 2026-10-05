@@ -135,6 +135,7 @@
   "docs": {
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
+    "macosAppPackaging": "docs/macos-app-packaging.md",
     "lockfile": "uv.lock",
     "releaseRoutes": "docs/release-routes.md",
     "releaseProcess": "docs/release-process.md",
@@ -208,7 +209,7 @@
       "pythonPackage": "uv build",
       "embeddedPythonBuild": "uv run python scripts/embedded_python.py",
       "macosPackage": "uv run python scripts/native_app.py package",
-      "macosCurrent": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=\"${BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT:?Set the diagnostics endpoint from scoped configuration}\" uv run python scripts/native_app.py publish-current"
+      "macosCurrent": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=\"${BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT:?Set the diagnostics endpoint per docs/macos-app-packaging.md}\" uv run python scripts/native_app.py publish-current"
     },
     "inspection": {
       "tool": "jetbrains",
