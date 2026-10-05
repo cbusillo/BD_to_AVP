@@ -446,6 +446,12 @@ For subtitle integration checks and the recorded hosted Vision limitation, see
 
 Contribute to the project by submitting pull requests or opening issues for bugs and feature requests.
 
+The Director's [overall direction](https://github.com/cbusillo/direction/blob/HEAD/DIRECTION.md)
+applies to this repository; it has no separate DIRECTION.md. Agents start with
+[AGENTS.md](AGENTS.md), which points to the maintained execution workflow and
+records repository-specific release and validation requirements. GitHub issues
+hold the work plan.
+
 ## Acknowledgements
 
 Big thanks to:

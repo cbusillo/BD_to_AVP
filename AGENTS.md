@@ -1,3 +1,18 @@
+# Direction and Execution
+
+Read the Director's [overall DIRECTION.md](https://github.com/cbusillo/direction/blob/HEAD/DIRECTION.md)
+before working here. This repository has no DIRECTION.md of its own.
+Use the maintained [executing loop](https://github.com/cbusillo/codex-skills/blob/main/skills/references/executing-loop.md)
+and its owning skills for issue claims, linked worktrees, bot commits, review,
+landing, and closeout. AGENTS.md is the sole agent-instruction filename;
+path-specific instructions belong in nested AGENTS.md files.
+
+Use `.github/github.json` for validation commands and repository workflow
+metadata. Documentation-only changes use the existing CI lane selection in
+`scripts/ci_lanes.py`; batch related edits into one push. Changes to execution
+guidance need a review under [reviews by another model](https://github.com/cbusillo/codex-skills/blob/main/skills/references/model-review.md).
+Release-specific requirements below still apply when release work is authorized.
+
 # Release Operations
 
 - For either `Stable` or `Prerelease`, use
