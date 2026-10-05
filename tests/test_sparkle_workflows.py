@@ -34,6 +34,49 @@ def load_release_engine() -> dict:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_release_evidence_configuration_records_durable_capture(self) -> None:
+        release_operations = load_github_config()["releaseOperations"]
+        self.assertEqual(release_operations["evidenceBranchPattern"], "automation/release-evidence-<tag>")
+        self.assertEqual(
+            release_operations["evidenceCapturePath"],
+            "docs/release-evidence/<tag>/capture-v2.json",
+        )
+        self.assertEqual(release_operations["evidenceCheckpointSemantics"], "branch_commit_plus_captured_v2")
+        self.assertEqual(release_operations["evidenceMergeSemantics"], "operator_opened_protected_pull_request")
+
+    def test_milestone_qualification_configuration_routes_durable_evidence(self) -> None:
+        config = load_github_config()
+        self.assertIn("Milestone Qualification", config["importantWorkflows"])
+        self.assertEqual(
+            config["releaseOperations"]["milestoneQualificationWorkflowPath"],
+            ".github/workflows/milestone-qualification.yml",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationManifestPath"],
+            "docs/release-evidence/<tag>/qualification-manifest.json",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationSnapshotPath"],
+            "docs/release-evidence/<tag>/qualification-record.json",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationManifestCommand"],
+            "uv run python -m scripts.release_qualification_manifest",
+        )
+
+    def test_release_operator_configuration_matches_workflow_paths(self) -> None:
+        release_operations = load_github_config()["releaseOperations"]
+        self.assertFalse((REPO_ROOT / ".github" / "workflows" / "publish-to-pypi.yml").exists())
+        self.assertEqual(
+            release_operations["workflows"]["Stable"]["path"],
+            ".github/workflows/briefcase.yml",
+        )
+        self.assertEqual(
+            release_operations["workflows"]["Prerelease"],
+            {"path": ".github/workflows/prerelease.yml", "route": "prerelease"},
+        )
+        self.assertEqual(release_operations["engineWorkflowPath"], ".github/workflows/release-engine.yml")
+
     def test_ci_fetches_full_history_for_recovery_provenance(self) -> None:
         workflow = load_workflow("ci.yml")
         checkouts = [

@@ -1,8 +1,8 @@
 """Security rules every GitHub workflow must satisfy.
 
-These are rules over the parsed workflows, not statements about one job or one
-line of shell. Renaming a job, moving a step or changing a runner must not
-fail them; weakening the release's trust boundaries must.
+These rules check parsed permissions, trust relationships and executed guards.
+Display labels and runner upgrades must not fail them. Release-specific wiring
+and ordering are checked where they enforce a trust boundary.
 """
 
 import json
@@ -28,7 +28,6 @@ from scripts.release_workflow_policy import (
     STABLE_ROUTE,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIRECTORY = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 UNTRUSTED_TRIGGERS = {"pull_request", "pull_request_target", "push", "schedule", "issue_comment"}
 SECRET_REFERENCE = re.compile(r"secrets\.([A-Za-z0-9_]+)")
@@ -224,18 +223,13 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
                     self.assertNotIn("secrets", job)
 
     def test_signing_steps_bind_identity_to_the_production_constants(self) -> None:
-        checked = 0
-        for job in load_release_engine()["jobs"].values():
-            for step in job.get("steps", []):
-                environment = step.get("env", {})
-                if environment.get("DEV_ID") != "${{ secrets.DEV_ID }}":
-                    continue
-                checked += 1
-                with self.subTest(step=step.get("id")):
-                    self.assertEqual(environment["TEAM_ID"], "${{ secrets.TEAM_ID }}")
-                    self.assertEqual(environment["PRODUCTION_TEAM_ID"], PRODUCTION_TEAM_ID)
-                    self.assertEqual(environment["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
-        self.assertGreater(checked, 0)
+        steps = load_release_engine()["jobs"]["package"]["steps"]
+        for ident in ("signing-certificate", "package_artifact"):
+            with self.subTest(step=ident):
+                environment = next(step["env"] for step in steps if step.get("id") == ident)
+                self.assertEqual(environment["TEAM_ID"], "${{ secrets.TEAM_ID }}")
+                self.assertEqual(environment["PRODUCTION_TEAM_ID"], PRODUCTION_TEAM_ID)
+                self.assertEqual(environment["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
 
     def test_clean_machine_commands_select_the_ephemeral_runner_contract(self) -> None:
         steps = load_workflow("milestone-qualification.yml")["jobs"]["qualify"]["steps"]
@@ -380,14 +374,6 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         actor_step = next(step for step in publish["steps"] if step.get("id") == "evidence-parent")
         self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_ID"], "${{ github.actor_id }}")
         self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_LOGIN"], "${{ github.actor }}")
-        release_operations = load_github_config()["releaseOperations"]
-        self.assertEqual(release_operations["evidenceBranchPattern"], "automation/release-evidence-<tag>")
-        self.assertEqual(
-            release_operations["evidenceCapturePath"],
-            "docs/release-evidence/<tag>/capture-v2.json",
-        )
-        self.assertEqual(release_operations["evidenceCheckpointSemantics"], "branch_commit_plus_captured_v2")
-        self.assertEqual(release_operations["evidenceMergeSemantics"], "operator_opened_protected_pull_request")
 
         next(step for step in publish["steps"] if step.get("id") == "publish")
 
@@ -396,9 +382,9 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         dispatch = workflow["on"]["workflow_dispatch"]
         qualify = workflow["jobs"]["qualify"]
         steps = qualify["steps"]
-        checkout = steps[0]
-        upload = steps[-1]
         by_id = {step.get("id"): step for step in steps}
+        checkout = by_id["checkout"]
+        upload = by_id["qualification-receipts"]
         diagnostics_upload = by_id["sparkle-diagnostics"]
 
         self.assertEqual(
@@ -430,28 +416,14 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         )
         self.assertEqual(diagnostics_upload["with"]["retention-days"], "30")
 
-        config = load_github_config()
-        self.assertIn("Milestone Qualification", config["importantWorkflows"])
-        self.assertEqual(
-            config["releaseOperations"]["milestoneQualificationWorkflowPath"],
-            ".github/workflows/milestone-qualification.yml",
-        )
-        self.assertEqual(
-            config["releaseOperations"]["qualificationManifestPath"],
-            "docs/release-evidence/<tag>/qualification-manifest.json",
-        )
-        self.assertEqual(
-            config["releaseOperations"]["qualificationSnapshotPath"],
-            "docs/release-evidence/<tag>/qualification-record.json",
-        )
-        self.assertEqual(
-            config["releaseOperations"]["qualificationManifestCommand"],
-            "uv run python -m scripts.release_qualification_manifest",
-        )
-
     def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:
         workflow = load_workflow("ci.yml")
-        by_id = {step.get("id"): step for job in workflow["jobs"].values() for step in job["steps"]}
+        job = next(
+            job
+            for job in workflow["jobs"].values()
+            if any(step.get("id") == "milestone-context" for step in job.get("steps", []))
+        )
+        by_id = {step.get("id"): step for step in job["steps"]}
         context = by_id["milestone-context"]
         classify = by_id["milestone-qualification"]
         upload = by_id["milestone-report"]
@@ -472,9 +444,6 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         workflow = load_release_engine()
         build = workflow["jobs"]["build-python"]
         publish = operator["jobs"]["publish-pypi"]
-        release_operations = load_github_config()["releaseOperations"]
-
-        self.assertFalse((REPO_ROOT / ".github" / "workflows" / "publish-to-pypi.yml").exists())
         self.assertEqual(publish["needs"], "release")
         self.assertIn("needs.release.result == 'success'", publish["if"])
         self.assertIn("needs.release.outputs.publish_pypi == 'true'", publish["if"])
@@ -503,15 +472,6 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         self.assertEqual(download["with"]["merge-multiple"], "true")
         self.assertNotIn("publish-pypi", workflow["jobs"])
         self.assertNotIn("publish-pypi", prerelease["jobs"])
-        self.assertEqual(
-            release_operations["workflows"]["Stable"]["path"],
-            ".github/workflows/briefcase.yml",
-        )
-        self.assertEqual(
-            release_operations["workflows"]["Prerelease"],
-            {"path": ".github/workflows/prerelease.yml", "route": "prerelease"},
-        )
-        self.assertEqual(release_operations["engineWorkflowPath"], ".github/workflows/release-engine.yml")
 
 
 class SigningCredentialMainGuardTests(unittest.TestCase):
