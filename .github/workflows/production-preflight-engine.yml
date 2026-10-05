@@ -272,6 +272,7 @@ jobs:
           fi
 
       - name: Retain bounded failure diagnostics
+        id: failure-diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -282,6 +283,7 @@ jobs:
           retention-days: 7
 
       - name: Retain bounded success evidence
+        id: success-evidence
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

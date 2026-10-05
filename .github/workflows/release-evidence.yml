@@ -459,6 +459,7 @@ jobs:
           fi
 
       - name: Reject conflicting evidence on the idempotent branch
+        id: evidence-conflict
         env:
           EVIDENCE_REF: ${{ needs.validate-and-prepare.outputs.evidence_ref }}
           EXPECTED_EXISTING_BRANCH_SHA: ${{ needs.validate-and-prepare.outputs.existing_branch_sha }}
@@ -519,6 +520,7 @@ jobs:
           python-version: "3.12"
 
       - name: Prepare exact evidence branch parent and actor identity
+        id: evidence-parent
         env:
           EVIDENCE_ACTOR_ID: ${{ github.actor_id }}
           EVIDENCE_ACTOR_LOGIN: ${{ github.actor }}

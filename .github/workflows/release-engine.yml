@@ -286,6 +286,7 @@ jobs:
         run: python -m scripts.release metadata --github-output "$GITHUB_OUTPUT"
 
       - name: Validate route and summarize publication effects
+        id: route-validation
         env:
           RELEASE_OPERATOR_WORKFLOW_REF: ${{ needs.policy.outputs.operator_workflow_ref }}
           RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
@@ -345,6 +346,7 @@ jobs:
           fi
 
       - name: Revalidate Beta 3 recovery premise
+        id: beta3-recovery
         if: steps.metadata.outputs.release_tag == 'v0.3.0-beta.3'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -759,6 +761,7 @@ jobs:
           uv sync --locked --all-groups --python 3.12
 
       - name: Install signing certificate in an ephemeral keychain
+        id: signing-certificate
         env:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
@@ -900,6 +903,7 @@ jobs:
           trap - EXIT
 
       - name: Store notarization credentials in the ephemeral keychain
+        id: notary-credentials
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -1118,6 +1122,7 @@ jobs:
           retention-days: 7
 
       - name: Remove temporary signing material
+        id: signing-cleanup
         if: always()
         run: |
           set +e
@@ -1250,6 +1255,7 @@ jobs:
           path: release-package
 
       - name: Validate the packaged app on macOS 26
+        id: compatibility
         env:
           BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
           EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
