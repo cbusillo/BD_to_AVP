@@ -7,7 +7,7 @@
   },
   "branchProtection": {
     "main": {
-      "system": "classic",
+      "system": "classic-and-rulesets",
       "requiresPullRequest": true,
       "requiredStatusChecks": [
         "validate",
@@ -18,7 +18,18 @@
       "enforceAdmins": true,
       "blocksForcePushes": true,
       "blocksDeletion": true,
-      "requiresConversationResolution": true
+      "requiresConversationResolution": true,
+      "requiresStrictStatusChecks": true,
+      "rulesets": [
+        {
+          "name": "Code-owner review for DIRECTION.md",
+          "enforcement": "active"
+        },
+        {
+          "name": "Only the owner and automation update the default branch",
+          "enforcement": "active"
+        }
+      ]
     }
   },
   "releaseEnvironments": {
@@ -112,14 +123,8 @@
     }
   },
   "visionosTestFlight": {
-    "appName": "Shiny 3D Cinema",
-    "bundleID": "com.shinycomputers.bd-to-avp.player",
-    "appStoreConnectID": "6811956508",
-    "internalGroup": "AVP Internal",
-    "automaticDistribution": false,
     "exportOptionsPath": "macos/TestFlightInternalExportOptions.plist",
     "externalExportOptionsPath": "macos/TestFlightExternalExportOptions.plist",
-    "externalGroup": "AVP External",
     "toolchainEnvironment": "BD_TO_AVP_XCODE_DEVELOPER_DIR",
     "archiveCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" /usr/bin/xcodebuild archive -project macos/BluRayToVisionPro.xcodeproj -scheme BDToAVPPlayer -configuration Release -destination 'generic/platform=visionOS' -derivedDataPath build/testflight/DerivedData -archivePath build/testflight/BDToAVPPlayer.xcarchive -allowProvisioningUpdates",
     "exportCommand": "DEVELOPER_DIR=\"${BD_TO_AVP_XCODE_DEVELOPER_DIR:?Set the supported Xcode developer directory}\" PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/xcodebuild -exportArchive -archivePath build/testflight/BDToAVPPlayer.xcarchive -exportPath build/testflight/export-internal -exportOptionsPlist macos/TestFlightInternalExportOptions.plist -allowProvisioningUpdates",
@@ -203,7 +208,7 @@
       "pythonPackage": "uv build",
       "embeddedPythonBuild": "uv run python scripts/embedded_python.py",
       "macosPackage": "uv run python scripts/native_app.py package",
-      "macosCurrent": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py publish-current"
+      "macosCurrent": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=\"${BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT:?Set the diagnostics endpoint from scoped configuration}\" uv run python scripts/native_app.py publish-current"
     },
     "inspection": {
       "tool": "jetbrains",
@@ -233,9 +238,6 @@
     "Update FFmpeg Vendor Pins"
   ],
   "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
-  "qaLabels": [],
-  "deployLabels": [],
-  "healthUrls": ["https://cbusillo.github.io/BD_to_AVP/appcast.xml"],
   "relatedRepos": ["cbusillo/homebrew-tap"],
   "githubSignals": {
     "postMerge": {
@@ -272,5 +274,10 @@
       "release workflow changes",
       "runtime dependency changes"
     ]
+  },
+  "githubSettings": {
+    "expected": {
+      "deleteBranchOnMerge": true
+    }
   }
 }
