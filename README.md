@@ -446,6 +446,15 @@ For subtitle integration checks and the recorded hosted Vision limitation, see
 
 Contribute to the project by submitting pull requests or opening issues for bugs and feature requests.
 
+For JetBrains inspection, `.github/github.json` configures the maintained
+`jetbrains-inspection` helper's Python preparation. Run its `open-worktree` or
+`agent-inspect` command in the exact checkout; preparation uses the locked uv
+environment and generates ignored module, interpreter and module-registry files.
+Shared inspection, mypy, Ruff and VCS settings remain tracked. Existing checkouts
+keep their local module registry when updating; new ones generate it during preparation.
+Preparation is separate from inspection: an UNKNOWN result still means the IDE
+has not established a clean assessment.
+
 The Director's [overall direction](https://github.com/cbusillo/direction/blob/HEAD/DIRECTION.md)
 applies to this repository; it has no separate DIRECTION.md. Agents start with
 [AGENTS.md](AGENTS.md), which points to the maintained execution workflow and
