@@ -863,7 +863,7 @@ def continue_reconciliation_apply(
             raise QualificationApplySafetyError(
                 "Evidence branch moved before the reconciliation commit could be pushed."
             )
-        checkpoint = _replace_progress(
+        _replace_progress(
             checkpoint_path,
             checkpoint,
             state="pushed",

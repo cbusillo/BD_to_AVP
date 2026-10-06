@@ -11,4 +11,5 @@
 /copilot/chatSessions
 # Machine-specific: the interpreter name and module settings differ per checkout
 /misc.xml
+/modules.xml
 /*.iml

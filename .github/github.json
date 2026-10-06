@@ -233,6 +233,16 @@
     "inspection": {
       "tool": "jetbrains",
       "ide": "IntelliJ IDEA",
+      "prepare": {
+        "python": {
+          "version": "3.12",
+          "moduleName": "BD_to_AVP",
+          "testRoots": [
+            "tests"
+          ],
+          "sync": true
+        }
+      },
       "scopePreference": [
         "changed_files",
         "directory",
