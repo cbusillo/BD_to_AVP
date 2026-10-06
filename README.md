@@ -450,8 +450,8 @@ For JetBrains inspection, `.github/github.json` configures the maintained
 `jetbrains-inspection` helper's Python preparation. Run its `open-worktree` or
 `agent-inspect` command in the exact checkout; preparation uses the locked uv
 environment and generates ignored module, interpreter and module-registry files.
-Shared inspection, mypy, Ruff and VCS settings remain tracked. Existing checkouts
-keep their local module registry when updating; new ones generate it during preparation.
+Shared inspection, mypy, Ruff and VCS settings remain tracked. Updating a checkout
+removes its previously tracked module registry; run preparation to regenerate it.
 Preparation is separate from inspection: an UNKNOWN result still means the IDE
 has not established a clean assessment.
 
