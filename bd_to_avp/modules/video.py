@@ -31,8 +31,10 @@ from bd_to_avp.presentation import cli_message
 from bd_to_avp.runtime import RunContext
 
 
-EDGE264_SKIPPED_NAL_PATTERN = re.compile(r"^edge264: skipped corrupt NAL unit after output frame (\d+)$")
-EDGE264_SKIPPED_TOTAL_PATTERN = re.compile(r"^edge264: skipped (\d+) corrupt NAL unit\(s\)")
+EDGE264_SKIPPED_NAL_PATTERN = re.compile(
+    r"^(?:edge264|edge264mvc_test): skipped corrupt NAL unit after output frame (\d+)$"
+)
+EDGE264_SKIPPED_TOTAL_PATTERN = re.compile(r"^(?:edge264|edge264mvc_test): skipped (\d+) corrupt NAL unit\(s\)")
 
 
 class Edge264DamageCollector:

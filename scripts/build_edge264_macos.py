@@ -157,7 +157,11 @@ def build_edge264(
         build_env["MACOSX_DEPLOYMENT_TARGET"] = provenance.minimum_macos
         run(make_command(provenance, "check"), checkout, build_env)
 
-        built_binary = checkout / "edge264_test"
+        # Upstream renamed its test executable; older pinned revisions still
+        # produce the original name. Keep the packaged destination stable.
+        built_binary = checkout / "edge264mvc_test"
+        if not built_binary.is_file():
+            built_binary = checkout / "edge264_test"
         linked_libraries = subprocess.check_output(["otool", "-L", str(built_binary)], text=True)
         if "libedge264" in linked_libraries:
             raise RuntimeError("edge264_test was not linked statically against libedge264")

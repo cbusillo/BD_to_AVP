@@ -121,6 +121,11 @@ class Edge264BuilderTests(unittest.TestCase):
                 build_edge264_macos.verify_checksum(binary_path, "0" * 64, "edge264_test")
 
     def test_build_edge264_uses_manifest_values(self) -> None:
+        for upstream_binary in ("edge264_test", "edge264mvc_test"):
+            with self.subTest(upstream_binary=upstream_binary):
+                self.check_build_uses_manifest_values(upstream_binary)
+
+    def check_build_uses_manifest_values(self, upstream_binary: str) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repository_root = Path(temp_dir)
             output_path = repository_root / "bin" / "edge264_test"
@@ -144,12 +149,13 @@ class Edge264BuilderTests(unittest.TestCase):
                 if command[:3] == ["git", "clone", "--filter=blob:none"]:
                     Path(command[-1]).mkdir(parents=True)
                 if command == build_edge264_macos.make_command(provenance, "check") and cwd:
-                    (cwd / "edge264_test").write_bytes(b"binary")
+                    (cwd / upstream_binary).write_bytes(b"binary")
 
             def fake_check_output(command: list[str], text: bool) -> str:
                 self.assertTrue(text)
                 if command[0] == "otool":
-                    return "edge264_test:\n\t/usr/lib/libSystem.B.dylib\n"
+                    self.assertTrue(Path(command[-1]).is_file(), "Inspect the executable produced by upstream")
+                    return f"{upstream_binary}:\n\t/usr/lib/libSystem.B.dylib\n"
                 if command[0] == "vtool":
                     return "platform macos\nminos 15.0\nsdk 26.5\n"
                 return "Mach-O 64-bit executable arm64"
