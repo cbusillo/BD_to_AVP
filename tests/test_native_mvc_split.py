@@ -739,6 +739,17 @@ class DirectMVHEVCPipelineTests(unittest.TestCase):
 
 
 class Edge264DamageCollectorTests(unittest.TestCase):
+    def test_renamed_upstream_decoder_still_reports_damaged_source(self) -> None:
+        collector = video.Edge264DamageCollector()
+        collector.handle_line(None, "edge264mvc_test: skipped corrupt NAL unit after output frame 24")
+        collector.handle_line(None, "edge264mvc_test: skipped 40 corrupt NAL unit(s); output may show brief artefacts")
+
+        self.assertEqual(collector.frame_indexes, [24])
+        self.assertEqual(collector.skipped_count, 40)
+        with patch.object(video.config, "preview_range", None):
+            message = video.build_damaged_source_warning(collector, "24")
+        self.assertIn("around 0:00:01.", message or "")
+
     def test_collects_skipped_positions_and_converts_them_to_source_time(self) -> None:
         collector = video.Edge264DamageCollector()
         collector.handle_line(None, "edge264: skipped corrupt NAL unit after output frame 129479")
