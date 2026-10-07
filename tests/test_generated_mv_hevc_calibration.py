@@ -22,6 +22,7 @@ from scripts.qualify_generated_mv_hevc_calibration import (
     CorpusBinding,
     ExperimentCell,
     ExperimentPlan,
+    _atomic_write,
     _assert_private_values_absent,
     _cell_order,
     _bitrate_search_record,
@@ -1453,7 +1454,7 @@ class GeneratedCalibrationCheckpointTests(unittest.TestCase):
             tool = root / "tool"
             tool.touch(mode=0o755)
             output = root / "receipt.json"
-            output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            _atomic_write(output, evidence, ())
             for name in ("EDGE264", "SPATIAL_MEDIA_TOOL", "MP4BOX"):
                 stack.enter_context(patch(prefix + name, tool))
             for name, value in (
