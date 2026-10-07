@@ -5,6 +5,7 @@ import stat
 import tempfile
 import unittest
 
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from itertools import product
@@ -1423,7 +1424,7 @@ class GeneratedCalibrationReceiptTests(unittest.TestCase):
 
 class GeneratedCalibrationCheckpointTests(unittest.TestCase):
     @contextmanager
-    def completed_checkpoint(self):
+    def completed_checkpoint(self) -> Iterator[tuple[Path, Callable[[], dict[str, object]], str]]:
         plan = GeneratedCalibrationSummaryTests._plan()
         binding = GeneratedCalibrationSummaryTests._binding("case-a")
         case = GeneratedCalibrationSummaryTests._definition()
@@ -1442,7 +1443,9 @@ class GeneratedCalibrationCheckpointTests(unittest.TestCase):
                 "frame_rate": case.output_frame_rate,
             },
         )
-        evidence["cases"].append(record)
+        cases = evidence["cases"]
+        assert isinstance(cases, list)
+        cases.append(record)
         _refresh_summaries(evidence, plan, binding, {case.case_id: case})
         prefix = "scripts.qualify_generated_mv_hevc_calibration."
         with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as stack:
@@ -1454,6 +1457,8 @@ class GeneratedCalibrationCheckpointTests(unittest.TestCase):
             for name in ("EDGE264", "SPATIAL_MEDIA_TOOL", "MP4BOX"):
                 stack.enter_context(patch(prefix + name, tool))
             for name, value in (
+                ("platform.system", "Darwin"),
+                ("platform.machine", "arm64"),
                 ("_git_head_from_clean_worktree", environment["git_head"]),
                 ("load_experiment_plan", (plan, binding, "a" * 64, "b" * 64)),
                 ("verify_current_experiment_inputs", None),
@@ -1473,7 +1478,7 @@ class GeneratedCalibrationCheckpointTests(unittest.TestCase):
             prepare = stack.enter_context(patch(prefix + "prepare_case"))
             measure = stack.enter_context(patch(prefix + "measure"))
 
-            def resume():
+            def resume() -> dict[str, object]:
                 return _run_calibration_unlocked(DEFAULT_EXPERIMENT_PLAN, output, root / "work", resume=True)
 
             yield output, resume, prefix
@@ -1518,6 +1523,30 @@ class GeneratedCalibrationCheckpointTests(unittest.TestCase):
                 with self.assertRaisesRegex(QualificationFailure, "environment changed"):
                     resume()
                 freeze.assert_not_called()
+
+    def test_complete_resume_rejects_missing_run_instead_of_reencoding(self) -> None:
+        for mode in (0o644, 0o444):
+            with self.subTest(mode=mode), self.completed_checkpoint() as (output, resume, prefix):
+                evidence = json.loads(output.read_text(encoding="utf-8"))
+                evidence["cases"][0]["cells"][0]["runs"].pop()
+                output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                output.chmod(mode)
+                original = output.read_bytes()
+                with patch(prefix + "_freeze_receipt") as freeze:
+                    with self.assertRaisesRegex(QualificationFailure, "contradicts its recorded runs"):
+                        resume()
+                    freeze.assert_not_called()
+                self.assertEqual(output.read_bytes(), original)
+                self.assertEqual(stat.S_IMODE(output.stat().st_mode), mode)
+
+    def test_complete_resume_rejects_unexpected_file_modes(self) -> None:
+        for mode in (0o666, 0o400):
+            with self.subTest(mode=mode), self.completed_checkpoint() as (output, resume, prefix):
+                output.chmod(mode)
+                with patch(prefix + "_freeze_receipt") as freeze:
+                    with self.assertRaisesRegex(QualificationFailure, "unexpected file mode"):
+                        resume()
+                    freeze.assert_not_called()
 
 
 class GeneratedCalibrationProductionParityTests(unittest.TestCase):
