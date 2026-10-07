@@ -8,9 +8,7 @@ landing, and closeout. AGENTS.md is the sole agent-instruction filename;
 path-specific instructions belong in nested AGENTS.md files.
 
 Use `.github/github.json` for validation commands and repository workflow
-metadata. For all PR landing, follow its `docs.mergeTrainPolicy` reference;
-its active service policy owns enrollment and enqueue routing.
-Documentation-only changes use the existing CI lane selection in
+metadata. Documentation-only changes use the existing CI lane selection in
 `scripts/ci_lanes.py`; batch related edits into one push. Changes to execution
 guidance need a review under [reviews by another model](https://github.com/cbusillo/codex-skills/blob/main/skills/references/model-review.md).
 Release-specific requirements below still apply when release work is authorized.
