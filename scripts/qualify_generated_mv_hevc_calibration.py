@@ -1445,6 +1445,12 @@ def _reset_case_directory(work_directory: Path, case_id: str) -> Path:
     return case_directory
 
 
+def _remove_case_directory(work_directory: Path, case_id: str) -> None:
+    case_directory = _owned_case_directory(work_directory, case_id)
+    if case_directory.exists():
+        shutil.rmtree(case_directory)
+
+
 @contextmanager
 def calibration_lock(output_path: Path, work_directory: Path) -> Iterator[None]:
     absolute_output_path = output_path.absolute()
@@ -3521,11 +3527,12 @@ def _run_calibration_unlocked(
     acceptance = evidence.get("acceptance")
     if isinstance(acceptance, Mapping) and acceptance.get("complete") is True and not completed:
         raise QualificationFailure("Completed resume evidence contradicts its recorded runs.")
-    if completed and stat.S_IMODE(output_path.stat().st_mode) == 0o444:
-        return evidence
+    frozen = completed and stat.S_IMODE(output_path.stat().st_mode) == 0o444
     for definition in selected_cases:
         existing_case = _case_record(evidence, definition.case_id)
         if existing_case is not None and _case_complete(existing_case, plan):
+            # The checkpoint can survive an interruption before case cleanup.
+            _remove_case_directory(work_directory, definition.case_id)
             continue
         case_work = _reset_case_directory(work_directory, definition.case_id)
         prepared = prepare_case(definition, case_work, ffmpeg=ffmpeg, ffprobe=ffprobe)
@@ -3629,7 +3636,10 @@ def _run_calibration_unlocked(
         _refresh_summaries(evidence, plan, binding, case_definitions)
         evidence["updated_at"] = datetime.now(UTC).isoformat()
         _atomic_write(output_path, evidence, private_paths)
-        shutil.rmtree(case_work)
+        _remove_case_directory(work_directory, definition.case_id)
+
+    if frozen:
+        return evidence
 
     if _git_head_from_clean_worktree() != source_git_sha:
         raise QualificationFailure("Calibration Git identity changed before final receipt freeze.")
