@@ -22,6 +22,7 @@ from scripts.qualify_generated_mv_hevc_calibration import (
     CorpusBinding,
     ExperimentCell,
     ExperimentPlan,
+    WORK_DIRECTORY_MARKER,
     _atomic_write,
     _assert_private_values_absent,
     _cell_order,
@@ -1548,6 +1549,189 @@ class GeneratedCalibrationCheckpointTests(unittest.TestCase):
                     with self.assertRaisesRegex(QualificationFailure, "unexpected file mode"):
                         resume()
                     freeze.assert_not_called()
+
+
+class GeneratedCalibrationCleanupTests(unittest.TestCase):
+    @contextmanager
+    def runner(self, *case_ids: str) -> Iterator[tuple[Path, Path, Callable[..., dict[str, object]], str]]:
+        plan = GeneratedCalibrationSummaryTests._plan()
+        binding = GeneratedCalibrationSummaryTests._binding(*case_ids)
+        cases = [GeneratedCalibrationSummaryTests._definition(case_id) for case_id in case_ids]
+        environment = {"git_head": "d" * 40}
+        prefix = "scripts.qualify_generated_mv_hevc_calibration."
+        with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as stack:
+            root = Path(temporary_directory)
+            tool = root / "tool"
+            tool.touch(mode=0o755)
+            output = root / "receipt.json"
+            work = root / "work"
+            for name in ("EDGE264", "SPATIAL_MEDIA_TOOL", "MP4BOX"):
+                stack.enter_context(patch(prefix + name, tool))
+            for name, value in (
+                ("platform.system", "Darwin"),
+                ("platform.machine", "arm64"),
+                ("_git_head_from_clean_worktree", environment["git_head"]),
+                ("load_experiment_plan", (plan, binding, "a" * 64, "b" * 64)),
+                ("verify_current_experiment_inputs", None),
+                ("_pinned_media_tool", str(tool)),
+                ("_environment_evidence", environment),
+                ("load_manifest", SimpleNamespace(cases=cases)),
+                ("_inspect_generated_output", {}),
+            ):
+                stack.enter_context(patch(prefix + name, return_value=value))
+            stack.enter_context(
+                patch(
+                    prefix + "_require_head_tracked_file",
+                    side_effect=lambda path, label: (
+                        plan.relative_path if label == "Experiment plan" else binding.relative_path
+                    ),
+                )
+            )
+
+            def prepare(definition: CorpusCase, directory: Path, **_kwargs: object) -> PreparedCase:
+                paths = [directory / filename for filename in ("source.mkv", "left.mkv", "right.mkv")]
+                for path in paths:
+                    path.write_bytes(b"prepared intermediate")
+                return PreparedCase(definition, *paths, 4.0, 96, binding.expected_case_sources[definition.case_id])
+
+            def measure(callback: Callable[[], object]) -> tuple[None, SimpleNamespace]:
+                callback()
+                return None, SimpleNamespace(elapsed_seconds=2.0, user_cpu_seconds=0.4, system_cpu_seconds=0.2)
+
+            def measurement(
+                _ffmpeg: str,
+                _prepared: PreparedCase,
+                encoded_path: Path,
+                _directory: Path,
+                *,
+                target_bitrate_mbps: float,
+                **_kwargs: object,
+            ) -> dict[str, object]:
+                cell = next(cell for cell in plan.cells if encoded_path.name.startswith(cell.cell_id + "-run-"))
+                record = GeneratedCalibrationSummaryTests._run(cell, 0, 0.95, 1000, 2.0)
+                record["target_bitrate_mbps"] = target_bitrate_mbps
+                return record
+
+            stack.enter_context(patch(prefix + "prepare_case", side_effect=prepare))
+            stack.enter_context(patch(prefix + "measure", side_effect=measure))
+            stack.enter_context(
+                patch(
+                    prefix + "_encode_generated",
+                    side_effect=lambda ffmpeg, prepared, encoded_path, *args, **kw: encoded_path.write_bytes(
+                        b"encoded"
+                    ),
+                )
+            )
+            stack.enter_context(patch(prefix + "_measure_output", side_effect=measurement))
+
+            def run(*, resume: bool = False) -> dict[str, object]:
+                return _run_calibration_unlocked(DEFAULT_EXPERIMENT_PLAN, output, work, resume=resume)
+
+            yield output, work, run, prefix
+
+    @contextmanager
+    def interrupted_runner(self, *case_ids: str) -> Iterator[tuple[Path, Path, Callable[..., dict[str, object]], str]]:
+        with self.runner(*case_ids) as (output, work, run, prefix):
+            with patch(prefix + "shutil.rmtree", side_effect=OSError("interrupted before removal")):
+                with self.assertRaisesRegex(OSError, "interrupted before removal"):
+                    run()
+            yield output, work, run, prefix
+
+    def test_resume_removes_final_checkpoint_intermediates_without_reencoding(self) -> None:
+        for frozen_checkpoint in (False, True):
+            with (
+                self.subTest(frozen=frozen_checkpoint),
+                self.interrupted_runner("case-a") as (
+                    output,
+                    work,
+                    run,
+                    prefix,
+                ),
+            ):
+                self.assertTrue(json.loads(output.read_bytes())["acceptance"]["complete"])
+                self.assertTrue((work / "case-a" / "source.mkv").is_file())
+                if frozen_checkpoint:
+                    _freeze_receipt(output)
+                original = output.read_bytes()
+                unrelated = work / "unrelated"
+                unrelated.mkdir()
+                sentinel = unrelated / "preserve.txt"
+                sentinel.write_bytes(b"preserve")
+                marker = (work / WORK_DIRECTORY_MARKER).read_bytes()
+                with patch(prefix + "prepare_case") as prepare, patch(prefix + "measure") as measure:
+                    recovered = run(resume=True)
+                    prepare.assert_not_called()
+                    measure.assert_not_called()
+                self.assertFalse((work / "case-a").exists())
+                self.assertTrue(recovered["acceptance"]["complete"])
+                self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o444)
+                if frozen_checkpoint:
+                    self.assertEqual(output.read_bytes(), original)
+                self.assertEqual(sentinel.read_bytes(), b"preserve")
+                self.assertEqual((work / WORK_DIRECTORY_MARKER).read_bytes(), marker)
+                frozen = output.read_bytes()
+                self.assertEqual(run(resume=True), recovered)
+                self.assertEqual(output.read_bytes(), frozen)
+
+    def test_partial_resume_cleans_completed_case_and_runs_remaining_case(self) -> None:
+        with self.interrupted_runner("case-a", "case-b") as (output, work, run, prefix):
+            self.assertFalse(json.loads(output.read_bytes())["acceptance"]["complete"])
+            self.assertTrue((work / "case-a").is_dir())
+            from scripts import qualify_generated_mv_hevc_calibration as calibration
+
+            with patch(prefix + "prepare_case", wraps=calibration.prepare_case) as prepare:
+                recovered = run(resume=True)
+            self.assertEqual([call.args[0].case_id for call in prepare.call_args_list], ["case-b"])
+            self.assertTrue(recovered["acceptance"]["complete"])
+            self.assertFalse((work / "case-a").exists())
+            self.assertFalse((work / "case-b").exists())
+
+    def test_resume_preserves_work_without_matching_ownership_marker(self) -> None:
+        for change in ("missing", "different"):
+            with self.subTest(marker=change), self.interrupted_runner("case-a") as (output, work, run, _):
+                marker = work / WORK_DIRECTORY_MARKER
+                if change == "missing":
+                    marker.unlink()
+                    message = "no ownership marker"
+                else:
+                    document = json.loads(marker.read_bytes())
+                    document["experiment_plan_sha256"] = "e" * 64
+                    marker.write_text(json.dumps(document), encoding="utf-8")
+                    message = "different experiment identity"
+                original = output.read_bytes()
+                with self.assertRaisesRegex(QualificationFailure, message):
+                    run(resume=True)
+                self.assertEqual((work / "case-a" / "source.mkv").read_bytes(), b"prepared intermediate")
+                self.assertEqual(output.read_bytes(), original)
+
+    def test_resume_preserves_symlinked_case_target(self) -> None:
+        with self.interrupted_runner("case-a") as (output, work, run, _):
+            target = work.parent / "unowned"
+            (work / "case-a").rename(target)
+            (work / "case-a").symlink_to(target, target_is_directory=True)
+            original = output.read_bytes()
+            with self.assertRaisesRegex(QualificationFailure, "must not be a symlink"):
+                run(resume=True)
+            self.assertTrue((work / "case-a").is_symlink())
+            self.assertEqual((target / "source.mkv").read_bytes(), b"prepared intermediate")
+            self.assertEqual(output.read_bytes(), original)
+
+    def test_invalid_resume_receipt_does_not_authorize_cleanup(self) -> None:
+        for change in ("identity", "summary"):
+            with self.subTest(receipt=change), self.interrupted_runner("case-a") as (output, work, run, _):
+                document = json.loads(output.read_bytes())
+                if change == "identity":
+                    document["environment"]["git_head"] = "e" * 40
+                    message = "environment does not match"
+                else:
+                    document["cell_summaries"][0]["median_quality_delta"] = 99
+                    message = "summaries contradict"
+                _atomic_write(output, document, ())
+                original = output.read_bytes()
+                with self.assertRaisesRegex(QualificationFailure, message):
+                    run(resume=True)
+                self.assertEqual((work / "case-a" / "source.mkv").read_bytes(), b"prepared intermediate")
+                self.assertEqual(output.read_bytes(), original)
 
 
 class GeneratedCalibrationProductionParityTests(unittest.TestCase):

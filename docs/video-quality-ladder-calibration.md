@@ -399,6 +399,9 @@ records exact source, tool, macOS-build, and Apple hardware identities, uses a s
 atomically after every encode, supports `--resume`, and freezes a completed canonical receipt read-only.
 If interrupted between the complete receipt write and its freeze, `--resume` validates the checkpoint and repeats
 the final source, plan, and environment checks before freezing it, without repeating completed encodes.
+Resume also retries removal of a completed case's intermediates if interrupted after its checkpoint. Cleanup uses
+the matching experiment work-root marker and validated receipt case identity, rejects symlinked case paths, and
+leaves unrelated siblings in place. An already-frozen receipt keeps its bytes while this cleanup is retried.
 
 The receipt includes the fresh `20/75` repeatability baseline, every raw per-eye SSIM and eye-order measurement,
 per-frame minimum and fifth-percentile SSIM, temporal quality variation and sudden-drop evidence, output size, runtime,
