@@ -2902,8 +2902,8 @@ def _load_resume_evidence(
         canonical = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
         if raw_evidence != canonical:
             raise QualificationFailure("Completed resume evidence is not canonical JSON.")
-        if mode != 0o444:
-            raise QualificationFailure("Completed resume evidence must be frozen read-only.")
+        if mode not in (0o444, 0o644):
+            raise QualificationFailure("Completed resume evidence has an unexpected file mode.")
     elif mode & 0o222 == 0:
         raise QualificationFailure("Incomplete resume evidence is unexpectedly read-only.")
     return evidence
@@ -3515,7 +3515,13 @@ def _run_calibration_unlocked(
         _atomic_write(output_path, evidence, private_paths)
 
     case_definitions = {case.case_id: case for case in selected_cases}
-    if _completed_resume_is_consistent(evidence, plan, binding, case_definitions):
+    # A complete writable checkpoint can survive an interruption before the final
+    # freeze. Validate it, then repeat final identity checks before freezing it.
+    completed = _completed_resume_is_consistent(evidence, plan, binding, case_definitions)
+    acceptance = evidence.get("acceptance")
+    if isinstance(acceptance, Mapping) and acceptance.get("complete") is True and not completed:
+        raise QualificationFailure("Completed resume evidence contradicts its recorded runs.")
+    if completed and stat.S_IMODE(output_path.stat().st_mode) == 0o444:
         return evidence
     for definition in selected_cases:
         existing_case = _case_record(evidence, definition.case_id)
