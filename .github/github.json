@@ -153,6 +153,7 @@
   },
   "docs": {
     "overview": "README.md",
+    "mergeTrainPolicy": "https://github.com/cbusillo/launchplane/blob/main/docs/merge-train-policy.md",
     "packageManifest": "pyproject.toml",
     "macosAppPackaging": "docs/macos-app-packaging.md",
     "lockfile": "uv.lock",
