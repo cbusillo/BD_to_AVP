@@ -43,9 +43,9 @@ class FileFolderPicker(QWidget):
 
 class LabeledComboBox(QWidget):
     def __init__(self, label: str, options: list[str], default_value: str | None = None, parent=None) -> None:
-        super().__init__()
+        super().__init__(parent)
 
-        self.combo_layout = QHBoxLayout(parent)
+        self.combo_layout = QHBoxLayout(self)
         self.combo_layout.setContentsMargins(0, 0, 0, 0)
         self.label = QLabel(label)
         self.combobox = QComboBox()
@@ -55,7 +55,6 @@ class LabeledComboBox(QWidget):
 
         self.combo_layout.addWidget(self.label)
         self.combo_layout.addWidget(self.combobox)
-        self.setLayout(self.combo_layout)
 
     def current_text(self) -> str:
         return self.combobox.currentText()
@@ -74,9 +73,9 @@ class LabeledLineEdit(QWidget):
     def __init__(
         self, label: str, default_value: str | None = None, placeholder_text: str | None = None, parent=None
     ) -> None:
-        super().__init__()
+        super().__init__(parent)
 
-        self.line_layout = QHBoxLayout(parent)
+        self.line_layout = QHBoxLayout(self)
         self.line_layout.setContentsMargins(0, 0, 0, 0)
         self.label = QLabel(label)
         self.line_edit = QLineEdit()
@@ -88,7 +87,6 @@ class LabeledLineEdit(QWidget):
 
         self.line_layout.addWidget(self.line_edit)
         self.line_layout.addWidget(self.label)
-        self.setLayout(self.line_layout)
 
     def text(self) -> str:
         return self.line_edit.text()
@@ -101,9 +99,9 @@ class LabeledSpinBox(QWidget):
     def __init__(
         self, label: str, min_value: int = 0, max_value: int = 100, default_value: int | None = None, parent=None
     ) -> None:
-        super().__init__()
+        super().__init__(parent)
 
-        self.spinbox_layout = QHBoxLayout(parent)
+        self.spinbox_layout = QHBoxLayout(self)
         self.spinbox_layout.setContentsMargins(0, 0, 0, 0)
         self.label = QLabel(label)
         self.spinbox = QSpinBox()
@@ -115,7 +113,6 @@ class LabeledSpinBox(QWidget):
 
         self.spinbox_layout.addWidget(self.spinbox)
         self.spinbox_layout.addWidget(self.label)
-        self.setLayout(self.spinbox_layout)
 
     def value(self) -> int:
         return self.spinbox.value()
