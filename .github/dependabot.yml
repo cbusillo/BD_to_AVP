@@ -30,7 +30,6 @@ updates:
       interval: weekly
     labels:
       - dependencies
-      - python:uv
     groups:
       all-version-updates:
         patterns:
