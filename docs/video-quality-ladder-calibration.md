@@ -397,6 +397,8 @@ Use repeatable `--case-id` options for a bounded smoke. A subset can prove execu
 cannot claim the planned stress corpus. The runner requires a clean worktree and HEAD-identical checked manifests,
 records exact source, tool, macOS-build, and Apple hardware identities, uses a single-writer lock, writes evidence
 atomically after every encode, supports `--resume`, and freezes a completed canonical receipt read-only.
+If interrupted between the complete receipt write and its freeze, `--resume` validates the checkpoint and repeats
+the final source, plan, and environment checks before freezing it, without repeating completed encodes.
 
 The receipt includes the fresh `20/75` repeatability baseline, every raw per-eye SSIM and eye-order measurement,
 per-frame minimum and fifth-percentile SSIM, temporal quality variation and sudden-drop evidence, output size, runtime,
