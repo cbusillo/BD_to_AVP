@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from babelfish import Language
+from cleanit import config as cleanit_config
 from click.testing import CliRunner
 
 from bd_to_avp.vendor.pgsrip.cli import pgsrip
@@ -15,6 +16,10 @@ from bd_to_avp.vendor.pgsrip.sup import Sup
 
 
 class PgsripCliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        packaged_rules = cleanit_config.merge_options(*cleanit_config.load_default_resources())
+        self.enterContext(patch.object(cleanit_config, "default_config", packaged_rules))
+
     def test_invalid_config_fails_before_scanning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
