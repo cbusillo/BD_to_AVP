@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 
@@ -17,8 +18,6 @@ class SsifProbeBuilderTests(unittest.TestCase):
         self.assertEqual(manifest.minimum_macos, "14.0")
         self.assertEqual(manifest.linkage, "private-shared")
         self.assertEqual(manifest.rpath, "@loader_path/../lib")
-        self.assertEqual(manifest.meson_version, "1.12.0")
-        self.assertEqual(manifest.ninja_version, "1.13.2.git.kitware.jobserver-pipe-1")
         self.assertIn("-arch", manifest.probe_compile_flags)
         self.assertEqual(manifest.libbluray.version, "1.4.1")
         self.assertEqual(manifest.libbluray.source, "libbluray-1.4.1.tar.xz")
@@ -41,6 +40,16 @@ class SsifProbeBuilderTests(unittest.TestCase):
                 "bd_to_avp/lib/libudfread.3.dylib",
             },
         )
+
+    def test_installed_build_tools_match_the_artifact_toolchain(self) -> None:
+        manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
+        tool_directory = Path(sys.executable).parent
+        for tool, version in (("meson", manifest.meson_version), ("ninja", manifest.ninja_version)):
+            with self.subTest(tool=tool):
+                self.assertEqual(
+                    build_ssif_probe_macos.command_output([str(tool_directory / tool), "--version"]).strip(),
+                    version,
+                )
 
     def test_manifest_rejects_unknown_fields(self) -> None:
         manifest_text = build_ssif_probe_macos.MANIFEST_PATH.read_text(encoding="utf-8")
