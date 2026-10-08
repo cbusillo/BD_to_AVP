@@ -1,5 +1,12 @@
 # Real PGS subtitle tests
 
+The vendored command can also be invoked with
+`uv run python -m bd_to_avp.vendor.pgsrip --help`. Its `--config` option requires
+an existing configuration file; a missing file or directory exits with a Click
+usage error (status 2) before scanning or extraction. Caller and option tests
+in `tests/test_vendor_pgsrip_cli.py` use temporary inputs and mock extraction/OCR
+boundaries; they do not qualify native Apple Vision recognition.
+
 `tests/test_final_mux_real_tools.py` follows regular and forced PGS tracks
 through real FFmpeg extraction, bitmap decoding, SRT creation and MP4Box muxing.
 It checks the decoded subtitle text and requires exactly one regular and one
