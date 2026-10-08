@@ -72,6 +72,59 @@ class PgsripCliTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.exception)
             scan.assert_called_once()
 
+    def test_invalid_config_content_is_a_usage_error_before_scanning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, content in (
+                ("broken.json", b"{bad"),
+                ("broken.yaml", b"rules: ["),
+                ("invalid.json", b'{"rules": []}'),
+                ("encoding.json", b"\xff"),
+            ):
+                with self.subTest(name=name), patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan:
+                    config_path = root / name
+                    config_path.write_bytes(content)
+                    result = CliRunner().invoke(pgsrip, ["--config", str(config_path), str(root / "movie.sup")])
+
+                    self.assertEqual(result.exit_code, 2, result.output)
+                    self.assertIn("--config", result.output)
+                    scan.assert_not_called()
+
+    def test_config_open_failure_is_a_usage_error_before_scanning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "cleanit.json"
+            config_path.write_text("{}", encoding="utf-8")
+            # The file passes Click's access check, then loses read permission.
+            with (
+                patch("cleanit.utils.open", side_effect=PermissionError("read permission changed")) as open_config,
+                patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan,
+            ):
+                result = CliRunner().invoke(pgsrip, ["--config", str(config_path), "movie.sup"])
+
+            open_config.assert_called_once_with(str(config_path))
+            self.assertEqual(result.exit_code, 2, result.output)
+            self.assertIn("--config", result.output)
+            scan.assert_not_called()
+
+    def test_unexpected_configuration_errors_propagate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "cleanit.json"
+            config_path.write_text("{}", encoding="utf-8")
+            for arguments in ([], ["--config", str(config_path)]):
+                with (
+                    self.subTest(arguments=arguments),
+                    patch(
+                        "bd_to_avp.vendor.pgsrip.options.Config.from_path"
+                        if arguments
+                        else "bd_to_avp.vendor.pgsrip.options.Config",
+                        side_effect=RuntimeError("unexpected configuration failure"),
+                    ),
+                ):
+                    result = CliRunner().invoke(pgsrip, [*arguments, "movie.sup"])
+
+                self.assertEqual(result.exit_code, 1)
+                self.assertIsInstance(result.exception, RuntimeError)
+
     def test_age_all_and_repeated_options_reach_extraction_in_each_progress_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "movie.en.sup"
