@@ -562,7 +562,7 @@ class PgsripCliTests(unittest.TestCase):
                 with (
                     self.subTest(arguments=arguments),
                     patch(
-                        "bd_to_avp.vendor.pgsrip.options.validate"
+                        "bd_to_avp.vendor.pgsrip.options.validate_schema"
                         if arguments
                         else "bd_to_avp.vendor.pgsrip.options.Config",
                         side_effect=RuntimeError("unexpected configuration failure"),

@@ -16,7 +16,7 @@ loaded directly after path validation, so a vanished file or a FIFO cannot
 silently select defaults. Custom rules retain cleanit's default/alias merging;
 pre-existing default-rule failures and unexpected programming errors propagate.
 Custom rule, alias and example content is validated even under empty or
-newline-only names; valid names retain their existing behavior. Invalid content
+newline-only names; valid names retain their existing behavior. Schema-invalid content
 names the requested file and its location in the configuration before scanning.
 Caller and option tests
 in `tests/test_vendor_pgsrip_cli.py` use temporary inputs and mock extraction/OCR
