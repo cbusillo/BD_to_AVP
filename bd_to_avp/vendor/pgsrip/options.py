@@ -75,27 +75,30 @@ def load_custom_config(path: str) -> Config:
                 except (BabelfishError, ValueError) as error:
                     raise CustomConfigurationError(f'Invalid language {language!r}') from error
             constructed = Rule(name=name, aliases=aliases, **rule)
-            check_replacement = name in data.get('rules', {})
-            if not check_replacement and aliases != defaults.get('aliases', {}):
-                try:
-                    inherited = Rule(name=name, aliases=defaults.get('aliases', {}), **rule)
-                except (re.error, OverflowError, RecursionError):
-                    # A custom alias may repair an originally invalid pattern.
-                    check_replacement = True
-                else:
-                    check_replacement = constructed.regexes != inherited.regexes
-            if check_replacement:
-                try:
-                    validate_replacement(constructed)
-                except (re.error, IndexError) as error:
-                    raise CustomConfigurationError(f'Invalid replacement: {error}') from error
         except (CustomConfigurationError, re.error, OverflowError, RecursionError, BabelfishError) as error:
             original = defaults.get('rules', {}).get(name)
             if original is not None:
-                # If this rule was already broken in the defaults, preserve
-                # that exception rather than blaming the custom file.
-                validate_replacement(Rule(name=name, aliases=defaults.get('aliases', {}), **original))
+                # Preserve pre-existing constructor errors from default rules.
+                Rule(name=name, aliases=defaults.get('aliases', {}), **original)
             raise CustomConfigurationError(f'{path}: Rule {name!r}: {error}') from error
+
+        check_replacement = name in data.get('rules', {})
+        if not check_replacement and aliases != defaults.get('aliases', {}):
+            try:
+                inherited = Rule(name=name, aliases=defaults.get('aliases', {}), **rule)
+            except (re.error, OverflowError, RecursionError):
+                # A custom alias may repair an originally invalid pattern.
+                check_replacement = True
+            else:
+                check_replacement = constructed.regexes != inherited.regexes
+        if check_replacement and not constructed.disabled:
+            try:
+                validate_replacement(constructed)
+            except (re.error, IndexError) as error:
+                original = defaults.get('rules', {}).get(name)
+                if original is not None:
+                    validate_replacement(Rule(name=name, aliases=defaults.get('aliases', {}), **original))
+                raise CustomConfigurationError(f'{path}: Rule {name!r}: Invalid replacement: {error}') from error
 
     # Keep unexpected constructor errors outside the custom diagnostic boundary.
     return Config(data)
