@@ -176,6 +176,8 @@ class PgsripCliTests(unittest.TestCase):
                 {"patterns": "("},
                 {},
                 {"patterns": "foo", "flags": "locale"},
+                {"patterns": r"\d{9999999999}"},
+                {"patterns": "(" * sys.getrecursionlimit() + "x" + ")" * sys.getrecursionlimit()},
                 *({"patterns": "typo", "languages": language} for language in ("zz-bogus", "en-UK", "xyz", "pt-BRA")),
             ):
                 with (
@@ -232,6 +234,8 @@ class PgsripCliTests(unittest.TestCase):
                 ({"patterns": "typo", "languages": "zz-bogus"}, BabelfishError),
                 ({"patterns": "typo", "languages": "en-UK"}, ValueError),
                 ({"patterns": "foo", "flags": "locale"}, ValueError),
+                ({"patterns": r"\d{9999999999}"}, OverflowError),
+                ({"patterns": "(" * sys.getrecursionlimit() + "x" + ")" * sys.getrecursionlimit()}, RecursionError),
             ):
                 for custom_rules in ({}, {"host-rule": {"tags": ["custom"]}}):
                     for arguments in ([], ["--config", str(config_path)]):

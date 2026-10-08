@@ -45,7 +45,7 @@ def load_custom_config(path: str) -> Config:
                 except (BabelfishError, ValueError) as error:
                     raise CustomConfigurationError(f'Invalid language {language!r}') from error
             Rule(name=name, aliases=aliases, **rule)
-        except (CustomConfigurationError, re.error, BabelfishError) as error:
+        except (CustomConfigurationError, re.error, OverflowError, RecursionError, BabelfishError) as error:
             original = defaults.get('rules', {}).get(name)
             if original is not None:
                 # If this rule was already broken in the defaults, preserve
