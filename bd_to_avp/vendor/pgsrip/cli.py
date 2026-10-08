@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 import typing
@@ -8,12 +7,10 @@ from types import TracebackType
 from babelfish import Error as BabelfishError, Language
 
 import click
-from jsonschema import ValidationError
-from yaml import YAMLError
 
 from bd_to_avp.vendor.pgsrip import Pgs, __version__, api
 from bd_to_avp.vendor.pgsrip.media import Media
-from bd_to_avp.vendor.pgsrip.options import Options
+from bd_to_avp.vendor.pgsrip.options import CustomConfigurationError, Options
 
 logger = logging.getLogger('pgsrip')
 
@@ -137,11 +134,8 @@ def pgsrip(config: typing.Optional[str],
                           max_workers=max_workers,
                           age=age,
                           srt_age=srt_age)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, YAMLError, ValidationError) as error:
-        if config is None:
-            raise
-        detail = error.message if isinstance(error, ValidationError) else str(error)
-        raise click.BadParameter(f'Cannot load cleanit configuration: {detail}', param_hint='--config') from error
+    except CustomConfigurationError as error:
+        raise click.BadParameter(f'Cannot load cleanit configuration: {error}', param_hint='--config') from error
 
     rules = options.config.select_rules(tags=options.tags, languages=options.languages)
     if not rules:

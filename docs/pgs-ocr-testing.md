@@ -5,7 +5,13 @@ The vendored command can also be invoked with
 an existing configuration file; a missing file or directory exits with a Click
 usage error (status 2) before scanning or extraction. Malformed JSON/YAML,
 schema-invalid content, undecodable text and custom-file read failures also
-report a usage error for `--config`. Caller and option tests
+report a usage error for `--config`. Invalid custom regexes, missing rule patterns
+and invalid rule languages name the failed rule in that diagnostic. The `locale`
+flag is also rejected because cleanit's text patterns cannot use it. The file is
+loaded directly after path validation, so a vanished file or a FIFO cannot
+silently select defaults. Custom rules retain cleanit's default/alias merging;
+pre-existing default-rule failures and unexpected programming errors propagate.
+Caller and option tests
 in `tests/test_vendor_pgsrip_cli.py` use temporary inputs and mock extraction/OCR
 boundaries; they do not qualify native Apple Vision recognition.
 
