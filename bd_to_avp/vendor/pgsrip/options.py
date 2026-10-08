@@ -1,9 +1,52 @@
 import typing
+import json
+import os
+import re
+import stat
 from datetime import timedelta
 
-from babelfish import Language
+from babelfish import Error as BabelfishError, Language
 
 from cleanit import Config
+from cleanit import config as cleanit_config
+from cleanit.rule import Rule
+from jsonschema import ValidationError
+from yaml import YAMLError
+
+
+class CustomConfigurationError(Exception):
+    """A failure attributable to the explicitly requested cleanit file."""
+
+
+def load_custom_config(path: str) -> Config:
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            raise CustomConfigurationError('Configuration must be a regular file')
+        # Load this file directly: Config.from_path silently ignores vanished
+        # files and non-regular paths, then constructs default rules instead.
+        data = cleanit_config.load_config_file(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, YAMLError, ValidationError) as error:
+        detail = error.message if isinstance(error, ValidationError) else str(error)
+        raise CustomConfigurationError(detail) from error
+
+    defaults = cleanit_config.default_config
+    merged = cleanit_config.merge_options(defaults, data)
+    aliases = merged.get('aliases', {})
+    for name, rule in merged.get('rules', {}).items():
+        try:
+            if 'patterns' not in rule:
+                raise CustomConfigurationError('Missing patterns')
+            Rule(name=name, aliases=aliases, **rule)
+        except (CustomConfigurationError, re.error, BabelfishError) as error:
+            original = defaults.get('rules', {}).get(name)
+            if original is not None:
+                # If this rule was already broken in the defaults, preserve
+                # that exception rather than blaming the custom file.
+                Rule(name=name, aliases=defaults.get('aliases', {}), **original)
+            raise CustomConfigurationError(f'Rule {name!r}: {error}') from error
+
+    # Keep unexpected constructor errors outside the custom diagnostic boundary.
+    return Config(data)
 
 
 class Options:
@@ -22,7 +65,7 @@ class Options:
                  ocr_backend: typing.Optional[typing.Any] = None,
                  age: typing.Optional[timedelta] = None,
                  srt_age: typing.Optional[timedelta] = None):
-        self.config = Config.from_path(config_path) if config_path else Config()
+        self.config = load_custom_config(config_path) if config_path is not None else Config()
         self.languages = languages or set()
         self.tags = tags or {'default'}
         self.encoding = encoding
