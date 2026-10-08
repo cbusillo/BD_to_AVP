@@ -1,4 +1,5 @@
 import typing
+import copy
 import json
 import os
 import re
@@ -10,8 +11,9 @@ from babelfish import Error as BabelfishError, Language
 from cleanit import Config
 from cleanit import config as cleanit_config
 from cleanit.rule import Rule
-from cleanit.utils import ensure_list, validate
-from jsonschema import ValidationError
+from cleanit.schema import RootSchema
+from cleanit.utils import ensure_list
+from jsonschema import ValidationError, validate as validate_schema
 from yaml import YAMLError, safe_load
 
 
@@ -46,6 +48,23 @@ def validate_replacement(rule: Rule) -> None:
             regex.sub(rule.replacement, '')
 
 
+def validate_custom_content(data: typing.Any) -> None:
+    schema = copy.deepcopy(RootSchema.schema)
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            patterns = value.get('patternProperties', {})
+            if '.+' in patterns:
+                # Apply the dependency's content constraints to every string
+                # key, including empty/newline-only names skipped by .+.
+                patterns[r'[\s\S]*'] = patterns.pop('.+')
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    validate_schema(data, schema)
+
+
 def load_custom_config(path: str) -> Config:
     try:
         if not stat.S_ISREG(os.stat(path).st_mode):
@@ -55,9 +74,9 @@ def load_custom_config(path: str) -> Config:
         with open(path) as source:
             data = json.load(source) if path.endswith('.json') else safe_load(source.read())
         validate_mapping_keys(data)
-        validate(data)
+        validate_custom_content(data)
     except (CustomConfigurationError, OSError, UnicodeDecodeError, json.JSONDecodeError, YAMLError, ValidationError) as error:
-        detail = error.message if isinstance(error, ValidationError) else str(error)
+        detail = f'At {list(error.absolute_path)!r}: {error.message}' if isinstance(error, ValidationError) else str(error)
         raise CustomConfigurationError(f'{path}: {detail}') from error
 
     defaults = cleanit_config.default_config
