@@ -37,6 +37,8 @@ def load_custom_config(path: str) -> Config:
         try:
             if 'patterns' not in rule:
                 raise CustomConfigurationError('Missing patterns')
+            if 'locale' in ensure_list(rule.get('flags')):
+                raise CustomConfigurationError('The locale flag cannot be used with text patterns')
             for language in ensure_list(rule.get('languages')):
                 try:
                     Language.fromietf(language)

@@ -175,6 +175,7 @@ class PgsripCliTests(unittest.TestCase):
             for rule in (
                 {"patterns": "("},
                 {},
+                {"patterns": "foo", "flags": "locale"},
                 *({"patterns": "typo", "languages": language} for language in ("zz-bogus", "en-UK", "xyz", "pt-BRA")),
             ):
                 with (
@@ -230,6 +231,7 @@ class PgsripCliTests(unittest.TestCase):
                 ({}, TypeError),
                 ({"patterns": "typo", "languages": "zz-bogus"}, BabelfishError),
                 ({"patterns": "typo", "languages": "en-UK"}, ValueError),
+                ({"patterns": "foo", "flags": "locale"}, ValueError),
             ):
                 for custom_rules in ({}, {"host-rule": {"tags": ["custom"]}}):
                     for arguments in ([], ["--config", str(config_path)]):
