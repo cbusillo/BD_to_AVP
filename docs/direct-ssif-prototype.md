@@ -29,9 +29,19 @@ The hermetic build requires Apple Silicon macOS and the repository's pinned uv
 toolchain:
 
 ```bash
+uv sync --locked --all-groups --python 3.12
 uv run python scripts/build_ssif_probe_macos.py
 uv run python scripts/build_ssif_probe_macos.py --verify-only
 ```
+
+The Meson pin in `runtime-build` must agree with
+`vendor/ssif-probe-macos-arm64.toml`, which records the bundled artifact's
+toolchain. A dependency-only update must preserve that agreement; changing the
+recorded toolchain requires the artifact/provenance workflow below.
+Apple's compiler, linker, and SDK also affect the artifact bytes. When those
+installed tools change, preserve the historical evidence and reconcile the new
+artifacts with the same reviewed workflow; matching Meson alone does not prove
+byte equivalence.
 
 The default command rebuilds the probe and private dylibs from the checksum-
 pinned libbluray and libudfread source archives. `--verify-only` validates the

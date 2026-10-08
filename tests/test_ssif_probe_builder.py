@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 
@@ -17,8 +18,6 @@ class SsifProbeBuilderTests(unittest.TestCase):
         self.assertEqual(manifest.minimum_macos, "14.0")
         self.assertEqual(manifest.linkage, "private-shared")
         self.assertEqual(manifest.rpath, "@loader_path/../lib")
-        self.assertEqual(manifest.meson_version, "1.12.0")
-        self.assertEqual(manifest.ninja_version, "1.13.2.git.kitware.jobserver-pipe-1")
         self.assertIn("-arch", manifest.probe_compile_flags)
         self.assertEqual(manifest.libbluray.version, "1.4.1")
         self.assertEqual(manifest.libbluray.source, "libbluray-1.4.1.tar.xz")
@@ -42,6 +41,15 @@ class SsifProbeBuilderTests(unittest.TestCase):
             },
         )
 
+    def test_installed_meson_matches_the_artifact_toolchain(self) -> None:
+        manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
+        meson_path = Path(sys.executable).parent / "meson"
+
+        self.assertEqual(
+            build_ssif_probe_macos.command_output([str(meson_path), "--version"]).strip(),
+            manifest.meson_version,
+        )
+
     def test_manifest_rejects_unknown_fields(self) -> None:
         manifest_text = build_ssif_probe_macos.MANIFEST_PATH.read_text(encoding="utf-8")
         manifest_text = manifest_text.replace(
@@ -60,6 +68,8 @@ class SsifProbeBuilderTests(unittest.TestCase):
         manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
         provenance = json.loads(build_ssif_probe_macos.PROVENANCE_PATH.read_text(encoding="utf-8"))
 
+        self.assertEqual(provenance["meson_version"], manifest.meson_version)
+        self.assertEqual(provenance["ninja_version"], manifest.ninja_version)
         self.assertEqual(
             provenance["library_compile_flags"],
             list(build_ssif_probe_macos.library_compile_flags(manifest)),
