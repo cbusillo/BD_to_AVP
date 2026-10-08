@@ -1,4 +1,5 @@
 import runpy
+import json
 import sys
 import tempfile
 import unittest
@@ -58,9 +59,15 @@ class PgsripCliTests(unittest.TestCase):
     def test_existing_config_reaches_scanning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "cleanit.json"
-            config_path.write_text("{}", encoding="utf-8")
+            tag = "cli-config-test"
+            config_path.write_text(
+                json.dumps({"rules": {"cli-test": {"tags": [tag], "patterns": ["typo"], "replacement": "corrected"}}}),
+                encoding="utf-8",
+            )
             with patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path", return_value=([], [], [])) as scan:
-                result = CliRunner().invoke(pgsrip, ["--config", str(config_path), str(Path(directory) / "movie.sup")])
+                result = CliRunner().invoke(
+                    pgsrip, ["--config", str(config_path), "--tag", tag, str(Path(directory) / "movie.sup")]
+                )
 
             self.assertEqual(result.exit_code, 0, result.exception)
             scan.assert_called_once()
