@@ -171,6 +171,24 @@ class PgsripCliTests(unittest.TestCase):
                     self.assertIn(str(config_path), result.output)
                     scan.assert_not_called()
 
+    def test_untouched_unused_default_templates_do_not_block_custom_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "custom.json"
+            defaults = {"rules": {"unused": {"patterns": "l(o)ve", "replacement": r"\2", "tags": "unused"}}}
+            for custom in ({}, {"aliases": {"UNRELATED": "typo"}}):
+                with (
+                    self.subTest(custom=custom),
+                    patch.object(cleanit_config, "default_config", defaults),
+                    patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path", return_value=([], [], [])) as scan,
+                ):
+                    config_path.write_text(json.dumps(custom), encoding="utf-8")
+                    result = CliRunner().invoke(pgsrip, ["--config", str(config_path), "--tag", "all", "movie.sup"])
+                    self.assertEqual(result.exit_code, 0, result.exception)
+                    scan.assert_called_once()
+                    selected = scan.call_args.args[1].config.select_rules(tags={"all"})
+                    with self.assertRaises(re.error):
+                        selected.apply("love")
+
     def test_replacement_checks_use_every_merged_pattern_and_alias(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "custom.json"

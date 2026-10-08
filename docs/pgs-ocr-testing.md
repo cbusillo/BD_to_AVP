@@ -7,7 +7,8 @@ usage error (status 2) before scanning or extraction. Malformed JSON/YAML,
 schema-invalid content, non-string YAML mapping keys, undecodable text and custom-file read failures also
 report a usage error for `--config`. Invalid custom regexes, missing rule patterns
 and invalid rule languages name the failed rule in that diagnostic. Custom replacement
-templates are checked against each merged pattern before scanning; invalid escapes or
+templates are checked against each merged pattern for custom rules and alias-affected
+inherited rules before scanning; invalid escapes or
 group references name the custom file and rule, before subtitle text is cleaned. The `locale`
 flag is also rejected because cleanit's text patterns cannot use it. The file is
 loaded directly after path validation, so a vanished file or a FIFO cannot

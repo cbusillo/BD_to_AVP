@@ -75,10 +75,20 @@ def load_custom_config(path: str) -> Config:
                 except (BabelfishError, ValueError) as error:
                     raise CustomConfigurationError(f'Invalid language {language!r}') from error
             constructed = Rule(name=name, aliases=aliases, **rule)
-            try:
-                validate_replacement(constructed)
-            except (re.error, IndexError) as error:
-                raise CustomConfigurationError(f'Invalid replacement: {error}') from error
+            check_replacement = name in data.get('rules', {})
+            if not check_replacement and aliases != defaults.get('aliases', {}):
+                try:
+                    inherited = Rule(name=name, aliases=defaults.get('aliases', {}), **rule)
+                except (re.error, OverflowError, RecursionError):
+                    # A custom alias may repair an originally invalid pattern.
+                    check_replacement = True
+                else:
+                    check_replacement = constructed.regexes != inherited.regexes
+            if check_replacement:
+                try:
+                    validate_replacement(constructed)
+                except (re.error, IndexError) as error:
+                    raise CustomConfigurationError(f'Invalid replacement: {error}') from error
         except (CustomConfigurationError, re.error, OverflowError, RecursionError, BabelfishError) as error:
             original = defaults.get('rules', {}).get(name)
             if original is not None:
