@@ -39,6 +39,10 @@ on image `xcode-27-arm64` / `20260928.0222.1` (macOS 27.0). Vision's
 passed on Chris-Studio. These observations do not establish whether the hosted
 backend lacks a model or compute prerequisite, or has an OS defect.
 
+The separate local test-worker crash diagnosis and remaining native macOS
+qualification are tracked in [#893](https://github.com/cbusillo/BD_to_AVP/issues/893).
+The hosted false/no-NSError gate above remains unchanged.
+
 CI still runs the real PGS extraction, bitmap decoding, SRT and final mux check
 with recognition substituted at `AppleVisionOcr.image_to_data`. The substitute
 requires an exact decoded fixture bitmap before returning its text; missing,
