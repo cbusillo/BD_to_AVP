@@ -13,6 +13,7 @@ from babelfish import Error as BabelfishError, Language
 from cleanit import config as cleanit_config
 from click.testing import CliRunner
 import click
+import yaml
 
 from bd_to_avp.vendor.pgsrip.cli import pgsrip
 from bd_to_avp.vendor.pgsrip.media import Pgs
@@ -79,6 +80,96 @@ class PgsripCliTests(unittest.TestCase):
             selected = options.config.select_rules(tags=options.tags, languages=options.languages)
             self.assertEqual([rule.name for rule in selected], ["cli-test"])
             self.assertEqual(selected.apply("typo"), ("corrected", True))
+
+    def test_unvalidated_name_content_is_rejected_before_scanning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".json", ".yaml"):
+                config_path = Path(directory) / ("custom" + suffix)
+                for name in ("", "\n"):
+                    for section, value in (
+                        ("rules", 5),
+                        ("rules", {"patterns": "typo", "bogus": 1}),
+                        ("rules", {"patterns": 5}),
+                        ("aliases", 5),
+                    ):
+                        with self.subTest(suffix=suffix, name=name, section=section, value=value):
+                            data = {section: {name: value}}
+                            config_path.write_text(json.dumps(data) if suffix == ".json" else yaml.safe_dump(data))
+                            with patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan:
+                                result = CliRunner().invoke(pgsrip, ["--config", str(config_path), "movie.sup"])
+
+                            self.assertEqual(result.exit_code, 2, result.exception)
+                            self.assertIn(str(config_path), result.output)
+                            self.assertIn(repr(name), result.output)
+                            scan.assert_not_called()
+
+    def test_unvalidated_example_content_is_rejected_before_scanning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".json", ".yaml"):
+                config_path = Path(directory) / ("examples" + suffix)
+                for name in ("", "\n"):
+                    with self.subTest(suffix=suffix, name=name):
+                        data = {"rules": {"example-rule": {"patterns": "typo", "examples": {name: 5}}}}
+                        config_path.write_text(json.dumps(data) if suffix == ".json" else yaml.safe_dump(data))
+                        with patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan:
+                            result = CliRunner().invoke(pgsrip, ["--config", str(config_path), "movie.sup"])
+
+                        self.assertEqual(result.exit_code, 2, result.exception)
+                        self.assertIn(str(config_path), result.output)
+                        self.assertIn("example-rule", result.output)
+                        scan.assert_not_called()
+
+    def test_valid_unusual_names_preserve_aliases_examples_and_partial_merges(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".json", ".yaml"):
+                config_path = Path(directory) / ("valid" + suffix)
+                for name in ("", "\n", "line\nname"):
+                    for example_value in (None, "fixed"):
+                        with self.subTest(suffix=suffix, name=name, example_value=example_value):
+                            defaults = {
+                                "aliases": {"TOKEN": "typo"},
+                                "rules": {name: {"patterns": "TOKEN", "tags": "unusual", "replacement": "old"}},
+                            }
+                            data = {
+                                "aliases": {"": "", "\n": "typo"},
+                                "rules": {
+                                    name: {"patterns": "\n", "replacement": "fixed", "examples": {"": example_value}}
+                                },
+                            }
+                            config_path.write_text(json.dumps(data) if suffix == ".json" else yaml.safe_dump(data))
+                            with (
+                                patch.object(cleanit_config, "default_config", defaults),
+                                patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path", return_value=([], [], [])) as scan,
+                            ):
+                                result = CliRunner().invoke(
+                                    pgsrip, ["--config", str(config_path), "--tag", "unusual", "movie.sup"]
+                                )
+
+                            self.assertEqual(result.exit_code, 0, result.exception)
+                            scan.assert_called_once()
+                            options = scan.call_args.args[1]
+                            selected = options.config.select_rules(tags=options.tags)
+                            self.assertEqual([rule.name for rule in selected], [name])
+                            self.assertEqual(selected.apply("typo"), ("fixed", True))
+                            self.assertEqual(selected[0].examples, {"": example_value})
+                            self.assertEqual(defaults["rules"][name]["replacement"], "old")
+
+    def test_invalid_default_content_under_empty_name_keeps_native_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "custom.json"
+            config_path.write_text("{}")
+            for arguments in ([], ["--config", str(config_path)]):
+                with (
+                    self.subTest(arguments=arguments),
+                    patch.object(cleanit_config, "default_config", {"rules": {"": {"patterns": "typo", "bogus": 1}}}),
+                    patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan,
+                ):
+                    result = CliRunner().invoke(pgsrip, [*arguments, "movie.sup"])
+
+                self.assertEqual(result.exit_code, 1, result.output)
+                self.assertIsInstance(result.exception, TypeError)
+                self.assertNotIn("Invalid value for '--config'", result.output)
+                scan.assert_not_called()
 
     def test_partial_custom_rule_inherits_patterns_and_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
