@@ -9,7 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from babelfish import Language
+from babelfish import Error as BabelfishError, Language
 from cleanit import config as cleanit_config
 from click.testing import CliRunner
 import click
@@ -172,7 +172,11 @@ class PgsripCliTests(unittest.TestCase):
     def test_invalid_custom_rules_are_usage_errors_before_scanning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "cleanit.json"
-            for rule in ({"patterns": "("}, {}, {"patterns": "typo", "languages": "zz-bogus"}):
+            for rule in (
+                {"patterns": "("},
+                {},
+                *({"patterns": "typo", "languages": language} for language in ("zz-bogus", "en-UK", "xyz", "pt-BRA")),
+            ):
                 with (
                     self.subTest(rule=rule),
                     patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path", return_value=([], [], [])) as scan,
@@ -221,20 +225,26 @@ class PgsripCliTests(unittest.TestCase):
     def test_host_rule_errors_are_not_attributed_to_custom_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "cleanit.json"
-            for custom_rules in ({}, {"host-rule": {"tags": ["custom"]}}):
-                for arguments in ([], ["--config", str(config_path)]):
-                    with (
-                        self.subTest(custom_rules=custom_rules, arguments=arguments),
-                        patch.object(cleanit_config, "default_config", {"rules": {"host-rule": {"patterns": "("}}}),
-                        patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan,
-                    ):
-                        config_path.write_text(json.dumps({"rules": custom_rules}) if custom_rules else "{}")
-                        result = CliRunner().invoke(pgsrip, [*arguments, "movie.sup"])
+            for host_rule, error_type in (
+                ({"patterns": "("}, re.error),
+                ({}, TypeError),
+                ({"patterns": "typo", "languages": "zz-bogus"}, BabelfishError),
+                ({"patterns": "typo", "languages": "en-UK"}, ValueError),
+            ):
+                for custom_rules in ({}, {"host-rule": {"tags": ["custom"]}}):
+                    for arguments in ([], ["--config", str(config_path)]):
+                        with (
+                            self.subTest(host_rule=host_rule, custom_rules=custom_rules, arguments=arguments),
+                            patch.object(cleanit_config, "default_config", {"rules": {"host-rule": host_rule}}),
+                            patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan,
+                        ):
+                            config_path.write_text(json.dumps({"rules": custom_rules}) if custom_rules else "{}")
+                            result = CliRunner().invoke(pgsrip, [*arguments, "movie.sup"])
 
-                    self.assertEqual(result.exit_code, 1, result.output)
-                    self.assertIsInstance(result.exception, re.error)
-                    self.assertNotIn("Invalid value for '--config'", result.output)
-                    scan.assert_not_called()
+                        self.assertEqual(result.exit_code, 1, result.output)
+                        self.assertIsInstance(result.exception, error_type)
+                        self.assertNotIn("Invalid value for '--config'", result.output)
+                        scan.assert_not_called()
 
     def test_unexpected_configuration_errors_propagate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

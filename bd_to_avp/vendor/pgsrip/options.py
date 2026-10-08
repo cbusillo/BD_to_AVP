@@ -10,6 +10,7 @@ from babelfish import Error as BabelfishError, Language
 from cleanit import Config
 from cleanit import config as cleanit_config
 from cleanit.rule import Rule
+from cleanit.utils import ensure_list
 from jsonschema import ValidationError
 from yaml import YAMLError
 
@@ -36,6 +37,11 @@ def load_custom_config(path: str) -> Config:
         try:
             if 'patterns' not in rule:
                 raise CustomConfigurationError('Missing patterns')
+            for language in ensure_list(rule.get('languages')):
+                try:
+                    Language.fromietf(language)
+                except (BabelfishError, ValueError) as error:
+                    raise CustomConfigurationError(f'Invalid language {language!r}') from error
             Rule(name=name, aliases=aliases, **rule)
         except (CustomConfigurationError, re.error, BabelfishError) as error:
             original = defaults.get('rules', {}).get(name)
