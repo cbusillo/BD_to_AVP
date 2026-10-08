@@ -171,6 +171,38 @@ class PgsripCliTests(unittest.TestCase):
                     self.assertIn(str(config_path), result.output)
                     scan.assert_not_called()
 
+    def test_explicit_bad_replacement_belongs_to_custom_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "custom.json"
+            defaults = {"rules": {"inherited": {"patterns": "l(o)ve", "replacement": r"\2"}}}
+            for replacement in (r"\3", r"\2"):
+                with (
+                    self.subTest(replacement=replacement),
+                    patch.object(cleanit_config, "default_config", defaults),
+                    patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan,
+                ):
+                    config_path.write_text(
+                        json.dumps({"rules": {"inherited": {"replacement": replacement}}}), encoding="utf-8"
+                    )
+                    result = CliRunner().invoke(pgsrip, ["--config", str(config_path), "movie.sup"])
+                    self.assertEqual(result.exit_code, 2, result.exception)
+                    self.assertIn(str(config_path), result.output)
+                    self.assertIn("inherited", result.output)
+                    scan.assert_not_called()
+
+    def test_custom_enable_validates_a_disabled_default_template(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "custom.json"
+            defaults = {"rules": {"inherited": {"patterns": "love", "replacement": r"\g<missing>", "disabled": True}}}
+            config_path.write_text(json.dumps({"rules": {"inherited": {"disabled": False}}}), encoding="utf-8")
+            with (
+                patch.object(cleanit_config, "default_config", defaults),
+                patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan,
+            ):
+                result = CliRunner().invoke(pgsrip, ["--config", str(config_path), "movie.sup"])
+            self.assertEqual(result.exit_code, 2, result.exception)
+            scan.assert_not_called()
+
     def test_custom_tag_filter_does_not_preflight_an_inherited_bad_template(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "custom.json"

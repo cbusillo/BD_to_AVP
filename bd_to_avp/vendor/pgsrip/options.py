@@ -84,9 +84,10 @@ def load_custom_config(path: str) -> Config:
 
         original = defaults.get('rules', {}).get(name)
         # Tags, priority and languages do not alter a replacement's validity.
-        check_replacement = original is None or any(
+        custom_rule = data.get('rules', {}).get(name, {})
+        check_replacement = 'replacement' in custom_rule or original is None or any(
             rule.get(field) != original.get(field)
-            for field in ('patterns', 'replacement', 'flags', 'type', 'match')
+            for field in ('patterns', 'replacement', 'flags', 'type', 'match', 'disabled')
         )
         if not check_replacement and aliases != defaults.get('aliases', {}):
             try:
@@ -100,7 +101,8 @@ def load_custom_config(path: str) -> Config:
             try:
                 validate_replacement(constructed)
             except (re.error, IndexError) as error:
-                if (original is not None and original.get('replacement') is not None
+                if (original is not None and 'replacement' not in custom_rule
+                        and original.get('replacement') is not None
                         and 'patterns' in original and not original.get('disabled')
                         and 'locale' not in ensure_list(original.get('flags'))):
                     try:

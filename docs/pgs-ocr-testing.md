@@ -8,7 +8,8 @@ schema-invalid content, non-string YAML mapping keys, undecodable text and custo
 report a usage error for `--config`. Invalid custom regexes, missing rule patterns
 and invalid rule languages name the failed rule in that diagnostic. Custom replacement
 templates are checked against each merged pattern when the file changes patterns,
-regex options, aliases or the replacement. Disabled rules remain inactive; invalid escapes or
+regex options, aliases or the replacement, or enables a disabled rule. An explicit
+replacement is attributed to that file. Disabled rules remain inactive; invalid escapes or
 group references name the custom file and rule, before subtitle text is cleaned. The `locale`
 flag is also rejected because cleanit's text patterns cannot use it. The file is
 loaded directly after path validation, so a vanished file or a FIFO cannot
