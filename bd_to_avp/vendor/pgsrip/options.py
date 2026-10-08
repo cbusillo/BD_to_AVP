@@ -82,7 +82,12 @@ def load_custom_config(path: str) -> Config:
                 Rule(name=name, aliases=defaults.get('aliases', {}), **original)
             raise CustomConfigurationError(f'{path}: Rule {name!r}: {error}') from error
 
-        check_replacement = name in data.get('rules', {})
+        original = defaults.get('rules', {}).get(name)
+        # Tags, priority and languages do not alter a replacement's validity.
+        check_replacement = original is None or any(
+            rule.get(field) != original.get(field)
+            for field in ('patterns', 'replacement', 'flags', 'type', 'match')
+        )
         if not check_replacement and aliases != defaults.get('aliases', {}):
             try:
                 inherited = Rule(name=name, aliases=defaults.get('aliases', {}), **rule)
@@ -95,9 +100,18 @@ def load_custom_config(path: str) -> Config:
             try:
                 validate_replacement(constructed)
             except (re.error, IndexError) as error:
-                original = defaults.get('rules', {}).get(name)
-                if original is not None:
-                    validate_replacement(Rule(name=name, aliases=defaults.get('aliases', {}), **original))
+                if (original is not None and original.get('replacement') is not None
+                        and 'patterns' in original and not original.get('disabled')
+                        and 'locale' not in ensure_list(original.get('flags'))):
+                    try:
+                        # Compare the original template at its regex boundary;
+                        # a repaired constructor/language error must not mask it.
+                        inherited = Rule(name=name, aliases=defaults.get('aliases', {}),
+                                         **{**original, 'languages': None})
+                    except (re.error, OverflowError, RecursionError):
+                        pass
+                    else:
+                        validate_replacement(inherited)
                 raise CustomConfigurationError(f'{path}: Rule {name!r}: Invalid replacement: {error}') from error
 
     # Keep unexpected constructor errors outside the custom diagnostic boundary.

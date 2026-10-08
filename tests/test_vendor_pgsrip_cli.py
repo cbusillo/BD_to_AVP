@@ -171,6 +171,48 @@ class PgsripCliTests(unittest.TestCase):
                     self.assertIn(str(config_path), result.output)
                     scan.assert_not_called()
 
+    def test_custom_tag_filter_does_not_preflight_an_inherited_bad_template(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "custom.json"
+            defaults = {"rules": {"inherited": {"patterns": "love", "replacement": r"\g<missing>"}}}
+            config_path.write_text(json.dumps({"rules": {"inherited": {"tags": "unused"}}}), encoding="utf-8")
+            with patch.object(cleanit_config, "default_config", defaults):
+                options = Options(config_path=str(config_path))
+            self.assertEqual(list(options.config.select_rules(tags={"default"})), [])
+
+    def test_repaired_default_pattern_does_not_hide_custom_template_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "custom.json"
+            config_path.write_text(
+                json.dumps({"rules": {"inherited": {"patterns": "love", "replacement": r"\g<missing>"}}}),
+                encoding="utf-8",
+            )
+            for original in (
+                {"patterns": "(", "replacement": r"\g<missing>"},
+                {"replacement": r"\g<missing>"},
+                {"patterns": "love", "languages": "zz-bogus"},
+            ):
+                with (
+                    self.subTest(original=original),
+                    patch.object(cleanit_config, "default_config", {"rules": {"inherited": original}}),
+                    patch("bd_to_avp.vendor.pgsrip.cli.api.scan_path") as scan,
+                ):
+                    # Repair the language as well when it came from defaults.
+                    config_path.write_text(
+                        json.dumps(
+                            {
+                                "rules": {
+                                    "inherited": {"patterns": "love", "replacement": r"\g<missing>", "languages": "en"}
+                                }
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    result = CliRunner().invoke(pgsrip, ["--config", str(config_path), "movie.sup"])
+                    self.assertEqual(result.exit_code, 2, result.exception)
+                    self.assertIn("inherited", result.output)
+                    scan.assert_not_called()
+
     def test_custom_config_can_disable_a_broken_default_template(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "custom.json"
@@ -254,7 +296,9 @@ class PgsripCliTests(unittest.TestCase):
             config_path = Path(directory) / "custom.json"
             for replacement, exception in ((r"\2", re.error), (r"\g<missing>", IndexError)):
                 defaults = {"rules": {"inherited": {"patterns": "l(o)ve", "replacement": replacement}}}
-                config_path.write_text(json.dumps({"rules": {"inherited": {"tags": "trial"}}}), encoding="utf-8")
+                config_path.write_text(
+                    json.dumps({"rules": {"inherited": {"patterns": "l(o)ve!", "tags": "trial"}}}), encoding="utf-8"
+                )
                 with self.subTest(replacement=replacement), patch.object(cleanit_config, "default_config", defaults):
                     result = CliRunner().invoke(pgsrip, ["--config", str(config_path), "movie.sup"])
                     self.assertEqual(result.exit_code, 1)
