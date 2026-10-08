@@ -10,13 +10,40 @@ from babelfish import Error as BabelfishError, Language
 from cleanit import Config
 from cleanit import config as cleanit_config
 from cleanit.rule import Rule
-from cleanit.utils import ensure_list
+from cleanit.utils import ensure_list, validate
 from jsonschema import ValidationError
-from yaml import YAMLError
+from yaml import YAMLError, safe_load
 
 
 class CustomConfigurationError(Exception):
     """A failure attributable to the explicitly requested cleanit file."""
+
+
+def validate_mapping_keys(data: typing.Any) -> None:
+    # YAML scalars remain non-string keys; jsonschema patternProperties assumes
+    # JSON object keys. Check before entering that string-only boundary.
+    pending = [data]
+    seen = set()
+    while pending:
+        value = pending.pop()
+        if not isinstance(value, (dict, list)) or id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if not isinstance(key, str):
+                    raise CustomConfigurationError(f'Mapping keys must be strings; found {key!r}')
+                pending.append(child)
+        else:
+            pending.extend(value)
+
+
+def validate_replacement(rule: Rule) -> None:
+    if rule.replacement is not None:
+        for regex in rule.regexes:
+            # sub parses group references even when the input does not match.
+            # Do not call Rule.apply: it recursively cleans actual subtitle text.
+            regex.sub(rule.replacement, '')
 
 
 def load_custom_config(path: str) -> Config:
@@ -25,10 +52,13 @@ def load_custom_config(path: str) -> Config:
             raise CustomConfigurationError('Configuration must be a regular file')
         # Load this file directly: Config.from_path silently ignores vanished
         # files and non-regular paths, then constructs default rules instead.
-        data = cleanit_config.load_config_file(path)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, YAMLError, ValidationError) as error:
+        with open(path) as source:
+            data = json.load(source) if path.endswith('.json') else safe_load(source.read())
+        validate_mapping_keys(data)
+        validate(data)
+    except (CustomConfigurationError, OSError, UnicodeDecodeError, json.JSONDecodeError, YAMLError, ValidationError) as error:
         detail = error.message if isinstance(error, ValidationError) else str(error)
-        raise CustomConfigurationError(detail) from error
+        raise CustomConfigurationError(f'{path}: {detail}') from error
 
     defaults = cleanit_config.default_config
     merged = cleanit_config.merge_options(defaults, data)
@@ -44,14 +74,18 @@ def load_custom_config(path: str) -> Config:
                     Language.fromietf(language)
                 except (BabelfishError, ValueError) as error:
                     raise CustomConfigurationError(f'Invalid language {language!r}') from error
-            Rule(name=name, aliases=aliases, **rule)
+            constructed = Rule(name=name, aliases=aliases, **rule)
+            try:
+                validate_replacement(constructed)
+            except (re.error, IndexError) as error:
+                raise CustomConfigurationError(f'Invalid replacement: {error}') from error
         except (CustomConfigurationError, re.error, OverflowError, RecursionError, BabelfishError) as error:
             original = defaults.get('rules', {}).get(name)
             if original is not None:
                 # If this rule was already broken in the defaults, preserve
                 # that exception rather than blaming the custom file.
-                Rule(name=name, aliases=defaults.get('aliases', {}), **original)
-            raise CustomConfigurationError(f'Rule {name!r}: {error}') from error
+                validate_replacement(Rule(name=name, aliases=defaults.get('aliases', {}), **original))
+            raise CustomConfigurationError(f'{path}: Rule {name!r}: {error}') from error
 
     # Keep unexpected constructor errors outside the custom diagnostic boundary.
     return Config(data)
