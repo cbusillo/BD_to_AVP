@@ -37,15 +37,9 @@ on image `xcode-27-arm64` / `20260928.0222.1` (macOS 27.0). Vision's
 passed on Chris-Studio. These observations do not establish whether the hosted
 backend lacks a model or compute prerequisite, or has an OS defect.
 
-A separate Chris-Studio macOS 27.2 worker segmentation fault is diagnosed in
-[#893](https://github.com/cbusillo/BD_to_AVP/issues/893#issuecomment-6052285577).
-The isolated native test passed; running it after GUI processing tests crashed
-in Shiboken's `QCheckBox` destructor during Python pending calls. Actual Vision
-recognition had already succeeded. GUI processing tests now destroy their
-windows and native children on the GUI thread during teardown, rather than
-leaving closed windows for later garbage collection in an OCR worker thread.
-This test-lifetime repair does not resolve the hosted false/no-NSError failure
-or establish a macOS 27.0 runtime boundary.
+The separate local test-worker crash diagnosis and remaining native macOS
+qualification are tracked in [#893](https://github.com/cbusillo/BD_to_AVP/issues/893).
+The hosted false/no-NSError gate above remains unchanged.
 
 CI still runs the real PGS extraction, bitmap decoding, SRT and final mux check
 with recognition substituted at `AppleVisionOcr.image_to_data`. The substitute

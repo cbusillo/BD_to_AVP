@@ -456,8 +456,8 @@ class MainWindowProcessingLifecycleTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.window.close()
         # Closing hides the window but leaves signal cycles and native children
-        # alive. Destroy them on the GUI thread before a later worker can trigger
-        # Python collection and queue stale Shiboken child destructors.
+        # alive. Destroy them on the GUI thread before later worker activity
+        # triggers collection and queues stale Shiboken child destructors.
         self.window.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.config_snapshot.apply()
