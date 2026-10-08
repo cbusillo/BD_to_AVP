@@ -100,7 +100,7 @@ class PgsripCliTests(unittest.TestCase):
 
                             self.assertEqual(result.exit_code, 2, result.exception)
                             self.assertIn(str(config_path), result.output)
-                            self.assertIn(repr(name), result.output)
+                            self.assertIn(repr([section, name])[:-1], result.output)
                             scan.assert_not_called()
 
     def test_unvalidated_example_content_is_rejected_before_scanning(self) -> None:
