@@ -125,8 +125,7 @@ def pgsrip(config: typing.Optional[str],
         logger.info('OCR backend: Apple Vision')
 
     if config and (not os.path.isfile(config) or os.path.isdir(config)):
-        click.echo(f"Invalid configuration is defined: {click.style(config, bold=True)}")
-        return
+        raise click.BadParameter('must be an existing configuration file', param_hint='--config')
 
     options = Options(config_path=config,
                       languages=set(language or []),

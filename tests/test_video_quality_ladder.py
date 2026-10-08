@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import io
 import json
 import tempfile
@@ -13,7 +14,6 @@ from scripts.validate_video_quality_ladder import CalibrationError, main, valida
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPOSITORY_ROOT / "docs/qualification/video-quality-ladder-v1.json"
 CORPUS_PATH = REPOSITORY_ROOT / "docs/qualification/direct-mv-hevc-corpus-v1.json"
-CORPUS_SHA256 = "d6cfc14cb9f29e14639d40a96516fe14f47a64df850fe0928833b77b077e87b1"
 
 
 class VideoQualityLadderTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class VideoQualityLadderTests(unittest.TestCase):
         evidence: dict[str, object] = {
             "artifact_sha256": "a" * 64,
             "source_git_sha": "b" * 40,
-            "fixture_manifest_sha256": CORPUS_SHA256,
+            "fixture_manifest_sha256": hashlib.sha256(CORPUS_PATH.read_bytes()).hexdigest(),
             "quality_delta": quality_delta,
             "output_size_ratio": output_size_ratio,
             "encode_time_seconds": 60.0,
