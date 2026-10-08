@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -455,6 +455,11 @@ class MainWindowProcessingLifecycleTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.window.close()
+        # Closing hides the window but leaves signal cycles and native children
+        # alive. Destroy them on the GUI thread before a later worker can trigger
+        # Python collection and queue stale Shiboken child destructors.
+        self.window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.config_snapshot.apply()
 
     def test_continuation_starts_explicit_request_and_updates_button(self) -> None:
