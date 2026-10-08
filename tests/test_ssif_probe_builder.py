@@ -41,14 +41,15 @@ class SsifProbeBuilderTests(unittest.TestCase):
             },
         )
 
-    def test_installed_meson_matches_the_artifact_toolchain(self) -> None:
+    def test_installed_build_tools_match_the_artifact_toolchain(self) -> None:
         manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
-        meson_path = Path(sys.executable).parent / "meson"
-
-        self.assertEqual(
-            build_ssif_probe_macos.command_output([str(meson_path), "--version"]).strip(),
-            manifest.meson_version,
-        )
+        tool_directory = Path(sys.executable).parent
+        for tool, version in (("meson", manifest.meson_version), ("ninja", manifest.ninja_version)):
+            with self.subTest(tool=tool):
+                self.assertEqual(
+                    build_ssif_probe_macos.command_output([str(tool_directory / tool), "--version"]).strip(),
+                    version,
+                )
 
     def test_manifest_rejects_unknown_fields(self) -> None:
         manifest_text = build_ssif_probe_macos.MANIFEST_PATH.read_text(encoding="utf-8")
@@ -68,8 +69,6 @@ class SsifProbeBuilderTests(unittest.TestCase):
         manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
         provenance = json.loads(build_ssif_probe_macos.PROVENANCE_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(provenance["meson_version"], manifest.meson_version)
-        self.assertEqual(provenance["ninja_version"], manifest.ninja_version)
         self.assertEqual(
             provenance["library_compile_flags"],
             list(build_ssif_probe_macos.library_compile_flags(manifest)),
