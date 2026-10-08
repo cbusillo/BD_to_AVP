@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 import typing
 from datetime import timedelta
@@ -84,7 +83,7 @@ AGE = AgeParamType()
 
 
 @click.command()
-@click.option('-c', '--config', type=click.Path(), help='cleanit configuration path to be used')
+@click.option('-c', '--config', type=click.Path(exists=True, dir_okay=False), help='cleanit configuration path to be used')
 @click.option('-l', '--language', type=LANGUAGE, multiple=True, help='Language as IETF code, '
               'e.g. en, pt-BR (can be used multiple times).')
 @click.option('-t', '--tag', required=False, multiple=True, help='Rule tags to be used, '
@@ -123,9 +122,6 @@ def pgsrip(config: typing.Optional[str],
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
         logger.info('OCR backend: Apple Vision')
-
-    if config and (not os.path.isfile(config) or os.path.isdir(config)):
-        raise click.BadParameter('must be an existing configuration file', param_hint='--config')
 
     options = Options(config_path=config,
                       languages=set(language or []),
