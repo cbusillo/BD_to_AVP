@@ -3,7 +3,9 @@
 The vendored command can also be invoked with
 `uv run python -m bd_to_avp.vendor.pgsrip --help`. Its `--config` option requires
 an existing configuration file; a missing file or directory exits with a Click
-usage error (status 2) before scanning or extraction. Caller and option tests
+usage error (status 2) before scanning or extraction. Malformed JSON/YAML,
+schema-invalid content, undecodable text and custom-file read failures also
+report a usage error for `--config`. Caller and option tests
 in `tests/test_vendor_pgsrip_cli.py` use temporary inputs and mock extraction/OCR
 boundaries; they do not qualify native Apple Vision recognition.
 

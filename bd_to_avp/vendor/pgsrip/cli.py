@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import typing
@@ -7,6 +8,8 @@ from types import TracebackType
 from babelfish import Error as BabelfishError, Language
 
 import click
+from jsonschema import ValidationError
+from yaml import YAMLError
 
 from bd_to_avp.vendor.pgsrip import Pgs, __version__, api
 from bd_to_avp.vendor.pgsrip.media import Media
@@ -123,16 +126,22 @@ def pgsrip(config: typing.Optional[str],
         logger.setLevel(logging.DEBUG)
         logger.info('OCR backend: Apple Vision')
 
-    options = Options(config_path=config,
-                      languages=set(language or []),
-                      tags=set(tag or []),
-                      encoding=encoding,
-                      overwrite=force,
-                      one_per_lang=not all,
-                      keep_temp_files=keep_temp_files,
-                      max_workers=max_workers,
-                      age=age,
-                      srt_age=srt_age)
+    try:
+        options = Options(config_path=config,
+                          languages=set(language or []),
+                          tags=set(tag or []),
+                          encoding=encoding,
+                          overwrite=force,
+                          one_per_lang=not all,
+                          keep_temp_files=keep_temp_files,
+                          max_workers=max_workers,
+                          age=age,
+                          srt_age=srt_age)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, YAMLError, ValidationError) as error:
+        if config is None:
+            raise
+        detail = error.message if isinstance(error, ValidationError) else str(error)
+        raise click.BadParameter(f'Cannot load cleanit configuration: {detail}', param_hint='--config') from error
 
     rules = options.config.select_rules(tags=options.tags, languages=options.languages)
     if not rules:
