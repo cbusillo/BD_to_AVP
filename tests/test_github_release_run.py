@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -778,6 +779,17 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
 
 
 class GitHubReleaseRunContractTests(unittest.TestCase):
+    def test_operator_metadata_agrees_with_the_monitor_contract(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        operations = json.loads((repository / ".github/github.json").read_text(encoding="utf-8"))["releaseOperations"]
+
+        self.assertEqual(operations["approvalRequiredExitCode"], EXIT_APPROVAL_REQUIRED)
+        self.assertEqual(operations["safetyErrorExitCode"], EXIT_SAFETY_ERROR)
+        self.assertEqual(
+            operations["workflows"],
+            {name: {"path": policy.path, "route": policy.route} for name, policy in OPERATOR_WORKFLOWS.items()},
+        )
+
     def test_parser_error_code_does_not_overlap_approval_required(self) -> None:
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as context:
             parse_args(["watch"])

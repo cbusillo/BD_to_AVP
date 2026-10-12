@@ -1360,10 +1360,10 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
     def test_private_key_is_only_exposed_to_read_only_signing_step(self) -> None:
         workflow = load_release_engine()
         publish = workflow["jobs"]["publish-appcast"]
-        configured_secrets = set(load_github_config()["releaseEnvironments"]["sparkle-release"]["secrets"])
+        configured_secrets = set(load_github_config()["releaseEnvironments"][publish["environment"]]["secrets"])
         matching_steps = [step for step in publish["steps"] if secrets_read_by(step) & configured_secrets]
 
-        self.assertEqual(publish["environment"], "sparkle-release")
+        self.assertEqual(secrets_read_by({key: value for key, value in publish.items() if key != "steps"}), set())
         self.assertEqual(publish["permissions"]["contents"], "read")
         self.assertEqual(len(matching_steps), 1)
 
