@@ -29,6 +29,7 @@ from scripts.native_app import (
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
     NATIVE_UPDATE_INFO,
+    TEST_HOME_BUILD_SETTING,
     REQUIRED_NATIVE_FRAMEWORK_LINKS,
     SUPPORT_DIAGNOSTICS_ENDPOINT_ENV,
     SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY,
@@ -40,6 +41,7 @@ from scripts.native_app import (
     ensure_clean_worktree,
     install_mv_hevc_encoder,
     native_build_settings,
+    native_test_home,
     minimum_macos_versions,
     linked_libraries,
     package,
@@ -58,6 +60,7 @@ from scripts.native_app import (
     verify_mach_o_minimum_system_versions,
     verify_exact_minimum_system_version,
     verify_layout,
+    xcodebuild,
     verify_package_paths,
     verify_committed_ssif_artifacts,
     verify_product_identity,
@@ -126,6 +129,73 @@ def make_app_bundle(root: Path, payload: bytes = b"current build") -> Path:
 
 
 class NativeAppPackagingTests(unittest.TestCase):
+    def test_native_test_home_exists_during_launch_and_is_removed_after_success_or_failure(self) -> None:
+        for fails in (False, True):
+            with self.subTest(fails=fails):
+                self.assert_native_test_home_cleanup(fails)
+
+    def assert_native_test_home_cleanup(self, fails: bool) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            homes: list[Path] = []
+
+            def launch(command: list[str], **_kwargs: object) -> None:
+                home_argument = next(arg for arg in command if arg.startswith(f"{TEST_HOME_BUILD_SETTING}="))
+                home = Path(home_argument.split("=", 1)[1])
+                homes.append(home)
+                self.assertTrue(home.is_relative_to(Path(directory)))
+                self.assertTrue(home.is_dir())
+                (home / "test-data").write_bytes(b"test data")
+                if fails:
+                    raise subprocess.CalledProcessError(1, command)
+
+            with (
+                patch("scripts.native_app.DERIVED_DATA", Path(directory) / "DerivedData"),
+                patch("scripts.native_app.generate_project"),
+                patch("scripts.native_app.run", side_effect=launch),
+            ):
+                if fails:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        xcodebuild("test", "Debug")
+                else:
+                    xcodebuild("test", "Debug")
+            self.assertEqual(len(homes), 1)
+            self.assertFalse(homes[0].exists())
+
+    def test_native_test_home_detects_new_user_preferences_without_deleting_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            preferences = root / "Preferences"
+            preferences.mkdir()
+            existing = preferences / "existing.plist"
+            existing.write_bytes(b"unchanged user data")
+            added = preferences / f"{NATIVE_BUNDLE_IDENTIFIER}.fixture.plist"
+            with patch("scripts.native_app.DERIVED_DATA", root / "DerivedData"):
+                with native_test_home("test", preferences_directory=preferences):
+                    pass
+                with self.assertRaises(RuntimeError):
+                    with native_test_home("test", preferences_directory=preferences):
+                        added.write_bytes(b"leaked data")
+            self.assertEqual(existing.read_bytes(), b"unchanged user data")
+            self.assertTrue(added.exists())
+
+    def test_native_test_home_reports_unrelated_preferences_without_failing_or_deleting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            preferences = root / "Preferences"
+            preferences.mkdir()
+            unrelated = preferences / "com.example.other-app.plist"
+            with patch("scripts.native_app.DERIVED_DATA", root / "DerivedData"), patch("sys.stderr") as output:
+                with native_test_home("test", preferences_directory=preferences):
+                    unrelated.touch()
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(output.write.called)
+
+    def test_native_product_build_does_not_redirect_home(self) -> None:
+        with patch("scripts.native_app.generate_project"), patch("scripts.native_app.run") as launch:
+            xcodebuild("build", "Debug")
+        command = launch.call_args.args[0]
+        self.assertFalse(any(arg.startswith(f"{TEST_HOME_BUILD_SETTING}=") for arg in command))
+
     def test_package_defaults_to_ad_hoc_signing(self) -> None:
         args = parse_args(["package"])
 

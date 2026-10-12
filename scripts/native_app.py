@@ -73,6 +73,7 @@ PROJECT_PATH = MACOS_ROOT / f"{NATIVE_PROJECT_NAME}.xcodeproj"
 SCHEME = NATIVE_PROJECT_NAME
 NATIVE_PACKAGE_CONFIGURATION = "Release"
 DERIVED_DATA = MACOS_ROOT / "build" / "DerivedData"
+TEST_HOME_BUILD_SETTING = "BD_TO_AVP_TEST_HOME"
 NATIVE_APP_NAME = f"{NATIVE_PRODUCT_NAME}.app"
 PACKAGE_ROOT = MACOS_ROOT / "build" / "package"
 PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
@@ -198,23 +199,71 @@ def verify_product_source_copy() -> None:
 def xcodebuild(action: str, configuration: str) -> None:
     generate_project()
     build_settings = native_build_settings(configuration, os.environ)
-    run(
-        [
-            "xcodebuild",
-            "-project",
-            PROJECT_PATH.name,
-            "-scheme",
-            SCHEME,
-            "-configuration",
-            configuration,
-            "-derivedDataPath",
-            str(DERIVED_DATA),
-            *build_settings,
-            action,
-        ],
-        cwd=MACOS_ROOT,
-        environment={**os.environ, "BD_TO_AVP_TEST_PYTHON": sys.executable},
-    )
+    with native_test_home(action) as test_home:
+        if test_home is not None:
+            build_settings.append(f"{TEST_HOME_BUILD_SETTING}={test_home}")
+        run(
+            [
+                "xcodebuild",
+                "-project",
+                PROJECT_PATH.name,
+                "-scheme",
+                SCHEME,
+                "-configuration",
+                configuration,
+                "-derivedDataPath",
+                str(DERIVED_DATA),
+                *build_settings,
+                action,
+            ],
+            cwd=MACOS_ROOT,
+            environment={**os.environ, "BD_TO_AVP_TEST_PYTHON": sys.executable},
+        )
+
+
+@contextmanager
+def native_test_home(action: str, *, preferences_directory: Path | None = None) -> Iterator[Path | None]:
+    if action != "test":
+        yield None
+        return
+    preferences = preferences_directory or Path.home() / "Library" / "Preferences"
+    before = preference_file_names(preferences)
+    test_homes = DERIVED_DATA.parent / "test-homes"
+    test_homes.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="native-tests-", dir=test_homes) as directory:
+            home = Path(directory) / "home"
+            home.mkdir()
+            yield home
+    finally:
+        added = preference_file_names(preferences) - before
+        app_prefix = NATIVE_BUNDLE_IDENTIFIER.casefold()
+        leaked = {
+            name
+            for name in added
+            if app_prefix in name.casefold()
+            or "bdtoavp" in name.casefold()
+            or re.fullmatch(r".*Tests\.[0-9a-fA-F-]+\.plist", name)
+        }
+        unrelated = added - leaked
+        if unrelated:
+            print(
+                "Unrelated Preferences entries appeared during the run (origin not established): "
+                + ", ".join(sorted(unrelated)),
+                file=sys.stderr,
+            )
+        if leaked:
+            raise RuntimeError(
+                "New user preference filenames appeared during native tests (origin not established): "
+                + ", ".join(sorted(leaked))
+            )
+
+
+def preference_file_names(directory: Path) -> set[str]:
+    try:
+        return {entry.name for entry in directory.iterdir()}
+    except FileNotFoundError:
+        return set()
 
 
 def validate_support_diagnostics_endpoint(endpoint: str) -> str:

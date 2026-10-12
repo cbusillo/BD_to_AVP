@@ -28,7 +28,22 @@ final class UpdateControllerTests: XCTestCase {
 
     @MainActor
     func testDebugBundleRemainsInManualUpdateMode() {
-        XCTAssertEqual(UpdateEnvironment().mode, .manual)
+        XCTAssertEqual(UpdateEnvironment(arguments: [], processEnvironment: [:]).mode, .manual)
+    }
+
+    @MainActor
+    func testHostedAppDisablesUpdaterWithoutConstructingBackend() throws {
+        var factoryCalled = false
+        let controller = UpdateController(
+            defaults: try isolatedDefaults(),
+            backendFactory: { _, _ in
+                factoryCalled = true
+                return FakeUpdateBackend()
+            }
+        )
+        controller.startIfNeeded()
+        XCTAssertEqual(controller.mode, .disabled)
+        XCTAssertFalse(factoryCalled)
     }
 
     @MainActor
@@ -44,10 +59,8 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testControllerSynchronizesSparklePreferencesAndChannel() {
-        let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+    func testControllerSynchronizesSparklePreferencesAndChannel() throws {
+        let defaults = try isolatedDefaults()
         let backend = FakeUpdateBackend(automaticallyChecksForUpdates: false, canCheckForUpdates: true)
         let controller = UpdateController(
             environment: directEnvironment(),
@@ -74,11 +87,11 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testControllerRefreshesWhenSparkleStateChanges() {
+    func testControllerRefreshesWhenSparkleStateChanges() throws {
         let backend = FakeUpdateBackend(automaticallyChecksForUpdates: false, canCheckForUpdates: true)
         let controller = UpdateController(
             environment: directEnvironment(),
-            defaults: isolatedDefaults(),
+            defaults: try isolatedDefaults(),
             backendFactory: { _, _ in backend }
         )
         controller.startIfNeeded()
@@ -93,12 +106,12 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testManualModeUsesReleasePageWithoutCreatingSparkle() {
+    func testManualModeUsesReleasePageWithoutCreatingSparkle() throws {
         var openedURL: URL?
         var factoryCalled = false
         let controller = UpdateController(
             environment: directEnvironment(publicKey: nil),
-            defaults: isolatedDefaults(),
+            defaults: try isolatedDefaults(),
             openURL: { url in
                 openedURL = url
                 return true
@@ -120,10 +133,8 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testLegacyReleaseCandidatePreferenceMigratesToProductionKey() {
-        let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+    func testLegacyReleaseCandidatePreferenceMigratesToProductionKey() throws {
+        let defaults = try isolatedDefaults()
         defaults.set("releaseCandidate", forKey: UpdateController.legacyChannelDefaultsKey)
 
         let controller = UpdateController(
@@ -137,10 +148,8 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testCurrentReleaseCandidateAliasMigratesToCanonicalValue() {
-        let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+    func testCurrentReleaseCandidateAliasMigratesToCanonicalValue() throws {
+        let defaults = try isolatedDefaults()
         defaults.set("releaseCandidate", forKey: UpdateController.channelDefaultsKey)
 
         let controller = UpdateController(
@@ -153,10 +162,8 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testRoutePreferencePersistsAcrossControllerRelaunch() {
-        let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+    func testRoutePreferencePersistsAcrossControllerRelaunch() throws {
+        let defaults = try isolatedDefaults()
 
         let firstController = UpdateController(
             environment: directEnvironment(publicKey: nil),
@@ -173,14 +180,14 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testPersistedStableAndRCStayUnchangedUntilExplicitRouteSelection() {
+    func testPersistedStableAndRCStayUnchangedUntilExplicitRouteSelection() throws {
         let cases: [(rawValue: String, preference: UpdateChannelPreference)] = [
             ("stable", .stable),
             ("rc", .releaseCandidate),
         ]
 
         for testCase in cases {
-            let defaults = isolatedDefaults()
+            let defaults = try isolatedDefaults()
             var backend: FakeUpdateBackend?
             var initializedChannel: UpdateChannelPreference?
             defaults.set(testCase.rawValue, forKey: UpdateController.channelDefaultsKey)
@@ -218,10 +225,8 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testInvalidStoredChannelFallsBackToStable() {
-        let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+    func testInvalidStoredChannelFallsBackToStable() throws {
+        let defaults = try isolatedDefaults()
         defaults.set("nightly", forKey: UpdateController.channelDefaultsKey)
 
         let controller = UpdateController(
@@ -234,10 +239,10 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testSparkleInitializationFailureFallsBackToManualUpdates() {
+    func testSparkleInitializationFailureFallsBackToManualUpdates() throws {
         let controller = UpdateController(
             environment: directEnvironment(),
-            defaults: isolatedDefaults(),
+            defaults: try isolatedDefaults(),
             backendFactory: { _, _ in throw TestError.initializationFailed }
         )
 
@@ -246,16 +251,6 @@ final class UpdateControllerTests: XCTestCase {
         XCTAssertEqual(controller.mode, .manual)
         XCTAssertNotNil(controller.initializationError)
         XCTAssertTrue(controller.canPerformUpdateAction)
-    }
-
-    @MainActor
-    private func isolatedDefaults() -> UserDefaults {
-        let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
-        return defaults
     }
 
     private func directEnvironment(

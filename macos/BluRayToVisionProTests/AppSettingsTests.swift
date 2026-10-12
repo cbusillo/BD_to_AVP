@@ -4,10 +4,8 @@ import XCTest
 
 final class AppSettingsTests: XCTestCase {
     @MainActor
-    func testPreferencesRoundTripThroughUserDefaults() {
-        let suiteName = "AppSettingsTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+    func testPreferencesRoundTripThroughUserDefaults() throws {
+        let defaults = try isolatedDefaults()
         let homeURL = URL(fileURLWithPath: "/Users/example", isDirectory: true)
 
         let settings = AppSettings(defaults: defaults, homeDirectoryURL: homeURL)
@@ -35,10 +33,8 @@ final class AppSettingsTests: XCTestCase {
     }
 
     @MainActor
-    func testQueueNotificationsDefaultOff() {
-        let suiteName = "AppSettingsTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+    func testQueueNotificationsDefaultOff() throws {
+        let defaults = try isolatedDefaults()
 
         let settings = AppSettings(defaults: defaults)
 
@@ -48,10 +44,8 @@ final class AppSettingsTests: XCTestCase {
     }
 
     @MainActor
-    func testProfileIdentifierIsPreservedAndMissingDestinationUsesSafeDefault() {
-        let suiteName = "AppSettingsTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+    func testProfileIdentifierIsPreservedAndMissingDestinationUsesSafeDefault() throws {
+        let defaults = try isolatedDefaults()
         defaults.set("removed-profile", forKey: "native.defaultProfile")
         defaults.set(true, forKey: "native.keepIntermediateFiles")
         let homeURL = URL(fileURLWithPath: "/Users/example", isDirectory: true)
