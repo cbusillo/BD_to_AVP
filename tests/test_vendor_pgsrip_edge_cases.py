@@ -138,6 +138,25 @@ class PgsImageRenderTests(unittest.TestCase):
 
 
 class PgsReaderTests(unittest.TestCase):
+    def test_many_segments_copy_a_linear_amount_of_input(self) -> None:
+        copied_bytes = 0
+
+        class MeasuredBytes(bytes):
+            def __getitem__(self, key):
+                nonlocal copied_bytes
+                value = super().__getitem__(key)
+                if isinstance(key, slice):
+                    copied_bytes += len(value)
+                return value
+
+        data = MeasuredBytes(b"".join(_pgs_segment_bytes(b"") for _ in range(1_000)))
+        segments = list(PgsReader.read_segments(data, MediaPath("many.sup")))
+
+        self.assertEqual(len(segments), 1_000)
+        # Permit several header/payload copies per segment, but not a shrinking suffix
+        # for each segment: that copies quadratically more bytes as input grows.
+        self.assertLessEqual(copied_bytes, 8 * len(data))
+
     def test_reads_many_segments_correctly(self) -> None:
         data = b"".join(_pgs_segment_bytes(b"") for _ in range(20_000))
 
