@@ -73,6 +73,7 @@ PROJECT_PATH = MACOS_ROOT / f"{NATIVE_PROJECT_NAME}.xcodeproj"
 SCHEME = NATIVE_PROJECT_NAME
 NATIVE_PACKAGE_CONFIGURATION = "Release"
 DERIVED_DATA = MACOS_ROOT / "build" / "DerivedData"
+TEST_HOME_BUILD_SETTING = "BD_TO_AVP_TEST_HOME"
 NATIVE_APP_NAME = f"{NATIVE_PRODUCT_NAME}.app"
 PACKAGE_ROOT = MACOS_ROOT / "build" / "package"
 PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
@@ -200,7 +201,7 @@ def xcodebuild(action: str, configuration: str) -> None:
     build_settings = native_build_settings(configuration, os.environ)
     with native_test_home(action) as test_home:
         if test_home is not None:
-            build_settings.append(f"BD_TO_AVP_TEST_HOME={test_home}")
+            build_settings.append(f"{TEST_HOME_BUILD_SETTING}={test_home}")
         run(
             [
                 "xcodebuild",

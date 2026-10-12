@@ -29,6 +29,7 @@ from scripts.native_app import (
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
     NATIVE_UPDATE_INFO,
+    TEST_HOME_BUILD_SETTING,
     REQUIRED_NATIVE_FRAMEWORK_LINKS,
     SUPPORT_DIAGNOSTICS_ENDPOINT_ENV,
     SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY,
@@ -135,7 +136,7 @@ class NativeAppPackagingTests(unittest.TestCase):
                 def launch(
                     command: list[str], *, homes: list[Path] = homes, fails: bool = fails, **kwargs: object
                 ) -> None:
-                    home_argument = next(arg for arg in command if arg.startswith("BD_TO_AVP_TEST_HOME="))
+                    home_argument = next(arg for arg in command if arg.startswith(f"{TEST_HOME_BUILD_SETTING}="))
                     home = Path(home_argument.split("=", 1)[1])
                     homes.append(home)
                     self.assertTrue(home.is_relative_to(Path(directory)))
@@ -161,7 +162,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         with patch("scripts.native_app.generate_project"), patch("scripts.native_app.run") as launch:
             xcodebuild("build", "Debug")
         command = launch.call_args.args[0]
-        self.assertFalse(any(arg.startswith("BD_TO_AVP_TEST_HOME=") for arg in command))
+        self.assertFalse(any(arg.startswith(f"{TEST_HOME_BUILD_SETTING}=") for arg in command))
 
     def test_package_defaults_to_ad_hoc_signing(self) -> None:
         args = parse_args(["package"])

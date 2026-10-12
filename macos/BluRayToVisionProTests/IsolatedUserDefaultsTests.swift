@@ -43,6 +43,23 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         XCTAssertEqual(restored.useSoftwareEncoder, settings.useSoftwareEncoder)
     }
 
+    @MainActor
+    func testMovieSharingConstructionDoesNotReadOrWriteIdentity() throws {
+        let trust = MovieLibraryTrustStore(
+            read: {
+                XCTFail("Constructing the test host must not read its identity")
+                return nil
+            },
+            write: { _ in
+                XCTFail("Constructing the test host must not write its identity")
+            }
+        )
+        let controller = MovieSharingController(defaults: try isolatedDefaults(), trust: trust)
+        XCTAssertTrue(controller.sources.isEmpty)
+        XCTAssertTrue(controller.peers.isEmpty)
+        XCTAssertNil(controller.errorMessage)
+    }
+
     func testHostUsesTemporaryHomeForPreferencesAndApplicationSupport() throws {
         let environment = ProcessInfo.processInfo.environment
         let home = try XCTUnwrap(environment["CFFIXED_USER_HOME"])
