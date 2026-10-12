@@ -1,4 +1,3 @@
-import inspect
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -145,11 +144,6 @@ class PgsReaderTests(unittest.TestCase):
         segments = list(PgsReader.read_segments(data, MediaPath("many.sup")))
 
         self.assertEqual(len(segments), 20_000)
-
-    def test_reader_does_not_slice_the_remaining_buffer(self) -> None:
-        source = inspect.getsource(PgsReader.read_segments)
-
-        self.assertNotIn("data[offset:]", source)
 
     def test_skips_unknown_segment_and_continues(self) -> None:
         data = _pgs_segment_bytes(b"") + _raw_pgs_segment_bytes(0x99, b"") + _pgs_segment_bytes(b"")

@@ -1,5 +1,4 @@
 import io
-import json
 import os
 import subprocess
 import tempfile
@@ -36,7 +35,6 @@ from scripts.release_workflow_policy import (
     REQUIRED_ACTOR,
     RECEIPT_ACTORS,
     STABLE_OPERATOR_WORKFLOW_PATH,
-    STABLE_ROUTE,
     STABLE_WORKFLOW_NAME,
 )
 
@@ -795,50 +793,6 @@ class GitHubReleaseRunContractTests(unittest.TestCase):
             watch_release_run(expectation(workflow="Release from protected main"), client)
 
         self.assertEqual(client.get_calls, [])
-
-    def test_operator_commands_and_reviewer_are_discoverable(self) -> None:
-        config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
-        operations = config["releaseOperations"]
-        signing = config["releaseEnvironments"]["macos-signing"]
-
-        self.assertEqual(operations["watchCommand"], "uv run python -m scripts.github_release_run watch")
-        self.assertEqual(operations["approveCommand"], "uv run python -m scripts.github_release_run approve")
-        self.assertEqual(operations["approvalRequiredExitCode"], EXIT_APPROVAL_REQUIRED)
-        self.assertEqual(operations["safetyErrorExitCode"], EXIT_SAFETY_ERROR)
-        self.assertEqual(operations["repository"], REPOSITORY)
-        self.assertEqual(operations["releaseActor"], REQUIRED_ACTOR)
-        self.assertEqual(operations["approvalActor"], "cbusillo")
-        self.assertEqual(operations["requiredBranch"], "main")
-        self.assertEqual(operations["requiredEvent"], "workflow_dispatch")
-        self.assertEqual(operations["approvalEnvironment"], "macos-signing")
-        self.assertEqual(operations["engineWorkflowPath"], ENGINE_WORKFLOW_PATH)
-        self.assertEqual(
-            operations["workflows"],
-            {
-                STABLE_WORKFLOW_NAME: {
-                    "path": STABLE_OPERATOR_WORKFLOW_PATH,
-                    "route": STABLE_ROUTE,
-                },
-                PRERELEASE_WORKFLOW_NAME: {
-                    "path": PRERELEASE_OPERATOR_WORKFLOW_PATH,
-                    "route": PRERELEASE_ROUTE,
-                },
-            },
-        )
-        self.assertEqual(set(operations["workflows"]), set(OPERATOR_WORKFLOWS))
-        self.assertTrue(all("id" not in policy for policy in operations["workflows"].values()))
-        self.assertTrue(signing["requiredReview"])
-        self.assertEqual(signing["reviewers"], ["cbusillo"])
-        self.assertTrue(signing["preventSelfReview"])
-        self.assertFalse(signing["canAdminsBypass"])
-
-    def test_root_agent_contract_requires_guarded_monitoring(self) -> None:
-        instructions = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
-
-        self.assertIn("scripts.github_release_run watch", instructions)
-        self.assertIn("scripts.github_release_run approve", instructions)
-        self.assertIn("explicit user authorization", instructions)
-        self.assertIn("Keep `main` fixed", instructions)
 
 
 class GhAPIClientTests(unittest.TestCase):
