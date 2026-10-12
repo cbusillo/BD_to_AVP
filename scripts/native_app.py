@@ -222,16 +222,30 @@ def xcodebuild(action: str, configuration: str) -> None:
 
 
 @contextmanager
-def native_test_home(action: str) -> Iterator[Path | None]:
+def native_test_home(action: str, *, preferences_directory: Path | None = None) -> Iterator[Path | None]:
     if action != "test":
         yield None
         return
+    preferences = preferences_directory or Path.home() / "Library" / "Preferences"
+    before = preference_file_names(preferences)
     test_homes = DERIVED_DATA.parent / "test-homes"
     test_homes.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="native-tests-", dir=test_homes) as directory:
-        home = Path(directory) / "home"
-        (home / "Library" / "Preferences").mkdir(parents=True)
-        yield home
+    try:
+        with tempfile.TemporaryDirectory(prefix="native-tests-", dir=test_homes) as directory:
+            home = Path(directory) / "home"
+            home.mkdir()
+            yield home
+    finally:
+        added = preference_file_names(preferences) - before
+        if added:
+            raise RuntimeError("Native tests added user preference files: " + ", ".join(sorted(added)))
+
+
+def preference_file_names(directory: Path) -> set[str]:
+    try:
+        return {entry.name for entry in directory.iterdir()}
+    except FileNotFoundError:
+        return set()
 
 
 def validate_support_diagnostics_endpoint(endpoint: str) -> str:

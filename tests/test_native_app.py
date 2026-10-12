@@ -41,6 +41,7 @@ from scripts.native_app import (
     ensure_clean_worktree,
     install_mv_hevc_encoder,
     native_build_settings,
+    native_test_home,
     minimum_macos_versions,
     linked_libraries,
     package,
@@ -142,8 +143,8 @@ class NativeAppPackagingTests(unittest.TestCase):
                 home = Path(home_argument.split("=", 1)[1])
                 homes.append(home)
                 self.assertTrue(home.is_relative_to(Path(directory)))
-                self.assertTrue((home / "Library" / "Preferences").is_dir())
-                (home / "Library" / "Preferences" / "test.plist").write_bytes(b"test data")
+                self.assertTrue(home.is_dir())
+                (home / "test-data").write_bytes(b"test data")
                 if fails:
                     raise subprocess.CalledProcessError(1, command)
 
@@ -159,6 +160,23 @@ class NativeAppPackagingTests(unittest.TestCase):
                     xcodebuild("test", "Debug")
             self.assertEqual(len(homes), 1)
             self.assertFalse(homes[0].exists())
+
+    def test_native_test_home_detects_new_user_preferences_without_deleting_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            preferences = root / "Preferences"
+            preferences.mkdir()
+            existing = preferences / "existing.plist"
+            existing.write_bytes(b"unchanged user data")
+            added = preferences / "leaked.plist"
+            with patch("scripts.native_app.DERIVED_DATA", root / "DerivedData"):
+                with native_test_home("test", preferences_directory=preferences):
+                    pass
+                with self.assertRaises(RuntimeError):
+                    with native_test_home("test", preferences_directory=preferences):
+                        added.write_bytes(b"leaked data")
+            self.assertEqual(existing.read_bytes(), b"unchanged user data")
+            self.assertTrue(added.exists())
 
     def test_native_product_build_does_not_redirect_home(self) -> None:
         with patch("scripts.native_app.generate_project"), patch("scripts.native_app.run") as launch:

@@ -64,6 +64,7 @@ final class IsolatedUserDefaultsTests: XCTestCase {
 
     @MainActor
     func testUnitTestHostNeverSelectsKeychainEvenWhenTeamSigned() {
+        XCTAssertFalse(MovieSharingController.usesKeychain())
         let environment = [AppDelegate.unitTestHomeEnvironmentKey: "/tmp/test-home"]
         XCTAssertFalse(MovieSharingController.usesKeychain(environment: environment, isTeamSigned: { true }))
         XCTAssertTrue(MovieSharingController.usesKeychain(environment: [:], isTeamSigned: { true }))

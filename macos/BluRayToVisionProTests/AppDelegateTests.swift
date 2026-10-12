@@ -52,7 +52,7 @@ final class AppDelegateTests: XCTestCase {
     }
 
     func testTheAppHostingTheseTestsSuppressesDefaultLaunch() {
-        // The real process: fails if Xcode stops marking test hosts the way the app detects them.
+        // Check the real host process, including the scheme's explicit test marker.
         XCTAssertTrue(
             AppDelegate.suppressesDefaultLaunch(
                 arguments: ProcessInfo.processInfo.arguments,
