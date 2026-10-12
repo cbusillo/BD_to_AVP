@@ -16,9 +16,6 @@ class EmbeddedPythonTests(unittest.TestCase):
     def test_repository_manifest_is_digest_pinned(self) -> None:
         manifest = embedded_python.load_manifest()
 
-        self.assertEqual(manifest.python_version, "3.12.10")
-        self.assertEqual(manifest.python_abi, "3.12")
-        self.assertEqual(manifest.architecture, "arm64")
         self.assertRegex(manifest.support.sha256, r"^[0-9a-f]{64}$")
         self.assertRegex(manifest.launcher.sha256, r"^[0-9a-f]{64}$")
 

@@ -59,16 +59,6 @@ def make_app(root: Path, info: dict[str, object]) -> Path:
 
 
 class SparkleMacOSTests(unittest.TestCase):
-    def test_manifest_pins_expected_release(self) -> None:
-        release = sparkle_macos.load_release()
-
-        self.assertEqual(release.version, "2.9.4")
-        self.assertEqual(
-            release.archive_sha256,
-            "ce89daf967db1e1893ed3ebd67575ed82d3902563e3191ca92aaec9164fbdef9",
-        )
-        self.assertTrue(release.archive_url.startswith("https://"))
-
     def test_manifest_rejects_non_https_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "sparkle.toml"

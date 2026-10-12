@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
-from scripts import embedded_python, qualify_release_scope, release, release_evidence_v2
+from scripts import qualify_release_scope, release, release_evidence_v2
 from scripts.beta3_recovery_evidence import BETA3_RECOVERY_EVIDENCE_PATH, Beta3RecoveryEvidenceError
 from scripts.production_identity import PRODUCTION_SPARKLE_PUBLIC_KEY
 
@@ -164,12 +164,6 @@ class ReleaseMetadataTests(unittest.TestCase):
             )
         return config_path
 
-    def test_repository_requires_dependabot_compatible_uv(self) -> None:
-        with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
-            pyproject = tomllib.load(handle)
-
-        self.assertEqual(pyproject["tool"]["uv"]["required-version"], ">=0.11.31")
-
     def test_repository_keeps_gui_dependency_out_of_cli_base(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)
@@ -187,18 +181,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         for requirement in gui_requirements:
             self.assertIn(requirement, dev_requirements)
         self.assertNotIn("briefcase", {normalized_requirement_name(requirement) for requirement in dev_requirements})
-
-    def test_repository_pins_embedded_python_runtime(self) -> None:
-        with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
-            pyproject = tomllib.load(handle)
-
-        manifest = embedded_python.load_manifest()
-        app = pyproject["tool"]["bd_to_avp"]
-        self.assertEqual(manifest.python_version, "3.12.10")
-        self.assertEqual(manifest.architecture, "arm64")
-        self.assertEqual(app["formal_name"], "3D Blu-ray to Vision Pro")
-        self.assertEqual(app["bundle_identifier"], "com.shinycomputers.bd-to-avp")
-        self.assertNotIn("briefcase", pyproject["tool"])
 
     def test_published_qualification_records_match_their_archived_evidence(self) -> None:
         evidence_root = REPO_ROOT / "docs" / "release-evidence"

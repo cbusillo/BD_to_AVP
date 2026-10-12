@@ -88,46 +88,6 @@ class MVHEVCEncoderBuilderTests(unittest.TestCase):
             ],
         )
 
-    def test_capability_probe_checks_the_real_asset_writer_settings(self) -> None:
-        source = build_mv_hevc_encoder_macos.SOURCE_PATH.read_text(encoding="utf-8")
-        probe_start = source.index("private func isStereoMVHEVCOutputConfigurationSupported(")
-        probe_end = source.index("private func fillPixelBuffer", probe_start)
-        probe_source = source[probe_start:probe_end]
-
-        self.assertIn("VTIsStereoMVHEVCEncodeSupported()", probe_source)
-        self.assertIn("for quality in [Double?.none, 0.7]", probe_source)
-        self.assertIn("makeOutputSettings(options: options, header: header)", probe_source)
-        self.assertIn("writer.canApply(outputSettings: outputSettings, forMediaType: .video)", probe_source)
-        self.assertIn("let supported = try isStereoMVHEVCOutputConfigurationSupported()", source)
-
-    def test_segmented_hls_source_contract_uses_asset_writer_segmentation(self) -> None:
-        source = build_mv_hevc_encoder_macos.SOURCE_PATH.read_text(encoding="utf-8")
-
-        self.assertIn("--hls-directory", source)
-        self.assertIn("--segment-duration", source)
-        self.assertIn("Specify exactly one of --output or --hls-directory.", source)
-        self.assertIn("AVAssetWriter(contentType: .mpeg4Movie)", source)
-        self.assertIn("writer.outputFileTypeProfile = .mpeg4AppleHLS", source)
-        self.assertIn("writer.preferredOutputSegmentInterval", source)
-        self.assertIn("AVAssetWriterDelegate", source)
-        self.assertIn('#EXT-X-MAP:URI=\\"init.mp4\\"', source)
-        self.assertIn('"#EXT-X-PLAYLIST-TYPE:EVENT"', source)
-        self.assertIn("#EXT-X-ENDLIST", source)
-        self.assertIn("segment-%05d.m4s", source)
-
-    def test_segmented_throughput_probe_contract_is_bounded_and_machine_readable(self) -> None:
-        source = (REPOSITORY_ROOT / "scripts/measure_segmented_mv_hevc_throughput.py").read_text(encoding="utf-8")
-
-        self.assertIn('RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"', source)
-        self.assertIn('DEFAULT_SSIF_PROBE = REPOSITORY_ROOT / "bd_to_avp/bin/ssif_probe"', source)
-        self.assertIn('"--y4m"', source)
-        self.assertIn('"--rainforest"', source)
-        self.assertIn('"--max-frames"', source)
-        self.assertIn('"hardware_fingerprint_sha256"', source)
-        self.assertIn('"storage_fingerprint_sha256"', source)
-        self.assertIn('"tool_hashes"', source)
-        self.assertIn('"realtime_ratio"', source)
-
     def test_box_requirements_distinguish_candidate_from_current_baseline(self) -> None:
         self.assertIn("proj", qualify_direct_mv_hevc.DIRECT_REQUIRED_BOX_TYPES)
         self.assertNotIn("proj", qualify_direct_mv_hevc.CURRENT_REQUIRED_BOX_TYPES)

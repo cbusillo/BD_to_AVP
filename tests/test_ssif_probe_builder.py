@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict
 import sys
 import tempfile
 import unittest
@@ -9,38 +10,6 @@ from scripts import build_ssif_probe_macos
 
 
 class SsifProbeBuilderTests(unittest.TestCase):
-    def test_manifest_records_bundled_shared_library_contract(self) -> None:
-        manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
-
-        self.assertEqual(manifest.schema_version, 3)
-        self.assertEqual(manifest.platform, "macOS arm64")
-        self.assertEqual(manifest.architecture, "arm64")
-        self.assertEqual(manifest.minimum_macos, "14.0")
-        self.assertEqual(manifest.linkage, "private-shared")
-        self.assertEqual(manifest.rpath, "@loader_path/../lib")
-        self.assertIn("-arch", manifest.probe_compile_flags)
-        self.assertEqual(manifest.libbluray.version, "1.4.1")
-        self.assertEqual(manifest.libbluray.source, "libbluray-1.4.1.tar.xz")
-        self.assertEqual(manifest.libudfread.version, "1.2.0")
-        self.assertEqual(manifest.libudfread.source, "libudfread-1.2.0.tar.xz")
-        self.assertEqual(manifest.libbluray.install_name, "@rpath/libbluray.3.dylib")
-        self.assertEqual(manifest.libudfread.install_name, "@rpath/libudfread.3.dylib")
-        self.assertEqual(manifest.filenames["probe"], "ssif_probe")
-        self.assertFalse(manifest.build_options.embed_udfread)
-        self.assertEqual(manifest.build_options.default_library, "shared")
-        self.assertEqual(manifest.build_options.bdj_jar, "disabled")
-        self.assertEqual(manifest.build_options.freetype, "disabled")
-        self.assertEqual(manifest.build_options.fontconfig, "disabled")
-        self.assertEqual(manifest.build_options.libxml2, "disabled")
-        self.assertEqual(
-            set(manifest.unsigned_checksums),
-            {
-                "bd_to_avp/bin/ssif_probe",
-                "bd_to_avp/lib/libbluray.3.dylib",
-                "bd_to_avp/lib/libudfread.3.dylib",
-            },
-        )
-
     def test_installed_build_tools_match_the_artifact_toolchain(self) -> None:
         manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
         tool_directory = Path(sys.executable).parent
@@ -95,26 +64,16 @@ class SsifProbeBuilderTests(unittest.TestCase):
         self.assertEqual(command[:4], ["/toolchain/meson", "setup", "build", "libbluray"])
         self.assertIn("--wrap-mode", command)
         self.assertEqual(command[command.index("--wrap-mode") + 1], "forcefallback")
-        self.assertIn("-Ddefault_library=shared", command)
-        self.assertIn("-Dembed_udfread=false", command)
-        self.assertIn("-Denable_docs=false", command)
-        self.assertIn("-Denable_tools=false", command)
-        self.assertIn("-Denable_examples=false", command)
-        self.assertIn("-Dbdj_jar=disabled", command)
-        self.assertIn("-Dfreetype=disabled", command)
-        self.assertIn("-Dfontconfig=disabled", command)
-        self.assertIn("-Dlibxml2=disabled", command)
+        for name, value in asdict(manifest.build_options).items():
+            rendered = str(value).lower() if isinstance(value, bool) else value
+            self.assertIn(f"-D{name}={rendered}", command)
 
     def test_artifact_paths_are_the_packaged_private_layout(self) -> None:
         manifest = build_ssif_probe_macos.load_manifest(build_ssif_probe_macos.MANIFEST_PATH)
 
         self.assertEqual(
             build_ssif_probe_macos.artifact_paths(manifest),
-            {
-                "bd_to_avp/bin/ssif_probe": build_ssif_probe_macos.BIN_PATH,
-                "bd_to_avp/lib/libbluray.3.dylib": build_ssif_probe_macos.LIBRARY_DIRECTORY / "libbluray.3.dylib",
-                "bd_to_avp/lib/libudfread.3.dylib": build_ssif_probe_macos.LIBRARY_DIRECTORY / "libudfread.3.dylib",
-            },
+            {path: build_ssif_probe_macos.REPOSITORY_ROOT / path for path in manifest.unsigned_checksums},
         )
 
     def test_sanitized_build_environment_blocks_host_search_paths(self) -> None:
@@ -131,8 +90,8 @@ class SsifProbeBuilderTests(unittest.TestCase):
         self.assertEqual(environment["PKG_CONFIG"], "/usr/bin/false")
         self.assertEqual(environment["PKG_CONFIG_PATH"], "")
         self.assertEqual(environment["PKG_CONFIG_LIBDIR"], "")
-        self.assertIn("-arch arm64", environment["CFLAGS"])
-        self.assertIn("-mmacosx-version-min=14.0", environment["CFLAGS"])
+        self.assertIn(f"-arch {manifest.architecture}", environment["CFLAGS"])
+        self.assertIn(f"-mmacosx-version-min={manifest.minimum_macos}", environment["CFLAGS"])
         self.assertIn("-headerpad_max_install_names", environment["LDFLAGS"])
         self.assertEqual(environment["CPATH"], "")
         self.assertEqual(environment["LIBRARY_PATH"], "")

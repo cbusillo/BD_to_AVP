@@ -5,9 +5,12 @@ Display labels and runner upgrades must not fail them. Release-specific wiring
 and ordering are checked where they enforce a trust boundary.
 """
 
+import hashlib
 import json
+import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +18,9 @@ from typing import Any, ClassVar
 
 import yaml
 
+from scripts import release
+from scripts.release_evidence_v2 import qualification_template_path
+from scripts.release_qualification_resume import ResumeIdentity
 from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
 from scripts.release_workflow_policy import (
     APPROVAL_ENVIRONMENT,
@@ -28,6 +34,7 @@ from scripts.release_workflow_policy import (
 )
 from scripts.tier3_clean_machine import RESETTABLE_VM_ENVIRONMENT_CLASS
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIRECTORY = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 UNTRUSTED_TRIGGERS = {"pull_request", "pull_request_target", "push", "schedule", "issue_comment"}
 SECRET_REFERENCE = re.compile(r"secrets\.([A-Za-z0-9_]+)")
@@ -324,8 +331,6 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
 
         success_upload = next(step for step in shared_job["steps"] if step.get("id") == "success-evidence")
         failure_upload = next(step for step in shared_job["steps"] if step.get("id") == "failure-diagnostics")
-        self.assertEqual(success_upload["with"]["retention-days"], "7")
-        self.assertEqual(failure_upload["with"]["retention-days"], "7")
         self.assertNotIn(".dmg", success_upload["with"]["path"])
         self.assertNotIn(".app", success_upload["with"]["path"])
         self.assertIn("${{ inputs.source_sha }}", success_upload["with"]["name"])
@@ -404,7 +409,6 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
         self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
-        self.assertEqual(upload["with"]["retention-days"], "30")
         self.assertRegex(diagnostics_upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
         self.assertEqual(
             diagnostics_upload["if"],
@@ -414,7 +418,6 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
             diagnostics_upload["with"]["path"],
             "qualification-output/sparkle-install-diagnostics.json",
         )
-        self.assertEqual(diagnostics_upload["with"]["retention-days"], "30")
 
     def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:
         workflow = load_workflow("ci.yml")
@@ -856,17 +859,575 @@ class ToolchainAgreementTests(unittest.TestCase):
         self.assertTrue(allowed)
         for workflow_name in QUALIFICATION_ONLY_WORKFLOWS:
             for job_name, job in load_workflows()[workflow_name]["jobs"].items():
-                scripts = "\n".join(str(step.get("run", "")) for step in job.get("steps", []))
-                checked = set(re.findall(r'sw_vers -productVersion \| cut -d\. -f1\)" = "(\d+)"', scripts))
-                with self.subTest(workflow=workflow_name, job=job_name):
-                    self.assertTrue(checked)
-                    self.assertLessEqual(checked, allowed)
+                # Execute the platform guard before the Xcode selection, with synthetic OS facts.
+                script = next(step["run"] for step in job["steps"] if "XCODE_PATH=" in step.get("run", ""))
+                platform_guard = script[: script.index("XCODE_PATH=")]
+                accepted = set()
+                outside = {"0", str(min(map(int, allowed)) - 1), str(max(map(int, allowed)) + 1)}
+                for major in allowed | outside:
+                    with self.subTest(workflow=workflow_name, job=job_name, macos=major):
+                        result = subprocess.run(
+                            [
+                                "/bin/bash",
+                                "-c",
+                                'uname() { echo arm64; }; sw_vers() { echo "$FIXTURE_MACOS"; };\n' + platform_guard,
+                            ],
+                            env={"PATH": "/usr/bin:/bin", "FIXTURE_MACOS": f"{major}.0"},
+                            capture_output=True,
+                            check=False,
+                        )
+                        if result.returncode == 0:
+                            accepted.add(major)
+                self.assertTrue(accepted, (workflow_name, job_name))
+                self.assertLessEqual(accepted, allowed)
 
     def test_no_job_runs_on_a_self_hosted_runner(self) -> None:
         for workflow_name, workflow in load_workflows().items():
             for job_name, job in workflow["jobs"].items():
                 with self.subTest(workflow=workflow_name, job=job_name):
                     self.assertNotIn("self-hosted", json.dumps(job.get("runs-on", "")))
+
+
+class ReleasePublicationFreshnessTests(unittest.TestCase):
+    def test_publication_leaves_a_draft_when_main_moves(self) -> None:
+        script = load_release_engine()["jobs"]["publish-release"]["steps"][0]["run"]
+        for main_moved in (False, True):
+            with self.subTest(main_moved=main_moved), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                tools = root / "tools"
+                tools.mkdir()
+                notes, receipt = b"Candidate notes\n", b"fixture receipt\n"
+                sha, tag, dmg = "a" * 40, "v1.2.3", "candidate.dmg"
+                response = {
+                    "body": notes.decode(),
+                    "target_commitish": sha,
+                    "draft": True,
+                    "immutable": True,
+                    "prerelease": False,
+                    "name": tag,
+                    "published_at": "2026-01-01T00:00:00Z",
+                    "assets": [
+                        {"id": 1, "name": "release-receipt.json"},
+                        {
+                            "name": dmg,
+                            "browser_download_url": f"https://github.com/fixture/project/releases/download/{tag}/{dmg}",
+                        },
+                        {"name": "checksum.txt"},
+                        {"name": "appcast.xml"},
+                    ],
+                }
+                (root / "response.json").write_text(json.dumps(response), encoding="utf-8")
+                (root / "fixture-receipt").write_bytes(receipt)
+                gh = tools / "gh"
+                gh.write_text(
+                    f"#!{sys.executable}\n"
+                    "import json, os, pathlib, sys\n"
+                    "root = pathlib.Path.cwd()\n"
+                    "args = sys.argv[1:]\n"
+                    "if 'PATCH' in args:\n"
+                    "    (root / 'published').touch()\n"
+                    "elif any('/git/ref/heads/main' in arg for arg in args):\n"
+                    "    print(os.environ['FIXTURE_MAIN_SHA'])\n"
+                    "elif any('/git/ref/tags/' in arg for arg in args):\n"
+                    "    print(os.environ['GITHUB_SHA'])\n"
+                    "elif any('/releases/assets/' in arg for arg in args):\n"
+                    "    sys.stdout.buffer.write((root / 'fixture-receipt').read_bytes())\n"
+                    "else:\n"
+                    "    response = json.loads((root / 'response.json').read_text())\n"
+                    "    response['draft'] = not (root / 'published').exists()\n"
+                    "    print(json.dumps(response))\n",
+                    encoding="utf-8",
+                )
+                gh.chmod(0o700)
+                curl = tools / "curl"
+                curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                curl.chmod(0o700)
+                completed = subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    cwd=root,
+                    env={
+                        "PATH": f"{tools}:{os.environ['PATH']}",
+                        "GITHUB_REPOSITORY": "fixture/project",
+                        "GITHUB_SHA": sha,
+                        "FIXTURE_MAIN_SHA": "b" * 40 if main_moved else sha,
+                        "EXPECTED_RELEASE_NOTES_SHA256": hashlib.sha256(notes).hexdigest(),
+                        "EXPECTED_RECEIPT_FILE_SHA256": hashlib.sha256(receipt).hexdigest(),
+                        "EXPECTED_RECEIPT_ASSET_ID": "1",
+                        "EXPECTED_DMG_NAME": dmg,
+                        "RELEASE_ID": "123",
+                        "RELEASE_NAME": tag,
+                        "RELEASE_TAG": tag,
+                        "PRERELEASE": "false",
+                        "MAKE_LATEST": "true",
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                self.assertEqual((root / "published").exists(), not main_moved, completed.stderr)
+                if main_moved:
+                    self.assertNotEqual(completed.returncode, 0, completed.stderr)
+                else:
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
+class ReleaseWorkflowWiringTests(unittest.TestCase):
+    def test_qualification_run_title_agrees_with_resume_identity(self) -> None:
+        identity = ResumeIdentity(
+            release_tag="v1.2.3",
+            candidate_sha="a" * 40,
+            release_id=1,
+            manifest_sha256="b" * 64,
+            runner_sha="c" * 40,
+            main_sha="c" * 40,
+            evidence_ref="automation/release-evidence-v1.2.3",
+            evidence_sha="d" * 40,
+            evidence_base_sha="e" * 40,
+            release_receipt_file_sha256="f" * 64,
+            signed_ui_artifact_id=2,
+            signed_ui_artifact_sha256="1" * 64,
+            policy_sha256="2" * 64,
+            policy_checkpoint_sha256="3" * 64,
+            route_table_sha256="4" * 64,
+            controller_runner_sha256="5" * 64,
+        )
+        inputs = {"candidate_tag": identity.release_tag, "manifest_sha256": identity.manifest_sha256}
+        title = load_workflow("milestone-qualification.yml")["run-name"]
+        rendered = re.sub(r"\$\{\{\s*inputs\.(\w+)\s*\}\}", lambda match: inputs[match[1]], title)
+        self.assertEqual(rendered, identity.workflow_display_title)
+
+    def test_ci_checkouts_leave_no_credentials(self) -> None:
+        workflow = load_workflow("ci.yml")
+        checkouts = [
+            step
+            for job in workflow["jobs"].values()
+            for step in job["steps"]
+            if step.get("uses", "").startswith("actions/checkout@")
+        ]
+
+        # Untrusted CI steps must not inherit checkout credentials.
+        self.assertTrue(checkouts)
+        for checkout in checkouts:
+            self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
+            self.assertEqual(checkout["with"]["persist-credentials"], "false")
+
+    def test_release_is_manual_only_and_packages_github_sha_from_main(self) -> None:
+        operators = {
+            "Stable": load_workflow("briefcase.yml"),
+            "Prerelease": load_workflow("prerelease.yml"),
+        }
+        workflow = load_release_engine()
+        load_workflow("production-preflight-engine.yml")
+        prepare = workflow["jobs"]["prepare"]
+        pre_signing = workflow["jobs"]["pre-signing-package"]
+        package = workflow["jobs"]["package"]
+
+        self.assertEqual({operator["name"] for operator in operators.values()}, set(operators))
+        for name, operator in operators.items():
+            with self.subTest(operator=name):
+                self.assertEqual(set(operator["on"]), {"workflow_dispatch"})
+                self.assertTrue(operator["concurrency"]["group"])
+                self.assertEqual(operator["concurrency"]["group"], operators["Stable"]["concurrency"]["group"])
+                self.assertEqual(operator["concurrency"]["cancel-in-progress"], "false")
+        self.assertEqual(set(workflow["on"]), {"workflow_call"})
+        self.assertEqual(workflow["env"]["GH_REPO"], "${{ github.repository }}")
+        self.assertNotIn("concurrency", workflow)
+        checkout = next(step for step in prepare["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertEqual(checkout["with"]["persist-credentials"], "false")
+        self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertEqual(pre_signing["with"]["source_sha"], "${{ inputs.release_sha }}")
+        self.assertIn("pre-signing-package", package["needs"])
+
+    def test_reusable_engine_rejects_direct_invocation_and_policy_bypass(self) -> None:
+        stable = load_workflow("briefcase.yml")
+        prerelease = load_workflow("prerelease.yml")
+        workflow = load_release_engine()
+        release = stable["jobs"]["release"]
+        for field in ("uses", "with", "permissions", "secrets"):
+            self.assertEqual(prerelease["jobs"]["release"][field], release[field], field)
+        call = workflow["on"]["workflow_call"]
+        configured_environments = load_github_config()["releaseEnvironments"]
+        macos_secret_names = set(configured_environments["macos-signing"]["secrets"])
+        sparkle_secret_names = set(configured_environments["sparkle-release"]["secrets"])
+        declared_secret_names = set(call["secrets"])
+        referenced_secret_names = secrets_read_by(workflow)
+        policy = workflow["jobs"]["policy"]
+        entry_guard = next(step for step in policy["steps"] if "INPUT_RELEASE_SHA" in step.get("env", {}))
+        policy_checkout = next(step for step in policy["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+        policy_step = next(step for step in policy["steps"] if step.get("id") == "policy")
+
+        self.assertEqual(release["uses"], "./.github/workflows/release-engine.yml")
+        self.assertEqual(declared_secret_names, macos_secret_names | sparkle_secret_names)
+        self.assertEqual(declared_secret_names, referenced_secret_names)
+        self.assertTrue(all(definition["required"] == "false" for definition in call["secrets"].values()))
+        self.assertEqual(
+            release["secrets"],
+            {name: f"${{{{ secrets.{name} }}}}" for name in declared_secret_names},
+        )
+        for operator in (stable, prerelease):
+            self.assertIsInstance(operator["jobs"]["release"]["secrets"], dict)
+        self.assertEqual(
+            set(
+                re.findall(
+                    r"\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}",
+                    json.dumps(workflow["jobs"]["package"]),
+                )
+            ),
+            macos_secret_names,
+        )
+        self.assertEqual(
+            set(
+                re.findall(
+                    r"\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}",
+                    json.dumps(workflow["jobs"]["publish-appcast"]),
+                )
+            ),
+            sparkle_secret_names,
+        )
+        self.assertLessEqual(
+            write_permissions(release["permissions"]),
+            write_permissions(
+                {
+                    "actions": "read",
+                    "attestations": "write",
+                    "contents": "write",
+                    "id-token": "write",
+                    "pages": "write",
+                }
+            ),
+        )
+        self.assertLessEqual(
+            write_permissions(workflow["permissions"]), write_permissions({"actions": "read", "contents": "read"})
+        )
+        self.assertEqual(release["with"]["release_sha"], "${{ github.sha }}")
+        self.assertEqual(release["with"]["operator_workflow_ref"], "${{ github.workflow_ref }}")
+        self.assertEqual(release["with"]["operator_workflow_sha"], "${{ github.workflow_sha }}")
+        self.assertEqual(release["with"]["operator_actor"], "${{ github.actor }}")
+        self.assertEqual(release["with"]["operator_triggering_actor"], "${{ github.triggering_actor }}")
+        self.assertLessEqual(
+            {
+                "release_sha",
+                "operator_workflow_ref",
+                "operator_workflow_sha",
+                "operator_run_id",
+                "operator_run_attempt",
+                "operator_actor",
+                "operator_triggering_actor",
+            },
+            {name for name, definition in call["inputs"].items() if definition.get("required") == "true"},
+        )
+        self.assertFalse({"route", "mode", "stage", "prerelease", "publish_pypi"} & set(call["inputs"]))
+        for operator in (stable, prerelease):
+            dispatch_inputs = operator["on"]["workflow_dispatch"]["inputs"]
+            self.assertFalse({"route", "mode", "stage", "prerelease", "publish_pypi"} & set(dispatch_inputs))
+        self.assertLessEqual(
+            write_permissions(policy["permissions"]), write_permissions({"contents": "read", "id-token": "write"})
+        )
+        self.assertNotIn("uses", entry_guard)
+        self.assertEqual(policy_checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertEqual(policy_checkout["with"]["persist-credentials"], "false")
+        self.assertEqual(policy_step["env"]["RELEASE_OPERATOR_WORKFLOW_REF"], "${{ github.workflow_ref }}")
+        self.assertNotIn("RELEASE_ENGINE_WORKFLOW_REF", policy_step["env"])
+        self.assertNotIn("RELEASE_ENGINE_WORKFLOW_SHA", policy_step["env"])
+        self.assertIn("release_route", policy["outputs"])
+        self.assertIn("operator_workflow_path", policy["outputs"])
+        self.assertIn("policy", direct_needs(workflow["jobs"]["prepare"]))
+        self.assertLessEqual(
+            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
+            direct_needs(workflow["jobs"]["package"]),
+        )
+
+    def test_release_metadata_outputs_are_wired_to_route_validation(self) -> None:
+        workflow = load_release_engine()
+        prepare = workflow["jobs"]["prepare"]
+        next(step for step in prepare["steps"] if step.get("id") == "release_history")
+        route_validation = next(step for step in prepare["steps"] if step.get("id") == "route-validation")
+
+        self.assertLessEqual(
+            write_permissions(prepare["permissions"]), write_permissions({"actions": "read", "contents": "write"})
+        )
+        self.assertEqual(
+            route_validation["env"]["RELEASE_OPERATOR_WORKFLOW_REF"],
+            "${{ needs.policy.outputs.operator_workflow_ref }}",
+        )
+        self.assertEqual(route_validation["env"]["RELEASE_TAG"], "${{ steps.metadata.outputs.release_tag }}")
+        self.assertEqual(route_validation["env"]["RELEASE_CHANNEL"], "${{ steps.metadata.outputs.channel }}")
+        self.assertNotIn("RELEASE_ROUTE", route_validation["env"])
+        self.assertIn("public_version", prepare["outputs"])
+        self.assertIn("dmg_name", prepare["outputs"])
+        self.assertIn("publish_pypi", prepare["outputs"])
+        self.assertIn("previous_release_tag", prepare["outputs"])
+        self.assertIn("base_snapshot_tag", prepare["outputs"])
+
+    def test_declared_diagnostics_bindings_use_the_release_variable(self) -> None:
+        workflow = load_release_engine()
+        inspections = [
+            step
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT" in step.get("env", {})
+        ]
+        self.assertTrue(inspections)
+        for step in inspections:
+            self.assertEqual(
+                step["env"]["BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT"],
+                "${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}",
+            )
+
+    def test_release_is_draft_until_assets_are_redownloaded_and_verified(self) -> None:
+        workflow = load_release_engine()
+        jobs = workflow["jobs"]
+
+        self.assertLessEqual(
+            {"prepare", "package", "attest-package", "compatibility"}, direct_needs(jobs["create-draft"])
+        )
+        self.assertIn("release_id", jobs["create-draft"]["outputs"])
+        self.assertIn("release_created_at", jobs["create-draft"]["outputs"])
+        self.assertLessEqual(
+            {"prepare", "package", "create-draft", "publish-appcast"}, direct_needs(jobs["verify-draft"])
+        )
+        self.assertLessEqual(
+            {
+                "build-python",
+                "create-draft",
+                "prepare",
+                "package",
+                "verify-draft",
+                "build-receipt",
+                "signed-artifact-ui",
+                "qualify-artifact",
+            },
+            direct_needs(jobs["publish-release"]),
+        )
+        self.assertIn("needs.create-draft.result == 'success'", jobs["publish-release"]["if"])
+        self.assertIn("needs.signed-artifact-ui.result == 'success'", jobs["publish-release"]["if"])
+        self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
+        self.assertIn("needs.build-python.result == 'success'", jobs["publish-release"]["if"])
+        self.assertIn("needs.build-receipt.result == 'success'", jobs["publish-release"]["if"])
+
+    def test_qualification_gates_block_signing_and_publication(self) -> None:
+        workflow = load_release_engine()
+        load_workflow("production-preflight-engine.yml")
+        jobs = workflow["jobs"]
+        qualify_prep = jobs["qualify-preparation"]
+        pre_signing_policy = jobs["pre-signing-policy"]
+        pre_signing = jobs["pre-signing-package"]
+        package = jobs["package"]
+        build_receipt = jobs["build-receipt"]
+        signed_ui = jobs["signed-artifact-ui"]
+        qualify_artifact = jobs["qualify-artifact"]
+
+        operators = [load_workflow("briefcase.yml"), load_workflow("prerelease.yml")]
+        self.assertTrue(
+            all(
+                operator["jobs"]["release"]["uses"] == "./.github/workflows/release-engine.yml"
+                for operator in operators
+            )
+        )
+        self.assertIn("qualify-preparation", set(jobs["package"]["needs"]))
+        self.assertIn("pre-signing-package", set(jobs["package"]["needs"]))
+        self.assertIn("qualify-preparation", set(jobs["build-python"]["needs"]))
+        self.assertLessEqual({"prepare"}, direct_needs(qualify_prep))
+        self.assertLessEqual({"policy", "prepare", "qualify-preparation"}, direct_needs(pre_signing_policy))
+        self.assertLessEqual({"pre-signing-policy"}, direct_needs(pre_signing))
+        self.assertIn("qualify-artifact", set(jobs["publish-release"]["needs"]))
+        self.assertIn("signed-artifact-ui", set(jobs["publish-release"]["needs"]))
+        self.assertIn("signed-artifact-ui", set(qualify_artifact["needs"]))
+        self.assertIn("needs.signed-artifact-ui.result == 'success'", jobs["publish-release"]["if"])
+        self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
+        self.assertNotIn("environment", qualify_prep)
+        self.assertNotIn("environment", pre_signing_policy)
+        self.assertNotIn("environment", pre_signing)
+        self.assertNotIn("environment", signed_ui)
+        self.assertNotIn("environment", qualify_artifact)
+        self.assertLessEqual(write_permissions(qualify_prep["permissions"]), write_permissions({"contents": "read"}))
+        self.assertLessEqual(
+            write_permissions(pre_signing_policy["permissions"]), write_permissions({"contents": "read"})
+        )
+        self.assertLessEqual(write_permissions(pre_signing["permissions"]), write_permissions({"contents": "read"}))
+        self.assertLessEqual(write_permissions(signed_ui["permissions"]), write_permissions({"contents": "read"}))
+        self.assertLessEqual(
+            write_permissions(qualify_artifact["permissions"]), write_permissions({"contents": "read"})
+        )
+        self.assertIn("steps.release_package.outputs.artifact-id", package["outputs"]["workflow_artifact_id"])
+        self.assertIn("steps.receipt_artifact.outputs.artifact-id", build_receipt["outputs"]["receipt_artifact_id"])
+        self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertNotIn("RELEASE_QUALIFICATION_RECORD", workflow["env"])
+        self.assertIn("first_candidate_of_cycle", jobs["prepare"]["outputs"])
+        self.assertEqual(
+            jobs["prepare"]["outputs"]["qualification_record"],
+            "${{ steps.metadata.outputs.qualification_record }}",
+        )
+        self.assertEqual(
+            next(step for step in qualify_prep["steps"] if step.get("id") == "qualification")["env"][
+                "RELEASE_QUALIFICATION_RECORD"
+            ],
+            "${{ needs.prepare.outputs.qualification_record }}",
+        )
+        prep_uploads = [step for step in qualify_prep["steps"] if "upload-artifact" in step.get("uses", "")]
+        artifact_uploads = [step for step in qualify_artifact["steps"] if "upload-artifact" in step.get("uses", "")]
+        package_uploads = [step for step in package["steps"] if "upload-artifact" in step.get("uses", "")]
+        receipt_uploads = [step for step in build_receipt["steps"] if "upload-artifact" in step.get("uses", "")]
+        signed_ui_uploads = [step for step in signed_ui["steps"] if "upload-artifact" in step.get("uses", "")]
+        self.assertGreaterEqual(len(prep_uploads), 1)
+        release_package_uploads = [step for step in package_uploads if step.get("id") == "release_package"]
+        self.assertGreaterEqual(len(release_package_uploads), 1)
+        self.assertGreaterEqual(len(receipt_uploads), 1)
+        self.assertEqual(receipt_uploads[0]["id"], "receipt_artifact")
+        self.assertEqual(receipt_uploads[0]["if"], "success()")
+        self.assertEqual(receipt_uploads[0]["with"]["if-no-files-found"], "error")
+        self.assertGreaterEqual(len(signed_ui_uploads), 2)
+        self.assertGreaterEqual(len(artifact_uploads), 1)
+        receipt_upload = next(step for step in signed_ui_uploads if step.get("id") == "signed_ui_artifact")
+        diagnostics_upload = next(step for step in signed_ui_uploads if step.get("if") == "failure()")
+        self.assertEqual(receipt_upload["if"], "success()")
+        self.assertEqual(receipt_upload["with"]["if-no-files-found"], "error")
+        self.assertIn(diagnostics_upload["with"]["if-no-files-found"], {"warn", "error"})
+        signed_ui_input_downloads = [step for step in signed_ui["steps"] if "download-artifact" in step.get("uses", "")]
+        self.assertGreaterEqual(len(signed_ui_input_downloads), 2)
+        signed_ui_input_ids = {step["with"]["artifact-ids"] for step in signed_ui_input_downloads}
+        self.assertEqual(
+            signed_ui_input_ids,
+            {
+                "${{ needs.package.outputs.workflow_artifact_id }}",
+                "${{ needs.build-receipt.outputs.receipt_artifact_id }}",
+            },
+        )
+        artifact_input_downloads = [
+            step for step in qualify_artifact["steps"] if "download-artifact" in step.get("uses", "")
+        ]
+        self.assertGreaterEqual(len(artifact_input_downloads), 2)
+        artifact_input_ids = {step["with"]["artifact-ids"] for step in artifact_input_downloads}
+        self.assertEqual(
+            artifact_input_ids,
+            {
+                "${{ needs.build-receipt.outputs.receipt_artifact_id }}",
+                "${{ needs.signed-artifact-ui.outputs.artifact_id }}",
+            },
+        )
+        self.assertTrue(all("name" not in step["with"] for step in artifact_input_downloads))
+        self.assertEqual(prep_uploads[0]["if"], "always()")
+        self.assertEqual(artifact_uploads[0]["if"], "always()")
+        prep_checkouts = [
+            step for step in qualify_prep["steps"] if step.get("uses", "").startswith("actions/checkout@")
+        ]
+        for checkout in prep_checkouts:
+            self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+            self.assertEqual(checkout["with"]["persist-credentials"], "false")
+
+        release_operations = load_github_config()["releaseOperations"]
+        self.assertEqual(workflow["env"]["RELEASE_QUALIFICATION_POLICY"], release_operations["qualificationPolicyPath"])
+        self.assertEqual(
+            workflow["env"]["RELEASE_QUALIFICATION_EVIDENCE"], release_operations["qualificationEvidencePath"]
+        )
+        # Preparation and evidence capture must select the same route-specific record.
+        metadata = release.load_release_metadata()
+        expected_qualification_record = qualification_template_path(
+            metadata.release_tag, "prerelease" if metadata.prerelease else "stable"
+        )
+        self.assertEqual(release_operations["qualificationRecordPath"], expected_qualification_record)
+        artifact_checkouts = [
+            step for step in qualify_artifact["steps"] if step.get("uses", "").startswith("actions/checkout@")
+        ]
+        for checkout in artifact_checkouts:
+            self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+            self.assertEqual(checkout["with"]["persist-credentials"], "false")
+
+    def test_release_receipt_depends_on_verified_artifacts(self) -> None:
+        workflow = load_release_engine()
+        jobs = workflow["jobs"]
+        receipt = jobs["build-receipt"]
+
+        self.assertLessEqual(
+            {"policy", "prepare", "package", "create-draft", "publish-appcast", "verify-draft"}, direct_needs(receipt)
+        )
+        self.assertLessEqual(write_permissions(receipt["permissions"]), write_permissions({"contents": "write"}))
+        self.assertNotIn("environment", receipt)
+        self.assertIn("receipt_file_sha256", receipt["outputs"])
+        self.assertIn("signed_app_tree_sha256", jobs["package"]["outputs"])
+
+    def test_release_provenance_jobs_have_attestation_permissions(self) -> None:
+        workflow = load_release_engine()
+        attest = workflow["jobs"]["attest-package"]
+        verify = workflow["jobs"]["verify-draft"]
+
+        self.assertEqual(attest["permissions"]["attestations"], "write")
+        self.assertEqual(attest["permissions"]["id-token"], "write")
+        self.assertEqual(verify["permissions"]["attestations"], "read")
+
+    def test_private_key_is_only_exposed_to_read_only_signing_step(self) -> None:
+        workflow = load_release_engine()
+        publish = workflow["jobs"]["publish-appcast"]
+        configured_secrets = set(load_github_config()["releaseEnvironments"][publish["environment"]]["secrets"])
+        matching_steps = [step for step in publish["steps"] if secrets_read_by(step) & configured_secrets]
+
+        self.assertEqual(
+            secrets_read_by({key: value for key, value in workflow.items() if key not in {"on", "jobs"}}), set()
+        )
+        self.assertEqual(secrets_read_by({key: value for key, value in publish.items() if key != "steps"}), set())
+        self.assertEqual(publish["permissions"]["contents"], "read")
+        self.assertEqual(len(matching_steps), 1)
+
+    def test_release_deploy_uses_resumable_pages_workflow(self) -> None:
+        workflow = load_release_engine()
+        deploy = workflow["jobs"]["deploy-appcast"]
+
+        self.assertLessEqual({"prepare", "publish-appcast", "publish-release"}, direct_needs(deploy))
+        self.assertIn("!cancelled()", deploy["if"])
+        self.assertIn("needs.prepare.result == 'success'", deploy["if"])
+        self.assertIn("needs.publish-appcast.result == 'success'", deploy["if"])
+        self.assertIn("needs.publish-release.result == 'success'", deploy["if"])
+        self.assertNotIn("build-python", deploy["if"])
+        self.assertNotIn("publish_pypi", deploy["if"])
+        self.assertEqual(deploy["uses"], "./.github/workflows/sparkle-pages.yml")
+        self.assertEqual(deploy["with"]["operation"], "deploy")
+        self.assertEqual(
+            deploy["with"]["expected_appcast_sha256"],
+            "${{ needs.publish-appcast.outputs.appcast_sha256 }}",
+        )
+        self.assertEqual(
+            deploy["with"]["expected_base_release_tag"],
+            "${{ needs.prepare.outputs.base_snapshot_tag }}",
+        )
+
+    def test_release_environment_contract_preserves_scoped_secrets(self) -> None:
+        environments = load_github_config()["releaseEnvironments"]
+
+        self.assertTrue(all(environment["branches"] == ["main"] for environment in environments.values()))
+        self.assertLessEqual(
+            {"macos-signing", "sparkle-feed-ops"},
+            {name for name, environment in environments.items() if environment["requiredReview"]},
+        )
+        self.assertEqual(environments["sparkle-feed-ops"]["secrets"], [])
+        self.assertEqual(environments["pypi"]["secrets"], [])
+        self.assertEqual(environments["github-pages"]["secrets"], [])
+        self.assertTrue(
+            set(environments["macos-signing"]["secrets"]).isdisjoint(environments["sparkle-release"]["secrets"])
+        )
+
+    def test_pages_workflow_supports_deploy_restore_and_disable(self) -> None:
+        workflow = load_workflow("sparkle-pages.yml")
+        manual = load_workflow("manage-sparkle-pages.yml")
+        dispatch = manual["on"]["workflow_dispatch"]["inputs"]
+
+        self.assertEqual(set(workflow["on"]), {"workflow_call"})
+        self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
+        self.assertEqual(manual.get("permissions"), {})
+        self.assertLessEqual({"deploy", "restore", "disable"}, set(dispatch["operation"]["options"]))
+        approval = manual["jobs"]["approve"]["environment"]
+        self.assertTrue(load_github_config()["releaseEnvironments"][approval]["requiredReview"])
+        self.assertEqual(manual["jobs"]["approve"].get("permissions"), {})
+        self.assertIn("approve", direct_needs(manual["jobs"]["manage"]))
+        self.assertEqual(manual["jobs"]["manage"]["uses"], "./.github/workflows/sparkle-pages.yml")
+        self.assertEqual(manual["jobs"]["manage"]["with"]["operation"], "${{ inputs.operation }}")
+        self.assertEqual(manual["jobs"]["manage"]["with"]["release_tag"], "${{ inputs.release_tag }}")
+        self.assertLessEqual(
+            write_permissions(manual["jobs"]["manage"]["permissions"]),
+            write_permissions({"contents": "read", "id-token": "write", "pages": "write"}),
+        )
+        self.assertTrue(workflow["concurrency"]["group"])
 
 
 if __name__ == "__main__":

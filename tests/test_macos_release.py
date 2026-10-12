@@ -1,5 +1,4 @@
 import io
-import importlib
 import json
 import plistlib
 import subprocess
@@ -25,9 +24,6 @@ from scripts.macos_release import (
 from scripts.native_app import NATIVE_APP_NAME
 from scripts.sparkle_bundle import SparkleBundleMetadata
 from scripts.verify_app_tools import REQUIRED_TOOLS
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-yaml = importlib.import_module("yaml")
 
 
 def release_metadata(app_path: Path) -> SparkleBundleMetadata:
@@ -272,13 +268,6 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
 
         emitted = json.loads(print_mock.call_args.args[0])
         self.assertEqual(emitted["bundle_identifier"], "com.shinycomputers.bd-to-avp")
-
-
-class MacOSReleaseWorkflowTests(unittest.TestCase):
-    def test_a_draft_release_waits_for_the_compatibility_check(self) -> None:
-        workflow_path = REPO_ROOT / ".github" / "workflows" / "release-engine.yml"
-        workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-        self.assertIn("compatibility", workflow["jobs"]["create-draft"]["needs"])
 
 
 if __name__ == "__main__":

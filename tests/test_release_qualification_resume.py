@@ -1533,15 +1533,6 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             with self.assertRaisesRegex(QualificationResumeSafetyError, "Multiple active exact"):
                 self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
 
-    def test_workflow_run_name_binds_full_manifest_digest(self) -> None:
-        workflow = (REPO_ROOT / ".github/workflows/milestone-qualification.yml").read_text(encoding="utf-8")
-
-        self.assertEqual(identity().workflow_display_title, f"Milestone {RELEASE_TAG} {MANIFEST_SHA}")
-        self.assertIn(
-            "run-name: Milestone ${{ inputs.candidate_tag }} ${{ inputs.manifest_sha256 }}",
-            workflow,
-        )
-
     def test_dynamic_workflow_run_name_matches_the_bound_display_title(self) -> None:
         run = workflow_run(101, status="completed", conclusion="failure")
         run["name"] = f"Milestone {RELEASE_TAG} {MANIFEST_SHA}"
