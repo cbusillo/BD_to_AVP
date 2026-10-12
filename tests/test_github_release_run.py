@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.github_release_run import (
+    APPROVAL_ACTOR,
     EXIT_APPROVAL_REQUIRED,
     EXIT_FAILED,
     EXIT_SAFETY_ERROR,
@@ -28,6 +29,7 @@ from scripts.github_release_run import (
     watch_release_run,
 )
 from scripts.release_workflow_policy import (
+    APPROVAL_ENVIRONMENT,
     ENGINE_WORKFLOW_PATH,
     OPERATOR_WORKFLOWS,
     PRERELEASE_OPERATOR_WORKFLOW_PATH,
@@ -785,6 +787,8 @@ class GitHubReleaseRunContractTests(unittest.TestCase):
 
         self.assertEqual(operations["approvalRequiredExitCode"], EXIT_APPROVAL_REQUIRED)
         self.assertEqual(operations["safetyErrorExitCode"], EXIT_SAFETY_ERROR)
+        self.assertEqual(operations["approvalActor"], APPROVAL_ACTOR)
+        self.assertEqual(operations["approvalEnvironment"], APPROVAL_ENVIRONMENT)
         self.assertEqual(
             operations["workflows"],
             {name: {"path": policy.path, "route": policy.route} for name, policy in OPERATOR_WORKFLOWS.items()},

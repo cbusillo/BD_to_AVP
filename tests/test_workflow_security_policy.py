@@ -1363,6 +1363,9 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         configured_secrets = set(load_github_config()["releaseEnvironments"][publish["environment"]]["secrets"])
         matching_steps = [step for step in publish["steps"] if secrets_read_by(step) & configured_secrets]
 
+        self.assertEqual(
+            secrets_read_by({key: value for key, value in workflow.items() if key not in {"on", "jobs"}}), set()
+        )
         self.assertEqual(secrets_read_by({key: value for key, value in publish.items() if key != "steps"}), set())
         self.assertEqual(publish["permissions"]["contents"], "read")
         self.assertEqual(len(matching_steps), 1)
