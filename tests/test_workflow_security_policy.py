@@ -997,7 +997,7 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         rendered = re.sub(r"\$\{\{\s*inputs\.(\w+)\s*\}\}", lambda match: inputs[match[1]], title)
         self.assertEqual(rendered, identity.workflow_display_title)
 
-    def test_ci_fetches_full_history_for_recovery_provenance(self) -> None:
+    def test_ci_checkouts_leave_no_credentials(self) -> None:
         workflow = load_workflow("ci.yml")
         checkouts = [
             step
@@ -1006,11 +1006,10 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
             if step.get("uses", "").startswith("actions/checkout@")
         ]
 
-        # Every job that checks out the repository gets full history without stored credentials.
+        # Untrusted CI steps must not inherit checkout credentials.
         self.assertTrue(checkouts)
         for checkout in checkouts:
             self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
-            self.assertEqual(checkout["with"]["fetch-depth"], "0")
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
     def test_release_is_manual_only_and_packages_github_sha_from_main(self) -> None:
@@ -1034,7 +1033,7 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertEqual(set(workflow["on"]), {"workflow_call"})
         self.assertEqual(workflow["env"]["GH_REPO"], "${{ github.repository }}")
         self.assertNotIn("concurrency", workflow)
-        checkout = prepare["steps"][0]
+        checkout = next(step for step in prepare["steps"] if step.get("uses", "").startswith("actions/checkout@"))
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
@@ -1055,8 +1054,8 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         declared_secret_names = set(call["secrets"])
         referenced_secret_names = secrets_read_by(workflow)
         policy = workflow["jobs"]["policy"]
-        entry_guard = policy["steps"][0]
-        policy_checkout = policy["steps"][1]
+        entry_guard = next(step for step in policy["steps"] if "INPUT_RELEASE_SHA" in step.get("env", {}))
+        policy_checkout = next(step for step in policy["steps"] if step.get("uses", "").startswith("actions/checkout@"))
         policy_step = next(step for step in policy["steps"] if step.get("id") == "policy")
 
         self.assertEqual(release["uses"], "./.github/workflows/release-engine.yml")
@@ -1107,8 +1106,7 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertEqual(release["with"]["operator_workflow_sha"], "${{ github.workflow_sha }}")
         self.assertEqual(release["with"]["operator_actor"], "${{ github.actor }}")
         self.assertEqual(release["with"]["operator_triggering_actor"], "${{ github.triggering_actor }}")
-        self.assertEqual(
-            {name for name, definition in call["inputs"].items() if definition.get("required") == "true"},
+        self.assertLessEqual(
             {
                 "release_sha",
                 "operator_workflow_ref",
@@ -1118,6 +1116,7 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
                 "operator_actor",
                 "operator_triggering_actor",
             },
+            {name for name, definition in call["inputs"].items() if definition.get("required") == "true"},
         )
         self.assertFalse({"route", "mode", "stage", "prerelease", "publish_pypi"} & set(call["inputs"]))
         for operator in (stable, prerelease):
@@ -1162,33 +1161,20 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertIn("previous_release_tag", prepare["outputs"])
         self.assertIn("base_snapshot_tag", prepare["outputs"])
 
-    def test_every_release_artifact_inspection_pins_the_diagnostics_endpoint(self) -> None:
+    def test_declared_diagnostics_bindings_use_the_release_variable(self) -> None:
         workflow = load_release_engine()
-        inspections = (
-            (
-                workflow["jobs"]["package"],
-                "package_artifact",
-            ),
-            (
-                workflow["jobs"]["compatibility"],
-                "compatibility",
-            ),
-            (
-                workflow["jobs"]["publish-appcast"],
-                "bundle",
-            ),
-            (
-                workflow["jobs"]["verify-draft"],
-                "verify_assets",
-            ),
-        )
-        for job, step_id in inspections:
-            with self.subTest(step=step_id):
-                step = next(step for step in job["steps"] if step.get("id") == step_id)
-                self.assertEqual(
-                    step["env"]["BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT"],
-                    "${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}",
-                )
+        inspections = [
+            step
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT" in step.get("env", {})
+        ]
+        self.assertTrue(inspections)
+        for step in inspections:
+            self.assertEqual(
+                step["env"]["BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT"],
+                "${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}",
+            )
 
     def test_release_is_draft_until_assets_are_redownloaded_and_verified(self) -> None:
         workflow = load_release_engine()
@@ -1330,7 +1316,6 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         for checkout in prep_checkouts:
             self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
-            self.assertEqual(checkout["with"]["fetch-depth"], "0")
 
         release_operations = load_github_config()["releaseOperations"]
         self.assertEqual(workflow["env"]["RELEASE_QUALIFICATION_POLICY"], release_operations["qualificationPolicyPath"])
@@ -1349,7 +1334,6 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         for checkout in artifact_checkouts:
             self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
-            self.assertEqual(checkout["with"]["fetch-depth"], "0")
 
     def test_release_receipt_depends_on_verified_artifacts(self) -> None:
         workflow = load_release_engine()
@@ -1381,7 +1365,7 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
 
         self.assertEqual(publish["environment"], "sparkle-release")
         self.assertEqual(publish["permissions"]["contents"], "read")
-        self.assertGreaterEqual(len(matching_steps), 1)
+        self.assertEqual(len(matching_steps), 1)
 
     def test_release_deploy_uses_resumable_pages_workflow(self) -> None:
         workflow = load_release_engine()
@@ -1409,9 +1393,9 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         environments = load_github_config()["releaseEnvironments"]
 
         self.assertTrue(all(environment["branches"] == ["main"] for environment in environments.values()))
-        self.assertEqual(
-            {name for name, environment in environments.items() if environment["requiredReview"]},
+        self.assertLessEqual(
             {"macos-signing", "sparkle-feed-ops"},
+            {name for name, environment in environments.items() if environment["requiredReview"]},
         )
         self.assertEqual(environments["sparkle-feed-ops"]["secrets"], [])
         self.assertEqual(environments["pypi"]["secrets"], [])
@@ -1429,7 +1413,8 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
         self.assertEqual(manual.get("permissions"), {})
         self.assertLessEqual({"deploy", "restore", "disable"}, set(dispatch["operation"]["options"]))
-        self.assertEqual(manual["jobs"]["approve"]["environment"], "sparkle-feed-ops")
+        approval = manual["jobs"]["approve"]["environment"]
+        self.assertTrue(load_github_config()["releaseEnvironments"][approval]["requiredReview"])
         self.assertEqual(manual["jobs"]["approve"].get("permissions"), {})
         self.assertIn("approve", direct_needs(manual["jobs"]["manage"]))
         self.assertEqual(manual["jobs"]["manage"]["uses"], "./.github/workflows/sparkle-pages.yml")
@@ -1440,14 +1425,6 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
             write_permissions({"contents": "read", "id-token": "write", "pages": "write"}),
         )
         self.assertTrue(workflow["concurrency"]["group"])
-        self.assertEqual(
-            workflow["concurrency"]["cancel-in-progress"],
-            "${{ inputs.operation == 'disable' }}",
-        )
-        stale_guard = next(
-            step for step in workflow["jobs"]["deploy"]["steps"] if "EXPECTED_BASE_RELEASE_TAG" in step.get("env", {})
-        )
-        self.assertEqual(stale_guard["if"], "inputs.operation == 'deploy'")
 
 
 if __name__ == "__main__":

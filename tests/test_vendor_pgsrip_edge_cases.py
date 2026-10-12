@@ -147,6 +147,7 @@ class PgsReaderTests(unittest.TestCase):
                 value = super().__getitem__(key)
                 if isinstance(key, slice):
                     copied_bytes += len(value)
+                    return type(self)(value)
                 return value
 
         data = MeasuredBytes(b"".join(_pgs_segment_bytes(b"") for _ in range(1_000)))
