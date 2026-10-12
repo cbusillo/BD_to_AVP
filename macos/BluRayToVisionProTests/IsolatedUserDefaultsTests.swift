@@ -62,6 +62,14 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         XCTAssertNil(controller.errorMessage)
     }
 
+    @MainActor
+    func testUnitTestHostNeverSelectsKeychainEvenWhenTeamSigned() {
+        let environment = [AppDelegate.unitTestHomeEnvironmentKey: "/tmp/test-home"]
+        XCTAssertFalse(MovieSharingController.usesKeychain(environment: environment, isTeamSigned: { true }))
+        XCTAssertTrue(MovieSharingController.usesKeychain(environment: [:], isTeamSigned: { true }))
+        XCTAssertFalse(MovieSharingController.usesKeychain(environment: [:], isTeamSigned: { false }))
+    }
+
     func testHostUsesTemporaryHomeForPreferencesAndApplicationSupport() throws {
         let environment = ProcessInfo.processInfo.environment
         let home = try XCTUnwrap(environment["CFFIXED_USER_HOME"])
@@ -73,7 +81,8 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         )
         XCTAssertTrue(support.path.hasPrefix(home + "/"))
         let domain = try XCTUnwrap(AppPreferences.isolatedDomain)
-        XCTAssertTrue(domain.hasPrefix(home + "/"))
+        let testRoot = URL(fileURLWithPath: home).deletingLastPathComponent().path
+        XCTAssertTrue(domain.hasPrefix(testRoot + "/"))
 
         let key = UUID().uuidString
         let defaults = AppPreferences.current

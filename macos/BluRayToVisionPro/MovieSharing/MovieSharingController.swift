@@ -21,9 +21,9 @@ final class MovieSharingController: ObservableObject {
     private static let foldersKey = "movieSharing.approvedFolders.v1"
     private static let enabledKey = "movieSharing.enabled.v1"
 
-    init(defaults: UserDefaults = AppPreferences.current, trust: MovieLibraryTrustStore = .forRunningApp()) {
+    init(defaults: UserDefaults = AppPreferences.current, trust: MovieLibraryTrustStore? = nil) {
         self.defaults = defaults
-        self.trust = trust
+        self.trust = trust ?? Self.trustStoreForRunningProcess()
         do {
             if let data = defaults.data(forKey: Self.foldersKey) {
                 guard data.count <= 1_048_576 else { throw MovieLibraryError.invalidResponse }
@@ -31,6 +31,17 @@ final class MovieSharingController: ObservableObject {
                 guard sources.count <= MovieLibraryContract.maximumRoots else { throw MovieLibraryError.invalidResponse }
             }
         } catch { errorMessage = "Saved sharing folders could not be read. Remove and add the folders again." }
+    }
+
+    private static func trustStoreForRunningProcess() -> MovieLibraryTrustStore {
+        MovieLibraryTrustStore.forRunningApp(isTeamSigned: usesKeychain())
+    }
+
+    static func usesKeychain(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        isTeamSigned: () -> Bool = MovieLibraryTrustStore.runningCodeHasTeamIdentifier
+    ) -> Bool {
+        !AppDelegate.isUnitTestHost(environment: environment) && isTeamSigned()
     }
 
     func restoreIfNeeded() async {

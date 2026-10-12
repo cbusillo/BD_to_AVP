@@ -50,7 +50,9 @@ Use `native_app.py test` for local unit tests. It supplies a fresh temporary
 home to the XCTest host, keeping preferences and Application Support files
 under the worktree's build directory, and removes that home after the run.
 App preferences in a unit-test host use an absolute-path UserDefaults domain
-inside that home; individual test fixtures use their own temporary domains.
+beside that home, inside the same temporary test root; individual fixtures
+use their own temporary domains. The host disables Sparkle and uses a file
+for its Movie Sharing identity even when it is team-signed.
 The unit-test scheme consumes `BD_TO_AVP_TEST_HOME` through `HOME` and
 `CFFIXED_USER_HOME`; direct Xcode test runs need that build setting pointing
 to a disposable home as well. Installed-app UI acceptance uses its separate

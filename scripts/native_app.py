@@ -229,7 +229,7 @@ def native_test_home(action: str) -> Iterator[Path | None]:
     test_homes = DERIVED_DATA.parent / "test-homes"
     test_homes.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="native-tests-", dir=test_homes) as directory:
-        home = Path(directory)
+        home = Path(directory) / "home"
         (home / "Library" / "Preferences").mkdir(parents=True)
         yield home
 

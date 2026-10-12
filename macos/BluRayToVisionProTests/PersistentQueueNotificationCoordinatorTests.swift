@@ -213,9 +213,10 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     private func makeSettings(finish: Bool, attention: Bool) throws -> AppSettings {
         let defaults = try isolatedDefaults()
-        defaults.set(finish, forKey: "native.notifyWhenQueueFinishes")
-        defaults.set(attention, forKey: "native.notifyWhenQueueNeedsAttention")
-        return AppSettings(defaults: defaults, homeDirectoryURL: URL(fileURLWithPath: "/Users/example"))
+        let settings = AppSettings(defaults: defaults, homeDirectoryURL: URL(fileURLWithPath: "/Users/example"))
+        settings.notifyWhenQueueFinishes = finish
+        settings.notifyWhenQueueNeedsAttention = attention
+        return settings
     }
 
     private func makeItem(

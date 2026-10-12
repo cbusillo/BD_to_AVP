@@ -12,7 +12,8 @@ enum AppPreferences {
         }
         // An explicit path avoids cfprefsd's cached user-domain routing.
         return URL(fileURLWithPath: home)
-            .appendingPathComponent("Library/Preferences/test-host").path
+            .deletingLastPathComponent()
+            .appendingPathComponent("test-host-preferences").path
     }()
 
     static let current = isolatedDomain.map { UserDefaults(suiteName: $0)! } ?? .standard

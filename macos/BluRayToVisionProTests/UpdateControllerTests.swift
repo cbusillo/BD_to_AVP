@@ -28,7 +28,22 @@ final class UpdateControllerTests: XCTestCase {
 
     @MainActor
     func testDebugBundleRemainsInManualUpdateMode() {
-        XCTAssertEqual(UpdateEnvironment().mode, .manual)
+        XCTAssertEqual(UpdateEnvironment(arguments: [], processEnvironment: [:]).mode, .manual)
+    }
+
+    @MainActor
+    func testHostedAppDisablesUpdaterWithoutConstructingBackend() throws {
+        var factoryCalled = false
+        let controller = UpdateController(
+            defaults: try isolatedDefaults(),
+            backendFactory: { _, _ in
+                factoryCalled = true
+                return FakeUpdateBackend()
+            }
+        )
+        controller.startIfNeeded()
+        XCTAssertEqual(controller.mode, .disabled)
+        XCTAssertFalse(factoryCalled)
     }
 
     @MainActor
