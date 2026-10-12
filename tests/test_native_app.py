@@ -130,33 +130,35 @@ def make_app_bundle(root: Path, payload: bytes = b"current build") -> Path:
 class NativeAppPackagingTests(unittest.TestCase):
     def test_native_test_home_exists_during_launch_and_is_removed_after_success_or_failure(self) -> None:
         for fails in (False, True):
-            with self.subTest(fails=fails), tempfile.TemporaryDirectory() as directory:
-                homes: list[Path] = []
+            with self.subTest(fails=fails):
+                self.assert_native_test_home_cleanup(fails)
 
-                def launch(
-                    command: list[str], *, homes: list[Path] = homes, fails: bool = fails, **kwargs: object
-                ) -> None:
-                    home_argument = next(arg for arg in command if arg.startswith(f"{TEST_HOME_BUILD_SETTING}="))
-                    home = Path(home_argument.split("=", 1)[1])
-                    homes.append(home)
-                    self.assertTrue(home.is_relative_to(Path(directory)))
-                    self.assertTrue((home / "Library" / "Preferences").is_dir())
-                    (home / "Library" / "Preferences" / "test.plist").write_bytes(b"test data")
-                    if fails:
-                        raise subprocess.CalledProcessError(1, command)
+    def assert_native_test_home_cleanup(self, fails: bool) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            homes: list[Path] = []
 
-                with (
-                    patch("scripts.native_app.DERIVED_DATA", Path(directory) / "DerivedData"),
-                    patch("scripts.native_app.generate_project"),
-                    patch("scripts.native_app.run", side_effect=launch),
-                ):
-                    if fails:
-                        with self.assertRaises(subprocess.CalledProcessError):
-                            xcodebuild("test", "Debug")
-                    else:
+            def launch(command: list[str], **_kwargs: object) -> None:
+                home_argument = next(arg for arg in command if arg.startswith(f"{TEST_HOME_BUILD_SETTING}="))
+                home = Path(home_argument.split("=", 1)[1])
+                homes.append(home)
+                self.assertTrue(home.is_relative_to(Path(directory)))
+                self.assertTrue((home / "Library" / "Preferences").is_dir())
+                (home / "Library" / "Preferences" / "test.plist").write_bytes(b"test data")
+                if fails:
+                    raise subprocess.CalledProcessError(1, command)
+
+            with (
+                patch("scripts.native_app.DERIVED_DATA", Path(directory) / "DerivedData"),
+                patch("scripts.native_app.generate_project"),
+                patch("scripts.native_app.run", side_effect=launch),
+            ):
+                if fails:
+                    with self.assertRaises(subprocess.CalledProcessError):
                         xcodebuild("test", "Debug")
-                self.assertEqual(len(homes), 1)
-                self.assertFalse(homes[0].exists())
+                else:
+                    xcodebuild("test", "Debug")
+            self.assertEqual(len(homes), 1)
+            self.assertFalse(homes[0].exists())
 
     def test_native_product_build_does_not_redirect_home(self) -> None:
         with patch("scripts.native_app.generate_project"), patch("scripts.native_app.run") as launch:

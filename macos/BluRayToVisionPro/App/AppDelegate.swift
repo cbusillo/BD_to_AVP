@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     nonisolated static let startupSmokeArgument = "--startup-smoke"
     nonisolated static let previewPresentationSmokeArgument = "--preview-presentation-smoke"
     nonisolated static let workerCancellationSmokeArgument = "--worker-cancellation-smoke"
+    nonisolated static let unitTestHomeEnvironmentKey = "BD_TO_AVP_TEST_HOME"
 
     weak var workCoordinator: AppWorkCoordinator?
     var observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
@@ -94,9 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             || isWorkerCancellationSmoke(arguments: arguments)
     }
 
-    /// Xcode sets this variable only in a process that hosts unit tests. An app launched by a UI test does not have it.
+    /// The unit-test scheme supplies its home before app initialization; Xcode also marks hosted tests.
     nonisolated static func isUnitTestHost(environment: [String: String]) -> Bool {
-        environment["XCTestConfigurationFilePath"] != nil
+        environment[unitTestHomeEnvironmentKey] != nil || environment["XCTestConfigurationFilePath"] != nil
     }
 
     /// Startup work that reaches the user's Keychain item and shared-folder bookmarks is for a person using the app.

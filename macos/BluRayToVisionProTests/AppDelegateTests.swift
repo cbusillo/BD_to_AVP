@@ -40,6 +40,10 @@ final class AppDelegateTests: XCTestCase {
     func testDefaultLaunchIsSuppressedForSmokeRunsAndUnitTestHostsOnly() {
         let hosted = ["XCTestConfigurationFilePath": "/tmp/session.xctestconfiguration"]
         XCTAssertTrue(AppDelegate.suppressesDefaultLaunch(arguments: ["app"], environment: hosted))
+        XCTAssertTrue(AppDelegate.suppressesDefaultLaunch(
+            arguments: ["app"],
+            environment: [AppDelegate.unitTestHomeEnvironmentKey: "/tmp/test-home"]
+        ))
         XCTAssertTrue(
             AppDelegate.suppressesDefaultLaunch(arguments: ["app", AppDelegate.startupSmokeArgument], environment: [:])
         )

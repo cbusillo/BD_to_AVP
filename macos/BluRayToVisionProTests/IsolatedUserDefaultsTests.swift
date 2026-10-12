@@ -16,7 +16,9 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         XCTAssertTrue(fixture.defaults.synchronize())
 
         let plist = URL(fileURLWithPath: fixture.domain).appendingPathExtension("plist")
-        let stored = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any])
+        let stored = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any]
+        )
         XCTAssertEqual(stored[key] as? String, value)
         XCTAssertEqual(UserDefaults(suiteName: fixture.domain)?.string(forKey: key), value)
 
@@ -66,19 +68,22 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         XCTAssertFalse(home.isEmpty)
         XCTAssertEqual(environment["HOME"], home)
         XCTAssertEqual(FileManager.default.homeDirectoryForCurrentUser.path, home)
-        let support = try XCTUnwrap(FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
+        let support = try XCTUnwrap(
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        )
         XCTAssertTrue(support.path.hasPrefix(home + "/"))
+        let domain = try XCTUnwrap(AppPreferences.isolatedDomain)
+        XCTAssertTrue(domain.hasPrefix(home + "/"))
 
         let key = UUID().uuidString
         let defaults = AppPreferences.current
         defaults.set(true, forKey: key)
         defer { defaults.removeObject(forKey: key) }
         XCTAssertTrue(defaults.synchronize())
-        let preferences = URL(fileURLWithPath: home).appendingPathComponent("Library/Preferences")
-        let plists = try FileManager.default.contentsOfDirectory(at: preferences, includingPropertiesForKeys: nil)
-        let values = try plists.map {
-            try PropertyListSerialization.propertyList(from: Data(contentsOf: $0), format: nil) as? [String: Any]
-        }
-        XCTAssertTrue(values.contains { $0?[key] as? Bool == true })
+        let plist = URL(fileURLWithPath: domain).appendingPathExtension("plist")
+        let stored = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any]
+        )
+        XCTAssertEqual(stored[key] as? Bool, true)
     }
 }
