@@ -68,7 +68,7 @@ final class AppSettings: ObservableObject {
     }
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppPreferences.current,
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
         self.defaults = defaults

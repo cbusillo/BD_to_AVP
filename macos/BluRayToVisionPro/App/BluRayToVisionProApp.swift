@@ -51,6 +51,8 @@ struct BluRayToVisionProApp: App {
     private let suppressDefaultLaunch: Bool
 
     init() {
+        // Validate the test home before constructing any disk-backed models.
+        _ = AppPreferences.current
         let observabilityEventStore = ObservabilityEventStore.automatic()
         let resolutionMemoryStore = ResolutionMemoryStore()
         let profileStore = ProfileStore(resolutionMemoryStore: resolutionMemoryStore)

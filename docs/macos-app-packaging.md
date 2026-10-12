@@ -46,6 +46,16 @@ BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com \
   uv run python scripts/native_app.py publish-current
 ```
 
+Use `native_app.py test` for local unit tests. It supplies a fresh temporary
+home to the XCTest host, keeping preferences and Application Support files
+under the worktree's build directory, and removes that home after the run.
+App preferences in a unit-test host use an absolute-path UserDefaults domain
+inside that home; individual test fixtures use their own temporary domains.
+The unit-test scheme consumes `BD_TO_AVP_TEST_HOME` through `HOME` and
+`CFFIXED_USER_HOME`; direct Xcode test runs need that build setting pointing
+to a disposable home as well. Installed-app UI acceptance uses its separate
+scheme and continues to exercise ordinary startup.
+
 `package` builds the pinned embedded Python runtime, builds the Xcode `Release`
 configuration, copies the runtime into the production bundle,
 signs nested Mach-O content from the inside out, verifies the complete

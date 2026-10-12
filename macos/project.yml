@@ -225,6 +225,9 @@ schemes:
         BluRayToVisionProTests: [test]
     test:
       gatherCoverageData: true
+      environmentVariables:
+        HOME: "$(BD_TO_AVP_TEST_HOME)"
+        CFFIXED_USER_HOME: "$(BD_TO_AVP_TEST_HOME)"
       targets:
         - BluRayToVisionProTests
 

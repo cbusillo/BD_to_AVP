@@ -6,7 +6,7 @@ import XCTest
 final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
     func testInitialRestoredTerminalStateIsBaselineOnly() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: true, attention: true)
+        let settings = try makeSettings(finish: true, attention: true)
         let failed = try makeItem(ordinal: 0, state: .failed, sourcePath: "/Private/Restored.mkv")
         let coordinator = PersistentQueueNotificationCoordinator(
             settings: settings,
@@ -23,7 +23,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testSendsOneAttentionAlertPerRunAndIgnoresProjectionRefreshes() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: false, attention: true)
+        let settings = try makeSettings(finish: false, attention: true)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         let waiting = try makeItem(ordinal: 0, state: .waiting)
         let failed = try waiting.replacingStatus(.failed)
@@ -40,7 +40,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testCompletionUsesFinalDurableStatesForParticipatingItems() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: true, attention: false)
+        let settings = try makeSettings(finish: true, attention: false)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         let first = try makeItem(ordinal: 0, state: .waiting)
         let second = try makeItem(ordinal: 1, state: .waiting)
@@ -63,7 +63,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testPauseStatesPreserveSingleNotificationSession() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: true, attention: true)
+        let settings = try makeSettings(finish: true, attention: true)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         let item = try makeItem(ordinal: 0, state: .waiting)
         let completed = try item.replacingStatus(.completed)
@@ -81,7 +81,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testTerminalPausedSessionResetsBeforeStoreFirstRetry() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: true, attention: true)
+        let settings = try makeSettings(finish: true, attention: true)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         let first = try makeItem(ordinal: 0, state: .waiting)
         let firstFailed = try first.replacingStatus(.failed)
@@ -110,7 +110,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testTerminalPauseAfterCurrentSessionResetsBeforeStoreFirstRetry() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: true, attention: true)
+        let settings = try makeSettings(finish: true, attention: true)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         let first = try makeItem(ordinal: 0, state: .waiting)
         let firstFailed = try first.replacingStatus(.failed)
@@ -138,7 +138,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testExplicitStopDoesNotSendCompletionNotification() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: true, attention: false)
+        let settings = try makeSettings(finish: true, attention: false)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         let first = try makeItem(ordinal: 0, state: .waiting)
         let second = try makeItem(ordinal: 1, state: .waiting)
@@ -156,7 +156,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testDisabledPreferencesRequestAuthorizationOnlyWhenEnabled() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: false, attention: false)
+        let settings = try makeSettings(finish: false, attention: false)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         await Task.yield()
         XCTAssertEqual(delivery.authorizationRequestCount, 0)
@@ -175,7 +175,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testRestoredFailedItemCanTriggerAttentionAfterRetry() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: false, attention: true)
+        let settings = try makeSettings(finish: false, attention: true)
         let failed = try makeItem(ordinal: 0, state: .failed)
         let waiting = try failed.replacingStatus(.waiting)
         let coordinator = PersistentQueueNotificationCoordinator(
@@ -195,7 +195,7 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
 
     func testNotificationCopyIsPrivacySafe() async throws {
         let delivery = CapturingQueueNotificationDelivery()
-        let settings = makeSettings(finish: true, attention: true)
+        let settings = try makeSettings(finish: true, attention: true)
         let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
         let waiting = try makeItem(ordinal: 0, state: .waiting, sourcePath: "/Volumes/Private Movie/Secret Feature.mkv")
         let failed = try waiting.replacingStatus(.failed, message: "ffmpeg failed at /tmp/private-output.mov")
@@ -211,10 +211,8 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("ffmpeg"))
     }
 
-    private func makeSettings(finish: Bool, attention: Bool) -> AppSettings {
-        let suiteName = "PersistentQueueNotificationCoordinatorTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+    private func makeSettings(finish: Bool, attention: Bool) throws -> AppSettings {
+        let defaults = try isolatedDefaults()
         defaults.set(finish, forKey: "native.notifyWhenQueueFinishes")
         defaults.set(attention, forKey: "native.notifyWhenQueueNeedsAttention")
         return AppSettings(defaults: defaults, homeDirectoryURL: URL(fileURLWithPath: "/Users/example"))

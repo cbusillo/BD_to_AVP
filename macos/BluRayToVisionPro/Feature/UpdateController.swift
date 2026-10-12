@@ -216,7 +216,7 @@ final class UpdateController: ObservableObject {
 
     init(
         environment: UpdateEnvironment = UpdateEnvironment(),
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppPreferences.current,
         installPostponer: (any UpdateInstallPostponing)? = nil,
         openURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
         backendFactory: @escaping BackendFactory = { channel, postponer in

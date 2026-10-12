@@ -198,23 +198,39 @@ def verify_product_source_copy() -> None:
 def xcodebuild(action: str, configuration: str) -> None:
     generate_project()
     build_settings = native_build_settings(configuration, os.environ)
-    run(
-        [
-            "xcodebuild",
-            "-project",
-            PROJECT_PATH.name,
-            "-scheme",
-            SCHEME,
-            "-configuration",
-            configuration,
-            "-derivedDataPath",
-            str(DERIVED_DATA),
-            *build_settings,
-            action,
-        ],
-        cwd=MACOS_ROOT,
-        environment={**os.environ, "BD_TO_AVP_TEST_PYTHON": sys.executable},
-    )
+    with native_test_home(action) as test_home:
+        if test_home is not None:
+            build_settings.append(f"BD_TO_AVP_TEST_HOME={test_home}")
+        run(
+            [
+                "xcodebuild",
+                "-project",
+                PROJECT_PATH.name,
+                "-scheme",
+                SCHEME,
+                "-configuration",
+                configuration,
+                "-derivedDataPath",
+                str(DERIVED_DATA),
+                *build_settings,
+                action,
+            ],
+            cwd=MACOS_ROOT,
+            environment={**os.environ, "BD_TO_AVP_TEST_PYTHON": sys.executable},
+        )
+
+
+@contextmanager
+def native_test_home(action: str) -> Iterator[Path | None]:
+    if action != "test":
+        yield None
+        return
+    test_homes = DERIVED_DATA.parent / "test-homes"
+    test_homes.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="native-tests-", dir=test_homes) as directory:
+        home = Path(directory)
+        (home / "Library" / "Preferences").mkdir(parents=True)
+        yield home
 
 
 def validate_support_diagnostics_endpoint(endpoint: str) -> str:

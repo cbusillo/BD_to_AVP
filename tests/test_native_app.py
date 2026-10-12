@@ -58,6 +58,7 @@ from scripts.native_app import (
     verify_mach_o_minimum_system_versions,
     verify_exact_minimum_system_version,
     verify_layout,
+    xcodebuild,
     verify_package_paths,
     verify_committed_ssif_artifacts,
     verify_product_identity,
@@ -126,6 +127,42 @@ def make_app_bundle(root: Path, payload: bytes = b"current build") -> Path:
 
 
 class NativeAppPackagingTests(unittest.TestCase):
+    def test_native_test_home_exists_during_launch_and_is_removed_after_success_or_failure(self) -> None:
+        for fails in (False, True):
+            with self.subTest(fails=fails), tempfile.TemporaryDirectory() as directory:
+                homes: list[Path] = []
+
+                def launch(
+                    command: list[str], *, homes: list[Path] = homes, fails: bool = fails, **kwargs: object
+                ) -> None:
+                    home_argument = next(arg for arg in command if arg.startswith("BD_TO_AVP_TEST_HOME="))
+                    home = Path(home_argument.split("=", 1)[1])
+                    homes.append(home)
+                    self.assertTrue(home.is_relative_to(Path(directory)))
+                    self.assertTrue((home / "Library" / "Preferences").is_dir())
+                    (home / "Library" / "Preferences" / "test.plist").write_bytes(b"test data")
+                    if fails:
+                        raise subprocess.CalledProcessError(1, command)
+
+                with (
+                    patch("scripts.native_app.DERIVED_DATA", Path(directory) / "DerivedData"),
+                    patch("scripts.native_app.generate_project"),
+                    patch("scripts.native_app.run", side_effect=launch),
+                ):
+                    if fails:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            xcodebuild("test", "Debug")
+                    else:
+                        xcodebuild("test", "Debug")
+                self.assertEqual(len(homes), 1)
+                self.assertFalse(homes[0].exists())
+
+    def test_native_product_build_does_not_redirect_home(self) -> None:
+        with patch("scripts.native_app.generate_project"), patch("scripts.native_app.run") as launch:
+            xcodebuild("build", "Debug")
+        command = launch.call_args.args[0]
+        self.assertFalse(any(arg.startswith("BD_TO_AVP_TEST_HOME=") for arg in command))
+
     def test_package_defaults_to_ad_hoc_signing(self) -> None:
         args = parse_args(["package"])
 
