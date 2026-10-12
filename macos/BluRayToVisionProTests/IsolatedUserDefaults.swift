@@ -8,7 +8,10 @@ final class IsolatedUserDefaults {
     let defaults: UserDefaults
 
     init() throws {
-        directory = FileManager.default.temporaryDirectory
+        let root = ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"].map {
+            URL(fileURLWithPath: $0, isDirectory: true).deletingLastPathComponent()
+        } ?? FileManager.default.temporaryDirectory
+        directory = root
             .appendingPathComponent("BDToAVPDefaults-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         domain = directory.appendingPathComponent("preferences").path

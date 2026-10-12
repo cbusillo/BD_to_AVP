@@ -50,11 +50,13 @@ Use `native_app.py test` for local unit tests. It supplies a fresh temporary
 home to the XCTest host, keeping preferences and Application Support files
 under the worktree's build directory, and removes that home after the run.
 App preferences in a unit-test host use an absolute-path UserDefaults domain
-beside that home, inside the same temporary test root; individual fixtures
-use their own temporary domains. The host disables Sparkle and uses a file
+beside that home, inside the same temporary test root; individual defaults fixtures
+also keep their temporary domains in that root, so a crashed host leaves no
+defaults fixture directories outside the runner's cleanup. The host disables Sparkle and uses a file
 for its Movie Sharing identity even when it is team-signed.
 The runner checks filenames in the real Preferences directory before and after
-each run and fails if new entries appear; it reads no preference values and
+each run and fails on new app or test-suite entries, while reporting unrelated
+entries separately; it reads no preference values and
 does not delete files there. The generated unit-test scheme requires the
 per-run `BD_TO_AVP_TEST_HOME` supplied by this command through `HOME` and
 `CFFIXED_USER_HOME`. Run unit tests through the command above; Cmd-U in the

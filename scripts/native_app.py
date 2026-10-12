@@ -237,8 +237,26 @@ def native_test_home(action: str, *, preferences_directory: Path | None = None) 
             yield home
     finally:
         added = preference_file_names(preferences) - before
-        if added:
-            raise RuntimeError("Native tests added user preference files: " + ", ".join(sorted(added)))
+        app_prefix = NATIVE_BUNDLE_IDENTIFIER.casefold()
+        leaked = {
+            name
+            for name in added
+            if app_prefix in name.casefold()
+            or "bdtoavp" in name.casefold()
+            or re.fullmatch(r".*Tests\.[0-9a-fA-F-]+\.plist", name)
+        }
+        unrelated = added - leaked
+        if unrelated:
+            print(
+                "Unrelated Preferences entries appeared during the run (origin not established): "
+                + ", ".join(sorted(unrelated)),
+                file=sys.stderr,
+            )
+        if leaked:
+            raise RuntimeError(
+                "New user preference filenames appeared during native tests (origin not established): "
+                + ", ".join(sorted(leaked))
+            )
 
 
 def preference_file_names(directory: Path) -> set[str]:

@@ -84,6 +84,9 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         let domain = try XCTUnwrap(AppPreferences.isolatedDomain)
         let testRoot = URL(fileURLWithPath: home).deletingLastPathComponent().path
         XCTAssertTrue(domain.hasPrefix(testRoot + "/"))
+        let fixture = try IsolatedUserDefaults()
+        defer { try? fixture.tearDown() }
+        XCTAssertTrue(fixture.directory.path.hasPrefix(testRoot + "/"))
 
         let key = UUID().uuidString
         let defaults = AppPreferences.current

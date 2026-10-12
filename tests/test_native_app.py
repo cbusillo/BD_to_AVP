@@ -168,7 +168,7 @@ class NativeAppPackagingTests(unittest.TestCase):
             preferences.mkdir()
             existing = preferences / "existing.plist"
             existing.write_bytes(b"unchanged user data")
-            added = preferences / "leaked.plist"
+            added = preferences / f"{NATIVE_BUNDLE_IDENTIFIER}.fixture.plist"
             with patch("scripts.native_app.DERIVED_DATA", root / "DerivedData"):
                 with native_test_home("test", preferences_directory=preferences):
                     pass
@@ -177,6 +177,18 @@ class NativeAppPackagingTests(unittest.TestCase):
                         added.write_bytes(b"leaked data")
             self.assertEqual(existing.read_bytes(), b"unchanged user data")
             self.assertTrue(added.exists())
+
+    def test_native_test_home_reports_unrelated_preferences_without_failing_or_deleting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            preferences = root / "Preferences"
+            preferences.mkdir()
+            unrelated = preferences / "com.example.other-app.plist"
+            with patch("scripts.native_app.DERIVED_DATA", root / "DerivedData"), patch("sys.stderr") as output:
+                with native_test_home("test", preferences_directory=preferences):
+                    unrelated.touch()
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(output.write.called)
 
     def test_native_product_build_does_not_redirect_home(self) -> None:
         with patch("scripts.native_app.generate_project"), patch("scripts.native_app.run") as launch:
