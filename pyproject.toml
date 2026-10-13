@@ -32,7 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 gui = [
     # PySide6 6.10+ includes macOS binaries that require macOS 15.
-    "pyside6>=6.7.1,<6.12",
+    "pyside6>=6.7.1,<6.13",
 ]
 
 [project.urls]
@@ -49,15 +49,15 @@ dev = [
     "black>=26.5.1,<27",
     "gitpython>=3.1.58,<4",
     "mypy>=2.1.0,<3",
-    "pyside6>=6.7.1,<6.12",
+    "pyside6>=6.7.1,<6.13",
     "pytest>=9.1.1,<10",
     "pytest-xdist>=3.8.0,<4",
-    "ruff>=0.15.20,<0.17",
+    "ruff>=0.15.20,<0.18",
     "types-psutil>=5.9.5.20240516",
 ]
 runtime-build = [
     # Keep Meson/Ninja aligned with vendor/ssif-probe-macos-arm64.toml for exact rebuilds.
-    "meson==1.12.0",
+    "meson==1.12.1",
     "ninja==1.13.2",
     "setuptools==84.0.0",
     "wheel==0.48.0",

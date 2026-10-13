@@ -4,7 +4,7 @@ architecture = "arm64"
 minimum_macos = "14.0"
 linkage = "private-shared"
 rpath = "@loader_path/../lib"
-meson_version = "1.12.0"
+meson_version = "1.12.1"
 ninja_version = "1.13.2.git.kitware.jobserver-pipe-1"
 probe_compile_flags = ["-std=c11", "-O2", "-g0", "-Wall", "-Wextra", "-Werror", "-arch", "arm64"]
 system_link_allowlist = [
