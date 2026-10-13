@@ -38,7 +38,7 @@
     "-Dfontconfig=disabled",
     "-Dlibxml2=disabled"
   ],
-  "meson_version": "1.12.0",
+  "meson_version": "1.12.1",
   "minimum_macos": "14.0",
   "ninja_version": "1.13.2.git.kitware.jobserver-pipe-1",
   "platform": "macOS arm64",
