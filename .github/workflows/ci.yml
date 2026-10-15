@@ -8,6 +8,11 @@ name: CI
       - "launchplane/train/**"
   pull_request:
   workflow_dispatch:
+    inputs:
+      vision_ocr_diagnostics:
+        description: Run the bounded native Vision OCR qualification matrix
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -141,6 +146,28 @@ jobs:
             CI 37229434438 attempts 1-4); real PGS extraction/mux still runs
             with bitmap-checked recognition. Run locally for actual OCR.
         run: uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs --durations 20 tests
+
+      - name: Diagnose hosted native Vision OCR
+        if: github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics
+        # #893: experiments preserve their own nonzero status and logs; they
+        # neither select a production backend nor replace the unit-test gate.
+        timeout-minutes: 10
+        run: |
+          mkdir -p build/vision-ocr
+          for mode in default cpu-only fast; do
+            status=0
+            uv run python -m scripts.qualify_vision_ocr --mode "$mode" > "build/vision-ocr/$mode.log" 2>&1 || status=$?
+            echo "$mode exit=$status" | tee -a build/vision-ocr/status.txt
+            cat "build/vision-ocr/$mode.log"
+          done
+
+      - name: Preserve native Vision OCR diagnostics
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vision-ocr-diagnostics
+          path: build/vision-ocr
+          if-no-files-found: warn
 
       - name: Verify committed release evidence
         env:
