@@ -125,12 +125,9 @@ def main() -> int:
     test = FinalMuxRealToolTests("test_pgs_subtitles_rip_to_srt_and_reach_the_final_mux_with_forced_flag")
     with patch.object(vision, "VNImageRequestHandler", DiagnosticHandler):
         result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([test]))
-    expected_requests = len(PGS_CUES) + len(FORCED_PGS_CUES)
+    minimum_requests = len(PGS_CUES) + len(FORCED_PGS_CUES)
     passed = (
-        result.wasSuccessful()
-        and result.testsRun == 1
-        and not result.skipped
-        and observed_requests == expected_requests
+        result.wasSuccessful() and result.testsRun == 1 and not result.skipped and observed_requests >= minimum_requests
     )
     emit(
         "qualification",
@@ -139,7 +136,7 @@ def main() -> int:
         tests_run=result.testsRun,
         skips=len(result.skipped),
         observed_requests=observed_requests,
-        expected_requests=expected_requests,
+        minimum_requests=minimum_requests,
     )
     return 0 if passed else 1
 

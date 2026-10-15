@@ -34,11 +34,17 @@ as request properties.
 Output records macOS build, architecture, Python/PyObjC and selected FFmpeg
 provenance, then actual request revision, languages, compute-device availability,
 native success/error and recognized text. CI provenance includes source SHA,
-run ID and attempt. A pass also requires observing one wrapped request per
-fixture cue; an instrumentation bypass cannot silently qualify a mode.
+run ID and attempt. A pass also requires observing at least one wrapped request
+per fixture cue, allowing the ripper's low-confidence retries; an instrumentation
+bypass cannot silently qualify a mode.
 Available devices do not prove
 which device performed the request. Request diagnostics wrap the native handler;
 compare the ordinary uninstrumented test before attributing a failure to Vision.
+The hosted matrix runs serially after the parallel unit suite has already used
+Vision, and device enumeration can itself affect initialization. If its default
+case passes alongside an ordinary unit-test skip in the same run, investigate
+concurrency, cold state and instrumentation; that combination does not qualify
+the image as recovered.
 
 To compare on the current hosted image, manually dispatch `CI` on the task
 branch with `vision_ocr_diagnostics=true`. The `vision-ocr-diagnostics` artifact
@@ -48,7 +54,9 @@ workflow alone is not native qualification. The matrix is bounded to ten
 minutes, and artifact upload runs after a timeout too. Ordinary CI runs do not
 pay for this experiment.
 
-Retain the exact source SHA, image version and OS build with any conclusion.
+Record conclusions with exact source SHA, image version, OS build and artifact
+links on #893 before hosted artifacts expire. Keep any required raw logs in the
+task's approved retained-evidence location under the host retention policy.
 An experiment that passes only after changing recognition settings establishes
 an observation, not a production fix or a boundary affecting all users on that
 OS. A runtime boundary needs affected physical-Mac evidence or a demonstrated

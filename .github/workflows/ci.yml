@@ -148,7 +148,7 @@ jobs:
         run: uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs --durations 20 tests
 
       - name: Diagnose hosted native Vision OCR
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics }}
         # #893: experiments preserve their own nonzero status and logs; they
         # neither select a production backend nor replace the unit-test gate.
         timeout-minutes: 10
