@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from bd_to_avp.modules.config import config
 from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr
-from tests.test_final_mux_real_tools import FinalMuxRealToolTests
+from tests.test_final_mux_real_tools import FORCED_PGS_CUES, PGS_CUES, FinalMuxRealToolTests
 
 
 def emit(event: str, **fields: Any) -> None:
@@ -30,7 +30,6 @@ def request_details(request: Any) -> dict[str, Any]:
         "recognition_level": request.recognitionLevel(),
         "languages": list(request.recognitionLanguages()),
         "language_correction": bool(request.usesLanguageCorrection()),
-        "cpu_only": bool(request.usesCPUOnly()),
     }
     try:
         devices, error = request.supportedComputeStageDevicesAndReturnError_(None)
@@ -62,11 +61,15 @@ def main() -> int:
         pyobjc_vision=importlib.metadata.version("pyobjc-framework-Vision"),
         runner_image=os.environ.get("ImageOS"),
         runner_image_version=os.environ.get("ImageVersion"),
+        source_sha=os.environ.get("GITHUB_SHA"),
+        run_id=os.environ.get("GITHUB_RUN_ID"),
+        run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT"),
         ffmpeg=str(config.FFMPEG_PATH),
         ffmpeg_version=subprocess.check_output([str(config.FFMPEG_PATH), "-version"], text=True).strip(),
     )
     vision, _ = AppleVisionOcr._load_frameworks()
     handler_class = vision.VNImageRequestHandler
+    observed_requests = 0
 
     class DiagnosticHandler:
         @classmethod
@@ -78,12 +81,31 @@ def main() -> int:
             return self
 
         def performRequests_error_(self, requests: list[Any], error_out: Any) -> Any:
+            nonlocal observed_requests
             for request in requests:
                 if args.mode == "cpu-only":
-                    request.setUsesCPUOnly_(True)
+                    import CoreML
+
+                    stages, error = request.supportedComputeStageDevicesAndReturnError_(None)
+                    if error or not stages:
+                        raise RuntimeError(f"Cannot enumerate CPU compute stages: {error}")
+                    for stage, devices in stages.items():
+                        cpu = next(
+                            (device for device in devices if isinstance(device, CoreML.MLCPUComputeDevice)), None
+                        )
+                        if cpu is None:
+                            raise RuntimeError(f"No supported CPU device for {stage}")
+                        request.setComputeDevice_forComputeStage_(cpu, stage)
+                        selected = request.computeDeviceForComputeStage_(stage)
+                        if not isinstance(selected, CoreML.MLCPUComputeDevice):
+                            raise RuntimeError(f"CPU assignment not confirmed for {stage}: {selected}")
+                        emit("compute_assignment", stage=str(stage), device=str(selected))
                 elif args.mode == "fast":
                     request.setRecognitionLevel_(vision.VNRequestTextRecognitionLevelFast)
+                    if request.recognitionLevel() != vision.VNRequestTextRecognitionLevelFast:
+                        raise RuntimeError("Fast recognition setting not confirmed")
                 emit("request", thread=threading.current_thread().name, **request_details(request))
+                observed_requests += 1
             success, error = self.handler.performRequests_error_(requests, error_out)
             emit(
                 "response",
@@ -103,8 +125,22 @@ def main() -> int:
     test = FinalMuxRealToolTests("test_pgs_subtitles_rip_to_srt_and_reach_the_final_mux_with_forced_flag")
     with patch.object(vision, "VNImageRequestHandler", DiagnosticHandler):
         result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([test]))
-    passed = result.wasSuccessful() and result.testsRun == 1 and not result.skipped
-    emit("qualification", mode=args.mode, passed=passed, tests_run=result.testsRun, skips=len(result.skipped))
+    expected_requests = len(PGS_CUES) + len(FORCED_PGS_CUES)
+    passed = (
+        result.wasSuccessful()
+        and result.testsRun == 1
+        and not result.skipped
+        and observed_requests == expected_requests
+    )
+    emit(
+        "qualification",
+        mode=args.mode,
+        passed=passed,
+        tests_run=result.testsRun,
+        skips=len(result.skipped),
+        observed_requests=observed_requests,
+        expected_requests=expected_requests,
+    )
     return 0 if passed else 1
 
 

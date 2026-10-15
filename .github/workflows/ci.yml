@@ -148,13 +148,14 @@ jobs:
         run: uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs --durations 20 tests
 
       - name: Diagnose hosted native Vision OCR
-        if: github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics
         # #893: experiments preserve their own nonzero status and logs; they
         # neither select a production backend nor replace the unit-test gate.
         timeout-minutes: 10
         run: |
           mkdir -p build/vision-ocr
           for mode in default cpu-only fast; do
+            echo "$mode started" | tee -a build/vision-ocr/status.txt
             status=0
             uv run python -m scripts.qualify_vision_ocr --mode "$mode" > "build/vision-ocr/$mode.log" 2>&1 || status=$?
             echo "$mode exit=$status" | tee -a build/vision-ocr/status.txt

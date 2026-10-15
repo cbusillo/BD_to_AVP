@@ -25,13 +25,18 @@ exit zero means that entire case passed without skips. These commands require
 the repository's development dependencies, Xcode and fixture decoders, like the
 normal real-tools test. They do not install system tools or change production
 OCR settings. The CPU-only and fast modes are experiments, not supported runtime
-workarounds. Apple documents [CPU-only execution](https://developer.apple.com/documentation/vision/vnrequest/usescpuonly)
-and [recognition levels](https://developer.apple.com/documentation/vision/vnrecognizetextrequest)
+workarounds. CPU-only mode explicitly assigns and reads back a supported CPU
+device for every compute stage using Apple's [compute-device API](https://developer.apple.com/documentation/vision/vnrequest/setcomputedevice%3Aforcomputestage%3A),
+instead of relying on the deprecated CPU-only flag. Apple documents
+the [recognition levels](https://developer.apple.com/documentation/vision/vnrecognizetextrequest)
 as request properties.
 
 Output records macOS build, architecture, Python/PyObjC and selected FFmpeg
 provenance, then actual request revision, languages, compute-device availability,
-native success/error and recognition results. Available devices do not prove
+native success/error and recognized text. CI provenance includes source SHA,
+run ID and attempt. A pass also requires observing one wrapped request per
+fixture cue; an instrumentation bypass cannot silently qualify a mode.
+Available devices do not prove
 which device performed the request. Request diagnostics wrap the native handler;
 compare the ordinary uninstrumented test before attributing a failure to Vision.
 
