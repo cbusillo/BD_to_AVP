@@ -5,6 +5,7 @@ struct QueueScheduleSettingsPane: View {
     @ObservedObject var controller: QueueAutomationController
 
     @State private var errorMessage: String?
+    @State private var isShowingDetails = false
 
     var body: some View {
         ScrollView {
@@ -78,31 +79,23 @@ struct QueueScheduleSettingsPane: View {
                     Text("Conditions").font(.headline)
                 }
 
-                if !controller.runPolicyActivity.isEmpty {
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(controller.runPolicyActivity.suffix(5).reversed()) { activity in
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text(activity.message(calendar: controller.calendar))
-                                    Spacer(minLength: 12)
-                                    Text(activity.occurredAt.formatted(date: .abbreviated, time: .shortened))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .font(.callout)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+                HStack(spacing: 6) {
+                    Text("Run times and conditions apply while the app is open.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        isShowingDetails = true
                     } label: {
-                        Text("Recent Activity").font(.headline)
+                        Image(systemName: "questionmark.circle")
                     }
-                    .accessibilityIdentifier("run-policy-activity")
+                    .buttonStyle(.borderless)
+                    .help("How run times work")
+                    .accessibilityLabel("How run times work")
+                    .accessibilityIdentifier("queue-schedule-details-button")
+                    .popover(isPresented: $isShowingDetails, arrowEdge: .bottom) {
+                        QueueScheduleDetailsView()
+                    }
                 }
-
-                Text("The app must be open. Run times do not wake the Mac or keep it awake, and a run time that passes while the Mac sleeps or the app is closed is not made up later. A video that is converting when a run time ends or a condition starts finishes normally; no new video starts until the queue may run again. Interrupted or stopped videos are never restarted on their own, and a pause or a pending Start Later window is always kept.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -245,11 +238,13 @@ private struct OperatingWindowEditorRow: View {
             HStack(spacing: 10) {
                 Text("From")
                 DatePicker("Start time", selection: timeBinding(\.start), displayedComponents: .hourAndMinute)
+                    .datePickerStyle(.field)
                     .labelsHidden()
                     .fixedSize()
                     .accessibilityIdentifier("run-time-start-\(window.id.uuidString)")
                 Text("to")
                 DatePicker("End time", selection: timeBinding(\.end), displayedComponents: .hourAndMinute)
+                    .datePickerStyle(.field)
                     .labelsHidden()
                     .fixedSize()
                     .accessibilityIdentifier("run-time-end-\(window.id.uuidString)")
@@ -301,6 +296,35 @@ private struct OperatingWindowEditorRow: View {
                 update(updated)
             }
         )
+    }
+}
+
+/// The rules behind run times, kept out of the pane so it stays short.
+struct QueueScheduleDetailsView: View {
+    private let details = [
+        ("macwindow", "The app must be open. Run times do not wake the Mac or keep it awake."),
+        ("moon.zzz", "A run time that passes while the Mac sleeps or the app is closed is not made up later."),
+        ("film", "A video that is converting when a run time ends or a condition starts finishes normally. No new video starts until the queue may run again."),
+        ("arrow.counterclockwise", "Interrupted or stopped videos never restart on their own."),
+        ("pause.circle", "A pause, or a pending Start Later window, always comes first."),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("How Run Times Work")
+                .font(.headline)
+            ForEach(details, id: \.1) { symbol, text in
+                Label {
+                    Text(text).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: symbol).foregroundStyle(.secondary)
+                }
+                .font(.callout)
+            }
+        }
+        .padding(16)
+        .frame(width: 340, alignment: .leading)
+        .accessibilityIdentifier("queue-schedule-details")
     }
 }
 

@@ -135,6 +135,7 @@ struct BluRayToVisionProApp: App {
                 resolutionMemoryStore: resolutionMemoryStore,
                 relayHostController: relayHostController,
                 movieSharingController: movieSharingController,
+                queueAutomationController: queueAutomationController,
                 capabilities: capabilities
             )
                 .environmentObject(queueNotificationCoordinator)

@@ -20,7 +20,13 @@ private extension UTType {
 }
 
 struct PersistentQueueSidebarView: View {
+    /// The narrowest the sidebar gets; every control in it fits on one line at this width.
+    static let minimumWidth: CGFloat = 300
+
     @State private var dropInsertion: PersistentQueueDropInsertion?
+    @State private var isShowingRunPolicyActivity = false
+    @State private var isShowingRunPolicyActivityFromBanner = false
+    @State private var isStorageForecastExpanded = false
 
     let items: [PersistentQueueItem]
     @Binding var selectedID: UUID?
@@ -53,6 +59,9 @@ struct PersistentQueueSidebarView: View {
     let dismissReview: () -> Void
     let release: (UUID) -> Void
     var runPolicyDecision: QueueRunPolicyDecision = .inactive
+    /// What the run policy did on its own, oldest first.
+    var runPolicyActivity: [QueueRunPolicyActivity] = []
+    var calendar: Calendar = .autoupdatingCurrent
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,8 +70,7 @@ struct PersistentQueueSidebarView: View {
             reviewBanner
             scheduleBanner
             runPolicyBanner
-            storageSummaryView
-            outcomeSummaryView
+            queueSummaryView
             if let banner {
                 Label(banner.title, systemImage: banner.systemImage)
                     .font(.caption.weight(.medium))
@@ -191,22 +199,41 @@ struct PersistentQueueSidebarView: View {
         TimelineView(.everyMinute) { context in
             switch runPolicyDecision {
             case let .waiting(hold, itemCount):
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(
-                        QueueRunPolicyFormatting.waitingTitle(for: hold, now: context.date),
-                        systemImage: Self.runPolicySymbol(for: hold)
-                    )
-                    .font(.caption.weight(.semibold))
-                    Text(QueueRunPolicyFormatting.waitingDetail(for: hold, itemCount: itemCount))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label(
+                            QueueRunPolicyFormatting.waitingTitle(for: hold, now: context.date),
+                            systemImage: Self.runPolicySymbol(for: hold)
+                        )
+                        .font(.caption.weight(.semibold))
+                        Text(QueueRunPolicyFormatting.waitingDetail(for: hold, itemCount: itemCount))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    Spacer(minLength: 0)
+                    if !runPolicyActivity.isEmpty {
+                        Button {
+                            isShowingRunPolicyActivityFromBanner = true
+                        } label: {
+                            Image(systemName: "clock.arrow.circlepath")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Show what the queue did on its own")
+                        .accessibilityLabel("Run Time Activity")
+                        .accessibilityIdentifier("run-policy-activity-button")
+                        .popover(isPresented: $isShowingRunPolicyActivityFromBanner, arrowEdge: .trailing) {
+                            runPolicyActivityList
+                        }
+                    }
                 }
                 .foregroundStyle(Color.accentColor)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.accentColor.opacity(0.08))
-                .accessibilityElement(children: .combine)
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("run-policy-waiting-banner")
             case let .running(until?):
                 Label(
@@ -263,11 +290,19 @@ struct PersistentQueueSidebarView: View {
                 if commandState.canUndo {
                     Button("Undo Remove", action: undo)
                 }
+                if !runPolicyActivity.isEmpty {
+                    Divider()
+                    Button("Run Time Activity…") { isShowingRunPolicyActivity = true }
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
+            .fixedSize()
             .accessibilityLabel("Queue options")
+            .popover(isPresented: $isShowingRunPolicyActivity, arrowEdge: .bottom) {
+                runPolicyActivityList
+            }
         }
         .padding(.horizontal, 14)
         .frame(height: 44)
@@ -307,20 +342,32 @@ struct PersistentQueueSidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Results and the storage forecast share one compact block above the list.
     @ViewBuilder
-    private var storageSummaryView: some View {
-        let summary = QueueStorageSummary(items: items)
-        if !summary.destinations.isEmpty {
+    private var queueSummaryView: some View {
+        let outcome = PersistentQueueOutcomeSummary(items: items)
+        let storage = QueueStorageSummary(items: items)
+        if outcome.hasAnyResults || !storage.destinations.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                if outcome.hasAnyResults {
+                    outcomeSummaryView(outcome)
+                }
+                if !storage.destinations.isEmpty {
+                    storageSummaryView(storage)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.06))
+        }
+    }
+
+    private func storageSummaryView(_ summary: QueueStorageSummary) -> some View {
+        DisclosureGroup(isExpanded: $isStorageForecastExpanded) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Storage Forecast")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
                 ForEach(summary.destinations) { destination in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(URL(fileURLWithPath: destination.destinationPath).lastPathComponent)
-                            .font(.caption.weight(.medium))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
                         Text(destination.destinationPath)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -334,24 +381,48 @@ struct PersistentQueueSidebarView: View {
                             storageMetric("Retained", destination.retainedIntermediateDescription)
                             storageMetric("Margin", destination.safetyMarginDescription)
                         }
-                        storageMetric("Peak", destination.totalPeakDescription)
-                        if destination.hasUnestimatedItems {
-                            Text("\(destination.unestimatedItemCount) item\(destination.unestimatedItemCount == 1 ? "" : "s") not estimated; totals are partial.")
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                        }
                     }
                     .accessibilityElement(children: .combine)
                     .help(destination.destinationPath)
                     .accessibilityIdentifier("storage-summary-\(destination.id)")
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentColor.opacity(0.05))
-            .accessibilityIdentifier("persistent-queue-storage-summary")
+            .padding(.top, 4)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Storage Forecast")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(summary.destinations) { destination in
+                    storagePeakLine(destination)
+                }
+            }
         }
+        .accessibilityIdentifier("persistent-queue-storage-summary")
+    }
+
+    /// The figure people act on, kept visible while the details are collapsed.
+    private func storagePeakLine(_ destination: StorageForecastDestinationSummary) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(URL(fileURLWithPath: destination.destinationPath).lastPathComponent)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text("Peak \(destination.totalPeakDescription)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if destination.hasUnestimatedItems {
+                Text("\(destination.unestimatedItemCount) item\(destination.unestimatedItemCount == 1 ? "" : "s") not estimated; totals are partial.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .help(destination.destinationPath)
     }
 
     private func storageMetric(_ title: String, _ value: String) -> some View {
@@ -366,43 +437,45 @@ struct PersistentQueueSidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private var outcomeSummaryView: some View {
-        let summary = PersistentQueueOutcomeSummary(items: items)
-        if summary.hasAnyResults {
-            VStack(alignment: .leading, spacing: 7) {
-                Text("Results")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 6) {
-                    outcomeButton(
-                        title: "Completed",
-                        count: summary.completedCount,
-                        itemIDs: summary.completedItemIDs,
-                        tint: .green,
-                        systemImage: "checkmark.circle.fill"
-                    )
-                    outcomeButton(
-                        title: "Failed",
-                        count: summary.failedCount,
-                        itemIDs: summary.failedItemIDs,
-                        tint: .red,
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                    outcomeButton(
-                        title: "Needs Action",
-                        count: summary.needsActionCount,
-                        itemIDs: summary.needsActionItemIDs,
-                        tint: .orange,
-                        systemImage: "exclamationmark.circle.fill"
-                    )
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.06))
-            .accessibilityIdentifier("persistent-queue-results-summary")
+    private func outcomeSummaryView(_ summary: PersistentQueueOutcomeSummary) -> some View {
+        // Names the outcomes when they fit and falls back to counts, which keep their names for
+        // VoiceOver and as help.
+        ViewThatFits(in: .horizontal) {
+            outcomeRow(summary, showsTitles: true)
+            outcomeRow(summary, showsTitles: false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Results")
+        .accessibilityIdentifier("persistent-queue-results-summary")
+    }
+
+    private func outcomeRow(_ summary: PersistentQueueOutcomeSummary, showsTitles: Bool) -> some View {
+        HStack(spacing: 6) {
+            outcomeButton(
+                title: "Completed",
+                count: summary.completedCount,
+                itemIDs: summary.completedItemIDs,
+                tint: .green,
+                systemImage: "checkmark.circle.fill",
+                showsTitle: showsTitles
+            )
+            outcomeButton(
+                title: "Failed",
+                count: summary.failedCount,
+                itemIDs: summary.failedItemIDs,
+                tint: .red,
+                systemImage: "exclamationmark.triangle.fill",
+                showsTitle: showsTitles
+            )
+            outcomeButton(
+                title: "Needs Action",
+                count: summary.needsActionCount,
+                itemIDs: summary.needsActionItemIDs,
+                tint: .orange,
+                systemImage: "exclamationmark.circle.fill",
+                showsTitle: showsTitles
+            )
+            Spacer(minLength: 0)
         }
     }
 
@@ -412,31 +485,58 @@ struct PersistentQueueSidebarView: View {
         count: Int,
         itemIDs: [UUID],
         tint: Color,
-        systemImage: String
+        systemImage: String,
+        showsTitle: Bool
     ) -> some View {
         if count > 0, let firstID = itemIDs.first {
             Button {
                 selectedID = firstID
             } label: {
-                VStack(spacing: 2) {
-                    Label(title, systemImage: systemImage)
-                        .labelStyle(.iconOnly)
-                        .font(.caption.weight(.semibold))
-                    Text("\(count)")
-                        .font(.caption.monospacedDigit().weight(.semibold))
-                    Text(title)
-                        .font(.caption2)
+                HStack(spacing: 4) {
+                    Image(systemName: systemImage)
+                    Text(showsTitle ? "\(count) \(title)" : "\(count)")
+                        .monospacedDigit()
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
                 }
-                .frame(maxWidth: .infinity, minHeight: 48)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(tint)
-                .contentShape(Rectangle())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(tint.opacity(0.12), in: Capsule())
+                .contentShape(Capsule())
+                .fixedSize()
             }
             .buttonStyle(.plain)
+            .help("Show the first \(title.lowercased()) item")
             .accessibilityLabel("\(title): \(count)")
             .accessibilityIdentifier("persistent-queue-results-\(title.lowercased().replacingOccurrences(of: " ", with: "-"))")
         }
+    }
+
+    var runPolicyActivityList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Run Time Activity")
+                .font(.headline)
+            Text("What the queue did on its own under its run times and conditions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            ForEach(runPolicyActivity.suffix(8).reversed()) { activity in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(activity.message(calendar: calendar))
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(activity.occurredAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .padding(14)
+        .frame(width: 320, alignment: .leading)
+        .accessibilityIdentifier("run-policy-activity")
     }
 
     private var queueList: some View {
@@ -486,9 +586,11 @@ struct PersistentQueueSidebarView: View {
         }
     }
 
-    private var actionBar: some View {
+    /// The bottom bar. Its editing controls are icons, as in other Mac sidebars, so nothing wraps at
+    /// the minimum sidebar width; each one keeps its name as help and for VoiceOver.
+    var actionBar: some View {
         VStack(spacing: 7) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Menu {
                     Button("Add Files or Folders…", action: addSources)
                     Button("Add Folder of Movies…", action: addSourceFolder)
@@ -500,17 +602,24 @@ struct PersistentQueueSidebarView: View {
                     }
                 } label: {
                     Label("Add", systemImage: "plus")
+                        .labelStyle(.iconOnly)
                 }
                 .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Add sources to the queue")
+                .accessibilityLabel("Add")
                 .accessibilityIdentifier("persistent-queue-add")
 
                 Button {
                     if let selectedID { remove(selectedID) }
                 } label: {
                     Label("Remove", systemImage: "minus")
+                        .labelStyle(.iconOnly)
                 }
                 .buttonStyle(.borderless)
                 .disabled(!commandState.canRemoveSelectedItem)
+                .help("Remove the selected item from the queue")
+                .accessibilityLabel("Remove")
                 .accessibilityIdentifier("persistent-queue-remove")
 
                 Menu {
@@ -531,19 +640,32 @@ struct PersistentQueueSidebarView: View {
                     }
                 } label: {
                     Label("Arrange", systemImage: "arrow.up.arrow.down")
+                        .labelStyle(.iconOnly)
                 }
                 .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Arrange the selected item")
+                .accessibilityLabel("Arrange")
                 .accessibilityHint("Move the selected waiting item with Command-Option-Up Arrow or Command-Option-Down Arrow.")
                 .accessibilityIdentifier("persistent-queue-arrange")
 
-                Spacer()
+                Spacer(minLength: 8)
                 if commandState.canUndo {
-                    Button("Undo", action: undo)
-                        .buttonStyle(.borderless)
+                    Button(action: undo) {
+                        Label("Undo Remove", systemImage: "arrow.uturn.backward")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Undo Remove")
+                    .accessibilityLabel("Undo Remove")
+                    .accessibilityIdentifier("persistent-queue-undo")
                 }
                 if !completedItems.isEmpty {
                     Button("Clear Completed", action: clearCompleted)
                         .buttonStyle(.borderless)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .accessibilityIdentifier("persistent-queue-clear-completed")
                 }
             }
             VStack(alignment: .trailing, spacing: 8) {
