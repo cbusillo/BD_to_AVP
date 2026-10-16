@@ -97,11 +97,18 @@ struct BluRayToVisionProApp: App {
         _durableQueueStore = StateObject(wrappedValue: durableQueueStore)
         _profileStore = StateObject(wrappedValue: profileStore)
         _resolutionMemoryStore = StateObject(wrappedValue: resolutionMemoryStore)
-        _queueNotificationCoordinator = StateObject(wrappedValue: PersistentQueueNotificationCoordinator(
+        let queueNotificationCoordinator = PersistentQueueNotificationCoordinator(
             viewModel: viewModel,
             settings: settings,
             delivery: UserNotificationsQueueNotificationDelivery()
-        ))
+        )
+        queueAutomationController.heldItemsAdmittedHandler = { [weak queueNotificationCoordinator] count in
+            queueNotificationCoordinator?.deliverHeldForReviewArrivals(count: count)
+        }
+        queueAutomationController.isOtherWorkActive = { [weak previewViewModel] in
+            previewViewModel?.hasActiveWorker ?? false
+        }
+        _queueNotificationCoordinator = StateObject(wrappedValue: queueNotificationCoordinator)
         _relayHostController = StateObject(wrappedValue: relayHostController)
         _movieSharingController = StateObject(wrappedValue: movieSharingController)
         _queueAutomationController = StateObject(wrappedValue: queueAutomationController)
@@ -160,7 +167,8 @@ struct BluRayToVisionProApp: App {
             SettingsView(
                 settings: settings,
                 profileStore: profileStore,
-                updater: updater
+                updater: updater,
+                queueAutomationController: queueAutomationController
             )
             .focusedSceneValue(\.persistentQueueCommandActions, nil)
         }

@@ -292,6 +292,23 @@ when a queue run finishes and/or when a queued item first needs attention during
 that run. macOS notification text is count-only: source names, file paths,
 destinations, technical details, and failure text stay inside the app.
 
+**Settings → Watch Folders** adds movies to the queue as they arrive in chosen
+folders. Each folder has its own profile, an **Include subfolders** option, and a
+**New items** choice: **Hold for review** (the default) or **Start
+automatically**. A file is admitted only after its size and modification time
+stop changing, through the same duplicate protection as manual adds, and a file
+removed from the queue is not admitted again unless **Forget Seen Files** is
+used. Held items show a **Ready for Review** banner grouped by folder, with
+**Review**, **Start All**, and dismiss; each held row offers **Release** and
+**Remove**, and the item detail shows its watch folder and arrival times. When
+the "needs attention" notification is on, new held items produce one count-only
+notification. **Start automatically** and **Start All** start an idle queue with
+only those items, join a running queue, and never override a pause, a requested
+pause, a scheduled window, or other active work. Folders are watched while the
+app is open; at launch the app checks for anything that arrived while it was
+closed. A folder on a disconnected drive shows **Drive offline** and resumes when
+the drive mounts again.
+
 The queue also shows a coarse storage forecast grouped by destination. Each
 forecast separates estimated output, peak temporary/working space, retained
 intermediates, a visible safety margin, and total peak space. Forecasts use

@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             window.orderFrontRegardless()
             return
         }
+        startQueueAutomationIfNeeded(arguments: arguments, environment: ProcessInfo.processInfo.environment)
         guard Self.isStartupSmoke(arguments: arguments) else {
             return
         }
@@ -105,6 +106,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     /// Startup work that reaches the user's Keychain item and shared-folder bookmarks is for a person using the app.
     nonisolated static func suppressesDefaultLaunch(arguments: [String], environment: [String: String]) -> Bool {
         isAutomationSmoke(arguments: arguments) || isUnitTestHost(environment: environment)
+    }
+
+    /// Starts watching folders and catching up on what arrived while the app was closed, for a person using the app.
+    @discardableResult
+    func startQueueAutomationIfNeeded(arguments: [String], environment: [String: String]) -> Task<Void, Never>? {
+        guard !Self.suppressesDefaultLaunch(arguments: arguments, environment: environment),
+              let queueAutomationController
+        else {
+            return nil
+        }
+        return Task { @MainActor in
+            await queueAutomationController.startMonitoring()
+        }
     }
 
     func attach(window: NSWindow, workCoordinator: AppWorkCoordinator) {

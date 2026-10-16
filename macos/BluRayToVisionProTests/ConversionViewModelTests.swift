@@ -1045,6 +1045,74 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomaticStartRunsOnlyNewlyAdmittedItemsAndLeavesInterruptedWorkForThePerson() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let interruptedURL = directoryURL.appendingPathComponent("Interrupted.mkv")
+        let arrivedURL = directoryURL.appendingPathComponent("Arrived.mkv")
+        for sourceURL in [interruptedURL, arrivedURL] {
+            _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        }
+        let scenario = BatchWorkerScenario()
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(
+            clientFactory: { scenario.makeClient() },
+            durableQueueStore: queueStore
+        )
+        func draft(_ sourceURL: URL) -> ConversionDraft {
+            ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: sourceURL),
+                sourceDetails: SourceInspection(
+                    name: sourceURL.deletingPathExtension().lastPathComponent,
+                    resolution: "1920x1080",
+                    frameRate: "24/1",
+                    interlaced: false,
+                    sizeBytes: 10
+                ),
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions()
+            )
+        }
+        let manual = try await viewModel.appendPersistentQueueDrafts([draft(interruptedURL)])
+        let interruptedID = try XCTUnwrap(manual.addedItemIDs.first)
+        _ = try await queueStore.mutateItems { items in
+            if let index = items.firstIndex(where: { $0.id == interruptedID }) {
+                items[index].state = .interrupted
+            }
+        }
+        let arrivedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let admitted = try await viewModel.admitAutomatedPersistentQueueDrafts([
+            AutomatedQueueDraft(
+                draft: draft(arrivedURL),
+                admission: .watchFolder(
+                    id: UUID(),
+                    name: "Incoming",
+                    arrivedAt: arrivedAt,
+                    settledAt: arrivedAt.addingTimeInterval(60),
+                    admittedAt: arrivedAt.addingTimeInterval(61)
+                ),
+                holdForReview: false
+            ),
+        ])
+
+        let decision = await viewModel.startAutomaticallyAdmittedItems(
+            admitted.addedItemIDs,
+            otherWorkIsActive: false
+        )
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+
+        XCTAssertEqual(decision, .startQueue)
+        XCTAssertEqual(
+            scenario.records.filter { $0.operation == "convert_source" }.map(\.sourcePath),
+            [arrivedURL.path]
+        )
+        XCTAssertEqual(queueStore.items.first { $0.id == interruptedID }?.state, .interrupted)
+    }
+
+    @MainActor
     func testHeldPersistentQueueItemPreservesIdentityAndResolutionTrace() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
