@@ -1,0 +1,24 @@
+spatial-media-kit-tool macOS arm64 binary
+
+BD_to_AVP packages spatial-media-kit-tool as a separate command-line executable.
+Its `merge` command builds MV-HEVC from separate left- and right-eye movies on
+the generated route, which BD_to_AVP keeps as the fallback to its direct
+MV-HEVC encoder.
+
+Vendored binary source:
+- Project: SpatialMediaKit, maintained fork of the archived
+  https://github.com/sturmen/SpatialMediaKit
+- Source: https://github.com/cbusillo/SpatialMediaKit
+- Source commit and build toolchain: `spatial-media-kit-build.json`
+- Platform: macOS arm64 executable linked only to macOS system libraries
+
+SpatialMediaKit is distributed under the GNU General Public License version 3;
+the full text is in `spatial-media-kit-LICENSE.txt`. BD_to_AVP invokes it as a
+separate command-line executable. The corresponding source is the commit named
+in `spatial-media-kit-build.json` in the repository above.
+
+The build script is `scripts/build_spatial_media_kit_macos.py`. It reads
+`spatial-media-kit-build.json`, verifies the pinned Xcode and SDK, builds the
+pinned commit from a clean checkout with path-independent flags, verifies
+arm64, system-only linkage and the minimum macOS version, and checks the
+recorded checksum before installing the executable into `bd_to_avp/bin`.
