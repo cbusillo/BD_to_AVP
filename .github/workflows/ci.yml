@@ -341,6 +341,22 @@ jobs:
           uv run python scripts/build_edge264_macos.py --output "$RUNNER_TEMP/edge264_test"
           cmp bd_to_avp/bin/edge264_test "$RUNNER_TEMP/edge264_test"
 
+      - name: TEMP diagnose spatial-media-kit-tool rebuild
+        continue-on-error: true
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+        run: |
+          mkdir -p "$RUNNER_TEMP/smk-diag"
+          uv run python scripts/build_spatial_media_kit_macos.py --update dbcf6c38ed079bdb9d0a37a434c8358586a08e63 --output "$RUNNER_TEMP/smk-diag/spatial-media-kit-tool"
+          sw_vers > "$RUNNER_TEMP/smk-diag/env.txt"; xcodebuild -version >> "$RUNNER_TEMP/smk-diag/env.txt"; swift --version >> "$RUNNER_TEMP/smk-diag/env.txt" 2>&1
+          git checkout -- bd_to_avp/resources/notices/spatial-media-kit-build.json
+
+      - name: TEMP upload spatial-media-kit-tool rebuild
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: smk-diag
+          path: ${{ runner.temp }}/smk-diag
+
       - name: Rebuild bundled spatial-media-kit-tool with release toolchain
         env:
           DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
