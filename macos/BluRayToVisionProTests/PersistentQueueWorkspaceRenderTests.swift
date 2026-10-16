@@ -180,7 +180,7 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
             compact: true,
             colorScheme: .dark,
             appearanceName: .darkAqua,
-            sidebarWidth: 300
+            sidebarWidth: PersistentQueueSidebarView.minimumWidth
         )
     }
 
@@ -196,6 +196,63 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 appearanceName: .darkAqua
             )
         }
+    }
+
+    private func makeSidebar(
+        items: [PersistentQueueItem],
+        selectedItem: PersistentQueueItem?,
+        compact: Bool,
+        offPeakSchedule: OffPeakQueueSchedule? = nil,
+        offPeakScheduleOutcome: OffPeakScheduleOutcome? = nil,
+        runState: PersistentQueueRunState = .running,
+        reviewGroups: [WatchFolderReviewGroup] = [],
+        runPolicyDecision: QueueRunPolicyDecision = .inactive,
+        runPolicyActivity: [QueueRunPolicyActivity] = [],
+        showsSidebarSelection: Bool = true
+    ) -> PersistentQueueSidebarView {
+        PersistentQueueSidebarView(
+            items: items,
+            selectedID: .constant(showsSidebarSelection ? selectedItem?.id : nil),
+            compactRows: .constant(compact),
+            commandState: PersistentQueueCommandState(
+                items: items,
+                selectedItemID: selectedItem?.id,
+                runState: runState,
+                hasActiveWorker: runState == .running && !items.isEmpty,
+                hasPreviewWorker: false,
+                offPeakSchedule: offPeakSchedule,
+                insertedDiscs: [],
+                removalTokenIsValid: true
+            ),
+            makeMKVAvailable: true,
+            activeProgress: WorkerProgress(currentStage: 3, totalStages: 5, stageFraction: 0.61),
+            activeElapsedText: "1:12:31",
+            offPeakScheduleOutcome: offPeakScheduleOutcome,
+            offPeakScheduleErrorMessage: nil,
+            addSources: {},
+            addSourceFolder: {},
+            addDisc: { _ in },
+            addDroppedURLs: { _, _ in true },
+            move: { _, _ in },
+            moveRelative: { _, _, _ in },
+            moveNext: { _ in },
+            remove: { _ in },
+            clearCompleted: {},
+            undo: {},
+            start: {},
+            startLater: {},
+            editSchedule: {},
+            cancelSchedule: {},
+            dismissScheduleOutcome: {},
+            pauseAfterCurrent: {},
+            stopCurrent: {},
+            reviewGroups: reviewGroups,
+            startReviewGroup: { _ in },
+            dismissReview: {},
+            release: { _ in },
+            runPolicyDecision: runPolicyDecision,
+            runPolicyActivity: runPolicyActivity
+        )
     }
 
     private func render(
@@ -216,47 +273,16 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         showsSidebarSelection: Bool = true
     ) throws {
         let workspace = HSplitView {
-            PersistentQueueSidebarView(
+            makeSidebar(
                 items: items,
-                selectedID: .constant(showsSidebarSelection ? selectedItem?.id : nil),
-                compactRows: .constant(compact),
-                commandState: PersistentQueueCommandState(
-                    items: items,
-                    selectedItemID: selectedItem?.id,
-                    runState: runState,
-                    hasActiveWorker: runState == .running && !items.isEmpty,
-                    hasPreviewWorker: false,
-                    offPeakSchedule: offPeakSchedule,
-                    insertedDiscs: [],
-                    removalTokenIsValid: true
-                ),
-                makeMKVAvailable: true,
-                activeProgress: WorkerProgress(currentStage: 3, totalStages: 5, stageFraction: 0.61),
-                activeElapsedText: "1:12:31",
+                selectedItem: selectedItem,
+                compact: compact,
+                offPeakSchedule: offPeakSchedule,
                 offPeakScheduleOutcome: offPeakScheduleOutcome,
-                offPeakScheduleErrorMessage: nil,
-                addSources: {},
-                addSourceFolder: {},
-                addDisc: { _ in },
-                addDroppedURLs: { _, _ in true },
-                move: { _, _ in },
-                moveRelative: { _, _, _ in },
-                moveNext: { _ in },
-                remove: { _ in },
-                clearCompleted: {},
-                undo: {},
-                start: {},
-                startLater: {},
-                editSchedule: {},
-                cancelSchedule: {},
-                dismissScheduleOutcome: {},
-                pauseAfterCurrent: {},
-                stopCurrent: {},
+                runState: runState,
                 reviewGroups: reviewGroups,
-                startReviewGroup: { _ in },
-                dismissReview: {},
-                release: { _ in },
-                runPolicyDecision: runPolicyDecision
+                runPolicyDecision: runPolicyDecision,
+                showsSidebarSelection: showsSidebarSelection
             )
             .frame(width: sidebarWidth)
             PersistentQueueDetailView(
@@ -373,6 +399,85 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
             screenshotName: "queue-waiting-on-battery",
             screenshotHeight: 760
         )
+    }
+
+    func testQueueWaitingAtMinimumSidebarWidthRendersAcrossAppearances() throws {
+        let items = try makeItems().map { item in
+            item.isActiveForRunPolicyRender ? try PersistentQueueItem(item: DurableConversionQueueItem(
+                ordinal: 20,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: item.draft),
+                state: .waiting
+            )) : item
+        }
+        let calendar = Calendar.autoupdatingCurrent
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))!
+        let nextStart = calendar.date(bySettingHour: 1, minute: 0, second: 0, of: tomorrow)!
+        let now = Date()
+        let activity = [
+            QueueRunPolicyActivity(occurredAt: now.addingTimeInterval(-9 * 60 * 60), kind: .started, itemCount: 9),
+            QueueRunPolicyActivity(
+                occurredAt: now.addingTimeInterval(-2 * 60 * 60),
+                kind: .stoppedStartingNewItems,
+                hold: .outsideRunTimes(nextStart: nextStart),
+                itemCount: 7
+            ),
+        ]
+        for (colorScheme, appearanceName, suffix) in [(ColorScheme.light, NSAppearance.Name.aqua, "light"), (.dark, .darkAqua, "dark")] {
+            let sidebar = makeSidebar(
+                items: items,
+                selectedItem: nil,
+                compact: true,
+                runState: .idle,
+                runPolicyDecision: .waiting(.outsideRunTimes(nextStart: nextStart), itemCount: 7),
+                runPolicyActivity: activity
+            )
+            try ReviewScreenshot.capture(
+                sidebar.preferredColorScheme(colorScheme),
+                size: CGSize(width: PersistentQueueSidebarView.minimumWidth, height: 820),
+                appearance: appearanceName,
+                named: "queue-sidebar-minimum-width-\(suffix)"
+            )
+            try ReviewScreenshot.capture(
+                sidebar.runPolicyActivityList.preferredColorScheme(colorScheme),
+                size: CGSize(width: 320, height: 200),
+                appearance: appearanceName,
+                named: "queue-run-time-activity-\(suffix)"
+            )
+        }
+        try render(
+            items: items,
+            selectedItem: nil,
+            compact: true,
+            colorScheme: .dark,
+            appearanceName: .darkAqua,
+            sidebarWidth: PersistentQueueSidebarView.minimumWidth,
+            runState: .idle,
+            runPolicyDecision: .waiting(.outsideRunTimes(nextStart: nextStart), itemCount: 7)
+        )
+    }
+
+    func testBottomBarFitsOnOneLineAtTheMinimumSidebarWidth() throws {
+        let items = try makeItems()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let schedule = OffPeakQueueSchedule(
+            startAt: start,
+            endAt: start.addingTimeInterval(8 * 60 * 60),
+            createdAt: start.addingTimeInterval(-60)
+        )
+        // Every optional control shown: undo, Clear Completed, and with and without a Start Later window.
+        for (runState, offPeakSchedule) in [(PersistentQueueRunState.idle, nil), (.running, schedule)] {
+            let sidebar = makeSidebar(
+                items: items,
+                selectedItem: items[4],
+                compact: false,
+                offPeakSchedule: offPeakSchedule,
+                runState: runState
+            )
+            // The bar's ideal width is what it needs with no text wrapped.
+            let idealWidth = NSHostingView(rootView: sidebar.actionBar).fittingSize.width
+            XCTAssertLessThanOrEqual(idealWidth, PersistentQueueSidebarView.minimumWidth)
+        }
     }
 
     private func makeItems() throws -> [PersistentQueueItem] {

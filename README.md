@@ -349,8 +349,9 @@ conditions **Wait while on battery power** and **Wait while the Mac is running
 hot** (serious or critical thermal pressure) work the same way: they never
 interrupt a converting video, they only keep new ones from starting, and an
 automatic run they stopped resumes when power returns or the Mac cools down.
-The queue shows what it is waiting for, and the recent decisions are listed in
-Settings and kept with the watch-folder settings in `queue.automation.json`.
+The queue shows what it is waiting for; its **Run Time Activity** (in the queue
+options menu, or from the waiting notice) lists what it did on its own. Those
+decisions are kept with the watch-folder settings in `queue.automation.json`.
 These rules never override a pause or a pending **Start Later** window, which
 runs at its own time (it still waits for power or for the Mac to cool down, and
 is reported missed if its window ends first). Interrupted or stopped videos are

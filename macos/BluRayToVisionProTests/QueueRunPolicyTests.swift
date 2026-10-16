@@ -497,12 +497,23 @@ final class QueueRunPolicyTests: XCTestCase {
         try harness.controller.updateRunPolicy(policy)
         XCTAssertNotNil(harness.controller.runPolicyEvaluation().nextWindowStart ?? harness.controller.runPolicyEvaluation().currentWindow?.end)
 
-        harness.controller.recordRunPolicyActivity(.started, hold: nil, itemCount: 3)
-        harness.controller.recordRunPolicyActivity(.stoppedStartingNewItems, hold: .onBatteryPower, itemCount: 2)
+        for (scheme, appearance, suffix) in [(ColorScheme.light, NSAppearance.Name.aqua, "light"), (.dark, .darkAqua, "dark")] {
+            try ReviewScreenshot.capture(
+                QueueScheduleSettingsPane(controller: harness.controller).padding(20).preferredColorScheme(scheme),
+                size: CGSize(width: 860, height: 700),
+                appearance: appearance,
+                named: "queue-schedule-settings-\(suffix)"
+            )
+            try ReviewScreenshot.capture(
+                QueueScheduleDetailsView().preferredColorScheme(scheme),
+                size: CGSize(width: 340, height: 300),
+                appearance: appearance,
+                named: "queue-schedule-details-\(suffix)"
+            )
+        }
         let pane = QueueScheduleSettingsPane(controller: harness.controller)
             .padding(20)
             .preferredColorScheme(.light)
-        try ReviewScreenshot.capture(pane, size: CGSize(width: 860, height: 700), named: "queue-schedule-settings")
         let hostingView = NSHostingView(rootView: pane.frame(width: 860, height: 700))
         hostingView.appearance = NSAppearance(named: .aqua)
         hostingView.frame = NSRect(x: 0, y: 0, width: 860, height: 700)

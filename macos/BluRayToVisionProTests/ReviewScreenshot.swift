@@ -28,8 +28,13 @@ enum ReviewScreenshot {
         guard let directoryURL else {
             return
         }
-        let hostingView = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
-        let window = NSWindow(
+        let hostingView = NSHostingView(
+            rootView: view
+                .frame(width: size.width, height: size.height)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .environment(\.controlActiveState, .key)
+        )
+        let window = ReviewWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless],
             backing: .buffered,
@@ -52,4 +57,14 @@ enum ReviewScreenshot {
         let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         try data.write(to: directoryURL.appendingPathComponent("\(name).png"))
     }
+}
+
+/// An off-screen window that draws as the focused window of the active app, so switches and other
+/// controls show their real on or off state instead of the gray of a background window. The test
+/// host is never brought forward, so a capture run does not take focus from what a person is doing.
+private final class ReviewWindow: NSWindow {
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
+    @objc(_hasActiveControls) var reviewHasActiveControls: Bool { true }
+    @objc(hasKeyAppearance) var reviewHasKeyAppearance: Bool { true }
 }

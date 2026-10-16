@@ -10,6 +10,7 @@ struct ContentView: View {
     @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
     @ObservedObject var relayHostController: RelayHostSessionController
     @ObservedObject var movieSharingController: MovieSharingController
+    @ObservedObject var queueAutomationController: QueueAutomationController
     let capabilities: AppCapabilities
 
     @State private var selectedProfileID: String
@@ -52,6 +53,7 @@ struct ContentView: View {
         resolutionMemoryStore: ResolutionMemoryStore,
         relayHostController: RelayHostSessionController,
         movieSharingController: MovieSharingController,
+        queueAutomationController: QueueAutomationController,
         capabilities: AppCapabilities
     ) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
@@ -62,6 +64,7 @@ struct ContentView: View {
         _resolutionMemoryStore = ObservedObject(wrappedValue: resolutionMemoryStore)
         _relayHostController = ObservedObject(wrappedValue: relayHostController)
         _movieSharingController = ObservedObject(wrappedValue: movieSharingController)
+        _queueAutomationController = ObservedObject(wrappedValue: queueAutomationController)
         self.capabilities = capabilities
 
         let profile = profileStore.profile(withID: settings.selectedProfileID)
@@ -100,7 +103,7 @@ struct ContentView: View {
     private var workspaceContent: some View {
         HSplitView {
             persistentQueueSidebar
-                .frame(minWidth: 300, idealWidth: 330, maxWidth: 420)
+                .frame(minWidth: PersistentQueueSidebarView.minimumWidth, idealWidth: 330, maxWidth: 420)
             PersistentQueueDetailView(
                 item: viewModel.selectedPersistentQueueItem,
                 resolutionGroup: selectedPersistentQueueResolutionGroup,
@@ -467,7 +470,9 @@ struct ContentView: View {
             startReviewGroup: startHeldReviewGroup,
             dismissReview: { queueReviewBannerState.dismiss(items: viewModel.persistentQueueItems) },
             release: releaseHeldPersistentQueueItem,
-            runPolicyDecision: viewModel.runPolicyDecision
+            runPolicyDecision: viewModel.runPolicyDecision,
+            runPolicyActivity: queueAutomationController.runPolicyActivity,
+            calendar: queueAutomationController.calendar
         )
     }
 
