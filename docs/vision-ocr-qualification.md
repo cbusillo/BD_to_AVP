@@ -1,9 +1,21 @@
 # Native Vision PGS OCR qualification
 
-Issue [#893](https://github.com/cbusillo/BD_to_AVP/issues/893) tracks the
-hosted Vision request returning false without an NSError. This differs from
-the local Qt test teardown crash fixed in #934. A newer local macOS pass does
-not qualify the affected OS or explain the hosted failure.
+## Runtime boundary
+
+On GitHub's hosted macOS 27.0.1 VM (build 26A434, VirtualMac2,1, paravirtual
+GPU and CPU, no Neural Engine), Vision text recognition returns false without
+an NSError. A native Swift control fails the same way on the same bitmaps, so
+the cause is the VM's Vision backend, not PyObjC or our request setup. A
+physical Mac mini (M1) on the same 27.0.1 build passes the real-tools tests and
+the full regular/forced OCR, SRT and final-mux qualification. Users on physical
+Macs are not affected. Evidence is on
+[#893](https://github.com/cbusillo/BD_to_AVP/issues/893) and in
+[#957](https://github.com/cbusillo/BD_to_AVP/pull/957).
+
+The hosted unit run keeps only its narrow known-failure skip for this
+signature. A hosted image that passes the diagnostic matrix below is the signal
+to remove it. This failure is separate from the local Qt test teardown crash
+fixed in #934.
 
 Run the normal product check first:
 
@@ -45,6 +57,23 @@ Vision, and device enumeration can itself affect initialization. If its default
 case passes alongside an ordinary unit-test skip in the same run, investigate
 concurrency, cold state and instrumentation; that combination does not qualify
 the image as recovered.
+
+To separate the PyObjC bridge from the Vision backend, save the exact bitmaps
+the default experiment passes to Vision, then recognize them from Swift:
+
+```sh
+uv run python -m scripts.qualify_vision_ocr --mode default --dump-bitmaps build/vision-ocr/bitmaps
+xcrun swiftc scripts/vision_ocr_control.swift -o build/vision-ocr-control
+build/vision-ocr-control build/vision-ocr/bitmaps
+```
+
+The Swift control rebuilds each grayscale image from the raw bytes, checks
+their SHA-256, and applies the same accurate level, language correction and
+languages. Each output line shows the Python outcome next to the Swift outcome
+for one bitmap. A Swift failure on the bytes Python also failed on points at the
+OS/VM backend; a Swift success there points at the bridge or request setup.
+A false return without NSError appears in Swift as a thrown nil error. It
+passes only when every bitmap returns text.
 
 To compare on the current hosted image, manually dispatch `CI` on the task
 branch with `vision_ocr_diagnostics=true`. The `vision-ocr-diagnostics` artifact

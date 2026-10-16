@@ -138,13 +138,13 @@ jobs:
         # One worker per core; each test class stays on one worker.
         env:
           BD_TO_AVP_REQUIRE_REAL_PGS_TESTS: "1"
-          # #892: four xcode-27 attempts failed both real PGS tracks with
-          # performRequests returning false and no NSError. The backend cause
-          # is unproven; the full OCR test remains enabled outside this runner.
+          # #893: Vision text recognition fails natively in the hosted macOS
+          # VM (Swift fails on the same bitmaps), while a physical Mac on the
+          # same 27.0.1 build passes. The full OCR test stays enabled elsewhere.
           BD_TO_AVP_HOSTED_VISION_OCR_SKIP_REASON: >-
-            xcode-27 hosted Vision OCR returns false without NSError (#892,
-            CI 37229434438 attempts 1-4); real PGS extraction/mux still runs
-            with bitmap-checked recognition. Run locally for actual OCR.
+            Hosted macOS VM Vision OCR returns false without NSError; physical
+            Macs on the same build pass (#893). Real PGS extraction/mux still
+            runs with bitmap-checked recognition. Run locally for actual OCR.
         run: uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs --durations 20 tests
 
       - name: Diagnose hosted native Vision OCR
@@ -157,10 +157,19 @@ jobs:
           for mode in default cpu-only fast; do
             echo "$mode started" | tee -a build/vision-ocr/status.txt
             status=0
-            uv run python -m scripts.qualify_vision_ocr --mode "$mode" > "build/vision-ocr/$mode.log" 2>&1 || status=$?
+            dump=()
+            if [ "$mode" = default ]; then dump=(--dump-bitmaps build/vision-ocr/bitmaps); fi
+            uv run python -m scripts.qualify_vision_ocr --mode "$mode" "${dump[@]}" > "build/vision-ocr/$mode.log" 2>&1 || status=$?
             echo "$mode exit=$status" | tee -a build/vision-ocr/status.txt
             cat "build/vision-ocr/$mode.log"
           done
+          # Same bitmaps through Vision without PyObjC.
+          echo "swift started" | tee -a build/vision-ocr/status.txt
+          status=0
+          { xcrun swiftc scripts/vision_ocr_control.swift -o build/vision-ocr-control \
+            && build/vision-ocr-control build/vision-ocr/bitmaps; } > build/vision-ocr/swift.log 2>&1 || status=$?
+          echo "swift exit=$status" | tee -a build/vision-ocr/status.txt
+          cat build/vision-ocr/swift.log
 
       - name: Preserve native Vision OCR diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics
