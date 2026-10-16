@@ -71,7 +71,7 @@ def verify_toolchain(provenance: BuildProvenance) -> None:
         raise RuntimeError(f"SpatialMediaKit requires macOS SDK {provenance.sdk_version}, got {sdk_version}")
 
 
-def swift_build_command(checkout: Path) -> list[str]:
+def swift_build_command(checkout: Path, minimum_macos: str) -> list[str]:
     # Map the checkout path away and drop debug info and the linker's
     # object-file debug map, so the bytes do not depend on where it builds.
     source = str(checkout.resolve())
@@ -82,8 +82,11 @@ def swift_build_command(checkout: Path) -> list[str]:
         source,
         "--configuration",
         "release",
-        "--arch",
-        "arm64",
+        # Targeting the app's own minimum macOS keeps the driver from adding a
+        # back-deployment rpath into the installed Xcode, which would make the
+        # bytes depend on where Xcode is.
+        "--triple",
+        f"arm64-apple-macosx{minimum_macos}",
         "--product",
         PRODUCT,
         "--disable-automatic-resolution",
@@ -97,8 +100,6 @@ def swift_build_command(checkout: Path) -> list[str]:
         "-g0",
         "-Xcc",
         f"-ffile-prefix-map={source}={SOURCE_PREFIX}",
-        "-Xlinker",
-        "-no_uuid",
         "-Xlinker",
         "-S",
     ]
@@ -121,7 +122,7 @@ def build_spatial_media_kit(output_path: Path, provenance: BuildProvenance, *, v
         checkout = Path(temp_dir) / "SpatialMediaKit"
         run(["git", "clone", "--filter=blob:none", provenance.repository, str(checkout)])
         run(["git", "checkout", "--detach", provenance.revision], checkout)
-        command = swift_build_command(checkout)
+        command = swift_build_command(checkout, provenance.minimum_macos)
         run(command)
         bin_path = subprocess.check_output([*command, "--show-bin-path"], text=True).strip()
         built_binary = Path(bin_path) / PRODUCT

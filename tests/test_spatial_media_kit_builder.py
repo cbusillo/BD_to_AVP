@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from scripts import build_spatial_media_kit_macos as builder
 
 
@@ -22,6 +24,11 @@ class SpatialMediaKitBuilderTests(unittest.TestCase):
             builder.sha256(REPO_ROOT / "bd_to_avp" / "bin" / builder.PRODUCT),
             committed_provenance().unsigned_sha256,
         )
+
+    def test_minimum_macos_matches_the_app(self) -> None:
+        project = yaml.safe_load((REPO_ROOT / "macos" / "project.yml").read_text(encoding="utf-8"))
+
+        self.assertEqual(committed_provenance().minimum_macos, project["options"]["deploymentTarget"]["macOS"])
 
     def test_load_provenance_rejects_missing_and_unexpected_fields(self) -> None:
         manifest = dataclasses.asdict(committed_provenance())
