@@ -226,7 +226,7 @@ final class QueueRunPolicyTests: XCTestCase {
         try harness.controller.updateRunPolicy(windowsPolicy([window(days: QueueWeekday.everyDay, from: 1, to: 7)]))
 
         await harness.controller.startMonitoring()
-        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker }
+        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker && harness.viewModel.persistentQueueRunState == .idle }
 
         XCTAssertEqual(harness.convertedPaths, [harness.path(0)])
         XCTAssertEqual(harness.queueStore.items.map(\.state), [.completed, .interrupted, .stopped, .heldForReview])
@@ -251,7 +251,7 @@ final class QueueRunPolicyTests: XCTestCase {
         harness.clock.value = opening
         harness.timers.fire(timer)
         await harness.controller.waitForRunPolicyEvaluation()
-        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker }
+        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker && harness.viewModel.persistentQueueRunState == .idle }
 
         XCTAssertEqual(harness.convertedPaths, [harness.path(0)])
         XCTAssertEqual(harness.controller.runPolicyActivity.map(\.kind), [.held, .started])
@@ -285,7 +285,7 @@ final class QueueRunPolicyTests: XCTestCase {
         try harness.controller.updateRunPolicy(windowsPolicy([window(days: QueueWeekday.everyDay, from: 1, to: 7)]))
 
         await harness.controller.evaluateRunPolicy()
-        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker }
+        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker && harness.viewModel.persistentQueueRunState == .idle }
 
         XCTAssertEqual(harness.convertedPaths, [harness.path(0)])
         XCTAssertEqual(harness.queueStore.items.map(\.state), [.completed, .waiting])
@@ -332,7 +332,7 @@ final class QueueRunPolicyTests: XCTestCase {
         harness.clock.value = date(2026, 10, 16, 12, 0)
         let evaluation = await harness.viewModel.evaluateOffPeakSchedule()
         XCTAssertEqual(evaluation, .start(schedule))
-        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker }
+        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker && harness.viewModel.persistentQueueRunState == .idle }
         XCTAssertEqual(harness.convertedPaths, [harness.path(0)])
     }
 
@@ -368,7 +368,7 @@ final class QueueRunPolicyTests: XCTestCase {
 
         let decision = await harness.viewModel.startAutomaticallyAdmittedItems(automatic, otherWorkIsActive: false)
         XCTAssertEqual(decision, .startQueue)
-        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker }
+        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker && harness.viewModel.persistentQueueRunState == .idle }
 
         // The running video finished; the next one waits for power instead of starting.
         XCTAssertEqual(harness.convertedPaths, [harness.path(0)])
@@ -380,7 +380,7 @@ final class QueueRunPolicyTests: XCTestCase {
         harness.onConversion = nil
         harness.conditions.current = QueueMachineConditions()
         await harness.controller.evaluateRunPolicy()
-        await harness.waitUntil { harness.queueStore.items[1].state == .completed && !harness.viewModel.hasActiveWorker }
+        await harness.waitUntil { harness.queueStore.items[1].state == .completed && !harness.viewModel.hasActiveWorker && harness.viewModel.persistentQueueRunState == .idle }
 
         // Only the automatic run resumes; the item a person left waiting still waits for them.
         XCTAssertEqual(harness.convertedPaths, [harness.path(0), harness.path(1)])
@@ -404,7 +404,7 @@ final class QueueRunPolicyTests: XCTestCase {
 
         harness.conditions.current = QueueMachineConditions(thermalState: .fair)
         await harness.controller.evaluateRunPolicy()
-        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker }
+        await harness.waitUntil { harness.queueStore.items.first?.state == .completed && !harness.viewModel.hasActiveWorker && harness.viewModel.persistentQueueRunState == .idle }
         XCTAssertEqual(harness.convertedPaths, [harness.path(0)])
     }
 
@@ -676,10 +676,18 @@ private final class PolicyHarness {
         Self.path(ordinal)
     }
 
-    func waitUntil(_ condition: @MainActor () -> Bool) async {
+    func waitUntil(
+        _ condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
         for _ in 0..<2_000 where !condition() {
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(1))
+        }
+        // A silent timeout would let later assertions observe a half-finished run.
+        if !condition() {
+            XCTFail("Timed out waiting for the queue to settle", file: file, line: line)
         }
     }
 }
