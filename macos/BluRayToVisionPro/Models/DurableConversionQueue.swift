@@ -24,6 +24,16 @@ struct ConversionQueueDocument: Codable, Equatable {
         self.init(version: Self.currentVersion, items: items)
     }
 
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        // Write version 4 only when a version 3 reader would misread the
+        // queue, so going back to an older build keeps queues without
+        // automatically admitted items editable.
+        let usesVersion4 = items.contains { $0.admission != nil || $0.state == .heldForReview }
+        try values.encode(usesVersion4 ? Self.currentVersion : 3, forKey: .version)
+        try values.encode(items, forKey: .items)
+    }
+
     func restoredAfterLaunch(at restoredAt: Date = Date()) -> ConversionQueueDocument {
         ConversionQueueDocument(
             version: version,

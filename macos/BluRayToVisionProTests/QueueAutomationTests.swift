@@ -36,6 +36,8 @@ final class QueueAutomationTests: XCTestCase {
         let reloaded = ConversionQueueStore(fileURL: fileURL)
         XCTAssertNil(reloaded.loadErrorMessage)
         XCTAssertEqual(reloaded.items, loadedItems)
+        // Without automatically admitted items, an older build can still edit the rewritten queue.
+        XCTAssertEqual(try writtenVersion(of: fileURL), try writtenVersion(of: fixtureURL))
     }
 
     @MainActor
@@ -53,6 +55,12 @@ final class QueueAutomationTests: XCTestCase {
         XCTAssertEqual(reloaded.items.map(\.state), [.heldForReview])
         XCTAssertEqual(reloaded.items.first?.admission, admission)
         XCTAssertEqual(try reloaded.items.map(PersistentQueueItem.init(item:)).map(\.status), [.heldForReview])
+        XCTAssertEqual(try writtenVersion(of: fileURL), ConversionQueueDocument.currentVersion)
+    }
+
+    private func writtenVersion(of url: URL) throws -> Int {
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        return try XCTUnwrap(object?["version"] as? Int)
     }
 
     // MARK: - Admission, release, and removal
