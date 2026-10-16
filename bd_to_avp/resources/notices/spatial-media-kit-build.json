@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/cbusillo/SpatialMediaKit.git",
+  "revision": "dbcf6c38ed079bdb9d0a37a434c8358586a08e63",
+  "platform": "macOS arm64",
+  "minimum_macos": "26.0",
+  "xcode_version": "27.0",
+  "xcode_build_version": "27A266a",
+  "sdk_version": "27.0",
+  "unsigned_sha256": "006ff6d941039048ea538030e276c6fdb86e3aa27c554564a81c5fe933ab7621"
+}
