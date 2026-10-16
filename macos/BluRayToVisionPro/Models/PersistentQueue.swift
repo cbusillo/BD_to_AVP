@@ -371,6 +371,8 @@ struct PersistentQueueRemovalToken: Equatable {
 struct PersistentQueueAppendResult: Equatable {
     let addedCount: Int
     let duplicateDisplayNames: [String]
+    /// The identifiers of the admitted items, in queue order.
+    var addedItemIDs: [UUID] = []
 
     var duplicateCount: Int { duplicateDisplayNames.count }
 }

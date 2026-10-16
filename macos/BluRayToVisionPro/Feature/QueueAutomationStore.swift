@@ -118,6 +118,7 @@ struct QueueAutomationDocument: Codable, Equatable {
 
 enum QueueAutomationStoreError: LocalizedError, Equatable {
     case unknownWatchFolder
+    case alreadyWatched
     case unsupportedVersion(Int)
     case writesBlocked
     case writeFailed
@@ -126,6 +127,8 @@ enum QueueAutomationStoreError: LocalizedError, Equatable {
         switch self {
         case .unknownWatchFolder:
             "That watch folder is no longer configured."
+        case .alreadyWatched:
+            "That folder is already a watch folder."
         case let .unsupportedVersion(version):
             "Watch folder data version \(version) is not supported."
         case .writesBlocked:

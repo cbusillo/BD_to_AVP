@@ -6,6 +6,7 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
     private enum ThreadIdentifier {
         static let attention = "queue.attention"
         static let completion = "queue.completion"
+        static let review = "queue.review"
     }
 
     private struct Snapshot: Equatable {
@@ -106,6 +107,23 @@ final class PersistentQueueNotificationCoordinator: ObservableObject {
         {
             self.session = nil
         }
+    }
+
+    /// Announces items a watch folder just held for review, as one notification for the whole round of scans.
+    ///
+    /// Held items wait for a person, so this follows the "needs attention" setting.
+    func deliverHeldForReviewArrivals(count: Int) {
+        guard count > 0, settings.notifyWhenQueueNeedsAttention else {
+            return
+        }
+        deliver(
+            identifier: "queue-review-\(UUID().uuidString)",
+            threadIdentifier: ThreadIdentifier.review,
+            title: "Ready for Review",
+            body: count == 1
+                ? "1 new item is ready for review."
+                : "\(count) new items are ready for review."
+        )
     }
 
     private func bind(viewModel: ConversionViewModel) {

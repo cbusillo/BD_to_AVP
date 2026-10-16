@@ -48,11 +48,16 @@ struct PersistentQueueSidebarView: View {
     let dismissScheduleOutcome: () -> Void
     let pauseAfterCurrent: () -> Void
     let stopCurrent: () -> Void
+    let reviewGroups: [WatchFolderReviewGroup]
+    let startReviewGroup: (WatchFolderReviewGroup) -> Void
+    let dismissReview: () -> Void
+    let release: (UUID) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
+            reviewBanner
             scheduleBanner
             storageSummaryView
             outcomeSummaryView
@@ -78,6 +83,54 @@ struct PersistentQueueSidebarView: View {
         .accessibilityIdentifier("persistent-queue-sidebar")
         .onChange(of: items.map(\.id)) { _, _ in
             dropInsertion = nil
+        }
+    }
+
+    @ViewBuilder
+    private var reviewBanner: some View {
+        if !reviewGroups.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Label("Ready for Review", systemImage: "tray.and.arrow.down.fill")
+                        .font(.caption.weight(.semibold))
+                    Spacer(minLength: 4)
+                    Button(action: dismissReview) {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Hide until more items arrive. Items stay held.")
+                    .accessibilityLabel("Dismiss review notice")
+                    .accessibilityIdentifier("queue-review-dismiss")
+                }
+                .foregroundStyle(Color.accentColor)
+                ForEach(reviewGroups) { group in
+                    HStack(spacing: 8) {
+                        Text(group.title)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Button("Review") {
+                            selectedID = group.firstItemID
+                        }
+                        .controlSize(.small)
+                        .accessibilityLabel("Review \(group.title)")
+                        Button("Start All") {
+                            startReviewGroup(group)
+                        }
+                        .controlSize(.small)
+                        .help("Release these items. The queue starts if it is idle; a pause or a schedule is kept.")
+                        .accessibilityLabel("Start all \(group.title)")
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("queue-review-group-\(group.id)")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.08))
+            .accessibilityIdentifier("queue-review-banner")
         }
     }
 
@@ -367,7 +420,8 @@ struct PersistentQueueSidebarView: View {
                 move: move,
                 moveRelative: moveRelative,
                 moveNext: moveNext,
-                remove: remove
+                remove: remove,
+                release: release
             )
             .tag(item.id)
         }
@@ -615,6 +669,7 @@ private struct PersistentQueueRow: View {
     let moveRelative: (UUID, UUID, PersistentQueueMovePlacement) -> Void
     let moveNext: (UUID) -> Void
     let remove: (UUID) -> Void
+    let release: (UUID) -> Void
 
     var body: some View {
         interactiveRow
@@ -653,6 +708,10 @@ private struct PersistentQueueRow: View {
                 .accessibilityAction(named: "Move Down") {
                     if canMoveDown { move(item.id, 1) }
                 }
+        } else if item.isHeldForReview {
+            baseRow
+                .accessibilityAction(named: "Release") { release(item.id) }
+                .accessibilityHint(item.queueManipulationLockReason ?? "This item cannot move or be edited.")
         } else {
             baseRow
                 .accessibilityHint(item.queueManipulationLockReason ?? "This item cannot move or be edited.")
@@ -719,6 +778,18 @@ private struct PersistentQueueRow: View {
                             + "State: \(item.status.title)"
                     )
                 }
+                if item.isHeldForReview {
+                    HStack(spacing: 6) {
+                        Button("Release") { release(item.id) }
+                            .help("Move this item to waiting so the queue can run it")
+                            .accessibilityIdentifier("persistent-queue-release-\(item.id.uuidString)")
+                        Button("Remove") { remove(item.id) }
+                            .help("Remove this item from the queue")
+                            .accessibilityIdentifier("persistent-queue-remove-held-\(item.id.uuidString)")
+                    }
+                    .controlSize(.small)
+                    .padding(.top, compact ? 1 : 2)
+                }
                 if item.status.isActive, let progress {
                     if let stageFraction = progress.stageFraction {
                         ProgressView(value: stageFraction)
@@ -750,6 +821,9 @@ private struct PersistentQueueRow: View {
                 Divider()
                 Button("Convert Next") { moveNext(item.id) }
                     .disabled(!canConvertNext)
+                Divider()
+            } else if item.isHeldForReview {
+                Button("Release") { release(item.id) }
                 Divider()
             } else if let reason = item.queueManipulationLockReason {
                 Text(reason)
@@ -883,6 +957,7 @@ struct PersistentQueueDetailView: View {
     let changeDestination: (PersistentQueueItem) -> Void
     let retry: (PersistentQueueItem, WorkerRecoveryChoice?) -> Void
     let resolveRouteQuality: (QueueResolutionGroup, QueueResolutionSelection) -> Void
+    let release: (PersistentQueueItem) -> Void
 
     var body: some View {
         Group {
@@ -977,6 +1052,11 @@ struct PersistentQueueDetailView: View {
                 } else {
                     Button(item.isRestored ? "Restart Safely" : "Retry") { retry(item, nil) }
                 }
+            }
+            if item.isHeldForReview {
+                Button("Release") { release(item) }
+                    .help("Move this item to waiting so the queue can run it")
+                    .accessibilityIdentifier("persistent-queue-detail-release")
             }
             if item.hasStorageDestinationFailure {
                 Button("Change Destination…") { changeDestination(item) }
@@ -1102,8 +1182,27 @@ struct PersistentQueueDetailView: View {
                     Text("State").foregroundStyle(.secondary)
                     detailValue(item.status.title, label: "State")
                 }
+                if let admission = item.admission, admission.origin == .watchFolder {
+                    GridRow {
+                        Text("Watch folder").foregroundStyle(.secondary)
+                        detailValue(admission.watchFolderName ?? "Unknown", label: "Watch folder")
+                    }
+                    if let arrivedAt = admission.arrivedAt {
+                        GridRow {
+                            Text("Arrived").foregroundStyle(.secondary)
+                            detailValue(arrivedAt.formatted(date: .abbreviated, time: .shortened), label: "Arrived")
+                        }
+                    }
+                    if let settledAt = admission.settledAt {
+                        GridRow {
+                            Text("Stopped changing").foregroundStyle(.secondary)
+                            detailValue(settledAt.formatted(date: .abbreviated, time: .shortened), label: "Stopped changing")
+                        }
+                    }
+                }
             }
             .font(.callout)
+            .accessibilityIdentifier("persistent-queue-item-details")
         }
     }
 
@@ -1265,6 +1364,7 @@ private extension PersistentQueueItemStatus {
         case let .failed(failure): failure.message
         case let .completed(result): URL(fileURLWithPath: result.outputPath).lastPathComponent
         case .interrupted: "Interrupted during the previous app session"
+        case .heldForReview: "Held for review. Release it to let the queue run it."
         default: title
         }
     }

@@ -21,6 +21,31 @@ final class PersistentQueueNotificationCoordinatorTests: XCTestCase {
         XCTAssertEqual(delivery.deliveredRequests.count, 0)
     }
 
+    func testHeldForReviewArrivalsSendOneCountOnlyNotificationWhenAttentionIsOn() async throws {
+        let delivery = CapturingQueueNotificationDelivery()
+        let settings = try makeSettings(finish: false, attention: true)
+        let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
+
+        coordinator.deliverHeldForReviewArrivals(count: 3)
+        coordinator.deliverHeldForReviewArrivals(count: 0)
+        await Task.yield()
+
+        XCTAssertEqual(delivery.deliveredRequests.count, 1)
+        let body = try XCTUnwrap(delivery.deliveredRequests.first?.body)
+        XCTAssertTrue(body.contains("3"))
+    }
+
+    func testHeldForReviewArrivalsStaySilentWhenAttentionNotificationsAreOff() async throws {
+        let delivery = CapturingQueueNotificationDelivery()
+        let settings = try makeSettings(finish: true, attention: false)
+        let coordinator = PersistentQueueNotificationCoordinator(settings: settings, delivery: delivery)
+
+        coordinator.deliverHeldForReviewArrivals(count: 2)
+        await Task.yield()
+
+        XCTAssertTrue(delivery.deliveredRequests.isEmpty)
+    }
+
     func testSendsOneAttentionAlertPerRunAndIgnoresProjectionRefreshes() async throws {
         let delivery = CapturingQueueNotificationDelivery()
         let settings = try makeSettings(finish: false, attention: true)

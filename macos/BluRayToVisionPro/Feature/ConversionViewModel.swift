@@ -321,6 +321,46 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         try await durableQueueStore.releaseHeldForReviewItems(itemIDs)
     }
 
+    /// Releases held items and runs them under the same rules as a "Start automatically" folder.
+    @discardableResult
+    func releaseAndStartHeldPersistentQueueItems(
+        _ itemIDs: [UUID],
+        otherWorkIsActive: Bool
+    ) async throws -> AutomaticQueueStartDecision {
+        try await releaseHeldPersistentQueueItems(Set(itemIDs))
+        return await startAutomaticallyAdmittedItems(itemIDs, otherWorkIsActive: otherWorkIsActive)
+    }
+
+    /// Runs waiting items that arrived without a person adding them, without taking the queue out of
+    /// the person's hands.
+    ///
+    /// An idle queue starts the way the Start button starts it, but runs only these items, and a
+    /// running queue takes them after the ones it already has. A paused queue, a requested pause, a scheduled window, or other
+    /// active work leaves them waiting.
+    @discardableResult
+    func startAutomaticallyAdmittedItems(
+        _ itemIDs: [UUID],
+        otherWorkIsActive: Bool
+    ) async -> AutomaticQueueStartDecision {
+        let decision = AutomaticQueueStartDecision.decide(
+            runState: persistentQueueRunState,
+            hasOffPeakSchedule: offPeakSchedule != nil,
+            otherWorkIsActive: otherWorkIsActive || (persistentQueueRunState == .idle && hasActiveWork)
+        )
+        switch decision {
+        case .startQueue:
+            _ = await startPersistentQueue(onlyItemIDs: Set(itemIDs))
+        case .joinRunningQueue:
+            let waitingIDs = Set(durableQueueStore.items.filter { $0.state == .waiting }.map(\.id))
+            for itemID in itemIDs where waitingIDs.contains(itemID) {
+                _ = await adoptPersistentQueueItem(itemID, recoveryChoice: nil, pump: true)
+            }
+        case .leaveWaiting:
+            break
+        }
+        return decision
+    }
+
     private struct PersistentQueueAdmissionEntry {
         let draft: ConversionDraft
         let conflict: RouteQualityConflict?
@@ -417,7 +457,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         return PersistentQueueAppendResult(
             addedCount: newItems.count,
-            duplicateDisplayNames: duplicateDisplayNames
+            duplicateDisplayNames: duplicateDisplayNames,
+            addedItemIDs: newItems.map(\.id)
         )
     }
 
@@ -661,8 +702,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
     }
 
+    /// Starts the queue. `onlyItemIDs` limits the run to those items, so an automatic start never
+    /// restarts interrupted or stopped work, which needs a person's explicit resume.
     @discardableResult
-    func startPersistentQueue(windowEnd: Date? = nil) async -> PersistentQueueCommandOutcome {
+    func startPersistentQueue(
+        windowEnd: Date? = nil,
+        onlyItemIDs: Set<UUID>? = nil
+    ) async -> PersistentQueueCommandOutcome {
         if persistentQueueRunState == .running {
             return .noChange(.running)
         }
@@ -689,11 +735,14 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
         }
         let candidates = persistentQueueItems.filter { item in
+            if let onlyItemIDs, !onlyItemIDs.contains(item.id) {
+                return false
+            }
             switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
-                true
+                return true
             case .needsChoice, .heldForReview, .inspecting, .processing, .stopping, .attention, .failed, .completed:
-                false
+                return false
             }
         }
         guard !candidates.isEmpty else {

@@ -1,9 +1,11 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var updater: UpdateController
+    @ObservedObject var queueAutomationController: QueueAutomationController
 
     var body: some View {
         TabView {
@@ -12,6 +14,12 @@ struct SettingsView: View {
 
             ProfilesSettingsPane(settings: settings, profileStore: profileStore)
                 .tabItem { Label("Profiles", systemImage: "slider.horizontal.3") }
+
+            WatchFoldersSettingsPane(controller: queueAutomationController, profileStore: profileStore)
+                .tabItem {
+                    Label("Watch Folders", systemImage: "folder.badge.gearshape")
+                        .accessibilityIdentifier("watch-folders-settings-tab")
+                }
 
             UpdatesSettingsPane(updater: updater)
                 .tabItem {
@@ -874,6 +882,332 @@ private struct AdvancedSettingsPane: View {
                 settings.intermediatePolicy = outcome.policy
             }
         )
+    }
+}
+
+/// Lists the folders whose new movies join the queue, with each folder's own admission settings.
+struct WatchFoldersSettingsPane: View {
+    @ObservedObject var controller: QueueAutomationController
+    @ObservedObject var profileStore: ProfileStore
+
+    @State private var selectedFolderID: UUID?
+    @State private var folderToRemove: WatchFolder?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsPaneHeader(
+                title: "Watch Folders",
+                subtitle: "Movies that finish arriving in these folders are added to the queue."
+            )
+
+            if let loadErrorMessage = controller.store.loadErrorMessage {
+                Label(loadErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+
+            VStack(spacing: 0) {
+                List(selection: $selectedFolderID) {
+                    if controller.watchFolders.isEmpty {
+                        Text("No watch folders yet. Click + to choose one.")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("watch-folders-empty")
+                    }
+                    ForEach(controller.watchFolders) { folder in
+                        WatchFolderSettingsRow(
+                            folder: folder,
+                            status: controller.status(for: folder),
+                            path: controller.displayPath(for: folder),
+                            errorMessage: controller.scanErrorMessages[folder.id],
+                            profiles: profileStore.profiles,
+                            update: update,
+                            scanNow: { controller.requestScan(folderID: folder.id) },
+                            forgetSeenFiles: { forgetSeenFiles(folder) }
+                        )
+                        .tag(folder.id)
+                    }
+                }
+                .listStyle(.inset)
+                .accessibilityIdentifier("watch-folders-list")
+
+                Divider()
+
+                HStack(spacing: 6) {
+                    Button(action: addFolder) {
+                        Label("Add Watch Folder", systemImage: "plus")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("Choose a folder to watch")
+                    .accessibilityIdentifier("watch-folders-add")
+
+                    Button {
+                        folderToRemove = controller.watchFolders.first { $0.id == selectedFolderID }
+                    } label: {
+                        Label("Remove Watch Folder", systemImage: "minus")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("Stop watching the selected folder")
+                    .disabled(selectedFolderID == nil)
+                    .accessibilityIdentifier("watch-folders-remove")
+
+                    Spacer()
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.secondary.opacity(0.25))
+            }
+
+            Text("Folders are watched while the app is open. When it opens, it checks for anything that arrived while it was closed. A file is added only after it stops changing, and a file you remove from the queue is not added again.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .alert(
+            "Stop Watching Folder?",
+            isPresented: Binding(
+                get: { folderToRemove != nil },
+                set: { if !$0 { folderToRemove = nil } }
+            ),
+            presenting: folderToRemove
+        ) { folder in
+            Button("Stop Watching", role: .destructive) {
+                remove(folder)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { folder in
+            Text("“\(folder.displayName)” will no longer be watched. Items it already added stay in the queue.")
+        }
+        .alert(
+            "Watch Folder Could Not Be Updated",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "The watch folder could not be updated.")
+        }
+    }
+
+    private func addFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Watch Folder"
+        panel.message = "Choose a folder to watch for new movies."
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        do {
+            selectedFolderID = try controller.addWatchFolder(at: url).id
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func update(_ folder: WatchFolder) {
+        do {
+            try controller.updateWatchFolder(folder)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func remove(_ folder: WatchFolder) {
+        do {
+            try controller.removeWatchFolder(id: folder.id)
+            if selectedFolderID == folder.id {
+                selectedFolderID = nil
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func forgetSeenFiles(_ folder: WatchFolder) {
+        do {
+            try controller.forgetSeenSources(watchFolderID: folder.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct WatchFolderSettingsRow: View {
+    let folder: WatchFolder
+    let status: WatchFolderStatus
+    let path: String?
+    let errorMessage: String?
+    let profiles: [EncodingProfile]
+    let update: (WatchFolder) -> Void
+    let scanNow: () -> Void
+    let forgetSeenFiles: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "folder.fill")
+                    .font(.title2)
+                    .foregroundStyle(folder.isEnabled ? Color.accentColor : Color.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(folder.displayName)
+                        .font(.headline)
+                    Text(path ?? "Location unknown")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(path ?? "")
+                }
+                Spacer(minLength: 8)
+                WatchFolderStatusBadge(status: status)
+                Toggle("Watch this folder", isOn: binding(\.isEnabled))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .help(folder.isEnabled ? "Pause watching this folder" : "Resume watching this folder")
+                    .accessibilityIdentifier("watch-folder-enabled-\(folder.id.uuidString)")
+            }
+
+            HStack(spacing: 14) {
+                Picker("New items", selection: binding(\.mode)) {
+                    Text("Hold for review").tag(WatchFolderAdmissionMode.holdForReview)
+                    Text("Start automatically").tag(WatchFolderAdmissionMode.startAutomatically)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .help("Held items wait in the queue until you release them. Automatic items start when the queue is idle, and never override a pause or a schedule.")
+                .accessibilityIdentifier("watch-folder-mode-\(folder.id.uuidString)")
+
+                Toggle("Include subfolders", isOn: binding(\.includesSubfolders))
+                    .accessibilityIdentifier("watch-folder-subfolders-\(folder.id.uuidString)")
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 14) {
+                Picker("Profile", selection: profileBinding) {
+                    Text("Default profile").tag(String?.none)
+                    Divider()
+                    ForEach(profiles) { profile in
+                        Text(profile.name).tag(Optional(profile.id))
+                    }
+                }
+                .fixedSize()
+                .accessibilityIdentifier("watch-folder-profile-\(folder.id.uuidString)")
+
+                Spacer(minLength: 0)
+
+                Button("Scan Now", action: scanNow)
+                    .disabled(!folder.isEnabled)
+                    .help("Check this folder for new movies now")
+                    .accessibilityIdentifier("watch-folder-scan-\(folder.id.uuidString)")
+
+                Menu {
+                    Button("Forget Seen Files", action: forgetSeenFiles)
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
+                        .labelStyle(.iconOnly)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Forget Seen Files lets files this folder already added be added again.")
+                .accessibilityLabel("More actions for \(folder.displayName)")
+            }
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 8)
+        .accessibilityIdentifier("watch-folder-row-\(folder.id.uuidString)")
+    }
+
+    private func binding<Value>(_ keyPath: WritableKeyPath<WatchFolder, Value>) -> Binding<Value> {
+        Binding(
+            get: { folder[keyPath: keyPath] },
+            set: { value in
+                var updated = folder
+                updated[keyPath: keyPath] = value
+                update(updated)
+            }
+        )
+    }
+
+    /// A profile that no longer exists reads as the default profile, which is what admission uses then.
+    private var profileBinding: Binding<String?> {
+        Binding(
+            get: {
+                guard let profileID = folder.profileID, profiles.contains(where: { $0.id == profileID }) else {
+                    return nil
+                }
+                return profileID
+            },
+            set: { value in
+                var updated = folder
+                updated.profileID = value
+                update(updated)
+            }
+        )
+    }
+}
+
+private struct WatchFolderStatusBadge: View {
+    let status: WatchFolderStatus
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(tint.opacity(0.12), in: Capsule())
+            .help(help)
+            .accessibilityLabel("Status: \(title)")
+    }
+
+    private var title: String {
+        switch status {
+        case .checking: "Checking…"
+        case .watching: "Watching"
+        case .paused: "Paused"
+        case .offline: "Drive offline"
+        }
+    }
+
+    private var systemImage: String {
+        switch status {
+        case .checking: "hourglass"
+        case .watching: "eye.fill"
+        case .paused: "pause.circle.fill"
+        case .offline: "externaldrive.badge.xmark"
+        }
+    }
+
+    private var tint: Color {
+        switch status {
+        case .checking, .paused: .secondary
+        case .watching: .green
+        case .offline: .orange
+        }
+    }
+
+    private var help: String {
+        switch status {
+        case .checking: "Looking for new movies in this folder."
+        case .watching: "New movies in this folder are added to the queue once they stop changing."
+        case .paused: "This folder is not being watched. Turn it on to resume."
+        case .offline: "The folder's drive is disconnected or the folder cannot be reached. Watching resumes when it is available again."
+        }
     }
 }
 

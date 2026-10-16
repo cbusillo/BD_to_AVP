@@ -207,18 +207,23 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         offPeakSchedule: OffPeakQueueSchedule? = nil,
         offPeakScheduleOutcome: OffPeakScheduleOutcome? = nil,
         resolutionGroup: QueueResolutionGroup? = nil,
-        sidebarWidth: CGFloat = 330
+        sidebarWidth: CGFloat = 330,
+        runState: PersistentQueueRunState = .running,
+        reviewGroups: [WatchFolderReviewGroup] = [],
+        screenshotName: String? = nil,
+        screenshotHeight: CGFloat = 620,
+        showsSidebarSelection: Bool = true
     ) throws {
-        let content = HSplitView {
+        let workspace = HSplitView {
             PersistentQueueSidebarView(
                 items: items,
-                selectedID: .constant(selectedItem?.id),
+                selectedID: .constant(showsSidebarSelection ? selectedItem?.id : nil),
                 compactRows: .constant(compact),
                 commandState: PersistentQueueCommandState(
                     items: items,
                     selectedItemID: selectedItem?.id,
-                    runState: .running,
-                    hasActiveWorker: !items.isEmpty,
+                    runState: runState,
+                    hasActiveWorker: runState == .running && !items.isEmpty,
                     hasPreviewWorker: false,
                     offPeakSchedule: offPeakSchedule,
                     insertedDiscs: [],
@@ -245,7 +250,11 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 cancelSchedule: {},
                 dismissScheduleOutcome: {},
                 pauseAfterCurrent: {},
-                stopCurrent: {}
+                stopCurrent: {},
+                reviewGroups: reviewGroups,
+                startReviewGroup: { _ in },
+                dismissReview: {},
+                release: { _ in }
             )
             .frame(width: sidebarWidth)
             PersistentQueueDetailView(
@@ -257,10 +266,20 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 edit: { _ in },
                 changeDestination: { _ in },
                 retry: { _, _ in },
-                resolveRouteQuality: { _, _ in }
+                resolveRouteQuality: { _, _ in },
+                release: { _ in }
             )
             .frame(minWidth: 600)
         }
+        if let screenshotName {
+            try ReviewScreenshot.capture(
+                workspace.preferredColorScheme(colorScheme),
+                size: CGSize(width: 920, height: screenshotHeight),
+                appearance: appearanceName,
+                named: screenshotName
+            )
+        }
+        let content = workspace
         .frame(width: 920, height: 620)
         .preferredColorScheme(colorScheme)
         let hostingView = NSHostingView(rootView: content)
@@ -271,6 +290,50 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
         XCTAssertEqual(bitmap.pixelsWide, 920)
         XCTAssertEqual(bitmap.pixelsHigh, 620)
+    }
+
+    func testReviewBannerRendersHeldItemsGroupedByWatchFolder() throws {
+        let arrivedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let ripsID = UUID()
+        func heldItem(_ name: String, ordinal: Int) throws -> PersistentQueueItem {
+            let draft = ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Volumes/Media/Rips/\(name)")),
+                sourceDetails: nil,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Movies"),
+                options: ConversionOptions()
+            )
+            return try PersistentQueueItem(item: DurableConversionQueueItem(
+                ordinal: ordinal,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: draft),
+                state: .heldForReview,
+                admission: .watchFolder(
+                    id: ripsID,
+                    name: "Rips",
+                    arrivedAt: arrivedAt,
+                    settledAt: arrivedAt.addingTimeInterval(60),
+                    admittedAt: arrivedAt.addingTimeInterval(61)
+                )
+            ))
+        }
+        let items = try [heldItem("Avatar 3D.mkv", ordinal: 0), heldItem("Gravity 3D.mkv", ordinal: 1)]
+        let groups = QueueReviewBannerState().visibleGroups(for: items)
+        XCTAssertEqual(groups.map(\.itemIDs), [items.map(\.id)])
+
+        try render(
+            items: items,
+            selectedItem: items[0],
+            compact: false,
+            colorScheme: .light,
+            appearanceName: .aqua,
+            runState: .idle,
+            reviewGroups: groups,
+            screenshotName: "queue-review-banner",
+            screenshotHeight: 760,
+            // An off-screen capture draws the selected sidebar row as a solid block.
+            showsSidebarSelection: false
+        )
     }
 
     private func makeItems() throws -> [PersistentQueueItem] {

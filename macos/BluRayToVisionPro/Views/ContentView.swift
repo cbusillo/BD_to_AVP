@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var isShowingSourceConfiguration = false
     @State private var isShowingSourceConfigurationEditor = false
     @State private var compactPersistentQueueRows = false
+    @State private var queueReviewBannerState = QueueReviewBannerState()
     @State private var preserveEncodingOnNextProfileChange = false
     @State private var titleSelection = DiscTitleSelection.main
     @State private var isShowingDiagnosticReport = false
@@ -109,7 +110,8 @@ struct ContentView: View {
                 edit: { queueItemBeingEdited = $0 },
                 changeDestination: changePersistentQueueDestination,
                 retry: retryPersistentQueueItem,
-                resolveRouteQuality: resolvePersistentQueueRouteQuality
+                resolveRouteQuality: resolvePersistentQueueRouteQuality,
+                release: { releaseHeldPersistentQueueItem($0.id) }
             )
             .frame(minWidth: 600, idealWidth: 760)
         }
@@ -460,7 +462,11 @@ struct ContentView: View {
             cancelSchedule: cancelOffPeakSchedule,
             dismissScheduleOutcome: clearOffPeakScheduleOutcome,
             pauseAfterCurrent: pausePersistentQueueAfterCurrent,
-            stopCurrent: stopCurrentPersistentQueueItem
+            stopCurrent: stopCurrentPersistentQueueItem,
+            reviewGroups: queueReviewBannerState.visibleGroups(for: viewModel.persistentQueueItems),
+            startReviewGroup: startHeldReviewGroup,
+            dismissReview: { queueReviewBannerState.dismiss(items: viewModel.persistentQueueItems) },
+            release: releaseHeldPersistentQueueItem
         )
     }
 
@@ -1287,6 +1293,29 @@ struct ContentView: View {
             }
             do {
                 persistentQueueRemovalToken = try await viewModel.removePersistentQueueItems([itemID])
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func releaseHeldPersistentQueueItem(_ itemID: UUID) {
+        Task { @MainActor in
+            do {
+                try await viewModel.releaseHeldPersistentQueueItems([itemID])
+            } catch {
+                persistentQueueErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func startHeldReviewGroup(_ group: WatchFolderReviewGroup) {
+        Task { @MainActor in
+            do {
+                try await viewModel.releaseAndStartHeldPersistentQueueItems(
+                    group.itemIDs,
+                    otherWorkIsActive: previewViewModel.hasActiveWorker
+                )
             } catch {
                 persistentQueueErrorMessage = error.localizedDescription
             }
