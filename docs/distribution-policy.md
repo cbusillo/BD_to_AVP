@@ -51,17 +51,19 @@ The validator accepts the legacy two-field contract and the current optional
 MetalFX/pixel-transfer boolean fields, while rejecting unknown, mistyped, or
 contradictory capability values.
 
-`spatial-media-kit-tool` runs the generated MV-HEVC route, the fallback to the
-direct encoder. Its upstream, SpatialMediaKit, is archived, so the binary is
-built from a pinned commit of the maintained fork
-[cbusillo/SpatialMediaKit](https://github.com/cbusillo/SpatialMediaKit). The
-commit, Xcode and SDK, and checksum are in
-`bd_to_avp/resources/notices/spatial-media-kit-build.json`, with the GPL-3.0
-notice beside it. Rebuild it with
-`uv run python scripts/build_spatial_media_kit_macos.py`; move the pin with
-`--update REVISION`. CI rebuilds it with the release toolchain and requires a
-byte-identical result. The intended direction is to move the generated route's
-cases onto the native encoder and retire this tool (#814).
+`spatial-media-kit-tool` and `fx-upscale` serve the generated MV-HEVC route, the
+fallback to the direct encoder. Both are built from pinned commits of forks we
+maintain:
+[cbusillo/SpatialMediaKit](https://github.com/cbusillo/SpatialMediaKit), whose
+upstream is archived, and [cbusillo/fx-upscale](https://github.com/cbusillo/fx-upscale),
+which carries the `--bitrate-scaling-factor` option upstream lacks. Each tool's
+commit, Xcode and SDK, and checksum are in its
+`bd_to_avp/resources/notices/*-build.json` manifest, with its license notice
+beside it. Rebuild one with `uv run python scripts/build_swift_tool_macos.py TOOL`;
+move its pin with `--update REVISION`. CI rebuilds both with the release
+toolchain and requires byte-identical results. The intended direction is to move
+the generated route's cases onto the native encoder and retire these tools
+(#814).
 
 Apple Vision OCR is the GUI subtitle OCR path. The clean-machine smoke should
 verify that the packaged app runtime can import and run the Apple Vision OCR

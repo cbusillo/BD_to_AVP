@@ -8,30 +8,36 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts import build_spatial_media_kit_macos as builder
+from scripts import build_swift_tool_macos as builder
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def committed_provenance() -> builder.BuildProvenance:
-    return builder.load_provenance(REPO_ROOT / builder.PROVENANCE_RELATIVE_PATH)
+def committed_provenance(tool: str) -> builder.BuildProvenance:
+    return builder.load_provenance(REPO_ROOT / builder.TOOLS[tool])
 
 
-class SpatialMediaKitBuilderTests(unittest.TestCase):
-    def test_committed_binary_matches_provenance_checksum(self) -> None:
-        self.assertEqual(
-            builder.sha256(REPO_ROOT / "bd_to_avp" / "bin" / builder.PRODUCT),
-            committed_provenance().unsigned_sha256,
-        )
+class SwiftToolBuilderTests(unittest.TestCase):
+    def test_committed_binaries_match_provenance_checksums(self) -> None:
+        for tool in builder.TOOLS:
+            with self.subTest(tool=tool):
+                self.assertEqual(
+                    builder.sha256(REPO_ROOT / "bd_to_avp" / "bin" / tool),
+                    committed_provenance(tool).unsigned_sha256,
+                )
 
     def test_minimum_macos_matches_the_app(self) -> None:
         project = yaml.safe_load((REPO_ROOT / "macos" / "project.yml").read_text(encoding="utf-8"))
-
-        self.assertEqual(committed_provenance().minimum_macos, project["options"]["deploymentTarget"]["macOS"])
+        for tool in builder.TOOLS:
+            with self.subTest(tool=tool):
+                self.assertEqual(
+                    committed_provenance(tool).minimum_macos,
+                    project["options"]["deploymentTarget"]["macOS"],
+                )
 
     def test_load_provenance_rejects_missing_and_unexpected_fields(self) -> None:
-        manifest = dataclasses.asdict(committed_provenance())
+        manifest = dataclasses.asdict(committed_provenance("spatial-media-kit-tool"))
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "build.json"
 
@@ -44,7 +50,7 @@ class SpatialMediaKitBuilderTests(unittest.TestCase):
                 builder.load_provenance(manifest_path)
 
     def test_verify_binary_rejects_non_system_library(self) -> None:
-        provenance = committed_provenance()
+        provenance = committed_provenance("fx-upscale")
         otool = "tool:\n\t/usr/lib/libSystem.B.dylib (compatibility)\n\t/opt/homebrew/lib/libx.dylib (compatibility)\n"
 
         def check_output(command: list[str], **_: object) -> str:
@@ -57,7 +63,7 @@ class SpatialMediaKitBuilderTests(unittest.TestCase):
 
         with patch.object(builder.subprocess, "check_output", side_effect=check_output):
             with self.assertRaisesRegex(RuntimeError, "non-system library: /opt/homebrew/lib/libx.dylib"):
-                builder.verify_binary(Path("tool"), provenance)
+                builder.verify_binary("fx-upscale", Path("tool"), provenance)
 
 
 if __name__ == "__main__":
