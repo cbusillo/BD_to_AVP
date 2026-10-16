@@ -341,12 +341,14 @@ jobs:
           uv run python scripts/build_edge264_macos.py --output "$RUNNER_TEMP/edge264_test"
           cmp bd_to_avp/bin/edge264_test "$RUNNER_TEMP/edge264_test"
 
-      - name: Rebuild bundled spatial-media-kit-tool with release toolchain
+      - name: Rebuild bundled Swift tools with release toolchain
         env:
           DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
         run: |
-          uv run python scripts/build_spatial_media_kit_macos.py --output "$RUNNER_TEMP/spatial-media-kit-tool"
-          cmp bd_to_avp/bin/spatial-media-kit-tool "$RUNNER_TEMP/spatial-media-kit-tool"
+          for tool in fx-upscale spatial-media-kit-tool; do
+            uv run python scripts/build_swift_tool_macos.py "$tool" --output "$RUNNER_TEMP/$tool"
+            cmp "bd_to_avp/bin/$tool" "$RUNNER_TEMP/$tool"
+          done
 
       - name: Install XcodeGen
         run: brew install xcodegen

@@ -17,7 +17,7 @@ the full text is in `spatial-media-kit-LICENSE.txt`. BD_to_AVP invokes it as a
 separate command-line executable. The corresponding source is the commit named
 in `spatial-media-kit-build.json` in the repository above.
 
-The build script is `scripts/build_spatial_media_kit_macos.py`. It reads
+The build script is `scripts/build_swift_tool_macos.py spatial-media-kit-tool`. It reads
 `spatial-media-kit-build.json`, verifies the pinned Xcode and SDK, builds the
 pinned commit from a clean checkout with path-independent flags, verifies
 arm64, system-only linkage and the minimum macOS version, and checks the

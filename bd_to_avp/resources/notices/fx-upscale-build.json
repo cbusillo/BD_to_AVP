@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/cbusillo/fx-upscale.git",
+  "revision": "62df159f2065507e17d05e090df8dc5fdee2d92d",
+  "platform": "macOS arm64",
+  "minimum_macos": "26.0",
+  "xcode_version": "27.0",
+  "xcode_build_version": "27A266a",
+  "sdk_version": "27.0",
+  "unsigned_sha256": "b2dc9ba382dd5911eab22a8174f604cb55817c6ca0001045b06c57a475263e69"
+}
