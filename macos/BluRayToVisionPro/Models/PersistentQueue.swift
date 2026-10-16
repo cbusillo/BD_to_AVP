@@ -286,6 +286,11 @@ struct PersistentQueueCommandState: Equatable {
     let selectedItemLockReason: String?
     let selectedItemRemovalLockReason: String?
 
+    /// A video is converting that Pause After Current or Stop Current can act on.
+    var hasCurrentVideoControls: Bool {
+        canPauseAfterCurrent || canStopCurrent
+    }
+
     init(
         items: [PersistentQueueItem],
         selectedItemID: UUID?,
