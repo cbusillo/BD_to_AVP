@@ -46,6 +46,23 @@ case passes alongside an ordinary unit-test skip in the same run, investigate
 concurrency, cold state and instrumentation; that combination does not qualify
 the image as recovered.
 
+To separate the PyObjC bridge from the Vision backend, save the exact bitmaps
+the default experiment passes to Vision, then recognize them from Swift:
+
+```sh
+uv run python -m scripts.qualify_vision_ocr --mode default --dump-bitmaps build/vision-ocr/bitmaps
+xcrun swiftc scripts/vision_ocr_control.swift -o build/vision-ocr-control
+build/vision-ocr-control build/vision-ocr/bitmaps
+```
+
+The Swift control rebuilds each grayscale image from the raw bytes, checks
+their SHA-256, and applies the same accurate level, language correction and
+languages. Each output line shows the Python outcome next to the Swift outcome
+for one bitmap. A Swift failure on the bytes Python also failed on points at the
+OS/VM backend; a Swift success there points at the bridge or request setup.
+A false return without NSError appears in Swift as a thrown nil error. It
+passes only when every bitmap returns text.
+
 To compare on the current hosted image, manually dispatch `CI` on the task
 branch with `vision_ocr_diagnostics=true`. The `vision-ocr-diagnostics` artifact
 contains separate process logs and exit statuses. The diagnostic step records

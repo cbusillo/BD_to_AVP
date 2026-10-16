@@ -5,6 +5,7 @@ must run in a fresh process; a nonzero exit means qualification did not pass.
 """
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -12,6 +13,7 @@ import platform
 import subprocess
 import threading
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -43,6 +45,11 @@ def request_details(request: Any) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("default", "cpu-only", "fast"), default="default")
+    parser.add_argument(
+        "--dump-bitmaps",
+        type=Path,
+        help="Save each exact grayscale bitmap and request outcome for scripts/vision_ocr_control.swift",
+    )
     args = parser.parse_args()
     if platform.system() != "Darwin":
         parser.error("requires macOS with Apple Vision")
@@ -67,9 +74,35 @@ def main() -> int:
         ffmpeg=str(config.FFMPEG_PATH),
         ffmpeg_version=subprocess.check_output([str(config.FFMPEG_PATH), "-version"], text=True).strip(),
     )
-    vision, _ = AppleVisionOcr._load_frameworks()
+    vision, quartz = AppleVisionOcr._load_frameworks()
     handler_class = vision.VNImageRequestHandler
     observed_requests = 0
+    dumped_bitmaps: list[dict[str, Any]] = []
+    if args.dump_bitmaps:
+        args.dump_bitmaps.mkdir(parents=True, exist_ok=True)
+
+    def dump_bitmap(image: Any, request: Any, success: bool, error: Any, results: list[str]) -> None:
+        # Raw provider bytes, not a re-encoded image, so the Swift control
+        # rebuilds byte-identical input.
+        data = bytes(quartz.CGDataProviderCopyData(quartz.CGImageGetDataProvider(image)))
+        name = f"{len(dumped_bitmaps):03d}.gray"
+        (args.dump_bitmaps / name).write_bytes(data)
+        dumped_bitmaps.append(
+            {
+                "file": name,
+                "width": quartz.CGImageGetWidth(image),
+                "height": quartz.CGImageGetHeight(image),
+                "bytes_per_row": quartz.CGImageGetBytesPerRow(image),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "languages": list(request.recognitionLanguages()),
+                "uses_language_correction": bool(request.usesLanguageCorrection()),
+                "python_success": success,
+                "python_error": None if error is None else str(error),
+                "python_results": results,
+            }
+        )
+        # Rewritten per request so a crash still leaves a usable manifest.
+        (args.dump_bitmaps / "manifest.json").write_text(json.dumps(dumped_bitmaps, indent=2))
 
     class DiagnosticHandler:
         @classmethod
@@ -77,6 +110,7 @@ def main() -> int:
             return cls()
 
         def initWithCGImage_options_(self, image: Any, options: Any) -> "DiagnosticHandler":
+            self.image = image
             self.handler = handler_class.alloc().initWithCGImage_options_(image, options)
             return self
 
@@ -107,19 +141,18 @@ def main() -> int:
                 emit("request", thread=threading.current_thread().name, **request_details(request))
                 observed_requests += 1
             success, error = self.handler.performRequests_error_(requests, error_out)
-            emit(
-                "response",
-                success=bool(success),
-                error=None if error is None else str(error),
-                results=[
-                    [
-                        str(candidate.string())
-                        for observation in request.results() or []
-                        for candidate in observation.topCandidates_(1)
-                    ]
-                    for request in requests
-                ],
-            )
+            results = [
+                [
+                    str(candidate.string())
+                    for observation in request.results() or []
+                    for candidate in observation.topCandidates_(1)
+                ]
+                for request in requests
+            ]
+            emit("response", success=bool(success), error=None if error is None else str(error), results=results)
+            if args.dump_bitmaps:
+                for request, request_results in zip(requests, results, strict=True):
+                    dump_bitmap(self.image, request, bool(success), error, request_results)
             return success, error
 
     test = FinalMuxRealToolTests("test_pgs_subtitles_rip_to_srt_and_reach_the_final_mux_with_forced_flag")

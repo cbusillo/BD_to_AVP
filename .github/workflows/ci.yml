@@ -157,10 +157,19 @@ jobs:
           for mode in default cpu-only fast; do
             echo "$mode started" | tee -a build/vision-ocr/status.txt
             status=0
-            uv run python -m scripts.qualify_vision_ocr --mode "$mode" > "build/vision-ocr/$mode.log" 2>&1 || status=$?
+            dump=()
+            if [ "$mode" = default ]; then dump=(--dump-bitmaps build/vision-ocr/bitmaps); fi
+            uv run python -m scripts.qualify_vision_ocr --mode "$mode" "${dump[@]}" > "build/vision-ocr/$mode.log" 2>&1 || status=$?
             echo "$mode exit=$status" | tee -a build/vision-ocr/status.txt
             cat "build/vision-ocr/$mode.log"
           done
+          # Same bitmaps through Vision without PyObjC.
+          echo "swift started" | tee -a build/vision-ocr/status.txt
+          status=0
+          { xcrun swiftc scripts/vision_ocr_control.swift -o build/vision-ocr-control \
+            && build/vision-ocr-control build/vision-ocr/bitmaps; } > build/vision-ocr/swift.log 2>&1 || status=$?
+          echo "swift exit=$status" | tee -a build/vision-ocr/status.txt
+          cat build/vision-ocr/swift.log
 
       - name: Preserve native Vision OCR diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics
