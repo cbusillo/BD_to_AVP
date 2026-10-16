@@ -77,6 +77,8 @@ final class ConversionQueueStore: ObservableObject {
                     item.routeQualityConflict == nil
                 case .needsChoice:
                     item.routeQualityConflict != nil
+                case .heldForReview:
+                    item.routeQualityConflict == nil && item.admission != nil
                 case .inspecting, .processing, .stopping, .interrupted, .attention, .failed, .completed, .stopped, .notStarted:
                     false
                 }
@@ -203,7 +205,8 @@ final class ConversionQueueStore: ObservableObject {
             guard matchingItems.count == itemIDs.count,
                   matchingItems.allSatisfy({ item in
                       switch item.state {
-                      case .waiting, .needsChoice, .interrupted, .attention, .failed, .stopped, .notStarted:
+                      case .waiting, .needsChoice, .heldForReview, .interrupted, .attention, .failed, .stopped,
+                           .notStarted:
                           true
                       case .inspecting, .processing, .stopping, .completed:
                           false
@@ -285,7 +288,7 @@ final class ConversionQueueStore: ObservableObject {
             case .failed:
                 canUpdate = items[index].failure?.code == DurableQueueFailureCode.destinationUnavailable
                     || items[index].failure?.code == DurableQueueFailureCode.destinationInsufficientCapacity
-            case .needsChoice, .inspecting, .processing, .stopping, .interrupted, .attention,
+            case .needsChoice, .heldForReview, .inspecting, .processing, .stopping, .interrupted, .attention,
                  .completed, .stopped, .notStarted:
                 canUpdate = false
             }
@@ -331,6 +334,27 @@ final class ConversionQueueStore: ObservableObject {
             guard Set(items.filter { itemIDs.contains($0.id) }.map(\.id)) == itemIDs else {
                 throw ConversionQueueStoreError.invalidDocument
             }
+        }
+    }
+
+    /// Moves items held for review to waiting so a later queue start can run them.
+    func releaseHeldForReviewItems(_ itemIDs: Set<UUID>) async throws {
+        guard !itemIDs.isEmpty else {
+            return
+        }
+        try await mutateItems { items in
+            let matchingIndices = items.indices.filter { itemIDs.contains(items[$0].id) }
+            guard matchingIndices.count == itemIDs.count,
+                  matchingIndices.allSatisfy({ items[$0].state == .heldForReview })
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let groupIDs = Set(matchingIndices.compactMap { items[$0].groupID })
+            let sourceRemovalRequests = Self.multiTitleSourceRemovalRequests(in: items, groupIDs: groupIDs)
+            for index in matchingIndices {
+                items[index].state = .waiting
+            }
+            Self.normalizeMultiTitleSourceRemoval(in: &items, requests: sourceRemovalRequests)
         }
     }
 
@@ -492,6 +516,9 @@ final class ConversionQueueStore: ObservableObject {
                 throw ConversionQueueStoreError.invalidDocument
             }
             if item.state == .waiting, item.routeQualityConflict != nil {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            if item.state == .heldForReview, item.admission == nil || item.routeQualityConflict != nil {
                 throw ConversionQueueStoreError.invalidDocument
             }
             if item.state == .attention, item.decision == nil {

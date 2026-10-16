@@ -1,7 +1,8 @@
 import Foundation
 
 struct ConversionQueueDocument: Codable, Equatable {
-    static let currentVersion = 3
+    /// Version 4 adds items held for review and their admission provenance.
+    static let currentVersion = 4
 
     let version: Int
     var items: [DurableConversionQueueItem]
@@ -21,6 +22,16 @@ struct ConversionQueueDocument: Codable, Equatable {
             throw ConversionQueueStoreError.unsupportedVersion(version)
         }
         self.init(version: Self.currentVersion, items: items)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        // Write version 4 only when a version 3 reader would misread the
+        // queue, so going back to an older build keeps queues without
+        // automatically admitted items editable.
+        let usesVersion4 = items.contains { $0.admission != nil || $0.state == .heldForReview }
+        try values.encode(usesVersion4 ? Self.currentVersion : 3, forKey: .version)
+        try values.encode(items, forKey: .items)
     }
 
     func restoredAfterLaunch(at restoredAt: Date = Date()) -> ConversionQueueDocument {
@@ -45,6 +56,7 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
     var result: DurableQueueResult?
     var resolutionTrace: DurableQueueResolutionTrace?
     var routeQualityConflict: DurableRouteQualityConflict?
+    var admission: DurableQueueAdmission?
 
     init(
         id: UUID = UUID(),
@@ -59,7 +71,8 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         failure: DurableQueueFailure? = nil,
         result: DurableQueueResult? = nil,
         resolutionTrace: DurableQueueResolutionTrace? = nil,
-        routeQualityConflict: DurableRouteQualityConflict? = nil
+        routeQualityConflict: DurableRouteQualityConflict? = nil,
+        admission: DurableQueueAdmission? = nil
     ) {
         self.id = id
         self.ordinal = ordinal
@@ -74,11 +87,12 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         self.result = result
         self.resolutionTrace = resolutionTrace
         self.routeQualityConflict = routeQualityConflict
+        self.admission = admission
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, ordinal, groupID, origin, intent, inspection, state, attempts
-        case decision, failure, result, resolutionTrace, routeQualityConflict
+        case decision, failure, result, resolutionTrace, routeQualityConflict, admission
     }
 
     init(from decoder: Decoder) throws {
@@ -96,6 +110,7 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         result = try values.decodeIfPresent(DurableQueueResult.self, forKey: .result)
         resolutionTrace = try values.decodeIfPresent(DurableQueueResolutionTrace.self, forKey: .resolutionTrace)
         routeQualityConflict = try values.decodeIfPresent(DurableRouteQualityConflict.self, forKey: .routeQualityConflict)
+        admission = try values.decodeIfPresent(DurableQueueAdmission.self, forKey: .admission)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -113,6 +128,7 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
         try values.encodeIfPresent(result, forKey: .result)
         try values.encodeIfPresent(resolutionTrace, forKey: .resolutionTrace)
         try values.encodeIfPresent(routeQualityConflict, forKey: .routeQualityConflict)
+        try values.encodeIfPresent(admission, forKey: .admission)
     }
 
     func restoredAfterLaunch(at restoredAt: Date = Date()) -> DurableConversionQueueItem {
@@ -131,7 +147,7 @@ struct DurableConversionQueueItem: Codable, Equatable, Identifiable {
                 return restored
             }
             restored.decision = decision.markedStaleAfterRestore()
-        case .waiting, .needsChoice, .interrupted, .failed, .completed, .stopped, .notStarted:
+        case .waiting, .needsChoice, .heldForReview, .interrupted, .failed, .completed, .stopped, .notStarted:
             break
         }
         return restored
@@ -189,6 +205,56 @@ struct DurableRouteQualityConflict: Codable, Equatable {
     }
 }
 
+/// Records how an item entered the queue without a person adding it directly.
+///
+/// `DurableQueueItemOrigin` describes the workflow shape that runs the item; admission
+/// provenance is separate so an automatically admitted single file still runs as a single source.
+struct DurableQueueAdmission: Codable, Equatable {
+    let origin: DurableQueueAdmissionOrigin
+    let watchFolderID: UUID?
+    let watchFolderName: String?
+    let arrivedAt: Date?
+    let settledAt: Date?
+    let admittedAt: Date
+
+    init(
+        origin: DurableQueueAdmissionOrigin,
+        watchFolderID: UUID? = nil,
+        watchFolderName: String? = nil,
+        arrivedAt: Date? = nil,
+        settledAt: Date? = nil,
+        admittedAt: Date
+    ) {
+        self.origin = origin
+        self.watchFolderID = watchFolderID
+        self.watchFolderName = watchFolderName
+        self.arrivedAt = arrivedAt
+        self.settledAt = settledAt
+        self.admittedAt = admittedAt
+    }
+
+    static func watchFolder(
+        id: UUID,
+        name: String,
+        arrivedAt: Date,
+        settledAt: Date,
+        admittedAt: Date
+    ) -> DurableQueueAdmission {
+        DurableQueueAdmission(
+            origin: .watchFolder,
+            watchFolderID: id,
+            watchFolderName: name,
+            arrivedAt: arrivedAt,
+            settledAt: settledAt,
+            admittedAt: admittedAt
+        )
+    }
+}
+
+enum DurableQueueAdmissionOrigin: String, Codable, Equatable {
+    case watchFolder
+}
+
 enum DurableQueueItemOrigin: String, Codable, Equatable {
     case singleSource
     case multiTitle
@@ -203,6 +269,8 @@ enum SourceFolderDiscTitleSelection: String, Codable, Equatable {
 enum DurableQueueItemState: String, Codable, Equatable, CaseIterable {
     case waiting
     case needsChoice
+    /// Admitted automatically and waiting for a person to release it; the queue never starts it.
+    case heldForReview
     case inspecting
     case processing
     case stopping

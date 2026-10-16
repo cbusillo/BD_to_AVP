@@ -44,6 +44,7 @@ struct BluRayToVisionProApp: App {
     @StateObject private var queueNotificationCoordinator: PersistentQueueNotificationCoordinator
     @StateObject private var relayHostController: RelayHostSessionController
     @StateObject private var movieSharingController: MovieSharingController
+    @StateObject private var queueAutomationController: QueueAutomationController
 
     private let capabilities = AppCapabilities.current
     private let workCoordinator: AppWorkCoordinator
@@ -68,6 +69,12 @@ struct BluRayToVisionProApp: App {
         let settings = AppSettings()
         let relayHostController = RelayHostSessionController()
         let movieSharingController = MovieSharingController()
+        let queueAutomationController = QueueAutomationController(
+            store: QueueAutomationStore(),
+            viewModel: viewModel,
+            settings: settings,
+            profileStore: profileStore
+        )
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         let diagnosticConfiguration = DiagnosticServiceConfiguration.configured()
         let diagnosticUploader = diagnosticConfiguration.map {
@@ -97,6 +104,7 @@ struct BluRayToVisionProApp: App {
         ))
         _relayHostController = StateObject(wrappedValue: relayHostController)
         _movieSharingController = StateObject(wrappedValue: movieSharingController)
+        _queueAutomationController = StateObject(wrappedValue: queueAutomationController)
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
         suppressDefaultLaunch = AppDelegate.suppressesDefaultLaunch(
@@ -106,6 +114,7 @@ struct BluRayToVisionProApp: App {
         appDelegate.observabilityEventStore = observabilityEventStore
         appDelegate.relayHostController = relayHostController
         appDelegate.movieSharingController = movieSharingController
+        appDelegate.queueAutomationController = queueAutomationController
     }
 
     var body: some Scene {

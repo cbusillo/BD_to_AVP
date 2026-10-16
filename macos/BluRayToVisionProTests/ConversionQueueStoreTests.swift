@@ -123,6 +123,15 @@ final class ConversionQueueStoreTests: XCTestCase {
                 result: state == .completed ? DurableQueueResult(outputPath: "/tmp/output.mov") : nil,
                 routeQualityConflict: state == .needsChoice
                     ? DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
+                    : nil,
+                admission: state == .heldForReview
+                    ? .watchFolder(
+                        id: UUID(),
+                        name: "Incoming",
+                        arrivedAt: Date(timeIntervalSince1970: 1),
+                        settledAt: Date(timeIntervalSince1970: 61),
+                        admittedAt: Date(timeIntervalSince1970: 62)
+                    )
                     : nil
             )
         }
@@ -1304,7 +1313,8 @@ final class ConversionQueueStoreTests: XCTestCase {
         decision: DurableQueueDecision? = nil,
         failure: DurableQueueFailure? = nil,
         result: DurableQueueResult? = nil,
-        routeQualityConflict: DurableRouteQualityConflict? = nil
+        routeQualityConflict: DurableRouteQualityConflict? = nil,
+        admission: DurableQueueAdmission? = nil
     ) -> DurableConversionQueueItem {
         DurableConversionQueueItem(
             id: id,
@@ -1330,7 +1340,8 @@ final class ConversionQueueStoreTests: XCTestCase {
             decision: decision,
             failure: failure,
             result: result,
-            routeQualityConflict: routeQualityConflict
+            routeQualityConflict: routeQualityConflict,
+            admission: admission
         )
     }
 
