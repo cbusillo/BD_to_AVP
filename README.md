@@ -304,7 +304,7 @@ used. Held items show a **Ready for Review** banner grouped by folder, with
 the "needs attention" notification is on, new held items produce one count-only
 notification. **Start automatically** and **Start All** start an idle queue with
 only those items, join a running queue, and never override a pause, a requested
-pause, a scheduled window, or other active work. Folders are watched while the
+pause, a scheduled window, the queue's run times, or other active work. Folders are watched while the
 app is open; at launch the app checks for anything that arrived while it was
 closed. A folder on a disconnected drive shows **Drive offline** and resumes when
 the drive mounts again.
@@ -337,6 +337,28 @@ it automatically. A video already running may finish after the end, but no new
 video starts outside the window. Sources are rechecked at launch time, and
 missing removable media or the wrong physical disc is parked while unrelated
 available work continues.
+
+**Settings → Schedule** sets when the app may start queued videos on its own.
+Every rule is off until you turn it on. **Run times** are weekly periods, such as
+every night 1:00–7:00 AM or weekdays only; a run time whose end is at or before
+its start continues into the next morning, and one whose start and end match
+lasts 24 hours. Settings shows when the next run time starts. While a run time
+is open and the queue is idle, the app starts the waiting videos; when it ends,
+the current video finishes and no new video starts until the next run time. The
+conditions **Wait while on battery power** and **Wait while the Mac is running
+hot** (serious or critical thermal pressure) work the same way: they never
+interrupt a converting video, they only keep new ones from starting, and an
+automatic run they stopped resumes when power returns or the Mac cools down.
+The queue shows what it is waiting for, and the recent decisions are listed in
+Settings and kept with the watch-folder settings in `queue.automation.json`.
+These rules never override a pause or a pending **Start Later** window, which
+runs at its own time (it still waits for power or for the Mac to cool down, and
+is reported missed if its window ends first). Interrupted or stopped videos are
+never restarted on their own. Opening the app or waking the Mac inside a run
+time starts eligible waiting work; a run time missed while the Mac slept or the
+app was closed is not made up later. **Start Queue** always starts right away,
+whatever the rules say. The app must remain open, and run times do not wake the
+Mac or keep it awake.
 
 ## Terminal Usage
 

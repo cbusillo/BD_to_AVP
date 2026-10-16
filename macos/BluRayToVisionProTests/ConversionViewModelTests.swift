@@ -5313,7 +5313,7 @@ final class ConversionViewModelTests: XCTestCase {
     }
 }
 
-private final class LockedTestDate: @unchecked Sendable {
+final class LockedTestDate: @unchecked Sendable {
     private let lock = NSLock()
     private var storedValue: Date
 
@@ -5610,7 +5610,7 @@ private final class CancellableInspectionWorkerClient: WorkerProcessRunning, @un
     }
 }
 
-private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Sendable {
+final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Sendable {
     private let lock = NSLock()
     private var conversionCancellationContinuation: CheckedContinuation<Void, Never>?
     private var conversionCancellationRequested = false

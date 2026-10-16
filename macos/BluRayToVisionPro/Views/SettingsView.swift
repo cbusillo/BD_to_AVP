@@ -21,6 +21,12 @@ struct SettingsView: View {
                         .accessibilityIdentifier("watch-folders-settings-tab")
                 }
 
+            QueueScheduleSettingsPane(controller: queueAutomationController)
+                .tabItem {
+                    Label("Schedule", systemImage: "clock")
+                        .accessibilityIdentifier("queue-schedule-settings-tab")
+                }
+
             UpdatesSettingsPane(updater: updater)
                 .tabItem {
                     Label("Updates", systemImage: "arrow.triangle.2.circlepath")
@@ -1084,7 +1090,7 @@ private struct WatchFolderSettingsRow: View {
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
-                .help("Held items wait in the queue until you release them. Automatic items start when the queue is idle, and never override a pause or a schedule.")
+                .help("Held items wait in the queue until you release them. Automatic items start when the queue is idle, and never override a pause, a schedule, or the queue's run times.")
                 .accessibilityIdentifier("watch-folder-mode-\(folder.id.uuidString)")
 
                 Toggle("Include subfolders", isOn: binding(\.includesSubfolders))

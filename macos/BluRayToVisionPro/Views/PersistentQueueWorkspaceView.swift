@@ -52,6 +52,7 @@ struct PersistentQueueSidebarView: View {
     let startReviewGroup: (WatchFolderReviewGroup) -> Void
     let dismissReview: () -> Void
     let release: (UUID) -> Void
+    var runPolicyDecision: QueueRunPolicyDecision = .inactive
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,6 +60,7 @@ struct PersistentQueueSidebarView: View {
             Divider()
             reviewBanner
             scheduleBanner
+            runPolicyBanner
             storageSummaryView
             outcomeSummaryView
             if let banner {
@@ -119,7 +121,7 @@ struct PersistentQueueSidebarView: View {
                             startReviewGroup(group)
                         }
                         .controlSize(.small)
-                        .help("Release these items. The queue starts if it is idle; a pause or a schedule is kept.")
+                        .help("Release these items. The queue starts if it is idle; a pause, a schedule, or the queue's run times are kept.")
                         .accessibilityLabel("Start all \(group.title)")
                     }
                     .accessibilityElement(children: .contain)
@@ -180,6 +182,63 @@ struct PersistentQueueSidebarView: View {
             .padding(.vertical, 9)
             .background(Color.orange.opacity(0.08))
             .accessibilityIdentifier("off-peak-schedule-missed")
+        }
+    }
+
+    /// Why the queue is waiting under its run policy, or until when a run the app started continues.
+    @ViewBuilder
+    private var runPolicyBanner: some View {
+        TimelineView(.everyMinute) { context in
+            switch runPolicyDecision {
+            case let .waiting(hold, itemCount):
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(
+                        QueueRunPolicyFormatting.waitingTitle(for: hold, now: context.date),
+                        systemImage: Self.runPolicySymbol(for: hold)
+                    )
+                    .font(.caption.weight(.semibold))
+                    Text(QueueRunPolicyFormatting.waitingDetail(for: hold, itemCount: itemCount))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.08))
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("run-policy-waiting-banner")
+            case let .running(until?):
+                Label(
+                    "Run time ends at \(QueueRunPolicyFormatting.moment(until, relativeTo: context.date)). The current video finishes; no new video starts after that.",
+                    systemImage: "clock.badge.checkmark.fill"
+                )
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.08))
+                .accessibilityIdentifier("run-policy-running-banner")
+            case .blockedByOtherWork:
+                Label("A run time is open. Queued videos start when the current task finishes.", systemImage: "clock.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("run-policy-other-work-banner")
+            case .inactive, .running(until: nil), .start:
+                EmptyView()
+            }
+        }
+    }
+
+    private static func runPolicySymbol(for hold: QueueRunPolicyHold) -> String {
+        switch hold {
+        case .outsideRunTimes: "moon.zzz.fill"
+        case .onBatteryPower: "battery.25percent"
+        case .thermalPressure: "thermometer.high"
         }
     }
 

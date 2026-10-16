@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import BluRayToVisionPro
@@ -443,6 +444,25 @@ final class WatchFolderMonitoringTests: XCTestCase {
 
         init(viewModel: ConversionViewModel) {
             self.viewModel = viewModel
+        }
+
+        var runPolicyGate: (any QueueRunPolicyGating)? {
+            get { viewModel.runPolicyGate }
+            set { viewModel.runPolicyGate = newValue }
+        }
+
+        var queueStateChanges: AnyPublisher<Void, Never> { viewModel.queueStateChanges }
+
+        func runPolicyQueueSnapshot(otherWorkIsActive: Bool) -> QueueRunPolicyQueueSnapshot {
+            viewModel.runPolicyQueueSnapshot(otherWorkIsActive: otherWorkIsActive)
+        }
+
+        func startQueueForRunPolicy(_ itemIDs: [UUID], windowEnd: Date?) async -> PersistentQueueCommandOutcome {
+            await viewModel.startQueueForRunPolicy(itemIDs, windowEnd: windowEnd)
+        }
+
+        func publishRunPolicyDecision(_ decision: QueueRunPolicyDecision) {
+            viewModel.publishRunPolicyDecision(decision)
         }
 
         func admitAutomatedPersistentQueueDrafts(_ drafts: [AutomatedQueueDraft]) async throws -> PersistentQueueAppendResult {

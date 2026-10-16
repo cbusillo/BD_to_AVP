@@ -84,35 +84,64 @@ struct WatchFolderSeenSource: Codable, Equatable {
 }
 
 struct QueueAutomationDocument: Codable, Equatable {
-    static let currentVersion = 1
+    /// The version written when a file holds only watch-folder data, so an earlier build can still edit it.
+    static let watchFoldersVersion = 1
+    /// The version that adds the queue run policy and its activity record.
+    static let currentVersion = 2
+    static let supportedVersions = watchFoldersVersion...currentVersion
 
     let version: Int
     var watchFolders: [WatchFolder]
     var seenSources: [WatchFolderSeenSource]
+    var runPolicy: QueueRunPolicy
+    var runPolicyActivity: [QueueRunPolicyActivity]
 
     init(
         version: Int = currentVersion,
         watchFolders: [WatchFolder] = [],
-        seenSources: [WatchFolderSeenSource] = []
+        seenSources: [WatchFolderSeenSource] = [],
+        runPolicy: QueueRunPolicy = .none,
+        runPolicyActivity: [QueueRunPolicyActivity] = []
     ) {
         self.version = version
         self.watchFolders = watchFolders
         self.seenSources = seenSources
+        self.runPolicy = runPolicy
+        self.runPolicyActivity = runPolicyActivity
     }
 
-    private enum CodingKeys: String, CodingKey { case version, watchFolders, seenSources }
+    /// The version this document needs: run-policy data is written only when there is some.
+    var requiredVersion: Int {
+        runPolicy == .none && runPolicyActivity.isEmpty ? Self.watchFoldersVersion : Self.currentVersion
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, watchFolders, seenSources, runPolicy, runPolicyActivity }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let version = try values.decode(Int.self, forKey: .version)
-        guard version == Self.currentVersion else {
+        guard Self.supportedVersions.contains(version) else {
             throw QueueAutomationStoreError.unsupportedVersion(version)
         }
         self.init(
             version: version,
             watchFolders: try values.decodeIfPresent([WatchFolder].self, forKey: .watchFolders) ?? [],
-            seenSources: try values.decodeIfPresent([WatchFolderSeenSource].self, forKey: .seenSources) ?? []
+            seenSources: try values.decodeIfPresent([WatchFolderSeenSource].self, forKey: .seenSources) ?? [],
+            runPolicy: try values.decodeIfPresent(QueueRunPolicy.self, forKey: .runPolicy) ?? .none,
+            runPolicyActivity: try values.decodeIfPresent([QueueRunPolicyActivity].self, forKey: .runPolicyActivity) ?? []
         )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        let version = requiredVersion
+        try values.encode(version, forKey: .version)
+        try values.encode(watchFolders, forKey: .watchFolders)
+        try values.encode(seenSources, forKey: .seenSources)
+        if version >= Self.currentVersion {
+            try values.encode(runPolicy, forKey: .runPolicy)
+            try values.encode(runPolicyActivity, forKey: .runPolicyActivity)
+        }
     }
 }
 
@@ -130,22 +159,23 @@ enum QueueAutomationStoreError: LocalizedError, Equatable {
         case .alreadyWatched:
             "That folder is already a watch folder."
         case let .unsupportedVersion(version):
-            "Watch folder data version \(version) is not supported."
+            "Queue automation data version \(version) is not supported."
         case .writesBlocked:
-            "Watch folder changes are disabled because the saved settings could not be loaded safely."
+            "Automation changes are disabled because the saved settings could not be loaded safely."
         case .writeFailed:
-            "Watch folder settings could not be saved."
+            "Automation settings could not be saved."
         }
     }
 }
 
-/// Persists watch folders and the sources they have already admitted.
+/// Persists watch folders, the sources they have already admitted, and the queue run policy.
 ///
 /// The data lives in a versioned JSON file next to `queue.json`, so a separate helper process can
 /// read the same configuration the app uses.
 @MainActor
 final class QueueAutomationStore: ObservableObject {
     static let maximumSeenSources = 10_000
+    static let maximumRunPolicyActivity = 100
 
     @Published private(set) var document: QueueAutomationDocument
     @Published private(set) var loadErrorMessage: String?
@@ -176,7 +206,7 @@ final class QueueAutomationStore: ObservableObject {
                 loadErrorMessage = error.localizedDescription
             } catch {
                 writesBlocked = true
-                loadErrorMessage = "Watch folder settings could not be loaded. Changes are disabled to avoid overwriting them."
+                loadErrorMessage = "Automation settings could not be loaded. Changes are disabled to avoid overwriting them."
             }
         }
     }
@@ -187,6 +217,24 @@ final class QueueAutomationStore: ObservableObject {
 
     var watchFolders: [WatchFolder] { document.watchFolders }
     var seenSources: [WatchFolderSeenSource] { document.seenSources }
+    var runPolicy: QueueRunPolicy { document.runPolicy }
+    var runPolicyActivity: [QueueRunPolicyActivity] { document.runPolicyActivity }
+
+    func saveRunPolicy(_ policy: QueueRunPolicy) throws {
+        try mutate { document in
+            document.runPolicy = policy
+        }
+    }
+
+    /// Adds an entry to the policy's activity record, keeping only the most recent entries.
+    func recordRunPolicyActivity(_ activity: QueueRunPolicyActivity) throws {
+        try mutate { document in
+            document.runPolicyActivity.append(activity)
+            if document.runPolicyActivity.count > Self.maximumRunPolicyActivity {
+                document.runPolicyActivity.removeFirst(document.runPolicyActivity.count - Self.maximumRunPolicyActivity)
+            }
+        }
+    }
 
     func watchFolder(id: UUID) -> WatchFolder? {
         document.watchFolders.first { $0.id == id }

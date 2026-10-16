@@ -466,7 +466,8 @@ struct ContentView: View {
             reviewGroups: queueReviewBannerState.visibleGroups(for: viewModel.persistentQueueItems),
             startReviewGroup: startHeldReviewGroup,
             dismissReview: { queueReviewBannerState.dismiss(items: viewModel.persistentQueueItems) },
-            release: releaseHeldPersistentQueueItem
+            release: releaseHeldPersistentQueueItem,
+            runPolicyDecision: viewModel.runPolicyDecision
         )
     }
 
