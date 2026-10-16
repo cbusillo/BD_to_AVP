@@ -287,20 +287,65 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         _ drafts: [ConversionDraft],
         conflicts: [RouteQualityConflict?] = []
     ) async throws -> PersistentQueueAppendResult {
+        let suppliedConflicts = conflicts + Array(repeating: nil, count: max(0, drafts.count - conflicts.count))
+        return try await admitPersistentQueueEntries(
+            drafts.enumerated().map { index, draft in
+                PersistentQueueAdmissionEntry(draft: draft, conflict: suppliedConflicts[index])
+            },
+            selectsFirstAddedItem: true
+        )
+    }
+
+    /// Admits drafts that arrived without a person adding them, such as files settling in a watch folder.
+    ///
+    /// They use the same duplicate protection and store admission as manual adds. Held drafts never
+    /// start until `releaseHeldPersistentQueueItems` moves them to waiting, and automated admission
+    /// leaves the person's current selection alone.
+    func admitAutomatedPersistentQueueDrafts(
+        _ drafts: [AutomatedQueueDraft]
+    ) async throws -> PersistentQueueAppendResult {
+        try await admitPersistentQueueEntries(
+            drafts.map { automated in
+                PersistentQueueAdmissionEntry(
+                    draft: automated.draft,
+                    conflict: nil,
+                    admission: automated.admission,
+                    holdForReview: automated.holdForReview
+                )
+            },
+            selectsFirstAddedItem: false
+        )
+    }
+
+    func releaseHeldPersistentQueueItems(_ itemIDs: Set<UUID>) async throws {
+        try await durableQueueStore.releaseHeldForReviewItems(itemIDs)
+    }
+
+    private struct PersistentQueueAdmissionEntry {
+        let draft: ConversionDraft
+        let conflict: RouteQualityConflict?
+        var admission: DurableQueueAdmission?
+        var holdForReview = false
+    }
+
+    private func admitPersistentQueueEntries(
+        _ entries: [PersistentQueueAdmissionEntry],
+        selectsFirstAddedItem: Bool
+    ) async throws -> PersistentQueueAppendResult {
         let existingIdentities = Set(persistentQueueItems.map {
             ConversionQueueItem.stablePreviewID(for: $0.draft)
         })
         var admittedIdentities = existingIdentities
-        let suppliedConflicts = conflicts + Array(repeating: nil, count: max(0, drafts.count - conflicts.count))
-        var admittedEntries: [(draft: ConversionDraft, conflict: RouteQualityConflict?)] = []
+        var admittedEntries: [PersistentQueueAdmissionEntry] = []
         var duplicateDisplayNames: [String] = []
-        for (index, draft) in drafts.enumerated() {
+        for entry in entries {
+            let draft = entry.draft
             let identity = ConversionQueueItem.stablePreviewID(for: draft)
             guard admittedIdentities.insert(identity).inserted else {
                 duplicateDisplayNames.append(draft.selectedTitle?.name ?? draft.source.displayName)
                 continue
             }
-            admittedEntries.append((draft, suppliedConflicts[index]))
+            admittedEntries.append(entry)
         }
         guard !admittedEntries.isEmpty else {
             return PersistentQueueAppendResult(addedCount: 0, duplicateDisplayNames: duplicateDisplayNames)
@@ -348,18 +393,28 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     return groupID
                 }()
             }
+            let state: DurableQueueItemState = if entry.conflict != nil {
+                .needsChoice
+            } else if entry.holdForReview {
+                .heldForReview
+            } else {
+                .waiting
+            }
             return DurableConversionQueueItem(
                 ordinal: offset,
                 groupID: itemGroupID,
                 origin: origin,
                 intent: DurableQueueItemIntent(draft: draft),
                 inspection: draft.sourceDetails,
-                state: entry.conflict == nil ? .waiting : .needsChoice,
-                routeQualityConflict: entry.conflict.map(DurableRouteQualityConflict.init)
+                state: state,
+                routeQualityConflict: entry.conflict.map(DurableRouteQualityConflict.init),
+                admission: entry.admission
             )
         }
         try await durableQueueStore.appendAdmittedItems(newItems)
-        selectedPersistentQueueItemID = newItems.first?.id
+        if selectsFirstAddedItem {
+            selectedPersistentQueueItemID = newItems.first?.id
+        }
         return PersistentQueueAppendResult(
             addedCount: newItems.count,
             duplicateDisplayNames: duplicateDisplayNames
@@ -499,7 +554,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         switch item.state {
         case .waiting, .interrupted, .stopped, .notStarted:
             true
-        case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
+        case .needsChoice, .heldForReview, .inspecting, .processing, .stopping, .attention, .failed, .completed:
             false
         }
     }
@@ -529,7 +584,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             switch item.state {
             case .waiting, .interrupted, .stopped, .notStarted:
                 item.id
-            case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
+            case .needsChoice, .heldForReview, .inspecting, .processing, .stopping, .attention, .failed, .completed:
                 nil
             }
         })
@@ -637,7 +692,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
                 true
-            case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
+            case .needsChoice, .heldForReview, .inspecting, .processing, .stopping, .attention, .failed, .completed:
                 false
             }
         }
@@ -2886,7 +2941,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             WorkerDecision(identifier: $0.identifier, prompt: $0.prompt, choices: $0.choices, details: $0.details)
         }
         projected.status = switch item.state {
-        case .waiting, .interrupted, .needsChoice:
+        case .waiting, .interrupted, .needsChoice, .heldForReview:
             .pending
         case .inspecting:
             .inspecting
@@ -3753,6 +3808,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             .waiting
         case .needsChoice:
             .attention("Needs a route-quality choice")
+        case .heldForReview:
+            .attention("Held for review")
         case .inspecting, .processing, .stopping:
             .processing
         case .attention:

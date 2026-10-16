@@ -24,6 +24,7 @@ enum PersistentQueueCommandRejection: Equatable {
 enum PersistentQueueItemStatus: Equatable {
     case waiting
     case needsChoice(RouteQualityConflict)
+    case heldForReview
     case inspecting
     case processing
     case stopping
@@ -44,6 +45,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
     let status: PersistentQueueItemStatus
     let attemptCount: Int
     let resolutionTrace: DurableQueueResolutionTrace?
+    let admission: DurableQueueAdmission?
 
     init(
         id: UUID = UUID(),
@@ -53,7 +55,8 @@ struct PersistentQueueItem: Identifiable, Equatable {
         draft: ConversionDraft,
         status: PersistentQueueItemStatus,
         attemptCount: Int = 0,
-        resolutionTrace: DurableQueueResolutionTrace? = nil
+        resolutionTrace: DurableQueueResolutionTrace? = nil,
+        admission: DurableQueueAdmission? = nil
     ) {
         self.id = id
         self.ordinal = ordinal
@@ -63,6 +66,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
         self.status = status
         self.attemptCount = attemptCount
         self.resolutionTrace = resolutionTrace
+        self.admission = admission
     }
 
     init(item: DurableConversionQueueItem) throws {
@@ -105,6 +109,11 @@ struct PersistentQueueItem: Identifiable, Equatable {
                 throw PersistentQueueProjectionError.missingRouteQualityConflict(item.id)
             }
             resolvedStatus = .needsChoice(conflict)
+        case .heldForReview:
+            guard item.admission != nil else {
+                throw PersistentQueueProjectionError.missingAdmission(item.id)
+            }
+            resolvedStatus = .heldForReview
         case .inspecting:
             resolvedStatus = .inspecting
         case .processing:
@@ -136,6 +145,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
         status = resolvedStatus
         attemptCount = item.attempts.count
         resolutionTrace = item.resolutionTrace
+        admission = item.admission
     }
 
     var displayName: String {
@@ -198,6 +208,8 @@ struct PersistentQueueItem: Identifiable, Equatable {
             nil
         case .needsChoice:
             "Resolve this item's required choice before moving or editing it."
+        case .heldForReview:
+            "Release this item from review before moving or editing it."
         case .inspecting, .processing:
             "This item is active and cannot move or be edited until it finishes."
         case .stopping:
@@ -219,7 +231,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
 
     var canRemove: Bool {
         switch status {
-        case .waiting, .needsChoice, .interrupted, .attention, .failed, .stopped, .notStarted:
+        case .waiting, .needsChoice, .heldForReview, .interrupted, .attention, .failed, .stopped, .notStarted:
             true
         case .inspecting, .processing, .stopping, .completed:
             false
@@ -234,9 +246,13 @@ struct PersistentQueueItem: Identifiable, Equatable {
             "This item cannot be removed until it has stopped."
         case .completed:
             "Completed items are removed with Clear Completed."
-        case .waiting, .needsChoice, .interrupted, .attention, .failed, .stopped, .notStarted:
+        case .waiting, .needsChoice, .heldForReview, .interrupted, .attention, .failed, .stopped, .notStarted:
             nil
         }
+    }
+
+    var isHeldForReview: Bool {
+        status == .heldForReview
     }
 
     var canRetry: Bool {
@@ -303,7 +319,7 @@ struct PersistentQueueCommandState: Equatable {
             switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
                 true
-            case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
+            case .needsChoice, .heldForReview, .inspecting, .processing, .stopping, .attention, .failed, .completed:
                 false
             }
         }
@@ -363,6 +379,7 @@ enum PersistentQueueProjectionError: Error, Equatable {
     case invalidSourceKind(String)
     case missingDecision(UUID)
     case missingRouteQualityConflict(UUID)
+    case missingAdmission(UUID)
     case unexpectedRouteQualityConflict(UUID)
     case missingFailure(UUID)
     case missingResult(UUID)

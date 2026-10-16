@@ -301,7 +301,8 @@ private extension PersistentQueueItem {
             true
         case let .failed(failure):
             failure.retryable
-        case .inspecting, .processing, .stopping, .completed:
+        case .heldForReview, .inspecting, .processing, .stopping, .completed:
+            // Held items are not committed to run until someone releases them.
             false
         }
     }

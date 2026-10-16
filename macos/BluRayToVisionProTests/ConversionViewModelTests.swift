@@ -972,6 +972,79 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testQueueRunnerConvertsWaitingItemsAndLeavesHeldForReviewItemsUntilReleased() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let manualURL = directoryURL.appendingPathComponent("Manual.mkv")
+        let watchedURL = directoryURL.appendingPathComponent("Watched.mkv")
+        for sourceURL in [manualURL, watchedURL] {
+            _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        }
+        let scenario = BatchWorkerScenario()
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(
+            clientFactory: { scenario.makeClient() },
+            durableQueueStore: queueStore
+        )
+        func draft(_ sourceURL: URL) -> ConversionDraft {
+            ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: sourceURL),
+                sourceDetails: SourceInspection(
+                    name: sourceURL.deletingPathExtension().lastPathComponent,
+                    resolution: "1920x1080",
+                    frameRate: "24/1",
+                    interlaced: false,
+                    sizeBytes: 10
+                ),
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions()
+            )
+        }
+        let arrivedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        _ = try await viewModel.admitAutomatedPersistentQueueDrafts([
+            AutomatedQueueDraft(
+                draft: draft(watchedURL),
+                admission: .watchFolder(
+                    id: UUID(),
+                    name: "Incoming",
+                    arrivedAt: arrivedAt,
+                    settledAt: arrivedAt.addingTimeInterval(60),
+                    admittedAt: arrivedAt.addingTimeInterval(61)
+                ),
+                holdForReview: true
+            ),
+        ])
+        let heldOnlyOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(heldOnlyOutcome, .rejected(.noEligibleItems))
+
+        _ = try await viewModel.appendPersistentQueueDrafts([draft(manualURL)])
+        let firstRunOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(firstRunOutcome, .accepted(.running))
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+
+        XCTAssertEqual(
+            scenario.records.filter { $0.operation == "convert_source" }.map(\.sourcePath),
+            [manualURL.path]
+        )
+        let heldID = try XCTUnwrap(queueStore.items.first { $0.intent.source.path == watchedURL.path }?.id)
+        XCTAssertEqual(queueStore.items.first { $0.id == heldID }?.state, .heldForReview)
+
+        try await viewModel.releaseHeldPersistentQueueItems([heldID])
+        let releasedRunOutcome = await viewModel.startPersistentQueue()
+        XCTAssertEqual(releasedRunOutcome, .accepted(.running))
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+
+        XCTAssertEqual(
+            scenario.records.filter { $0.operation == "convert_source" }.map(\.sourcePath),
+            [manualURL.path, watchedURL.path]
+        )
+        XCTAssertEqual(queueStore.items.first { $0.id == heldID }?.state, .completed)
+    }
+
+    @MainActor
     func testHeldPersistentQueueItemPreservesIdentityAndResolutionTrace() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -4379,6 +4452,15 @@ final class ConversionViewModelTests: XCTestCase {
             if state == .needsChoice {
                 item.routeQualityConflict = DurableRouteQualityConflict(conflict: makeRouteQualityConflict())
             }
+            if state == .heldForReview {
+                item.admission = .watchFolder(
+                    id: UUID(),
+                    name: "Incoming",
+                    arrivedAt: Date(timeIntervalSince1970: 1),
+                    settledAt: Date(timeIntervalSince1970: 61),
+                    admittedAt: Date(timeIntervalSince1970: 62)
+                )
+            }
             if state == .failed {
                 item.failure = DurableQueueFailure(
                     code: "fixture_failure",
@@ -4400,6 +4482,7 @@ final class ConversionViewModelTests: XCTestCase {
             switch (projected.status, state) {
             case (.waiting, .waiting),
                  (.needsChoice, .needsChoice),
+                 (.heldForReview, .heldForReview),
                  (.inspecting, .inspecting),
                  (.processing, .processing),
                  (.stopping, .stopping),

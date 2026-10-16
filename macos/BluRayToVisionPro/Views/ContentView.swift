@@ -64,13 +64,9 @@ struct ContentView: View {
         self.capabilities = capabilities
 
         let profile = profileStore.profile(withID: settings.selectedProfileID)
-        var initialJobOptions = Self.jobOptions(from: settings)
-        if let pipelineDefaults = profile.pipelineDefaults {
-            initialJobOptions.applyProfilePipelineDefaults(pipelineDefaults)
-        }
-        let initialOptions = ConversionOptions(
-            encoding: profile.options,
-            job: initialJobOptions
+        let initialOptions = QueueDraftFactory.initialOptions(
+            profile: profile,
+            jobOptions: QueueDraftFactory.jobOptions(from: settings)
         )
 
         _selectedProfileID = State(initialValue: profile.id)
@@ -548,7 +544,7 @@ struct ContentView: View {
             return switch item.status {
             case .waiting, .interrupted, .stopped, .notStarted:
                 true
-            case .needsChoice, .inspecting, .processing, .stopping, .attention, .failed, .completed:
+            case .needsChoice, .heldForReview, .inspecting, .processing, .stopping, .attention, .failed, .completed:
                 false
             }
         }
@@ -750,7 +746,7 @@ struct ContentView: View {
     }
 
     private var defaultJobOptions: JobOptions {
-        Self.jobOptions(from: settings)
+        QueueDraftFactory.jobOptions(from: settings)
     }
 
     private var selectedTitles: [SourceTitle] {
@@ -1042,15 +1038,6 @@ struct ContentView: View {
         profile.pipelineDefaults ?? defaultJobOptions.profilePipelineDefaults
     }
 
-    private static func jobOptions(from settings: AppSettings) -> JobOptions {
-        JobOptions(
-            intermediatePolicy: settings.intermediatePolicy,
-            softwareEncoder: settings.useSoftwareEncoder,
-            keepAwake: settings.keepAwake,
-            playSound: settings.playSound
-        )
-    }
-
     private func refreshDiscs() {
         guard !isRefreshingDiscs else {
             return
@@ -1119,20 +1106,12 @@ struct ContentView: View {
 
     private func appendSourcesToPersistentQueue(_ sources: [ConversionSource]) {
         guard !sources.isEmpty else { return }
-        let drafts = sources.map { source in
-            var sourceOptions = options
-            if source.kind == .physicalDisc {
-                sourceOptions.job.removeOriginalAfterSuccess = false
-            }
-            return ConversionDraft(
-                source: source,
-                sourceDetails: nil,
-                profile: selectedProfile,
-                destinationURL: destinationURL,
-                options: sourceOptions
-            )
-        }
-        appendDraftsToPersistentQueue(drafts, clearConfiguredSource: false)
+        let factory = QueueDraftFactory(
+            profile: selectedProfile,
+            destinationURL: destinationURL,
+            options: options
+        )
+        appendDraftsToPersistentQueue(factory.drafts(for: sources), clearConfiguredSource: false)
     }
 
     private func chooseFile(_ kind: ConversionSourceKind) {

@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     var observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
     weak var relayHostController: RelayHostSessionController?
     weak var movieSharingController: MovieSharingController?
+    /// Queue automation lives outside any window so a later menu-bar helper can own it instead.
+    weak var queueAutomationController: QueueAutomationController?
     private weak var managedWindow: NSWindow?
     private var originalWindowDelegate: NSWindowDelegate?
     private var allowManagedWindowClose = false

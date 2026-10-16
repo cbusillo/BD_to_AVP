@@ -245,14 +245,14 @@ private extension PersistentQueueItem {
         switch status {
         case .waiting, .inspecting, .processing, .stopping, .stopped, .notStarted:
             true
-        case .needsChoice, .interrupted, .attention, .failed, .completed:
+        case .needsChoice, .heldForReview, .interrupted, .attention, .failed, .completed:
             false
         }
     }
 
     var isQueueNotificationBaselineTerminal: Bool {
         switch status {
-        case .needsChoice, .interrupted, .attention, .failed, .completed:
+        case .needsChoice, .heldForReview, .interrupted, .attention, .failed, .completed:
             true
         case .waiting, .inspecting, .processing, .stopping, .stopped, .notStarted:
             false
@@ -263,14 +263,14 @@ private extension PersistentQueueItem {
         switch status {
         case .needsChoice, .interrupted, .attention, .failed:
             true
-        case .waiting, .inspecting, .processing, .stopping, .completed, .stopped, .notStarted:
+        case .waiting, .heldForReview, .inspecting, .processing, .stopping, .completed, .stopped, .notStarted:
             false
         }
     }
 
     var isQueueNotificationTerminalForSession: Bool {
         switch status {
-        case .needsChoice, .interrupted, .attention, .failed, .completed, .stopped, .notStarted:
+        case .needsChoice, .heldForReview, .interrupted, .attention, .failed, .completed, .stopped, .notStarted:
             true
         case .waiting, .inspecting, .processing, .stopping:
             false

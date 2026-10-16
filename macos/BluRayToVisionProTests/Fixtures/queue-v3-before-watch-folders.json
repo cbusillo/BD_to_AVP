@@ -1,0 +1,195 @@
+{
+  "items" : [
+    {
+      "attempts" : [
+
+      ],
+      "id" : "6A51BC62-1262-4C1C-8CD5-7787B41CBA7D",
+      "intent" : {
+        "destinationPath" : "\/Users\/example\/Movies",
+        "options" : {
+          "encoding" : {
+            "audioBitrate" : 384,
+            "audioHandling" : "automatic",
+            "audioLanguages" : {
+              "mode" : "preferred_only",
+              "preferredLanguage" : "eng"
+            },
+            "av1CRF" : 32,
+            "cropBlackBars" : false,
+            "fieldOfView" : 90,
+            "frameRateOverride" : "",
+            "hevcQuality" : 75,
+            "leftRightBitrate" : 20,
+            "linkQuality" : true,
+            "mvHEVC" : {
+              "directFinalBitrate" : {
+                "customMbps" : 40,
+                "mode" : "automatic"
+              },
+              "generatedEyeBitrate" : {
+                "customMbps" : 20,
+                "mode" : "automatic"
+              },
+              "generatedMergeQuality" : 75,
+              "linkGeneratedAndUpscaleQuality" : true
+            },
+            "resolutionOverride" : "",
+            "subtitles" : {
+              "mode" : "preferred_plus_others",
+              "preferredLanguage" : "eng"
+            },
+            "swapEyes" : false,
+            "upscaleEnabled" : false,
+            "upscaleQuality" : 75,
+            "videoOutputMode" : "mv_hevc",
+            "videoQuality" : {
+              "custom" : {
+                "av1CRF" : 32,
+                "directFinalBitrate" : {
+                  "customMbps" : 40,
+                  "mode" : "automatic"
+                },
+                "generatedEyeBitrate" : {
+                  "customMbps" : 20,
+                  "mode" : "automatic"
+                },
+                "generatedMergeQuality" : 75,
+                "upscaleQuality" : 75
+              },
+              "lastLadderStep" : "balanced",
+              "mode" : "ladder"
+            }
+          },
+          "job" : {
+            "continueOnError" : false,
+            "intermediatePolicy" : "automatic",
+            "keepAwake" : true,
+            "keepStageFiles" : false,
+            "outputCommands" : false,
+            "overwriteExisting" : false,
+            "playSound" : true,
+            "removeOriginalAfterSuccess" : false,
+            "softwareEncoder" : false,
+            "startStage" : 1
+          }
+        },
+        "profile" : {
+          "id" : "builtin.balanced",
+          "kind" : "builtIn",
+          "name" : "Recommended"
+        },
+        "source" : {
+          "displayName" : "Movie One.mkv",
+          "kind" : "matroska",
+          "path" : "\/Volumes\/Media\/Incoming\/Movie One.mkv",
+          "workerSourcePath" : "\/Volumes\/Media\/Incoming\/Movie One.mkv"
+        }
+      },
+      "ordinal" : 0,
+      "origin" : "singleSource",
+      "state" : "waiting"
+    },
+    {
+      "attempts" : [
+        {
+          "endedAt" : "2026-09-21T14:15:00Z",
+          "id" : "00A767C6-CA61-4F76-9A73-B37DA628F35F",
+          "startedAt" : "2026-09-21T14:13:20Z"
+        }
+      ],
+      "failure" : {
+        "code" : "source_unavailable",
+        "details" : "\/Volumes\/Media\/Incoming\/Movie Two.iso",
+        "message" : "The queued source is no longer available.",
+        "retryable" : true
+      },
+      "id" : "580C5BC8-F5F4-44E0-B2BF-46A8DACF3236",
+      "intent" : {
+        "destinationPath" : "\/Users\/example\/Movies",
+        "options" : {
+          "encoding" : {
+            "audioBitrate" : 384,
+            "audioHandling" : "automatic",
+            "audioLanguages" : {
+              "mode" : "preferred_only",
+              "preferredLanguage" : "eng"
+            },
+            "av1CRF" : 32,
+            "cropBlackBars" : false,
+            "fieldOfView" : 90,
+            "frameRateOverride" : "",
+            "hevcQuality" : 75,
+            "leftRightBitrate" : 20,
+            "linkQuality" : true,
+            "mvHEVC" : {
+              "directFinalBitrate" : {
+                "customMbps" : 40,
+                "mode" : "automatic"
+              },
+              "generatedEyeBitrate" : {
+                "customMbps" : 20,
+                "mode" : "automatic"
+              },
+              "generatedMergeQuality" : 75,
+              "linkGeneratedAndUpscaleQuality" : true
+            },
+            "resolutionOverride" : "",
+            "subtitles" : {
+              "mode" : "preferred_plus_others",
+              "preferredLanguage" : "eng"
+            },
+            "swapEyes" : false,
+            "upscaleEnabled" : false,
+            "upscaleQuality" : 75,
+            "videoOutputMode" : "mv_hevc",
+            "videoQuality" : {
+              "custom" : {
+                "av1CRF" : 32,
+                "directFinalBitrate" : {
+                  "customMbps" : 40,
+                  "mode" : "automatic"
+                },
+                "generatedEyeBitrate" : {
+                  "customMbps" : 20,
+                  "mode" : "automatic"
+                },
+                "generatedMergeQuality" : 75,
+                "upscaleQuality" : 75
+              },
+              "lastLadderStep" : "balanced",
+              "mode" : "ladder"
+            }
+          },
+          "job" : {
+            "continueOnError" : false,
+            "intermediatePolicy" : "automatic",
+            "keepAwake" : true,
+            "keepStageFiles" : false,
+            "outputCommands" : false,
+            "overwriteExisting" : false,
+            "playSound" : true,
+            "removeOriginalAfterSuccess" : false,
+            "softwareEncoder" : false,
+            "startStage" : 1
+          }
+        },
+        "profile" : {
+          "id" : "builtin.balanced",
+          "kind" : "builtIn",
+          "name" : "Recommended"
+        },
+        "source" : {
+          "displayName" : "Movie Two.iso",
+          "kind" : "discImage",
+          "path" : "\/Volumes\/Media\/Incoming\/Movie Two.iso",
+          "workerSourcePath" : "\/Volumes\/Media\/Incoming\/Movie Two.iso"
+        }
+      },
+      "ordinal" : 1,
+      "origin" : "singleSource",
+      "state" : "failed"
+    }
+  ],
+  "version" : 3
+}

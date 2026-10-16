@@ -18,7 +18,8 @@ struct PersistentQueueOutcomeSummary: Equatable {
                 failedItemIDs.append(item.id)
             case .needsChoice, .interrupted, .attention:
                 needsActionItemIDs.append(item.id)
-            case .waiting, .inspecting, .processing, .stopping, .stopped, .notStarted:
+            case .waiting, .heldForReview, .inspecting, .processing, .stopping, .stopped, .notStarted:
+                // Held items are waiting for review, not a result of the run.
                 break
             }
         }

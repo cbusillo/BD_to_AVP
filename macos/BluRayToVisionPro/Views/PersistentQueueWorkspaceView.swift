@@ -1245,6 +1245,7 @@ private extension PersistentQueueItemStatus {
         switch self {
         case .waiting: "Waiting"
         case .needsChoice: "Needs a Choice"
+        case .heldForReview: "Held for Review"
         case .inspecting: "Reading Source"
         case .processing: "Converting"
         case .stopping: "Stopping"
@@ -1272,6 +1273,7 @@ private extension PersistentQueueItemStatus {
         switch self {
         case .waiting: "clock"
         case .needsChoice: "exclamationmark.circle.fill"
+        case .heldForReview: "tray.and.arrow.down"
         case .inspecting: "doc.text.magnifyingglass"
         case .processing: "gearshape.2"
         case .stopping: "hourglass"
@@ -1285,7 +1287,7 @@ private extension PersistentQueueItemStatus {
 
     var tint: Color {
         switch self {
-        case .waiting, .stopped, .notStarted: .secondary
+        case .waiting, .heldForReview, .stopped, .notStarted: .secondary
         case .inspecting, .processing, .stopping: .accentColor
         case .needsChoice, .interrupted, .attention: .orange
         case .failed: .red
