@@ -18,11 +18,12 @@ enum AutomaticQueueStartDecision: Equatable {
     case joinRunningQueue
     case leaveWaiting(AutomaticQueueStartHold)
 
-    /// Never overrides a pause, a requested pause, a scheduled window, or other active work.
+    /// Never overrides a pause, a requested pause, a scheduled window, the run policy, or other active work.
     static func decide(
         runState: PersistentQueueRunState,
         hasOffPeakSchedule: Bool,
-        otherWorkIsActive: Bool
+        otherWorkIsActive: Bool,
+        runPolicyHold: QueueRunPolicyHold? = nil
     ) -> AutomaticQueueStartDecision {
         switch runState {
         case .running:
@@ -34,6 +35,9 @@ enum AutomaticQueueStartDecision: Equatable {
         case .idle:
             if hasOffPeakSchedule {
                 return .leaveWaiting(.scheduled)
+            }
+            if let runPolicyHold {
+                return .leaveWaiting(.runPolicy(runPolicyHold))
             }
             if otherWorkIsActive {
                 return .leaveWaiting(.otherWorkActive)
@@ -47,6 +51,7 @@ enum AutomaticQueueStartHold: Equatable {
     case paused
     case pauseRequested
     case scheduled
+    case runPolicy(QueueRunPolicyHold)
     case otherWorkActive
 }
 

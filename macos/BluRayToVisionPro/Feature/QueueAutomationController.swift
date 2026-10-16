@@ -10,9 +10,28 @@ protocol QueueAutomationAdmitting: AnyObject {
         _ itemIDs: [UUID],
         otherWorkIsActive: Bool
     ) async -> AutomaticQueueStartDecision
+
+    /// Asked before every start the queue makes on its own, and before each further video of such a run.
+    var runPolicyGate: (any QueueRunPolicyGating)? { get set }
+    func runPolicyQueueSnapshot(otherWorkIsActive: Bool) -> QueueRunPolicyQueueSnapshot
+    func startQueueForRunPolicy(_ itemIDs: [UUID], windowEnd: Date?) async -> PersistentQueueCommandOutcome
+    func publishRunPolicyDecision(_ decision: QueueRunPolicyDecision)
+    /// Emits when the queue may have changed, so the run policy can be checked again.
+    var queueStateChanges: AnyPublisher<Void, Never> { get }
 }
 
-extension ConversionViewModel: QueueAutomationAdmitting {}
+/// Answers whether the app may start a video on its own right now, and records what the policy did.
+@MainActor
+protocol QueueRunPolicyGating: AnyObject {
+    func runPolicyHold(for scope: QueueRunPolicyScope) -> QueueRunPolicyHold?
+    func recordRunPolicyActivity(_ kind: QueueRunPolicyActivity.Kind, hold: QueueRunPolicyHold?, itemCount: Int)
+}
+
+extension ConversionViewModel: QueueAutomationAdmitting {
+    var queueStateChanges: AnyPublisher<Void, Never> {
+        objectWillChange.map { _ in () }.eraseToAnyPublisher()
+    }
+}
 
 struct WatchFolderScanReport: Equatable {
     let admittedCount: Int
@@ -36,14 +55,21 @@ enum WatchFolderScanOutcome: Equatable {
 /// through the same queue admission path as manual adds. While monitoring, it watches each enabled
 /// folder for file-system changes, re-scans on a timer until arriving files settle, catches up on
 /// anything that arrived while it was not running, and resumes a folder when its drive comes back.
+///
+/// It also applies the queue run policy: it starts waiting items when a run time opens or a machine
+/// condition clears, answers whether a run it started may start another video, and records each
+/// decision in the policy's activity record. Every decision comes from `QueueRunPolicyDecision.decide`
+/// with an injected clock, calendar, and machine conditions.
 @MainActor
-final class QueueAutomationController: ObservableObject {
+final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
     typealias DraftFactoryProvider = @MainActor (WatchFolder) -> QueueDraftFactory
     typealias BookmarkResolver = (Data) throws -> (url: URL, isStale: Bool)
     typealias BookmarkCreator = (URL) throws -> Data
 
     /// Added to a settle time before re-scanning, so a timer that fires on the boundary sees the file settled.
     static let rescanTolerance: TimeInterval = 1
+    /// How often an active run policy is checked again between run-time boundaries.
+    static let runPolicyRecheckInterval: TimeInterval = 60
 
     let store: QueueAutomationStore
     let settleInterval: TimeInterval
@@ -65,6 +91,12 @@ final class QueueAutomationController: ObservableObject {
     private let eventSourceFactory: WatchFolderEventSourceFactory
     private let timerScheduler: any QueueAutomationTimerScheduling
     private let workspaceNotificationCenter: NotificationCenter
+    private let machineConditions: any QueueMachineConditionsProviding
+    let calendar: Calendar
+    private var runPolicyTimer: (any QueueAutomationTimer)?
+    private var runPolicyTask: Task<Void, Never>?
+    private var runPolicyEvaluationRequested = false
+    private var queueChangeSubscription: AnyCancellable?
     private var settleEvaluators: [UUID: WatchFolderSettleEvaluator] = [:]
     private var eventSources: [UUID: any WatchFolderEventSource] = [:]
     private var timers: [UUID: any QueueAutomationTimer] = [:]
@@ -85,7 +117,9 @@ final class QueueAutomationController: ObservableObject {
         createBookmark: @escaping BookmarkCreator = QueueAutomationController.createSecurityScopedBookmark,
         eventSourceFactory: @escaping WatchFolderEventSourceFactory = FSEventsWatchFolderEventSource.make,
         timerScheduler: (any QueueAutomationTimerScheduling)? = nil,
-        workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter
+        workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+        machineConditions: (any QueueMachineConditionsProviding)? = nil,
+        calendar: Calendar = .autoupdatingCurrent
     ) {
         self.store = store
         self.admitter = admitter
@@ -97,9 +131,12 @@ final class QueueAutomationController: ObservableObject {
         self.eventSourceFactory = eventSourceFactory
         self.timerScheduler = timerScheduler ?? TaskQueueAutomationTimerScheduler(now: now)
         self.workspaceNotificationCenter = workspaceNotificationCenter
+        self.machineConditions = machineConditions ?? SystemQueueMachineConditions()
+        self.calendar = calendar
         storeSubscription = store.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        admitter.runPolicyGate = self
     }
 
     convenience init(
@@ -214,10 +251,28 @@ final class QueueAutomationController: ObservableObject {
                 }
             }
         }
+        notificationObservers.append(center.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in self?.requestRunPolicyEvaluation() }
+        })
+        machineConditions.startObserving { [weak self] in
+            self?.requestRunPolicyEvaluation()
+        }
+        queueChangeSubscription = admitter.queueStateChanges
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.requestRunPolicyEvaluation()
+            }
         for folder in store.watchFolders {
             requestScan(folderID: folder.id)
         }
         await waitForPendingScans()
+        // Opening the app inside a run time starts eligible waiting work, as the window opening would.
+        requestRunPolicyEvaluation()
+        await waitForRunPolicyEvaluation()
     }
 
     func stopMonitoring() {
@@ -231,6 +286,135 @@ final class QueueAutomationController: ObservableObject {
         notificationObservers = []
         for folderID in Set(eventSources.keys).union(timers.keys) {
             stopWatching(folderID: folderID)
+        }
+        machineConditions.stopObserving()
+        queueChangeSubscription = nil
+        runPolicyTimer?.cancel()
+        runPolicyTimer = nil
+    }
+
+    // MARK: - Run policy
+
+    var runPolicy: QueueRunPolicy { store.runPolicy }
+    var runPolicyActivity: [QueueRunPolicyActivity] { store.runPolicyActivity }
+    var currentMachineConditions: QueueMachineConditions { machineConditions.current }
+
+    func updateRunPolicy(_ policy: QueueRunPolicy) throws {
+        try store.saveRunPolicy(policy)
+        requestRunPolicyEvaluation()
+    }
+
+    /// The policy applied to `date`, or to now, with the Mac's current power and thermal state.
+    func runPolicyEvaluation(at date: Date? = nil) -> QueueRunPolicyEvaluation {
+        QueueRunPolicyEvaluation.evaluate(
+            store.runPolicy,
+            at: date ?? now(),
+            conditions: machineConditions.current,
+            calendar: calendar
+        )
+    }
+
+    func runPolicyHold(for scope: QueueRunPolicyScope) -> QueueRunPolicyHold? {
+        runPolicyEvaluation().hold(for: scope)
+    }
+
+    /// Records what the policy did. A hold that repeats the previous entry is not recorded again.
+    func recordRunPolicyActivity(_ kind: QueueRunPolicyActivity.Kind, hold: QueueRunPolicyHold?, itemCount: Int) {
+        if kind != .started,
+           let last = store.runPolicyActivity.last,
+           last.kind == kind,
+           last.hold == hold?.kind
+        {
+            return
+        }
+        try? store.recordRunPolicyActivity(QueueRunPolicyActivity(
+            occurredAt: now(),
+            kind: kind,
+            hold: hold,
+            itemCount: itemCount
+        ))
+    }
+
+    /// Checks the policy soon, coalescing with a check already running.
+    func requestRunPolicyEvaluation() {
+        guard isMonitoring else {
+            return
+        }
+        guard runPolicyTask == nil else {
+            runPolicyEvaluationRequested = true
+            return
+        }
+        runPolicyTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            repeat {
+                runPolicyEvaluationRequested = false
+                await evaluateRunPolicy()
+            } while runPolicyEvaluationRequested
+            runPolicyTask = nil
+        }
+    }
+
+    func waitForRunPolicyEvaluation() async {
+        while let task = runPolicyTask {
+            await task.value
+        }
+    }
+
+    /// Applies the policy to the queue now: starts it when a run time is open or a condition has
+    /// cleared, records holds, and publishes what the queue is waiting for.
+    @discardableResult
+    func evaluateRunPolicy() async -> QueueRunPolicyDecision {
+        let policy = store.runPolicy
+        let evaluation = runPolicyEvaluation()
+        var decision = QueueRunPolicyDecision.decide(
+            policy: policy,
+            evaluation: evaluation,
+            queue: admitter.runPolicyQueueSnapshot(otherWorkIsActive: isOtherWorkActive())
+        )
+        switch decision {
+        case let .start(itemIDs, windowEnd):
+            let outcome = await admitter.startQueueForRunPolicy(itemIDs, windowEnd: windowEnd)
+            switch outcome {
+            case .accepted:
+                recordRunPolicyActivity(.started, hold: nil, itemCount: itemIDs.count)
+            case .noChange:
+                break
+            case .rejected:
+                recordRunPolicyActivity(.startFailed, hold: nil, itemCount: itemIDs.count)
+            }
+            decision = QueueRunPolicyDecision.decide(
+                policy: policy,
+                evaluation: runPolicyEvaluation(),
+                queue: admitter.runPolicyQueueSnapshot(otherWorkIsActive: isOtherWorkActive())
+            )
+            if case .start = decision {
+                // The start did not take; the queue's own banners explain why.
+                decision = .inactive
+            }
+        case let .waiting(hold, itemCount):
+            recordRunPolicyActivity(.held, hold: hold, itemCount: itemCount)
+        case .inactive, .running, .blockedByOtherWork:
+            break
+        }
+        admitter.publishRunPolicyDecision(decision)
+        scheduleRunPolicyRecheck(after: evaluation, isNeeded: decision != .inactive || policy.isActive)
+        return decision
+    }
+
+    private func scheduleRunPolicyRecheck(after evaluation: QueueRunPolicyEvaluation, isNeeded: Bool) {
+        runPolicyTimer?.cancel()
+        runPolicyTimer = nil
+        guard isMonitoring, isNeeded else {
+            return
+        }
+        // Boundaries are exact; the periodic recheck catches changes no notification reports.
+        let recheck = evaluation.date.addingTimeInterval(Self.runPolicyRecheckInterval)
+        let date = min(evaluation.nextBoundary ?? recheck, recheck)
+        runPolicyTimer = timerScheduler.schedule(at: date) { [weak self] in
+            self?.runPolicyTimer = nil
+            self?.requestRunPolicyEvaluation()
         }
     }
 

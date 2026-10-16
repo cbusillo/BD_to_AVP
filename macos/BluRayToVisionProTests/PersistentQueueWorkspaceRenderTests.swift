@@ -210,6 +210,7 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         sidebarWidth: CGFloat = 330,
         runState: PersistentQueueRunState = .running,
         reviewGroups: [WatchFolderReviewGroup] = [],
+        runPolicyDecision: QueueRunPolicyDecision = .inactive,
         screenshotName: String? = nil,
         screenshotHeight: CGFloat = 620,
         showsSidebarSelection: Bool = true
@@ -254,7 +255,8 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
                 reviewGroups: reviewGroups,
                 startReviewGroup: { _ in },
                 dismissReview: {},
-                release: { _ in }
+                release: { _ in },
+                runPolicyDecision: runPolicyDecision
             )
             .frame(width: sidebarWidth)
             PersistentQueueDetailView(
@@ -333,6 +335,43 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
             screenshotHeight: 760,
             // An off-screen capture draws the selected sidebar row as a solid block.
             showsSidebarSelection: false
+        )
+    }
+
+    func testQueueShowsWhyItIsWaitingForItsRunTime() throws {
+        let items = try makeItems().map { item in
+            // An idle queue: nothing is converting while it waits for the run time.
+            item.isActiveForRunPolicyRender ? try PersistentQueueItem(item: DurableConversionQueueItem(
+                ordinal: 20,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: item.draft),
+                state: .waiting
+            )) : item
+        }
+        let calendar = Calendar.autoupdatingCurrent
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))!
+        let nextStart = calendar.date(bySettingHour: 1, minute: 0, second: 0, of: tomorrow)!
+        try render(
+            items: items,
+            selectedItem: nil,
+            compact: false,
+            colorScheme: .light,
+            appearanceName: .aqua,
+            runState: .idle,
+            runPolicyDecision: .waiting(.outsideRunTimes(nextStart: nextStart), itemCount: 7),
+            screenshotName: "queue-waiting-for-run-time",
+            screenshotHeight: 760
+        )
+        try render(
+            items: items,
+            selectedItem: nil,
+            compact: true,
+            colorScheme: .light,
+            appearanceName: .aqua,
+            runState: .idle,
+            runPolicyDecision: .waiting(.onBatteryPower, itemCount: 7),
+            screenshotName: "queue-waiting-on-battery",
+            screenshotHeight: 760
         )
     }
 
@@ -535,5 +574,14 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
             throw NSError(domain: "PersistentQueueWorkspaceRenderTests", code: 1)
         }
         return conflict
+    }
+}
+
+private extension PersistentQueueItem {
+    var isActiveForRunPolicyRender: Bool {
+        switch status {
+        case .inspecting, .processing, .stopping: true
+        default: false
+        }
     }
 }

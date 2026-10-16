@@ -1,0 +1,25 @@
+{
+  "seenSources" : [
+    {
+      "fingerprint" : {
+        "modifiedAtMilliseconds" : 1800000000123,
+        "path" : "/Volumes/Media/Incoming/Movie.mkv",
+        "sizeBytes" : 42
+      },
+      "recordedAt" : "2027-01-15T08:00:00Z",
+      "watchFolderID" : "6A51BC62-1262-4C1C-8CD5-7787B41CBA7D"
+    }
+  ],
+  "version" : 1,
+  "watchFolders" : [
+    {
+      "bookmark" : "Zm9sZGVy",
+      "displayName" : "Incoming",
+      "id" : "6A51BC62-1262-4C1C-8CD5-7787B41CBA7D",
+      "includesSubfolders" : false,
+      "isEnabled" : true,
+      "mode" : "startAutomatically",
+      "profileID" : null
+    }
+  ]
+}

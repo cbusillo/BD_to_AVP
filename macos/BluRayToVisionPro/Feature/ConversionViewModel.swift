@@ -70,6 +70,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var offPeakSchedule: OffPeakQueueSchedule?
     @Published private(set) var offPeakScheduleOutcome: OffPeakScheduleOutcome?
     @Published private(set) var offPeakScheduleErrorMessage: String?
+    /// What the queue run policy is doing, published by queue automation for display.
+    @Published private(set) var runPolicyDecision: QueueRunPolicyDecision = .inactive
+    /// Items an automatic start left waiting for a machine condition to clear.
+    @Published private(set) var runPolicyDeferredItemIDs: Set<UUID> = []
+    /// Queue automation, which decides whether the app may start a video on its own right now.
+    weak var runPolicyGate: (any QueueRunPolicyGating)?
 
     private let clientFactory: ClientFactory
     private let diagnosticClock: () -> Date
@@ -105,6 +111,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var durableQueueSubscription: AnyCancellable?
     private var offPeakScheduleSubscription: AnyCancellable?
     private var offPeakRunWindowEnd: Date?
+    /// Set while the running queue was started by the app on its own, with the rules it follows.
+    private var runPolicyScope: QueueRunPolicyScope?
+    /// For items deferred from a Start Later run, when that window ends.
+    private var runPolicyDeferredWindowEnd: Date?
+    /// The Start Later schedule a machine condition kept from starting, so a miss is reported accurately.
+    private var offPeakScheduleHeldByRunPolicyID: UUID?
 
     init(
         clientFactory: @escaping ClientFactory = {
@@ -335,21 +347,29 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     /// the person's hands.
     ///
     /// An idle queue starts the way the Start button starts it, but runs only these items, and a
-    /// running queue takes them after the ones it already has. A paused queue, a requested pause, a scheduled window, or other
-    /// active work leaves them waiting.
+    /// running queue takes them after the ones it already has. A paused queue, a requested pause, a
+    /// scheduled window, the run policy, or other active work leaves them waiting.
     @discardableResult
     func startAutomaticallyAdmittedItems(
         _ itemIDs: [UUID],
         otherWorkIsActive: Bool
     ) async -> AutomaticQueueStartDecision {
+        let runPolicyHold = runPolicyGate?.runPolicyHold(for: .all)
         let decision = AutomaticQueueStartDecision.decide(
             runState: persistentQueueRunState,
             hasOffPeakSchedule: offPeakSchedule != nil,
-            otherWorkIsActive: otherWorkIsActive || (persistentQueueRunState == .idle && hasActiveWork)
+            otherWorkIsActive: otherWorkIsActive || (persistentQueueRunState == .idle && hasActiveWork),
+            runPolicyHold: runPolicyHold
         )
         switch decision {
         case .startQueue:
-            _ = await startPersistentQueue(onlyItemIDs: Set(itemIDs))
+            _ = await startPersistentQueue(onlyItemIDs: Set(itemIDs), runPolicyScope: .all)
+        case let .leaveWaiting(.runPolicy(hold)):
+            // Run times start every waiting item when they open; a machine condition needs remembering.
+            if hold.kind != .outsideRunTimes {
+                runPolicyDeferredItemIDs.formUnion(itemIDs)
+            }
+            runPolicyGate?.recordRunPolicyActivity(.held, hold: hold, itemCount: itemIDs.count)
         case .joinRunningQueue:
             let waitingIDs = Set(durableQueueStore.items.filter { $0.state == .waiting }.map(\.id))
             for itemID in itemIDs where waitingIDs.contains(itemID) {
@@ -359,6 +379,76 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             break
         }
         return decision
+    }
+
+    // MARK: - Run policy
+
+    /// The queue state the run policy decides from. Interrupted, stopped, and held items are never waiting.
+    func runPolicyQueueSnapshot(otherWorkIsActive: Bool) -> QueueRunPolicyQueueSnapshot {
+        if let runPolicyDeferredWindowEnd, diagnosticClock() >= runPolicyDeferredWindowEnd {
+            // A Start Later window's leftover items wait for a person once that window has ended.
+            runPolicyDeferredItemIDs.removeAll()
+            self.runPolicyDeferredWindowEnd = nil
+        }
+        let waitingItemIDs = durableQueueStore.items
+            .filter { $0.state == .waiting }
+            .sorted { $0.ordinal < $1.ordinal }
+            .map(\.id)
+        return QueueRunPolicyQueueSnapshot(
+            runState: persistentQueueRunState,
+            hasPendingStartLaterSchedule: offPeakSchedule != nil,
+            isOtherWorkActive: otherWorkIsActive || (persistentQueueRunState == .idle && hasActiveWork),
+            waitingItemIDs: waitingItemIDs,
+            deferredItemIDs: runPolicyDeferredItemIDs,
+            deferredWindowEnd: runPolicyDeferredWindowEnd,
+            isRunningUnderPolicy: runPolicyScope != nil
+        )
+    }
+
+    /// Starts the queue on the app's own initiative with only these items, following the run policy.
+    ///
+    /// `windowEnd` continues a Start Later run that a machine condition interrupted.
+    @discardableResult
+    func startQueueForRunPolicy(_ itemIDs: [UUID], windowEnd: Date?) async -> PersistentQueueCommandOutcome {
+        runPolicyDeferredItemIDs.subtract(itemIDs)
+        if runPolicyDeferredItemIDs.isEmpty {
+            runPolicyDeferredWindowEnd = nil
+        }
+        return await startPersistentQueue(
+            windowEnd: windowEnd,
+            onlyItemIDs: Set(itemIDs),
+            runPolicyScope: windowEnd == nil ? .all : .machineConditionsOnly
+        )
+    }
+
+    func publishRunPolicyDecision(_ decision: QueueRunPolicyDecision) {
+        if runPolicyDecision != decision {
+            runPolicyDecision = decision
+        }
+    }
+
+    /// Stops a run the app started on its own from starting another video; the current one has finished.
+    private func stopStartingNewItemsForRunPolicy(_ hold: QueueRunPolicyHold, scope: QueueRunPolicyScope) {
+        let pendingItemIDs = durableQueueStore.items.compactMap { item in
+            adoptedItemIDs.contains(item.id) && item.state == .waiting ? item.id : nil
+        }
+        for itemID in pendingItemIDs {
+            releaseAdoption(itemID)
+        }
+        if hold.kind != .outsideRunTimes {
+            runPolicyDeferredItemIDs.formUnion(pendingItemIDs)
+            if scope == .machineConditionsOnly {
+                runPolicyDeferredWindowEnd = offPeakRunWindowEnd
+            }
+        }
+        offPeakRunWindowEnd = nil
+        runPolicyScope = nil
+        persistentQueueRunState = .idle
+        persistentQueueControlsActive = false
+        publishTitleQueueProjection()
+        publishSourceFolderQueueProjection()
+        finishSourceFolderQueueIfNeeded()
+        runPolicyGate?.recordRunPolicyActivity(.stoppedStartingNewItems, hold: hold, itemCount: pendingItemIDs.count)
     }
 
     private struct PersistentQueueAdmissionEntry {
@@ -546,11 +636,26 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         {
             return .waiting(schedule)
         }
+        let now = diagnosticClock()
+        let opensNow = now >= schedule.startAt
+            && now < schedule.endAt
+            && !(appLaunched && now > schedule.startAt)
+        if opensNow, let hold = runPolicyGate?.runPolicyHold(for: .machineConditionsOnly) {
+            // A machine condition delays the window's start; it starts later if the window is still open.
+            offPeakScheduleHeldByRunPolicyID = schedule.id
+            runPolicyGate?.recordRunPolicyActivity(
+                .held,
+                hold: hold,
+                itemCount: durableQueueStore.items.filter(Self.isScheduleEligible).count
+            )
+            return .waiting(schedule)
+        }
         var consumedSchedule: OffPeakQueueSchedule?
         do {
             let evaluation = try await offPeakScheduleStore.evaluate(
-                at: diagnosticClock(),
-                appLaunched: appLaunched
+                at: now,
+                appLaunched: appLaunched,
+                heldByRunPolicy: offPeakScheduleHeldByRunPolicyID == schedule.id
             )
             offPeakScheduleErrorMessage = nil
             guard case let .start(startedSchedule) = evaluation else {
@@ -558,7 +663,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             consumedSchedule = startedSchedule
             try await parkUnavailableScheduledQueueItems()
-            let outcome = await startPersistentQueue(windowEnd: startedSchedule.endAt)
+            let outcome = await startPersistentQueue(
+                windowEnd: startedSchedule.endAt,
+                runPolicyScope: .machineConditionsOnly
+            )
             if case let .rejected(rejection) = outcome {
                 offPeakRunWindowEnd = nil
                 let reason: OffPeakScheduleMissReason
@@ -704,10 +812,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     /// Starts the queue. `onlyItemIDs` limits the run to those items, so an automatic start never
     /// restarts interrupted or stopped work, which needs a person's explicit resume.
+    ///
+    /// `runPolicyScope` marks a run the app starts on its own: before each further video it checks
+    /// the run policy and stops starting new videos once a rule holds. A person's start passes `nil`
+    /// and runs regardless of the policy.
     @discardableResult
     func startPersistentQueue(
         windowEnd: Date? = nil,
-        onlyItemIDs: Set<UUID>? = nil
+        onlyItemIDs: Set<UUID>? = nil,
+        runPolicyScope: QueueRunPolicyScope? = nil
     ) async -> PersistentQueueCommandOutcome {
         if persistentQueueRunState == .running {
             return .noChange(.running)
@@ -751,8 +864,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         let previousRunState = persistentQueueRunState
         let previousControlsActive = persistentQueueControlsActive
         let previousWindowEnd = offPeakRunWindowEnd
+        let previousRunPolicyScope = self.runPolicyScope
         parkActiveDurableQueueItemForResume()
         offPeakRunWindowEnd = windowEnd
+        self.runPolicyScope = runPolicyScope
         persistentQueueControlsActive = true
         persistentQueueRunState = .running
         durableQueueStopRequested = false
@@ -766,7 +881,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             persistentQueueRunState = previousRunState
             persistentQueueControlsActive = previousControlsActive
             offPeakRunWindowEnd = previousWindowEnd
+            self.runPolicyScope = previousRunPolicyScope
             return .rejected(.noEligibleItems)
+        }
+        if runPolicyScope == nil {
+            // A person's start runs every eligible item, so nothing is left deferred.
+            runPolicyDeferredItemIDs.removeAll()
+            runPolicyDeferredWindowEnd = nil
         }
         await pumpDurableQueue()
         return .accepted(.running)
@@ -2171,6 +2292,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         if let offPeakRunWindowEnd, diagnosticClock() >= offPeakRunWindowEnd {
             self.offPeakRunWindowEnd = nil
+            runPolicyScope = nil
             await pauseDurableQueueNow()
             return
         }
@@ -2184,7 +2306,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             persistentQueueControlsActive = false
             offPeakRunWindowEnd = nil
+            runPolicyScope = nil
             finishSourceFolderQueueIfNeeded()
+            return
+        }
+        if let runPolicyScope, let hold = runPolicyGate?.runPolicyHold(for: runPolicyScope) {
+            stopStartingNewItemsForRunPolicy(hold, scope: runPolicyScope)
             return
         }
 
@@ -3015,6 +3142,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         persistentQueueRunState = .idle
         persistentQueueControlsActive = false
         offPeakRunWindowEnd = nil
+        runPolicyScope = nil
         if let projected = batchQueue {
             if sourceFolderQueueGroupID == nil {
                 batchQueue = SourceFolderQueueState(
@@ -3764,6 +3892,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             releaseAdoption(itemID)
         }
         persistentQueueRunState = .paused
+        runPolicyScope = nil
         publishTitleQueueProjection()
         publishSourceFolderQueueProjection()
         finishSourceFolderQueueIfNeeded()
@@ -3882,6 +4011,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         persistentQueueRunState = .idle
         persistentQueueControlsActive = false
         offPeakRunWindowEnd = nil
+        runPolicyScope = nil
         activeQueueItemID = nil
         titleQueueGroupID = nil
         adoptedItemIDs.removeAll()
@@ -3897,6 +4027,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         persistentQueueRunState = .idle
         persistentQueueControlsActive = false
         offPeakRunWindowEnd = nil
+        runPolicyScope = nil
         activeQueueItemID = nil
         titleQueueGroupID = nil
         titleQueueStopRequested = false

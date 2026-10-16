@@ -22,6 +22,7 @@ enum OffPeakScheduleMissReason: String, Codable, Equatable {
     case queueBecameActive
     case queuePersistenceFailed
     case windowEndedBeforeEvaluation
+    case windowEndedWhileHeldByRunPolicy
 
     var message: String {
         switch self {
@@ -37,6 +38,8 @@ enum OffPeakScheduleMissReason: String, Codable, Equatable {
             "The scheduled window opened, but the queue could not be updated safely."
         case .windowEndedBeforeEvaluation:
             "The scheduled window was missed because the Mac was asleep or unavailable until after it ended."
+        case .windowEndedWhileHeldByRunPolicy:
+            "The scheduled window ended while the queue was waiting for power or for the Mac to cool down."
         }
     }
 }
@@ -201,7 +204,13 @@ final class OffPeakScheduleStore: ObservableObject {
         }
     }
 
-    func evaluate(at now: Date, appLaunched: Bool) async throws -> OffPeakScheduleEvaluation {
+    /// Consumes the schedule once its window opens. `heldByRunPolicy` reports that a machine condition
+    /// kept the window from starting, so a window that ended meanwhile is missed for that reason.
+    func evaluate(
+        at now: Date,
+        appLaunched: Bool,
+        heldByRunPolicy: Bool = false
+    ) async throws -> OffPeakScheduleEvaluation {
         await mutationLock.lock()
         do {
             guard !writesBlocked else {
@@ -218,7 +227,7 @@ final class OffPeakScheduleStore: ObservableObject {
 
             let evaluation: OffPeakScheduleEvaluation
             if now >= schedule.endAt {
-                evaluation = .missed(.windowEndedBeforeEvaluation)
+                evaluation = .missed(heldByRunPolicy ? .windowEndedWhileHeldByRunPolicy : .windowEndedBeforeEvaluation)
             } else if appLaunched, now > schedule.startAt {
                 evaluation = .missed(.appRelaunchedAfterStart)
             } else {
