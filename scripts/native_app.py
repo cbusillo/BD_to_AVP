@@ -88,6 +88,7 @@ PACKAGED_MV_HEVC_ENCODER = PACKAGE_ROOT / "native-tools" / MV_HEVC_ENCODER_NAME
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 WORKER_PROTOCOL_VERSION = PROTOCOL_VERSION
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
+APP_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "App.entitlements"
 DEPLOYMENT_TARGET_OVERRIDE_ENV = "BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE"
 SUPPORT_DIAGNOSTICS_ENDPOINT_ENV = "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT"
 SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY = "BDToAVPSupportDiagnosticsEndpoint"
@@ -697,7 +698,7 @@ def sign_package(app_path: Path, identity: str, keychain: str | None = None) -> 
 
     worker_path = app_path / "Contents" / "MacOS" / WORKER_EXECUTABLE_NAME
     run([*sign_options, "--entitlements", str(WORKER_ENTITLEMENTS), str(worker_path)])
-    run([*sign_options, str(app_path)])
+    run([*sign_options, "--entitlements", str(APP_ENTITLEMENTS), str(app_path)])
     verify_codesign(app_path)
 
 

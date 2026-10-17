@@ -108,6 +108,20 @@ struct BluRayToVisionProApp: App {
         queueAutomationController.isOtherWorkActive = { [weak previewViewModel] in
             previewViewModel?.hasActiveWorker ?? false
         }
+        // The same work that makes the app ask before quitting keeps the Mac on after the queue finishes.
+        queueAutomationController.postRun.otherWork = { [weak previewViewModel, weak movieSharingController, weak relayHostController] in
+            var work: [QueuePostRunOtherWork] = []
+            if previewViewModel?.hasActiveWorker == true {
+                work.append(.preview)
+            }
+            if movieSharingController?.isSharing == true {
+                work.append(.movieSharing)
+            }
+            if relayHostController?.isSessionActive == true {
+                work.append(.relaySession)
+            }
+            return work
+        }
         _queueNotificationCoordinator = StateObject(wrappedValue: queueNotificationCoordinator)
         _relayHostController = StateObject(wrappedValue: relayHostController)
         _movieSharingController = StateObject(wrappedValue: movieSharingController)
@@ -122,6 +136,7 @@ struct BluRayToVisionProApp: App {
         appDelegate.relayHostController = relayHostController
         appDelegate.movieSharingController = movieSharingController
         appDelegate.queueAutomationController = queueAutomationController
+        appDelegate.postRunCountdownPresenter = QueuePostRunCountdownPresenter(postRun: queueAutomationController.postRun)
     }
 
     var body: some Scene {

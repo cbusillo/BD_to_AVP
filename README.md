@@ -358,7 +358,7 @@ conditions **Wait while on battery power** and **Wait while the Mac is running
 hot** (serious or critical thermal pressure) work the same way: they never
 interrupt a converting video, they only keep new ones from starting, and an
 automatic run they stopped resumes when power returns or the Mac cools down.
-The queue shows what it is waiting for; its **Run Time Activity** (in the queue
+The queue shows what it is waiting for; its **Queue Activity** (in the queue
 options menu, or from the waiting notice) lists what it did on its own. Those
 decisions are kept with the watch-folder settings in `queue.automation.json`.
 These rules never override a pause or a pending **Start Later** window, which
@@ -369,6 +369,20 @@ time starts eligible waiting work; a run time missed while the Mac slept or the
 app was closed is not made up later. **Start Queue** always starts right away,
 whatever the rules say. The app must remain open, and run times do not wake the
 Mac or keep it awake.
+
+**When the queue finishes** (also in **Settings → Schedule**) can put the Mac to
+**Sleep** or **Shut Down** after a run; it is **Do Nothing** until you choose
+otherwise. It acts only when a run ends with every video in the queue finished:
+nothing waiting, held for review, stopped, failed, or needing a choice, and no
+**Start Later** window pending. It is also skipped when someone used the
+keyboard, mouse, or trackpad in the last 5 minutes, or while a preview, another
+conversion, Movie Sharing, or a relay session is active. Otherwise a 60-second
+countdown appears with **Cancel**; any input, new queue work, or the Mac
+sleeping during the countdown cancels it. Sleep uses macOS power management.
+Shut Down asks macOS to shut down the way the Apple menu does, so apps with
+unsaved changes can still stop it; macOS asks once for permission when you
+choose it, and if permission is missing the Mac stays on. Every skip,
+countdown, cancel, and request is listed in **Queue Activity**.
 
 ## Terminal Usage
 

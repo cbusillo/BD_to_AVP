@@ -108,6 +108,13 @@ The auxiliary launcher receives the direct-distribution entitlements required
 by CPython and extension modules. Those entitlements belong only to the worker,
 not the SwiftUI application.
 
+The SwiftUI application is signed with `App.entitlements`, which holds only the
+hardened-runtime Apple Events entitlement. The app uses it for one request: when
+a person chooses **Shut Down** under **When the queue finishes**, it asks
+loginwindow to shut down the way the Apple menu does. macOS still asks the
+person for Automation permission, and `NSAppleEventsUsageDescription` in both
+Info plists explains why.
+
 ## Product And Update Identity
 
 The Release configuration uses:
