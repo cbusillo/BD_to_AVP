@@ -1429,7 +1429,8 @@ class _StageEvidencePathTests(ReleaseEvidenceV2Fixture):
         )
         return bundle
 
-    def rewrite_live_receipt(self, root: Path, bundle: Path, change: Any) -> None:
+    @staticmethod
+    def rewrite_live_receipt(bundle: Path, change: Any) -> None:
         live_path = bundle / "live-qualification-v1.json"
         live = json.loads(live_path.read_text(encoding="utf-8"))
         change(live)
@@ -1452,6 +1453,20 @@ class _StageEvidencePathTests(ReleaseEvidenceV2Fixture):
 
         return change
 
+    @staticmethod
+    def set_qualification_id(qualification_id: str) -> Any:
+        def change(live: dict[str, Any]) -> None:
+            live["qualification_id"] = qualification_id
+
+        return change
+
+    @staticmethod
+    def set_prior_tag(prior_tag: str) -> Any:
+        def change(live: dict[str, Any]) -> None:
+            live["cases"][0]["observations"]["prior_release_tag"] = prior_tag
+
+        return change
+
     def test_published_candidate_qualifies_through_the_evidence_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1463,7 +1478,7 @@ class _StageEvidencePathTests(ReleaseEvidenceV2Fixture):
             with self.subTest(route=route), tempfile.TemporaryDirectory() as temporary_directory:
                 root = Path(temporary_directory)
                 bundle = self.qualify(root)
-                self.rewrite_live_receipt(root, bundle, self.offer_on_route(route))
+                self.rewrite_live_receipt(bundle, self.offer_on_route(route))
                 with self.assertRaisesRegex(ReleaseEvidenceV2Error, "route conflicts with the candidate"):
                     validate_v2_bundle(root, self.TAG, worktree=True)
 
@@ -1473,10 +1488,7 @@ class _StageEvidencePathTests(ReleaseEvidenceV2Fixture):
                 root = Path(temporary_directory)
                 bundle = self.qualify(root)
 
-                def change(live: dict[str, Any], channel: str = channel) -> None:
-                    live["qualification_id"] = f"{channel}-live-qualification-v1"
-
-                self.rewrite_live_receipt(root, bundle, change)
+                self.rewrite_live_receipt(bundle, self.set_qualification_id(f"{channel}-live-qualification-v1"))
                 with self.assertRaisesRegex(ReleaseEvidenceV2Error, "qualification ID conflicts"):
                     validate_v2_bundle(root, self.TAG, worktree=True)
 
@@ -1486,10 +1498,7 @@ class _StageEvidencePathTests(ReleaseEvidenceV2Fixture):
                 root = Path(temporary_directory)
                 bundle = self.qualify(root)
 
-                def change(live: dict[str, Any], prior_tag: str = prior_tag) -> None:
-                    live["cases"][0]["observations"]["prior_release_tag"] = prior_tag
-
-                self.rewrite_live_receipt(root, bundle, change)
+                self.rewrite_live_receipt(bundle, self.set_prior_tag(prior_tag))
                 with self.assertRaisesRegex(ReleaseEvidenceV2Error, "does not identify a supported release stage"):
                     validate_v2_bundle(root, self.TAG, worktree=True)
 
