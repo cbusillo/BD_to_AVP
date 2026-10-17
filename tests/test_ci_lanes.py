@@ -7,9 +7,10 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts.ci_lanes import changed_paths, lanes_for, player_source_prefixes
+from scripts.ci_lanes import ALL_LANES, changed_paths, lanes_for, player_source_prefixes, selected_lanes
 
-PROJECT = yaml.safe_load((Path(__file__).resolve().parents[1] / "macos/project.yml").read_text(encoding="utf-8"))
+PROJECT_SPEC = Path(__file__).resolve().parents[1] / "macos/project.yml"
+PROJECT = yaml.safe_load(PROJECT_SPEC.read_text(encoding="utf-8"))
 PLAYER = player_source_prefixes(PROJECT)
 
 
@@ -144,6 +145,88 @@ class ChangedPathDiscoveryTests(unittest.TestCase):
         paths = changed_paths("base", self.repository)
         self.assertEqual(paths, [unusual])
         self.assertEqual(lanes_for(paths, PLAYER), {"native": False, "player": True})
+
+
+class TrainCandidateLaneSelectionTests(unittest.TestCase):
+    """A merge-train candidate is main plus the batch; it is diffed against the main it was built on."""
+
+    TRAIN_REF = "refs/heads/launchplane/train/cbusillo/bd_to_avp/main/merge-train-batch-example"
+    EVERY_LANE = dict.fromkeys(ALL_LANES, True)
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory(prefix="ci-lanes-train-")
+        self.addCleanup(directory.cleanup)
+        self.repository = Path(directory.name)
+        isolated = patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+        isolated.start()
+        self.addCleanup(isolated.stop)
+        self.git("init", "--quiet", "--initial-branch=main")
+        self.git("config", "user.name", "CI lanes test")
+        self.git("config", "user.email", "ci-lanes@example.invalid")
+        # The real project spec, so the player's sources are read the way CI reads them.
+        self.commit({"macos/project.yml": PROJECT_SPEC.read_text(encoding="utf-8"), "README.md": "readme\n"})
+        # What a full-history checkout fetches: main as the remote-tracking ref.
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("checkout", "--quiet", "-b", "candidate")
+
+    def git(self, *arguments: str) -> None:
+        subprocess.run(["git", *arguments], cwd=self.repository, check=True, capture_output=True)
+
+    def commit(self, files: dict[str, str]) -> None:
+        for path, text in files.items():
+            (self.repository / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.repository / path).write_text(text, encoding="utf-8")
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "--message", "change")
+
+    def lanes(self, event: str = "push", ref: str = TRAIN_REF) -> dict[str, bool]:
+        return selected_lanes(event, ref, "", self.repository)
+
+    def test_a_candidate_that_does_not_touch_the_player_skips_the_player(self) -> None:
+        self.commit({"bd_to_avp/modules/example.py": "VALUE = 1\n"})
+        self.assertEqual(self.lanes(), {"native": True, "player": False})
+
+    def test_a_candidate_that_touches_the_player_runs_the_player(self) -> None:
+        self.commit({"bd_to_avp/modules/example.py": "VALUE = 1\n"})
+        self.commit({"macos/BDToAVPPlayer/Library/Example.swift": "struct Example {}\n"})
+        self.assertTrue(self.lanes()["player"])
+
+    def test_main_moving_after_the_candidate_was_built_does_not_hide_its_changes(self) -> None:
+        self.commit({"macos/BDToAVPPlayer/Library/Example.swift": "struct Example {}\n"})
+        self.git("checkout", "--quiet", "main")
+        self.commit({"docs/later.md": "later\n"})
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("checkout", "--quiet", "candidate")
+        self.assertTrue(self.lanes()["player"])
+
+    def test_a_candidate_without_a_known_base_on_main_runs_every_lane(self) -> None:
+        self.commit({"docs/notes.md": "notes\n"})
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.assertEqual(self.lanes(), self.EVERY_LANE)
+
+    def test_a_candidate_with_no_changes_of_its_own_runs_every_lane(self) -> None:
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertEqual(self.lanes(), self.EVERY_LANE)
+
+    def test_a_pull_request_uses_the_same_rule_against_its_own_base(self) -> None:
+        base = subprocess.run(
+            ["git", "rev-parse", "main"], cwd=self.repository, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        self.commit({"bd_to_avp/modules/example.py": "VALUE = 1\n"})
+        self.assertEqual(
+            selected_lanes("pull_request", "refs/pull/1/merge", base, self.repository),
+            {"native": True, "player": False},
+        )
+
+    def test_pushes_to_main_and_manual_runs_still_run_every_lane(self) -> None:
+        self.commit({"docs/notes.md": "notes\n"})
+        for event, ref in (
+            ("push", "refs/heads/main"),
+            ("push", "refs/heads/launchplane/construct/example"),
+            ("workflow_dispatch", self.TRAIN_REF),
+        ):
+            with self.subTest(event=event, ref=ref):
+                self.assertEqual(self.lanes(event, ref), self.EVERY_LANE)
 
 
 if __name__ == "__main__":

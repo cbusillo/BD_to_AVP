@@ -56,8 +56,13 @@ jobs:
         id: lanes
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: uv run --no-project --with pyyaml python scripts/ci_lanes.py --event "$EVENT_NAME" --base "$PR_BASE_SHA"
+        # The full-history checkout above includes origin/main, which a merge-train
+        # candidate is diffed against.
+        run: >-
+          uv run --no-project --with pyyaml python scripts/ci_lanes.py
+          --event "$EVENT_NAME" --ref "$GIT_REF" --base "$PR_BASE_SHA"
 
   checks:
     name: Python, evidence and packaging checks
@@ -432,7 +437,11 @@ jobs:
     needs: lanes
     if: needs.lanes.outputs.player == 'true'
     runs-on: xcode-27
-    timeout-minutes: 30
+    # Measured on hosted runners: about 1 min setup and build, 4-5.5 min to create and boot the
+    # simulator, 2 min to launch the test runner, and 1-4 min per UI test (7 min at worst). With
+    # every UI test attempt stopped at its 5-minute allowance below, the step ends by about
+    # 30 min, so 40 leaves room without letting a hang hold the train.
+    timeout-minutes: 40
     steps:
       - name: Check out repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -525,6 +534,8 @@ jobs:
           xcrun simctl bootstatus "$simulator_udid" -b
           # The simulator sometimes fails to launch the UI test runner. Retry a failed test once
           # in a fresh process, and skip the sysdiagnose that used to add a 600 s timeout.
+          # Stop any test that runs past 5 minutes so a hung UI query fails and is retried
+          # instead of using up the job; passing UI tests have taken 40 s to 4.6 min, once 7.
           xcodebuild test-without-building \
             -project BluRayToVisionPro.xcodeproj \
             -scheme BDToAVPPlayer \
@@ -534,6 +545,9 @@ jobs:
             -retry-tests-on-failure \
             -test-iterations 2 \
             -test-repetition-relaunch-enabled YES \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 300 \
+            -maximum-test-execution-time-allowance 300 \
             -collect-test-diagnostics never \
             CODE_SIGNING_ALLOWED=NO
 
