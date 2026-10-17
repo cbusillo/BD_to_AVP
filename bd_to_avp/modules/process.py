@@ -13,7 +13,14 @@ from bd_to_avp import preflight
 from bd_to_avp.modules.audio import create_transcoded_audio_file
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
-from bd_to_avp.modules.disc import DiscInfo, create_mkv_file, get_disc_and_mvc_video_info, MKVCreationError
+from bd_to_avp.modules.disc import (
+    DiscInfo,
+    create_mkv_file,
+    get_disc_and_mvc_video_info,
+    makemkv_image_path,
+    MKVCreationError,
+)
+from bd_to_avp.modules.disc_image import build_incomplete_image_warning, find_incomplete_image
 from bd_to_avp.modules.file import (
     file_exists_normalized,
     is_initial_conversion_stage,
@@ -167,6 +174,24 @@ def report_damaged_source(
         source_positions_seconds=[
             round(seconds, 3) for seconds in damage_collector.source_positions_seconds(disc_info.frame_rate)[:32]
         ],
+    )
+
+
+def report_incomplete_disc_image(activity: ActivityReporter | None, stage: str, run_context: RunContext | None) -> None:
+    image_path = makemkv_image_path()
+    incomplete = find_incomplete_image(image_path) if image_path is not None else None
+    if incomplete is None:
+        return
+    message = build_incomplete_image_warning(incomplete)
+    if activity is None:
+        cli_message(f"Warning: {message}", run_context=run_context)
+        return
+    activity.warning(
+        message,
+        stage=stage,
+        code="disc_image_incomplete",
+        missing_bytes=incomplete.missing_bytes,
+        image_bytes=incomplete.image_bytes,
     )
 
 
@@ -417,6 +442,7 @@ def _process_each(
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("inspect_source", "Reading video metadata")
+    report_incomplete_disc_image(activity, "inspect_source", run_context)
     disc_info = get_disc_and_mvc_video_info(
         selected_title_id,
         run_context=run_context,

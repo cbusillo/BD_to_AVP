@@ -9,6 +9,7 @@ from bd_to_avp.observability import ObservabilityContext, ObservabilityProgress
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
 from bd_to_avp.modules.command import combined_process_output, run_ffprobe, run_process_capture
+from bd_to_avp.modules.disc_image import backing_image_for_folder
 from bd_to_avp.process_runner import CaptureOverflowPolicy, ProcessArtifactProbe
 from bd_to_avp.runtime import RunContext
 
@@ -328,9 +329,22 @@ def rip_disc_to_mkv(
     raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{filtered_output}")
 
 
+def makemkv_image_path() -> Path | None:
+    """Return the image file MakeMKV reads, including the file behind a mounted image's folder."""
+    source_path = config.source_path
+    if source_path is None:
+        return None
+    if source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
+        return source_path
+    if source_path.is_dir():
+        return backing_image_for_folder(source_path)
+    return None
+
+
 def get_makemkv_source() -> str:
-    if config.source_path and config.source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
-        return f"iso:{config.source_path}"
+    image_path = makemkv_image_path()
+    if image_path is not None:
+        return f"iso:{image_path}"
     if config.source_path and config.source_path.is_dir():
         return f"file:{config.source_path}"
     if config.source_path:
