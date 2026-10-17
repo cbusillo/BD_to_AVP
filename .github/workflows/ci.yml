@@ -122,7 +122,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Check hand-built TLS verification
-        run: uv run --python 3.14 https://raw.githubusercontent.com/cbusillo/codex-skills/96b299144e01d9fa1145f0ac6f02201c71808456/scripts/check_insecure_tls.py
+        run: uv run --python 3.14 https://raw.githubusercontent.com/cbusillo/codex-skills/2e531a680b16b32dda6d24d4c40de3675c0faaf5/scripts/check_insecure_tls.py
 
       - name: Type check
         run: uv run mypy bd_to_avp
