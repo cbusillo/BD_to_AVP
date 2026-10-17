@@ -510,6 +510,21 @@ applies to this repository; it has no separate DIRECTION.md. Agents start with
 records repository-specific release and validation requirements. GitHub issues
 hold the work plan.
 
+### TLS lint
+
+Run `qualityGate.lint.default` from `.github/github.json` before a PR. The
+existing Ruff gate includes the five TLS rules, and CI also runs the catalog's
+immutable reviewed checker for hand-built verification disabling. The latter
+uses Python 3.14 only as a source parser; the app's Python requirement is
+unchanged. Update its pin in the runnable lint command in `.github/github.json` after
+reviewing the catalog change. CI reads that same command.
+
+A justified exception needs an `insecure-tls:` comment with its plain reason
+at the choke point, plus a permanent decision link when applicable. Add a
+targeted Ruff `noqa` only if its library rule also reports that same call.
+Bare ignores do not satisfy the shared check. These lint commands do not
+change app settings, a release, signing, or an installed build.
+
 ## Acknowledgements
 
 Big thanks to:
