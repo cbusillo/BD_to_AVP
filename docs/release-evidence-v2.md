@@ -304,6 +304,12 @@ profile case reuses the deeply validated signed-UI receipt, the two Tier 3 cases
 run through the maintained Tier 3 receipt validator against historical policy,
 and the Sparkle case validates the full live-qualification candidate, updater,
 profile, artifact, workflow, manifest, and clean-machine receipt bindings. The
+release channel and the Sparkle route the update must be proven on come from the
+release stage rules in `scripts/release.py`: the channel is the candidate tag's
+stage (Alpha, Beta, RC, or Stable), and the route is the candidate's own stage
+for a prerelease or the prior release's stage for a Stable, the same rule the
+qualification manifest uses. A tag or prior tag that names no supported stage,
+or a route other than that one, is rejected. The
 qualification also has explicit passed updater-route and preserved-profile
 results tied to their exact receipt file digests.
 

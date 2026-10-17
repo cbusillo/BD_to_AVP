@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Literal, cast
 
+from scripts.release import ReleaseError, ReleaseVersion, parse_release_tag, qualification_sparkle_route
 from scripts.release_receipt import (
     EXPECTED_REPOSITORY,
     ReleaseReceiptError,
@@ -1657,16 +1658,20 @@ def _validate_tier3_case_receipt(
         )
 
 
+def _release_version(release_tag: str, description: str) -> ReleaseVersion:
+    try:
+        return parse_release_tag(release_tag, allow_legacy_rc=False)
+    except ReleaseError as error:
+        raise ReleaseEvidenceV2Error(f"{description} does not identify a supported release stage: {error}") from error
+
+
 def _release_channel(release_tag: str, prerelease: object) -> str:
-    if prerelease is False:
-        return "stable"
-    if prerelease is not True:
+    if not isinstance(prerelease, bool):
         raise ReleaseEvidenceV2Error("Validated release receipt prerelease flag is invalid.")
-    if "-beta." in release_tag:
-        return "beta"
-    if "-rc." in release_tag:
-        return "rc"
-    raise ReleaseEvidenceV2Error("Prerelease tag does not identify a beta or release-candidate channel.")
+    version = _release_version(release_tag, "Release tag")
+    if version.prerelease is not prerelease:
+        raise ReleaseEvidenceV2Error("Release tag stage conflicts with the validated release receipt prerelease flag.")
+    return version.channel
 
 
 def _validate_live_qualification_receipt(
@@ -1724,9 +1729,18 @@ def _validate_live_qualification_receipt(
     if case.get("id") != "sparkle-update-route" or case.get("result") != "passed":
         raise ReleaseEvidenceV2Error("Sparkle update live qualification case did not pass.")
     observations = _mapping(case.get("observations"), "sparkle update live qualification observations")
+    prior_tag = _tag(observations.get("prior_release_tag"), "sparkle update prior release tag")
+    if prior_tag == capture.release_tag:
+        raise ReleaseEvidenceV2Error("Sparkle update prior release tag must differ from the candidate.")
+    expected_route = qualification_sparkle_route(
+        _release_version(capture.release_tag, "Release tag"),
+        _release_version(prior_tag, "Sparkle update prior release tag"),
+    )
     route = _string(observations.get("route"), "sparkle update live qualification route")
-    if route not in {"beta", "rc", "stable"}:
-        raise ReleaseEvidenceV2Error("Sparkle update live qualification route is unsupported.")
+    if route != expected_route:
+        raise ReleaseEvidenceV2Error(
+            "Sparkle update live qualification route conflicts with the candidate and prior release stages."
+        )
     offered_key = f"candidate_offered_on_{route}_route"
     expected_observation_keys = frozenset(
         {
@@ -1748,9 +1762,6 @@ def _validate_live_qualification_receipt(
         }
     )
     _exact_keys(observations, expected_observation_keys, "sparkle update live qualification observations")
-    prior_tag = _tag(observations.get("prior_release_tag"), "sparkle update prior release tag")
-    if prior_tag == capture.release_tag:
-        raise ReleaseEvidenceV2Error("Sparkle update prior release tag must differ from the candidate.")
     expected_observations = {
         offered_key: True,
         "install_action": "Install and Relaunch",
