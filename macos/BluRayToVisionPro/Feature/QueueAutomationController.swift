@@ -40,6 +40,18 @@ struct WatchFolderScanReport: Equatable {
     /// When to scan again so pending candidates can settle; `nil` when nothing is pending.
     let nextEvaluationAt: Date?
     var admittedItemIDs: [UUID] = []
+    /// Settled candidates held back because they are still being written; included in `pendingCount`.
+    var stillBeingWrittenCount = 0
+}
+
+/// A file in a watch folder that stopped changing but is still being written.
+struct WatchFolderWriteHoldNotice: Equatable {
+    let path: String
+    let hold: WatchFolderWriteHold
+
+    var message: String {
+        hold.waitingMessage(fileName: (path as NSString).lastPathComponent)
+    }
 }
 
 enum WatchFolderScanOutcome: Equatable {
@@ -77,6 +89,10 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
     @Published private(set) var statuses: [UUID: WatchFolderStatus] = [:]
     @Published private(set) var scanErrorMessages: [UUID: String] = [:]
     @Published private(set) var isMonitoring = false
+    /// Files that stopped changing but are still being written, by watch folder and candidate path.
+    @Published private(set) var writeHolds: [UUID: [String: WatchFolderWriteHold]] = [:]
+    /// Why the last write check for a folder fell back to the settle time alone, when it did.
+    @Published private(set) var writeCheckFallbackReasons: [UUID: String] = [:]
 
     /// Receives the number of items newly held for review, once per round of scans.
     var heldItemsAdmittedHandler: (@MainActor (Int) -> Void)?
@@ -92,6 +108,7 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
     private let timerScheduler: any QueueAutomationTimerScheduling
     private let workspaceNotificationCenter: NotificationCenter
     private let machineConditions: any QueueMachineConditionsProviding
+    private let writeCompletionCheck: WatchFolderWriteCompletionCheck
     let calendar: Calendar
     private var runPolicyTimer: (any QueueAutomationTimer)?
     private var runPolicyTask: Task<Void, Never>?
@@ -119,6 +136,7 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
         timerScheduler: (any QueueAutomationTimerScheduling)? = nil,
         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
         machineConditions: (any QueueMachineConditionsProviding)? = nil,
+        writeCompletionCheck: WatchFolderWriteCompletionCheck = .system,
         calendar: Calendar = .autoupdatingCurrent
     ) {
         self.store = store
@@ -132,6 +150,7 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
         self.timerScheduler = timerScheduler ?? TaskQueueAutomationTimerScheduler(now: now)
         self.workspaceNotificationCenter = workspaceNotificationCenter
         self.machineConditions = machineConditions ?? SystemQueueMachineConditions()
+        self.writeCompletionCheck = writeCompletionCheck
         self.calendar = calendar
         storeSubscription = store.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -155,6 +174,13 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
     }
 
     var watchFolders: [WatchFolder] { store.watchFolders }
+
+    /// Files in the folder that are waiting only because they are still being written, by name.
+    func writeHoldNotices(for folder: WatchFolder) -> [WatchFolderWriteHoldNotice] {
+        (writeHolds[folder.id] ?? [:])
+            .map { WatchFolderWriteHoldNotice(path: $0.key, hold: $0.value) }
+            .sorted { $0.path < $1.path }
+    }
 
     func status(for folder: WatchFolder) -> WatchFolderStatus {
         guard folder.isEnabled else {
@@ -203,7 +229,7 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
         }
         try store.saveWatchFolder(folder)
         if !folder.isEnabled {
-            settleEvaluators[folder.id] = nil
+            forgetPendingState(folderID: folder.id)
             stopWatching(folderID: folder.id)
         }
         if isMonitoring {
@@ -213,7 +239,7 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
 
     func removeWatchFolder(id: UUID) throws {
         try store.removeWatchFolder(id: id)
-        settleEvaluators[id] = nil
+        forgetPendingState(folderID: id)
         stopWatching(folderID: id)
         statuses[id] = nil
         scanErrorMessages[id] = nil
@@ -564,11 +590,11 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
             throw QueueAutomationStoreError.unknownWatchFolder
         }
         guard folder.isEnabled else {
-            settleEvaluators[folder.id] = nil
+            forgetPendingState(folderID: folder.id)
             return .disabled
         }
         guard let directoryURL = try? resolvedDirectory(for: folder) else {
-            settleEvaluators[folder.id] = nil
+            forgetPendingState(folderID: folder.id)
             return .unavailable
         }
         let includesSubfolders = folder.includesSubfolders
@@ -585,7 +611,7 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
                 )
             }.value
         } catch {
-            settleEvaluators[folder.id] = nil
+            forgetPendingState(folderID: folder.id)
             return .unavailable
         }
 
@@ -594,11 +620,42 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
         let evaluation = evaluator.evaluate(unseen, at: now())
         settleEvaluators[folder.id] = evaluator
 
-        var result = PersistentQueueAppendResult(addedCount: 0, duplicateDisplayNames: [])
+        // Holds for files that are gone or seen are dropped; the rest stay until the file is checked again.
+        let unseenPaths = Set(unseen.map(\.fingerprint.path))
+        var holds = (writeHolds[folder.id] ?? [:]).filter { unseenPaths.contains($0.key) }
+        var admittable = evaluation.settled
+        var stillBeingWritten: [SettledWatchFolderCandidate] = []
         if !evaluation.settled.isEmpty {
+            // Only candidates about to be admitted are checked, so an idle folder costs nothing.
+            let check = writeCompletionCheck
+            let candidates = evaluation.settled.map(\.candidate)
+            let checkResult = await Task.detached(priority: .utility) {
+                let accessing = directoryURL.startAccessingSecurityScopedResource()
+                defer {
+                    if accessing { directoryURL.stopAccessingSecurityScopedResource() }
+                }
+                return check.check(candidates)
+            }.value
+            for settled in evaluation.settled {
+                holds[settled.candidate.fingerprint.path] = checkResult.holds[settled.candidate.fingerprint.path]
+            }
+            admittable = evaluation.settled.filter { checkResult.holds[$0.candidate.fingerprint.path] == nil }
+            stillBeingWritten = evaluation.settled.filter { checkResult.holds[$0.candidate.fingerprint.path] != nil }
+            writeCheckFallbackReasons[folder.id] = checkResult.fallbackReason
+            // The folder may have been paused or removed during the check; then nothing stays pending.
+            if !stillBeingWritten.isEmpty, var current = settleEvaluators[folder.id] {
+                current.restartSettling(stillBeingWritten, at: now())
+                settleEvaluators[folder.id] = current
+                evaluator = current
+            }
+        }
+        writeHolds[folder.id] = holds.isEmpty ? nil : holds
+
+        var result = PersistentQueueAppendResult(addedCount: 0, duplicateDisplayNames: [])
+        if !admittable.isEmpty {
             let factory = draftFactory(folder)
             let admittedAt = now()
-            let drafts = evaluation.settled.map { settled in
+            let drafts = admittable.map { settled in
                 AutomatedQueueDraft(
                     draft: factory.draft(for: settled.candidate.source),
                     admission: .watchFolder(
@@ -614,7 +671,7 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
             result = try await admitter.admitAutomatedPersistentQueueDrafts(drafts)
             // Duplicates are already queued, so they are recorded as seen too.
             try store.recordSeen(
-                evaluation.settled.map(\.candidate.fingerprint),
+                admittable.map(\.candidate.fingerprint),
                 watchFolderID: folder.id,
                 at: admittedAt
             )
@@ -622,10 +679,17 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
         return .scanned(WatchFolderScanReport(
             admittedCount: result.addedCount,
             duplicateCount: result.duplicateCount,
-            pendingCount: evaluation.pending.count,
-            nextEvaluationAt: evaluation.nextEvaluationAt,
-            admittedItemIDs: result.addedItemIDs
+            pendingCount: evaluation.pending.count + stillBeingWritten.count,
+            nextEvaluationAt: evaluator.nextEvaluationAt,
+            admittedItemIDs: result.addedItemIDs,
+            stillBeingWrittenCount: stillBeingWritten.count
         ))
+    }
+
+    private func forgetPendingState(folderID: UUID) {
+        settleEvaluators[folderID] = nil
+        writeHolds[folderID] = nil
+        writeCheckFallbackReasons[folderID] = nil
     }
 
     private func resolvedDirectory(for folder: WatchFolder) throws -> URL {

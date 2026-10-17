@@ -301,9 +301,13 @@ destinations, technical details, and failure text stay inside the app.
 folders. Each folder has its own profile, an **Include subfolders** option, and a
 **New items** choice: **Hold for review** (the default) or **Start
 automatically**. A file is admitted only after its size and modification time
-stop changing, through the same duplicate protection as manual adds, and a file
-removed from the queue is not admitted again unless **Forget Seen Files** is
-used. Held items show a **Ready for Review** banner grouped by folder, with
+stop changing and no app running as you still has it open for writing, through
+the same duplicate protection as manual adds. A MakeMKV title also waits until
+MakeMKV finishes it, so a rip that pauses on a damaged disc, or stops partway,
+is never admitted half-written; the folder lists such files as **Still being
+written**. Point a watch folder at MakeMKV's output folder to hand rips to the
+queue. A file removed from the queue is not admitted again unless **Forget Seen
+Files** is used. Held items show a **Ready for Review** banner grouped by folder, with
 **Review**, **Start All**, and dismiss; each held row offers **Release** and
 **Remove**, and the item detail shows its watch folder and arrival times. When
 the "needs attention" notification is on, new held items produce one count-only
