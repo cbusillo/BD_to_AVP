@@ -1686,6 +1686,29 @@ class SourceInspectionTests(unittest.TestCase):
             self.assertEqual(context.exception.details, "Disc metadata could not be read.\n")
             self.assertTrue(context.exception.retryable)
 
+    def test_iso_inspection_reports_makemkv_crash_plainly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.touch()
+            fake_makemkv = temporary_path / "makemkvcon"
+            fake_makemkv.write_text("#!/bin/sh\necho 'MSG:1005,0,1,\"MakeMKV started\"'\nkill -SEGV $$\n")
+            fake_makemkv.chmod(0o755)
+
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                self.assertRaises(WorkerOperationError) as context,
+            ):
+                inspect_source(
+                    JobSource(kind=WorkerSourceKind.DISC_IMAGE, path=source_path),
+                    WorkerProcessOwner(),
+                )
+
+            self.assertEqual(context.exception.code, "makemkv_crashed")
+            self.assertIn(signal.SIGSEGV.name, context.exception.message)
+            self.assertIn("MakeMKV started", context.exception.details or "")
+            self.assertTrue(context.exception.retryable)
+
     def test_iso_inspection_preserves_stderr_only_failure_details(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
@@ -2219,6 +2242,45 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(context.exception.code, "mkv_creation_decision_required")
             self.assertEqual(context.exception.choices, ("retry_continue_on_error", "cancel"))
             self.assertIn("Extract MVC and Audio", context.exception.details or "")
+
+    def test_makemkv_crash_during_conversion_is_reported_plainly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "output"
+            job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
+            activity = WorkerActivityReporter(WorkerEventEmitter(io.StringIO(), job.job_id))
+            crash = subprocess.CalledProcessError(-signal.SIGBUS, [config.MAKEMKVCON_PATH, "mkv"])
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=crash),
+                self.assertRaises(WorkerOperationError) as context,
+            ):
+                convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(context.exception.code, "makemkv_crashed")
+            self.assertIn(signal.SIGBUS.name, context.exception.message)
+
+    def test_other_tool_crash_during_conversion_stays_generic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "output"
+            job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
+            activity = WorkerActivityReporter(WorkerEventEmitter(io.StringIO(), job.job_id))
+            crash = subprocess.CalledProcessError(-signal.SIGSEGV, [temporary_path / "ffmpeg"])
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=crash),
+                self.assertRaises(WorkerOperationError) as context,
+            ):
+                convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(context.exception.code, "tool_failed")
 
     def test_generated_mv_hevc_validation_failure_is_typed_and_retryable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

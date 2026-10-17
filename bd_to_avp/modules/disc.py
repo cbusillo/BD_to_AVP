@@ -1,5 +1,7 @@
 import re
 import shutil
+import signal
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -57,6 +59,9 @@ class TitleInfo:
 
 ProgressCallback = Callable[[float, float], object]
 MAKEMKV_PROGRESS_PATTERN = re.compile(r"^PRGV:(\d+),(\d+),(\d+)$")
+MAKEMKV_CRASH_SIGNALS = frozenset(
+    {signal.SIGSEGV, signal.SIGBUS, signal.SIGILL, signal.SIGABRT, signal.SIGFPE, signal.SIGTRAP}
+)
 
 
 def parse_makemkv_progress(line: str) -> tuple[int, int] | None:
@@ -327,6 +332,26 @@ def rip_disc_to_mkv(
     filtered_output = filter_lines_from_output(mkv_output, config.MKV_ERROR_FILTERS)
 
     raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{filtered_output}")
+
+
+def makemkv_crash_signal_name(error: BaseException) -> str | None:
+    if not isinstance(error, subprocess.CalledProcessError) or error.returncode >= 0 or not error.cmd:
+        return None
+    if Path(error.cmd[0]).name != config.MAKEMKVCON_PATH.name:
+        return None
+    try:
+        crash_signal = signal.Signals(-error.returncode)
+    except ValueError:
+        return None
+    return crash_signal.name if crash_signal in MAKEMKV_CRASH_SIGNALS else None
+
+
+def build_makemkv_crash_message(signal_name: str) -> str:
+    return (
+        f"MakeMKV crashed ({signal_name}) while reading this source. MakeMKV 2.0 has a known bug that "
+        "crashes on Blu-ray images and folders without disc encryption, which includes most backups. "
+        "Install MakeMKV 1.18.4 with a registration key, then try again."
+    )
 
 
 def makemkv_image_path() -> Path | None:

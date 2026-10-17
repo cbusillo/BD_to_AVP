@@ -13,7 +13,13 @@ import ffmpeg
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
-from bd_to_avp.modules.disc import DiscTitleSelectionError, get_disc_and_mvc_video_info, MKVCreationError
+from bd_to_avp.modules.disc import (
+    build_makemkv_crash_message,
+    DiscTitleSelectionError,
+    get_disc_and_mvc_video_info,
+    makemkv_crash_signal_name,
+    MKVCreationError,
+)
 from bd_to_avp.modules.disc_image import MountedImageBackingUnknownError, backing_image_for_folder
 from bd_to_avp.modules.file import path_is_relative_to
 from bd_to_avp.modules.preview import PreviewRange, resolve_preview_range
@@ -215,6 +221,14 @@ def inspect_source(
             details = raw_details.decode("utf-8", errors="replace")
         else:
             details = raw_details if isinstance(raw_details, str) else None
+        crash_signal_name = makemkv_crash_signal_name(error)
+        if crash_signal_name is not None:
+            raise WorkerOperationError(
+                "makemkv_crashed",
+                build_makemkv_crash_message(crash_signal_name),
+                details,
+                retryable=True,
+            ) from error
         message = (
             "MakeMKV could not read the selected Blu-ray disc. Confirm it is inserted, "
             "wait for the drive to finish spinning up, and try again."
@@ -476,6 +490,14 @@ def _convert_source(
                 details = raw_details.decode("utf-8", errors="replace")
             else:
                 details = raw_details if isinstance(raw_details, str) else None
+            crash_signal_name = makemkv_crash_signal_name(error)
+            if crash_signal_name is not None:
+                raise WorkerOperationError(
+                    "makemkv_crashed",
+                    build_makemkv_crash_message(crash_signal_name),
+                    details,
+                    retryable=True,
+                ) from error
             raise WorkerOperationError(
                 "tool_failed",
                 "A conversion helper failed.",
