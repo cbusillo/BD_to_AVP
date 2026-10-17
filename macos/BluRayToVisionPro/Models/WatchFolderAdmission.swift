@@ -92,10 +92,27 @@ struct WatchFolderSettleEvaluator: Equatable {
             }
         }
         observations = nextObservations
-        let nextEvaluationAt = observations.values
+        return WatchFolderSettleEvaluation(settled: settled, pending: pending, nextEvaluationAt: nextEvaluationAt)
+    }
+
+    /// When the earliest pending candidate could next settle; `nil` when nothing is pending.
+    var nextEvaluationAt: Date? {
+        observations.values
             .map { $0.unchangedSince.addingTimeInterval(settleInterval) }
             .min()
-        return WatchFolderSettleEvaluation(settled: settled, pending: pending, nextEvaluationAt: nextEvaluationAt)
+    }
+
+    /// Puts settled candidates that turned out to be still in use back to pending, keeping their
+    /// arrival time, so they must stay unchanged for another full interval after `now`.
+    mutating func restartSettling(_ candidates: [SettledWatchFolderCandidate], at now: Date) {
+        for settled in candidates {
+            observations[settled.candidate.fingerprint.path] = Observation(
+                sizeBytes: settled.candidate.fingerprint.sizeBytes,
+                modifiedAtMilliseconds: settled.candidate.fingerprint.modifiedAtMilliseconds,
+                arrivedAt: settled.arrivedAt,
+                unchangedSince: now
+            )
+        }
     }
 
     /// Forgets every observation, for example when the folder's drive goes offline.

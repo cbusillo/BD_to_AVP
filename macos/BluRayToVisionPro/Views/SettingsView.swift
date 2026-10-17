@@ -925,6 +925,8 @@ struct WatchFoldersSettingsPane: View {
                             status: controller.status(for: folder),
                             path: controller.displayPath(for: folder),
                             errorMessage: controller.scanErrorMessages[folder.id],
+                            writeHoldNotices: controller.writeHoldNotices(for: folder),
+                            writeCheckFallbackReason: controller.writeCheckFallbackReasons[folder.id],
                             profiles: profileStore.profiles,
                             update: update,
                             scanNow: { controller.requestScan(folderID: folder.id) },
@@ -967,7 +969,7 @@ struct WatchFoldersSettingsPane: View {
                     .strokeBorder(Color.secondary.opacity(0.25))
             }
 
-            Text("Folders are watched while the app is open. When it opens, it checks for anything that arrived while it was closed. A file is added only after it stops changing, and a file you remove from the queue is not added again.")
+            Text("Folders are watched while the app is open. When it opens, it checks for anything that arrived while it was closed. A file is added only after it stops changing and no app is still writing it, and a file you remove from the queue is not added again.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1051,6 +1053,8 @@ private struct WatchFolderSettingsRow: View {
     let status: WatchFolderStatus
     let path: String?
     let errorMessage: String?
+    let writeHoldNotices: [WatchFolderWriteHoldNotice]
+    let writeCheckFallbackReason: String?
     let profiles: [EncodingProfile]
     let update: (WatchFolder) -> Void
     let scanNow: () -> Void
@@ -1126,6 +1130,23 @@ private struct WatchFolderSettingsRow: View {
                 .fixedSize()
                 .help("Forget Seen Files lets files this folder already added be added again.")
                 .accessibilityLabel("More actions for \(folder.displayName)")
+            }
+
+            ForEach(writeHoldNotices, id: \.path) { notice in
+                Label(notice.message, systemImage: "pencil.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(notice.path)
+            }
+
+            if let writeCheckFallbackReason {
+                Label(
+                    "Could not check whether files are still being written, so only the wait for files to stop changing applies. \(writeCheckFallbackReason)",
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             if let errorMessage {
