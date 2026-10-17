@@ -99,11 +99,11 @@ struct QueueScheduleSettingsPane: View {
                         Image(systemName: "questionmark.circle")
                     }
                     .buttonStyle(.borderless)
-                    .help("How run times work")
-                    .accessibilityLabel("How run times work")
+                    .help("How the schedule works")
+                    .accessibilityLabel("How the schedule works")
                     .accessibilityIdentifier("queue-schedule-details-button")
                     .popover(isPresented: $isShowingDetails, arrowEdge: .bottom) {
-                        QueueScheduleDetailsView()
+                        QueueScheduleDetailsView(idleMinutes: Int(controller.postRun.idleThreshold / 60))
                     }
                 }
             }
@@ -343,7 +343,8 @@ private struct OperatingWindowEditorRow: View {
     }
 }
 
-/// The "When the queue finishes" choice, what it will do, and what it last did.
+/// The "When the queue finishes" choice, one line on what it will do, and what it last did.
+/// The countdown and skip rules are in the Schedule tab's help popover.
 struct QueuePostRunSettingsSection: View {
     @ObservedObject var postRun: QueuePostRunController
     let select: (QueuePostRunAction) -> Void
@@ -366,14 +367,6 @@ struct QueuePostRunSettingsSection: View {
                 .foregroundStyle(postRun.action == .doNothing ? Color.secondary : Color.accentColor)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("post-run-action-preview")
-
-            if postRun.action != .doNothing {
-                Text(Self.skipRules(idleMinutes: Int(postRun.idleThreshold / 60)))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("post-run-action-skip-rules")
-            }
 
             if postRun.action == .shutDown {
                 Label(Self.shutDownWarning, systemImage: "exclamationmark.triangle.fill")
@@ -407,7 +400,7 @@ struct QueuePostRunSettingsSection: View {
         case .doNothing:
             "The Mac stays on when the queue finishes."
         case .sleep, .shutDown:
-            "When every video in the queue has finished, a \(Int(QueuePostRunController.countdownDuration))-second countdown starts, then the Mac will \(postRun.action.verbPhrase). Cancel it, or use the keyboard or mouse, to keep the Mac on."
+            "When the queue finishes, the Mac will \(postRun.action.verbPhrase) after a \(Int(QueuePostRunController.countdownDuration))-second countdown."
         }
     }
 
@@ -418,9 +411,11 @@ struct QueuePostRunSettingsSection: View {
     static let shutDownWarning = "Shut Down closes every app on this Mac. Apps with unsaved changes can stop it, but save your work before you leave."
 }
 
-/// The rules behind run times, kept out of the pane so it stays short.
+/// The rules behind run times and the finish action, kept out of the pane so it stays short.
 struct QueueScheduleDetailsView: View {
-    private let details = [
+    var idleMinutes = Int(QueuePostRunDecision.defaultIdleThreshold / 60)
+
+    private let runTimeDetails = [
         ("macwindow", "The app must be open. Run times do not wake the Mac or keep it awake."),
         ("moon.zzz", "A run time that passes while the Mac sleeps or the app is closed is not made up later."),
         ("film", "A video that is converting when a run time ends or a condition starts finishes normally. No new video starts until the queue may run again."),
@@ -432,18 +427,32 @@ struct QueueScheduleDetailsView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("How Run Times Work")
                 .font(.headline)
-            ForEach(details, id: \.1) { symbol, text in
-                Label {
-                    Text(text).fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: symbol).foregroundStyle(.secondary)
-                }
-                .font(.callout)
+            ForEach(runTimeDetails, id: \.1) { symbol, text in
+                detail(symbol, text)
             }
+            Divider()
+                .padding(.vertical, 2)
+            Text("When the Queue Finishes")
+                .font(.headline)
+            detail(
+                "timer",
+                "Sleep or Shut Down waits for every video to finish, then counts down \(Int(QueuePostRunController.countdownDuration)) seconds. Cancel it, or use the keyboard or mouse, to keep the Mac on."
+            )
+            detail("hand.raised", QueuePostRunSettingsSection.skipRules(idleMinutes: idleMinutes))
+                .accessibilityIdentifier("post-run-action-skip-rules")
         }
         .padding(16)
         .frame(width: 340, alignment: .leading)
         .accessibilityIdentifier("queue-schedule-details")
+    }
+
+    private func detail(_ symbol: String, _ text: String) -> some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(.secondary)
+        }
+        .font(.callout)
     }
 }
 

@@ -663,8 +663,9 @@ struct PersistentQueueSidebarView: View {
         }
     }
 
-    /// The bottom bar. Add, Remove and Arrange show their names next to their icons and still fit on
-    /// one line at the minimum sidebar width. Pause After Current and Stop Current take the place
+    /// The bottom bar. Add, Remove and Arrange show their names next to their icons, and Undo Remove
+    /// sits beside them as part of the same group, still fitting on one line at the minimum sidebar
+    /// width. Pause After Current and Stop Current take the place
     /// of Start while a video is converting, since Start cannot be used then.
     var actionBar: some View {
         VStack(spacing: 7) {
@@ -727,7 +728,6 @@ struct PersistentQueueSidebarView: View {
                 .accessibilityHint("Move the selected waiting item with Command-Option-Up Arrow or Command-Option-Down Arrow.")
                 .accessibilityIdentifier("persistent-queue-arrange")
 
-                Spacer(minLength: 8)
                 if commandState.canUndo {
                     Button(action: undo) {
                         Label("Undo Remove", systemImage: "arrow.uturn.backward")
@@ -738,6 +738,7 @@ struct PersistentQueueSidebarView: View {
                     .accessibilityLabel("Undo Remove")
                     .accessibilityIdentifier("persistent-queue-undo")
                 }
+                Spacer(minLength: 0)
             }
             VStack(alignment: .trailing, spacing: 8) {
                 if commandState.hasCurrentVideoControls {
