@@ -119,10 +119,10 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Lint
-        run: uv run ruff check .
-
-      - name: Check hand-built TLS verification
-        run: uv run --python 3.14 https://raw.githubusercontent.com/cbusillo/codex-skills/2e531a680b16b32dda6d24d4c40de3675c0faaf5/scripts/check_insecure_tls.py
+        run: |
+          set -euo pipefail
+          lint_command="$(jq -er '.qualityGate.lint.default | select(type == "string" and length > 0)' .github/github.json)"
+          bash -euo pipefail -c "$lint_command"
 
       - name: Type check
         run: uv run mypy bd_to_avp
