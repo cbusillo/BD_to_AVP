@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.release_evidence_v2 import (
+    _release_channel,
     CAPTURE_NAME,
     DISPOSITION_NAME,
     INDEX_NAME,
@@ -37,6 +38,7 @@ from scripts.release_evidence_v2 import (
     with_self_digest,
     write_record,
 )
+from scripts.release import ReleaseVersion, parse_release_tag
 from scripts.release_qualification_manifest import manifest_sha256
 from scripts.release_receipt import build_receipt, write_receipt
 from scripts.signed_artifact_receipt import (
@@ -52,7 +54,8 @@ from scripts.release_workflow_policy import REQUIRED_ACTOR
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TAG = "v0.3.0-rc.3"
+DEFAULT_TAG = "v0.3.0-rc.3"
+TAG = DEFAULT_TAG
 LIVE_APPCAST_BYTES = b"<appcast>test</appcast>\n"
 LIVE_APPCAST_SHA256 = hashlib.sha256(LIVE_APPCAST_BYTES).hexdigest()
 
@@ -65,11 +68,30 @@ def git(root: Path, *arguments: str) -> str:
     return subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
 
 
-class ReleaseEvidenceV2Tests(unittest.TestCase):
+class ReleaseEvidenceV2Fixture(unittest.TestCase):
+    """Builds a synthetic release bundle for one candidate; holds no tests of its own."""
+
+    TAG = DEFAULT_TAG
+    PRIOR_TAG = "v0.3.0-rc.2"
+    LIVE_ROUTE = "rc"
+
+    @property
+    def version(self) -> ReleaseVersion:
+        return parse_release_tag(self.TAG, allow_legacy_rc=False)
+
+    @property
+    def release_route(self) -> str:
+        return "prerelease" if self.version.prerelease else "stable"
+
+    @property
+    def dmg_name(self) -> str:
+        return f"3D-Blu-ray-to-Vision-Pro-{self.version.public_version}.dmg"
+
     def build_repository(self, root: Path) -> tuple[str, Path]:
+        tag = self.TAG
         source_paths = {
             "policy": "docs/qualification/release-qualification-policy-v1.json",
-            "qualification_template": f"docs/qualification/{TAG}-signed-qualification-v1.json",
+            "qualification_template": qualification_template_path(tag, self.release_route),
             "route_table": "docs/qualification/video-quality-route-table-v2.json",
             "runner": ".github/workflows/milestone-qualification.yml",
         }
@@ -86,29 +108,29 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         git(root, "add", ".")
         git(root, "commit", "-qm", "source inputs")
         source_sha = git(root, "rev-parse", "HEAD")
-        bundle_root = root / "docs" / "release-evidence" / TAG
+        bundle_root = root / "docs" / "release-evidence" / tag
         bundle_root.mkdir(parents=True)
         release_receipt = build_receipt(
             {
-                "release_route": "prerelease",
+                "release_route": self.release_route,
                 "source_sha": source_sha,
                 "workflow_actor": REQUIRED_ACTOR,
                 "workflow_run_id": 12345,
                 "workflow_run_attempt": 2,
-                "package_version": "0.3.0rc3",
-                "public_version": "0.3.0-rc.3",
+                "package_version": self.version.text,
+                "public_version": self.version.public_version,
                 "build_version": "160",
-                "release_tag": TAG,
-                "release_name": TAG,
+                "release_tag": tag,
+                "release_name": tag,
                 "release_id": 67890,
                 "release_created_at": "2026-08-05T12:00:00Z",
-                "prerelease": True,
-                "make_latest": False,
+                "prerelease": self.version.prerelease,
+                "make_latest": not self.version.prerelease,
                 "signed_app_tree_sha256": "f" * 64,
                 "artifacts": [
                     {
                         "kind": "dmg",
-                        "name": "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg",
+                        "name": self.dmg_name,
                         "sha256": "a" * 64,
                         "size_bytes": 1000,
                         "asset_id": 1,
@@ -154,22 +176,22 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         qualification = json.loads(
             (REPO_ROOT / "docs/release-evidence/v0.3.2-beta.7/qualification-record.json").read_text(encoding="utf-8")
         )
-        qualification["qualification_id"] = f"{TAG}-signed-qualification-v1"
+        qualification["qualification_id"] = f"{tag}-signed-qualification-v1"
         candidate = qualification["candidate"]
         candidate.update(
             {
                 "appcast_sha256": LIVE_APPCAST_SHA256,
                 "build_version": "160",
-                "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg",
+                "dmg_name": self.dmg_name,
                 "dmg_sha256": "a" * 64,
-                "package_version": "0.3.0rc3",
-                "public_version": "0.3.0-rc.3",
+                "package_version": self.version.text,
+                "public_version": self.version.public_version,
                 "release_id": 67890,
                 "release_run_id": 12345,
-                "release_tag": TAG,
+                "release_tag": tag,
                 "signed_app_tree_sha256": "f" * 64,
                 "source_git_sha": source_sha,
-                "workflow": "Prerelease",
+                "workflow": "Prerelease" if self.version.prerelease else "Stable",
             }
         )
         (bundle_root / "qualification-record.json").write_text(
@@ -192,7 +214,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 "evidence_source": sample["evidence_source"],
                 "hardware": sample["hardware"],
                 "release_receipt_file_sha256": digest(release_receipt_path),
-                "release_receipt_reference": f"docs/release-evidence/{TAG}/release-receipt.json",
+                "release_receipt_reference": f"docs/release-evidence/{tag}/release-receipt.json",
                 "result": sample["result"],
                 "started_at": "2026-08-05T12:02:00Z",
             }
@@ -218,12 +240,13 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         return source_sha, bundle_root
 
     def capture_record(self, root: Path, source_sha: str) -> dict[str, Any]:
-        bundle = root / "docs" / "release-evidence" / TAG
+        tag = self.TAG
+        bundle = root / "docs" / "release-evidence" / tag
         receipt_path = bundle / "release-receipt.json"
         signed_receipt_path = bundle / "signed-artifact-ui-receipt.json"
         source_inputs = {
             "policy": "docs/qualification/release-qualification-policy-v1.json",
-            "qualification_template": f"docs/qualification/{TAG}-signed-qualification-v1.json",
+            "qualification_template": qualification_template_path(tag, self.release_route),
             "route_table": "docs/qualification/video-quality-route-table-v2.json",
             "runner": ".github/workflows/milestone-qualification.yml",
         }
@@ -239,20 +262,20 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 "captured_at": "2026-08-05T12:01:00Z",
                 "live_appcast": {"sha256": LIVE_APPCAST_SHA256, "verified_at": "2026-08-05T12:00:30Z"},
                 "qualification_record": {
-                    "path": f"docs/release-evidence/{TAG}/qualification-record.json",
+                    "path": f"docs/release-evidence/{tag}/qualification-record.json",
                     "sha256": digest(bundle / "qualification-record.json"),
                 },
                 "receipt": {
                     "asset_id": 99,
                     "file_sha256": digest(receipt_path),
-                    "path": f"docs/release-evidence/{TAG}/release-receipt.json",
+                    "path": f"docs/release-evidence/{tag}/release-receipt.json",
                     "receipt_sha256": release_receipt["receipt_sha256"],
                 },
                 "record_type": "capture",
-                "release_tag": TAG,
+                "release_tag": tag,
                 "release_workflow": {
                     "actor": REQUIRED_ACTOR,
-                    "path": ".github/workflows/prerelease.yml",
+                    "path": release_receipt["workflow"]["path"],
                     "run_attempt": 2,
                     "run_id": 12345,
                 },
@@ -260,13 +283,13 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 "schema_version": 2,
                 "signed_ui": {
                     "archive": {
-                        "path": f"docs/release-evidence/{TAG}/signed-artifact-ui.zip",
+                        "path": f"docs/release-evidence/{tag}/signed-artifact-ui.zip",
                         "sha256": digest(bundle / "signed-artifact-ui.zip"),
                     },
                     "artifact_id": 777,
                     "receipt": {
                         "file_sha256": digest(signed_receipt_path),
-                        "path": f"docs/release-evidence/{TAG}/signed-artifact-ui-receipt.json",
+                        "path": f"docs/release-evidence/{tag}/signed-artifact-ui-receipt.json",
                         "receipt_sha256": json.loads(signed_receipt_path.read_text(encoding="utf-8"))["receipt_sha256"],
                     },
                 },
@@ -279,7 +302,8 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         )
 
     def qualification_record(self, root: Path, capture: dict[str, Any]) -> dict[str, Any]:
-        bundle = root / "docs" / "release-evidence" / TAG
+        tag = self.TAG
+        bundle = root / "docs" / "release-evidence" / tag
         artifact_path = bundle / "qualification-artifact.zip"
         profile_receipt_path = bundle / "signed-artifact-ui-receipt.json"
         clean_receipt_path = bundle / "clean-machine-signed-update-receipt.json"
@@ -299,7 +323,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 "public_version": versions["public"],
                 "release_id": release["id"],
                 "release_run_id": workflow["run_id"],
-                "release_tag": TAG,
+                "release_tag": tag,
                 "signed_app_tree_sha256": release_receipt["signed_app_tree_sha256"],
                 "source_sha": capture["source_sha"],
             },
@@ -307,28 +331,28 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 {
                     "id": "sparkle-update-route",
                     "observations": {
-                        "candidate_offered_on_rc_route": True,
+                        f"candidate_offered_on_{self.LIVE_ROUTE}_route": True,
                         "install_action": "Install and Relaunch",
                         "post_update_build": versions["build"],
                         "post_update_package_version": versions["package"],
                         "post_update_signed_app_tree_sha256": release_receipt["signed_app_tree_sha256"],
-                        "prior_release_tag": "v0.3.0-rc.2",
+                        "prior_release_tag": self.PRIOR_TAG,
                         "profile_preserved": True,
                         "qualification_artifact_digest": f"sha256:{digest(artifact_path)}",
                         "qualification_artifact_id": 888,
                         "qualification_evidence_sha": "e" * 40,
                         "qualification_manifest_sha256": manifest["manifest_sha256"],
                         "qualification_receipt_reference": (
-                            f"docs/release-evidence/{TAG}/clean-machine-signed-update-receipt.json"
+                            f"docs/release-evidence/{tag}/clean-machine-signed-update-receipt.json"
                         ),
                         "qualification_receipt_sha256": digest(clean_receipt_path),
                         "qualification_workflow_run_id": 33333,
-                        "route": "rc",
+                        "route": self.LIVE_ROUTE,
                     },
                     "result": "passed",
                 }
             ],
-            "qualification_id": "rc-live-qualification-v1",
+            "qualification_id": f"{self.version.channel}-live-qualification-v1",
             "qualified_at": "2026-08-05T12:04:30Z",
             "schema_version": 1,
         }
@@ -341,25 +365,25 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                 "accepted_case_receipts": {
                     "profile-save-action-accessibility": {
                         "accepted_at": "2026-08-05T12:04:00Z",
-                        "path": f"docs/release-evidence/{TAG}/signed-artifact-ui-receipt.json",
+                        "path": f"docs/release-evidence/{tag}/signed-artifact-ui-receipt.json",
                         "sha256": digest(profile_receipt_path),
                         "source": "signed_artifact_receipt",
                     },
                     "sparkle-update-route": {
                         "accepted_at": "2026-08-05T12:04:00Z",
-                        "path": f"docs/release-evidence/{TAG}/live-qualification-v1.json",
+                        "path": f"docs/release-evidence/{tag}/live-qualification-v1.json",
                         "sha256": digest(live_qualification_path),
                         "source": "signed_artifact_receipt",
                     },
                     "clean-machine-signed-update": {
                         "accepted_at": "2026-08-05T12:04:00Z",
-                        "path": f"docs/release-evidence/{TAG}/clean-machine-signed-update-receipt.json",
+                        "path": f"docs/release-evidence/{tag}/clean-machine-signed-update-receipt.json",
                         "sha256": digest(bundle / "clean-machine-signed-update-receipt.json"),
                         "source": "tier3_automation_receipt",
                     },
                     "installed-ui-accessibility": {
                         "accepted_at": "2026-08-05T12:04:00Z",
-                        "path": f"docs/release-evidence/{TAG}/installed-ui-accessibility-receipt.json",
+                        "path": f"docs/release-evidence/{tag}/installed-ui-accessibility-receipt.json",
                         "sha256": digest(bundle / "installed-ui-accessibility-receipt.json"),
                         "source": "tier3_automation_receipt",
                     },
@@ -372,7 +396,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                     "sha256": digest(artifact_path),
                 },
                 "capture": {
-                    "path": f"docs/release-evidence/{TAG}/capture-v2.json",
+                    "path": f"docs/release-evidence/{tag}/capture-v2.json",
                     "sha256": capture["capture_sha256"],
                 },
                 "profile_preservation": {
@@ -381,13 +405,13 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                     "receipt_sha256": digest(profile_receipt_path),
                 },
                 "qualification_manifest": {
-                    "path": f"docs/release-evidence/{TAG}/qualification-manifest.json",
+                    "path": f"docs/release-evidence/{tag}/qualification-manifest.json",
                     "sha256": digest(qualification_manifest_path),
                 },
                 "qualification_record": capture["qualification_record"],
                 "qualified_at": "2026-08-05T12:05:00Z",
                 "record_type": "qualification",
-                "release_tag": TAG,
+                "release_tag": tag,
                 "schema_version": 2,
                 "source_sha": capture["source_sha"],
                 "state": "QUALIFIED",
@@ -406,12 +430,11 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             }
         )
 
-    @staticmethod
-    def disposition_record(capture: dict[str, Any]) -> dict[str, Any]:
+    def disposition_record(self, capture: dict[str, Any]) -> dict[str, Any]:
         return with_self_digest(
             {
                 "capture": {
-                    "path": f"docs/release-evidence/{TAG}/capture-v2.json",
+                    "path": f"docs/release-evidence/{self.TAG}/capture-v2.json",
                     "sha256": capture["capture_sha256"],
                 },
                 "failed_at": "2026-08-05T12:05:00Z",
@@ -433,7 +456,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                     "source_identity_preserved": True,
                 },
                 "record_type": "disposition",
-                "release_tag": TAG,
+                "release_tag": self.TAG,
                 "schema_version": 2,
                 "source_sha": capture["source_sha"],
                 "state": "FAILED",
@@ -470,9 +493,11 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
 
     def write_capture(self, root: Path, source_sha: str) -> dict[str, Any]:
         capture = self.capture_record(root, source_sha)
-        write_record(root / "docs" / "release-evidence" / TAG / CAPTURE_NAME, capture)
+        write_record(root / "docs" / "release-evidence" / self.TAG / CAPTURE_NAME, capture)
         return capture
 
+
+class ReleaseEvidenceV2Tests(ReleaseEvidenceV2Fixture):
     def test_capture_binds_release_signed_ui_appcast_workflows_and_historical_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1378,6 +1403,163 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             index_path.write_bytes(index_path.read_bytes().replace(b"schema_version", b"schema-version", 1))
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "index-v2 is stale"):
                 check_index_v2(REPO_ROOT, worktree=True, output_path=index_path)
+
+
+class _StageEvidencePathTests(ReleaseEvidenceV2Fixture):
+    """Runs one candidate stage through the post-publication evidence path.
+
+    Each subclass names a candidate tag, the prior published tag it updates from,
+    and the Sparkle route its live update must be proven on.
+    """
+
+    def qualify(self, root: Path) -> Path:
+        source_sha, bundle = self.build_repository(root)
+        capture = self.write_capture(root, source_sha)
+        qualify_v2(
+            root,
+            release_tag=self.TAG,
+            qualified_at="2026-08-05T12:05:00Z",
+            milestone_actor="cbusillo",
+            milestone_run_id=33333,
+            milestone_run_attempt=3,
+            qualification_artifact_path=bundle / "qualification-artifact.zip",
+            qualification_artifact_id=888,
+            qualification_manifest_path=bundle / "qualification-manifest.json",
+            accepted_case_receipts=self.qualification_inputs(root, capture),
+        )
+        return bundle
+
+    @staticmethod
+    def rewrite_live_receipt(bundle: Path, change: Any) -> None:
+        live_path = bundle / "live-qualification-v1.json"
+        live = json.loads(live_path.read_text(encoding="utf-8"))
+        change(live)
+        live_path.write_bytes(canonical_record_bytes(live))
+        qualification_path = bundle / QUALIFICATION_NAME
+        qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+        qualification["accepted_case_receipts"]["sparkle-update-route"]["sha256"] = digest(live_path)
+        qualification["updater_route"]["receipt_sha256"] = digest(live_path)
+        qualification_path.unlink()
+        write_record(qualification_path, with_self_digest(qualification))
+
+    @staticmethod
+    def offer_on_route(route: str) -> Any:
+        def change(live: dict[str, Any]) -> None:
+            observations = live["cases"][0]["observations"]
+            for key in [key for key in observations if key.startswith("candidate_offered_on_")]:
+                del observations[key]
+            observations[f"candidate_offered_on_{route}_route"] = True
+            observations["route"] = route
+
+        return change
+
+    @staticmethod
+    def set_qualification_id(qualification_id: str) -> Any:
+        def change(live: dict[str, Any]) -> None:
+            live["qualification_id"] = qualification_id
+
+        return change
+
+    @staticmethod
+    def set_prior_tag(prior_tag: str) -> Any:
+        def change(live: dict[str, Any]) -> None:
+            live["cases"][0]["observations"]["prior_release_tag"] = prior_tag
+
+        return change
+
+    def test_published_candidate_qualifies_through_the_evidence_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.qualify(root)
+            self.assertEqual(validate_v2_bundle(root, self.TAG, worktree=True)["class"], "v2-qualified")
+
+    def test_live_update_proven_on_any_other_route_is_refused(self) -> None:
+        for route in sorted({"alpha", "beta", "rc", "stable", "nightly"} - {self.LIVE_ROUTE}):
+            with self.subTest(route=route), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                bundle = self.qualify(root)
+                self.rewrite_live_receipt(bundle, self.offer_on_route(route))
+                with self.assertRaisesRegex(ReleaseEvidenceV2Error, "route conflicts with the candidate"):
+                    validate_v2_bundle(root, self.TAG, worktree=True)
+
+    def test_live_qualification_identity_of_another_stage_is_refused(self) -> None:
+        for channel in sorted({"alpha", "beta", "rc", "stable"} - {self.version.channel}):
+            with self.subTest(channel=channel), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                bundle = self.qualify(root)
+
+                self.rewrite_live_receipt(bundle, self.set_qualification_id(f"{channel}-live-qualification-v1"))
+                with self.assertRaisesRegex(ReleaseEvidenceV2Error, "qualification ID conflicts"):
+                    validate_v2_bundle(root, self.TAG, worktree=True)
+
+    def test_prior_tag_with_unknown_or_malformed_stage_is_refused(self) -> None:
+        for prior_tag in ("v0.2.9-gamma.1", "v0.2.9-alpha", "v0.2.9alpha1", "v0.2.9rc1"):
+            with self.subTest(prior_tag=prior_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                bundle = self.qualify(root)
+
+                self.rewrite_live_receipt(bundle, self.set_prior_tag(prior_tag))
+                with self.assertRaisesRegex(ReleaseEvidenceV2Error, "does not identify a supported release stage"):
+                    validate_v2_bundle(root, self.TAG, worktree=True)
+
+
+class AlphaEvidencePathTests(_StageEvidencePathTests):
+    TAG = "v0.3.4-alpha.1"
+    PRIOR_TAG = "v0.3.3"
+    LIVE_ROUTE = "alpha"
+
+
+class BetaEvidencePathTests(_StageEvidencePathTests):
+    TAG = "v0.3.4-beta.1"
+    PRIOR_TAG = "v0.3.4-alpha.1"
+    LIVE_ROUTE = "beta"
+
+
+class RcEvidencePathTests(_StageEvidencePathTests):
+    TAG = "v0.3.4-rc.1"
+    PRIOR_TAG = "v0.3.4-beta.1"
+    LIVE_ROUTE = "rc"
+
+
+class StableEvidencePathTests(_StageEvidencePathTests):
+    TAG = "v0.3.4"
+    PRIOR_TAG = "v0.3.4-rc.1"
+    LIVE_ROUTE = "rc"
+
+
+class StableAfterAlphaEvidencePathTests(_StageEvidencePathTests):
+    TAG = "v0.3.4"
+    PRIOR_TAG = "v0.3.4-alpha.1"
+    LIVE_ROUTE = "alpha"
+
+
+class ReleaseChannelTests(unittest.TestCase):
+    def test_channel_follows_the_tag_stage(self) -> None:
+        for tag, prerelease, channel in (
+            ("v0.3.4-alpha.1", True, "alpha"),
+            ("v0.3.4-beta.2", True, "beta"),
+            ("v0.3.4-rc.3", True, "rc"),
+            ("v0.3.4", False, "stable"),
+        ):
+            with self.subTest(tag=tag):
+                self.assertEqual(_release_channel(tag, prerelease), channel)
+
+    def test_unknown_malformed_or_conflicting_stages_are_refused(self) -> None:
+        for tag, prerelease in (
+            ("v0.3.4-gamma.1", True),
+            ("v0.3.4-alpha", True),
+            ("v0.3.4-alpha.0", True),
+            ("v0.3.4alpha1", True),
+            ("v0.3.4-Alpha.1", True),
+            ("v0.3.0rc1", True),
+            ("v0.3.0-beta.1", True),
+            ("v0.3.4-alpha.1", False),
+            ("v0.3.4", True),
+            ("v0.3.4-alpha.1", None),
+        ):
+            with self.subTest(tag=tag, prerelease=prerelease):
+                with self.assertRaises(ReleaseEvidenceV2Error):
+                    _release_channel(tag, prerelease)
 
 
 if __name__ == "__main__":
