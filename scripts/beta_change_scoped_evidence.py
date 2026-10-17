@@ -1,11 +1,14 @@
-"""Produce Beta change-scoped Tier 2 evidence for a blocked preparation classification.
+"""Produce Alpha or Beta change-scoped Tier 2 evidence for a blocked preparation classification.
 
-Run from a clean ``qualify/<beta-tag>`` checkout whose HEAD is the candidate SHA.
+Run from a clean ``qualify/<tag>`` checkout whose HEAD is the candidate SHA.
 The command reruns the preparation classifier, the native and focused Python
 tests, and the local ad hoc package, checks every catalogued proof against the
 actual results, then writes
-``docs/qualification/<beta-tag>-change-scoped-evidence-v1.json`` and appends one
+``docs/qualification/<tag>-change-scoped-evidence-v1.json`` and appends one
 receipt per proved case to the evidence index. It never commits or pushes.
+
+Only the prerelease stages in ``CHANGE_SCOPED_EVIDENCE_STAGES`` may use this lane;
+the module keeps its historical ``beta_`` name so existing commands keep working.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from typing import IO, Any
 
 from scripts.qualify_release_scope import load_policy
 from scripts.release import (
+    CHANGE_SCOPED_EVIDENCE_STAGES,
     ReleaseError,
     ReleaseMetadata,
     load_release_metadata,
@@ -278,7 +282,7 @@ def _require_candidate_checkout(repo_root: Path, release_tag: str) -> str:
 
 
 def eligible_case_ids(policy: Mapping[str, Any]) -> set[str]:
-    """Return policy cases the Beta change-scoped lane may prove (mirrors the PR validator)."""
+    """Return policy cases the change-scoped lane may prove (mirrors the PR validator)."""
     return {
         str(case["id"])
         for case in policy["cases"]
@@ -454,7 +458,7 @@ def _latest_precedent(repo_root: Path, release_tag: str) -> str | None:
     return max(candidates)[1] if candidates else None
 
 
-def _classifier_command(qualification_relative: str, candidate_sha: str) -> list[str]:
+def _classifier_command(qualification_relative: str, candidate_sha: str, release_stage: str) -> list[str]:
     return [
         "uv",
         "run",
@@ -468,7 +472,7 @@ def _classifier_command(qualification_relative: str, candidate_sha: str) -> list
         "--evidence",
         EVIDENCE_INDEX_PATH,
         "--release-stage",
-        "beta",
+        release_stage,
         "--workflow-phase",
         "preparation",
         "--require-evidence",
@@ -512,8 +516,11 @@ def produce_change_scoped_evidence(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> EvidenceResult | None:
     """Prove the blocking preparation cases and write the evidence; ``None`` when nothing blocks."""
-    if metadata.channel != "beta":
-        raise BetaEvidenceError(f"Change-scoped evidence is limited to Beta releases; found {metadata.channel!r}.")
+    if metadata.channel not in CHANGE_SCOPED_EVIDENCE_STAGES:
+        raise BetaEvidenceError(
+            f"Change-scoped evidence is limited to {sorted(CHANGE_SCOPED_EVIDENCE_STAGES)} releases; "
+            f"found {metadata.channel!r}."
+        )
     release_tag = metadata.release_tag
     candidate_sha = _require_candidate_checkout(repo_root, release_tag)
     document_relative = f"{QUALIFICATION_DIRECTORY}/{release_tag}-change-scoped-evidence-v1.json"
@@ -524,7 +531,7 @@ def produce_change_scoped_evidence(
         raise BetaEvidenceError("Logs must stay outside the repository.")
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    classifier_command = _classifier_command(qualification_relative, candidate_sha)
+    classifier_command = _classifier_command(qualification_relative, candidate_sha, metadata.channel)
     print(f"Running: {' '.join(classifier_command)}", flush=True)
     classification = runners.classify(classifier_command, None)
     (log_dir / "preparation-report.json").write_text(classification.stdout, encoding="utf-8")
@@ -551,7 +558,7 @@ def produce_change_scoped_evidence(
     eligible = eligible_case_ids(load_policy(repo_root / POLICY_PATH))
     ineligible = [case_id for case_id in blocking_case_ids if case_id not in eligible]
     if ineligible:
-        raise BetaEvidenceError(f"Blocking cases are not eligible for Beta change-scoped evidence: {ineligible}.")
+        raise BetaEvidenceError(f"Blocking cases are not eligible for change-scoped evidence: {ineligible}.")
     uncatalogued = [case_id for case_id in blocking_case_ids if case_id not in PROOF_CATALOG]
     if uncatalogued:
         raise BetaEvidenceError(f"Blocking cases have no catalogued proof: {uncatalogued}.")
@@ -810,7 +817,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    log_dir = args.log_dir or Path(tempfile.mkdtemp(prefix="bd-to-avp-beta-evidence-"))
+    log_dir = args.log_dir or Path(tempfile.mkdtemp(prefix="bd-to-avp-change-scoped-evidence-"))
     try:
         metadata = load_release_metadata()
         qualification_relative = validate_configured_qualification_record(metadata).as_posix()
