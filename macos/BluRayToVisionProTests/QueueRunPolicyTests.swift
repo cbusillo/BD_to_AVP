@@ -506,7 +506,7 @@ final class QueueRunPolicyTests: XCTestCase {
             )
             try ReviewScreenshot.capture(
                 QueueScheduleDetailsView().preferredColorScheme(scheme),
-                size: CGSize(width: 340, height: 300),
+                size: CGSize(width: 340, height: 500),
                 appearance: appearance,
                 named: "queue-schedule-details-\(suffix)"
             )

@@ -331,8 +331,14 @@ final class QueuePostRunTests: XCTestCase {
         )
         XCTAssertEqual(controller.postRun.action, .shutDown)
 
-        let pane = QueueScheduleSettingsPane(controller: controller).padding(20).preferredColorScheme(.light)
-        try ReviewScreenshot.capture(pane, size: CGSize(width: 860, height: 620), named: "post-run-schedule-settings-shut-down-light")
+        for (scheme, appearance, suffix) in [(ColorScheme.light, NSAppearance.Name.aqua, "light"), (.dark, .darkAqua, "dark")] {
+            try ReviewScreenshot.capture(
+                QueueScheduleSettingsPane(controller: controller).padding(20).preferredColorScheme(scheme),
+                size: CGSize(width: 860, height: 620),
+                appearance: appearance,
+                named: "post-run-schedule-settings-shut-down-\(suffix)"
+            )
+        }
 
         let startedAt = Date()
         let countdown = QueuePostRunCountdown(action: .shutDown, startedAt: startedAt, deadline: startedAt.addingTimeInterval(QueuePostRunController.countdownDuration))
