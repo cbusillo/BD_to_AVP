@@ -250,9 +250,10 @@ and drop to append files, folders, disc images, Blu-ray folders, movie folders,
 and inserted discs without replacing work already in the queue. For a disc
 image, add the ISO file itself. If you choose the folder of a mounted image,
 the app reads the image file behind it instead, and refuses when it cannot find
-that file. An ISO that is smaller than its own filesystem describes is refused
-before MakeMKV starts, because reading a truncated image through the mounted
-disc can hang macOS until restart. Select a
+that file, because reading a damaged image through the mounted disc can hang
+macOS until restart. An ISO that is smaller than its own filesystem describes
+still converts, with a warning that the end of the movie or some extras may be
+missing. Select a
 waiting video and use **Edit…** to change its Profile and conversion settings,
 or **Change…** to choose its destination.
 

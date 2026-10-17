@@ -9,7 +9,7 @@ from bd_to_avp.observability import ObservabilityContext, ObservabilityProgress
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
 from bd_to_avp.modules.command import combined_process_output, run_ffprobe, run_process_capture
-from bd_to_avp.modules.disc_image import backing_image_for_folder, require_complete_disc_image
+from bd_to_avp.modules.disc_image import backing_image_for_folder
 from bd_to_avp.process_runner import CaptureOverflowPolicy, ProcessArtifactProbe
 from bd_to_avp.runtime import RunContext
 
@@ -329,16 +329,24 @@ def rip_disc_to_mkv(
     raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{filtered_output}")
 
 
-def get_makemkv_source() -> str:
+def makemkv_image_path() -> Path | None:
+    """Return the image file MakeMKV reads, including the file behind a mounted image's folder."""
     source_path = config.source_path
-    if source_path and source_path.suffix.lower() not in config.IMAGE_EXTENSIONS and source_path.is_dir():
-        backing_image = backing_image_for_folder(source_path)
-        if backing_image is None:
-            return f"file:{source_path}"
-        source_path = backing_image
-    if source_path and source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
-        require_complete_disc_image(source_path)
-        return f"iso:{source_path}"
+    if source_path is None:
+        return None
+    if source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
+        return source_path
+    if source_path.is_dir():
+        return backing_image_for_folder(source_path)
+    return None
+
+
+def get_makemkv_source() -> str:
+    image_path = makemkv_image_path()
+    if image_path is not None:
+        return f"iso:{image_path}"
+    if config.source_path and config.source_path.is_dir():
+        return f"file:{config.source_path}"
     if config.source_path:
         return config.source_path.as_posix()
     if config.source_str:

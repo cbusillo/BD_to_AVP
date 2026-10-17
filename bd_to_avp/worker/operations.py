@@ -14,11 +14,7 @@ import ffmpeg
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscTitleSelectionError, get_disc_and_mvc_video_info, MKVCreationError
-from bd_to_avp.modules.disc_image import (
-    DiscImageSourceError,
-    backing_image_for_folder,
-    require_complete_disc_image,
-)
+from bd_to_avp.modules.disc_image import MountedImageBackingUnknownError, backing_image_for_folder
 from bd_to_avp.modules.file import path_is_relative_to
 from bd_to_avp.modules.preview import PreviewRange, resolve_preview_range
 from bd_to_avp.modules.storage_capacity import emit_storage_capacity
@@ -662,18 +658,16 @@ def route_message(video_route: ResolvedVideoRoute) -> str:
 
 
 def resolve_job_source(source: JobSource) -> JobSource:
-    """Validate a source and route mounted or damaged disc images away from the kernel UDF driver."""
+    """Validate a source and read a mounted disc image from its file, never through the mount."""
     source_path = validate_source(source)
-    try:
-        if source.kind is WorkerSourceKind.BLU_RAY_FOLDER:
+    if source.kind is WorkerSourceKind.BLU_RAY_FOLDER:
+        try:
             backing_image = backing_image_for_folder(source_path)
-            if backing_image is not None:
-                source = replace(source, kind=WorkerSourceKind.DISC_IMAGE, path=backing_image)
-                source_path = validate_source(source)
-        if source.kind is WorkerSourceKind.DISC_IMAGE:
-            require_complete_disc_image(source_path)
-    except DiscImageSourceError as error:
-        raise WorkerOperationError(error.code, error.message) from error
+        except MountedImageBackingUnknownError as error:
+            raise WorkerOperationError(error.code, error.message) from error
+        if backing_image is not None:
+            source = replace(source, kind=WorkerSourceKind.DISC_IMAGE, path=backing_image)
+            source_path = validate_source(source)
     return replace(source, path=source_path)
 
 

@@ -2,8 +2,9 @@
 
 Reading a truncated Blu-ray image through macOS's kernel UDF driver can leave
 the Mac unable to unmount it until restart. Images are therefore always read as
-plain files (``iso:``), and an image shorter than its own filesystem claims is
-refused before any MakeMKV run. Nothing here mounts or unmounts anything.
+plain files (``iso:``). An image shorter than its own filesystem claims is
+reported as incomplete but still converted, because MakeMKV can usually read
+most of it. Nothing here mounts or unmounts anything.
 """
 
 from __future__ import annotations
@@ -39,29 +40,18 @@ UNKNOWN_BACKING_MESSAGE = (
 )
 
 
-class DiscImageSourceError(ValueError):
-    code = "disc_image_unreadable"
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
-class IncompleteDiscImageError(DiscImageSourceError):
-    code = "disc_image_incomplete"
-
-    def __init__(self, missing_bytes: int) -> None:
-        super().__init__(
-            f"This disc image is incomplete (about {format_size(missing_bytes)} missing). Download or rip it again."
-        )
-        self.missing_bytes = missing_bytes
-
-
-class MountedImageBackingUnknownError(DiscImageSourceError):
+class MountedImageBackingUnknownError(ValueError):
     code = "mounted_image_backing_unknown"
 
     def __init__(self) -> None:
         super().__init__(UNKNOWN_BACKING_MESSAGE)
+        self.message = UNKNOWN_BACKING_MESSAGE
+
+
+@dataclass(frozen=True)
+class IncompleteImage:
+    missing_bytes: int
+    image_bytes: int
 
 
 @dataclass(frozen=True)
@@ -152,16 +142,25 @@ def claimed_image_size(handle: BinaryIO) -> int | None:
     return max(claims) if claims else None
 
 
-def require_complete_disc_image(image_path: Path) -> None:
-    """Refuse an image that is shorter than its filesystem says, reading it only as a plain file."""
+def find_incomplete_image(image_path: Path) -> IncompleteImage | None:
+    """Report an image shorter than its filesystem says, reading it only as a plain file."""
     try:
         with image_path.open("rb") as handle:
             file_size = os.fstat(handle.fileno()).st_size
             claimed_size = claimed_image_size(handle)
     except OSError:
-        return
-    if claimed_size is not None and file_size < claimed_size:
-        raise IncompleteDiscImageError(claimed_size - file_size)
+        return None
+    if claimed_size is None or file_size >= claimed_size:
+        return None
+    return IncompleteImage(missing_bytes=claimed_size - file_size, image_bytes=file_size)
+
+
+def build_incomplete_image_warning(incomplete: IncompleteImage) -> str:
+    return (
+        f"This disc image looks incomplete (about {format_size(incomplete.missing_bytes)} missing). "
+        "The conversion will continue, but the end of the movie or some extras may be missing. "
+        "Rip or download it again if anything is cut off."
+    )
 
 
 def _run_disk_tool(argv: list[Any], tool_id: str) -> bytes | None:

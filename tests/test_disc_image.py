@@ -6,11 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+from uuid import uuid4
 
-from bd_to_avp.modules import disc, disc_image
-from bd_to_avp.modules.config import config
+from bd_to_avp.modules import disc, disc_image, process
+from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc_image import AttachedImage, SECTOR_SIZE
-from bd_to_avp.worker.operations import WorkerOperationError, convert_source, inspect_source, resolve_job_source
+from bd_to_avp.worker.operations import WorkerOperationError, convert_source, resolve_job_source
 from bd_to_avp.worker.ownership import WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     JobSource,
@@ -19,7 +20,7 @@ from bd_to_avp.worker.protocol import (
     WorkerEventEmitter,
     WorkerSourceKind,
 )
-from tests.test_native_worker import conversion_request_line
+from tests.test_native_worker import conversion_request_line, decoded_events
 
 PARTITION_START = 288
 DESCRIPTOR_SEQUENCE_SECTORS = 16
@@ -76,73 +77,96 @@ def build_mounted_volume(root: Path) -> Path:
     return volume
 
 
+class StopAtMakeMKV(Exception):
+    pass
+
+
 class IncompleteImageTests(unittest.TestCase):
-    def test_truncated_udf_image_is_refused_with_missing_size(self) -> None:
+    def test_truncated_udf_image_reports_missing_size(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             image = Path(temporary_directory) / "Feature.iso"
             claimed = build_udf_image(image, partition_length=4000, file_sectors=3000)
 
-            with self.assertRaises(disc_image.IncompleteDiscImageError) as context:
-                disc_image.require_complete_disc_image(image)
+            incomplete = disc_image.find_incomplete_image(image)
 
-            self.assertEqual(context.exception.missing_bytes, claimed - image.stat().st_size)
-            self.assertIn(disc_image.format_size(context.exception.missing_bytes), str(context.exception))
+            image_bytes = image.stat().st_size
+            self.assertEqual(incomplete, disc_image.IncompleteImage(claimed - image_bytes, image_bytes))
 
-    def test_complete_udf_image_is_accepted(self) -> None:
+    def test_complete_udf_image_is_not_reported(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             image = Path(temporary_directory) / "Feature.iso"
             claimed = build_udf_image(image, partition_length=4000, file_sectors=1)
             with image.open("r+b") as handle:
                 handle.truncate(claimed)
 
-            disc_image.require_complete_disc_image(image)
+            self.assertIsNone(disc_image.find_incomplete_image(image))
 
-    def test_truncated_iso9660_image_is_refused(self) -> None:
+    def test_truncated_iso9660_image_reports_missing_size(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             image = Path(temporary_directory) / "Feature.iso"
             claimed = build_iso9660_image(image, volume_blocks=600, file_bytes=500 * SECTOR_SIZE)
 
-            with self.assertRaises(disc_image.IncompleteDiscImageError) as context:
-                disc_image.require_complete_disc_image(image)
+            incomplete = disc_image.find_incomplete_image(image)
 
-            self.assertEqual(context.exception.missing_bytes, claimed - image.stat().st_size)
+            self.assertIsNotNone(incomplete)
+            assert incomplete is not None
+            self.assertEqual(incomplete.missing_bytes, claimed - image.stat().st_size)
 
-    def test_unrecognized_image_is_left_to_makemkv(self) -> None:
+    def test_unrecognized_image_is_not_reported(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             image = Path(temporary_directory) / "Feature.iso"
             image.write_bytes(b"disc")
 
-            disc_image.require_complete_disc_image(image)
+            self.assertIsNone(disc_image.find_incomplete_image(image))
 
-    def test_truncated_image_never_reaches_makemkv(self) -> None:
+    def test_truncated_image_warns_and_still_reaches_makemkv(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             image = temporary_path / "Feature.iso"
-            build_udf_image(image, partition_length=4000, file_sectors=3000)
-            fake_makemkv = temporary_path / "makemkvcon"
-            fake_makemkv.touch()
-            makemkv_run = Mock(side_effect=AssertionError("MakeMKV must not run"))
+            claimed = build_udf_image(image, partition_length=4000, file_sectors=3000)
+            output = io.StringIO()
+            activity = WorkerActivityReporter(WorkerEventEmitter(output, str(uuid4())))
+            activity.set_stage_plan(["preflight", "inspect_source", "create_mkv"])
+            makemkv_run = Mock(side_effect=StopAtMakeMKV)
 
             with (
-                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                patch.object(config, "source_path", image),
+                patch.object(config, "source_str", None),
+                patch.object(config, "output_root_path", temporary_path / "output"),
+                patch.object(config, "overwrite", True),
+                patch.object(config, "start_stage", Stage.CREATE_MKV),
+                patch.object(config, "preview_range", None),
+                patch.object(config, "MAKEMKVCON_PATH", temporary_path / "makemkvcon"),
+                patch("bd_to_avp.modules.process.preflight.verify_runtime_ready"),
                 patch.object(disc, "run_process_capture", makemkv_run),
-                self.assertRaises(WorkerOperationError) as context,
+                self.assertRaises(StopAtMakeMKV),
             ):
-                inspect_source(JobSource(kind=WorkerSourceKind.DISC_IMAGE, path=image), WorkerProcessOwner())
+                process.process_each(activity=activity, selected_title_id="makemkv:0")
 
-            self.assertEqual(context.exception.code, disc_image.IncompleteDiscImageError.code)
-            makemkv_run.assert_not_called()
+            warnings = [
+                event["payload"]
+                for event in decoded_events(output)
+                if event["type"] == "warning" and event["payload"].get("code") == "disc_image_incomplete"
+            ]
+            image_bytes = image.stat().st_size
+            self.assertEqual(len(warnings), 1)
+            self.assertEqual(warnings[0]["missing_bytes"], claimed - image_bytes)
+            self.assertEqual(warnings[0]["image_bytes"], image_bytes)
+            makemkv_run.assert_called_once()
+            self.assertIn(f"iso:{image}", makemkv_run.call_args.args[0])
 
-    def test_cli_source_refuses_truncated_image(self) -> None:
+    def test_cli_run_prints_incomplete_image_warning(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             image = Path(temporary_directory) / "Feature.iso"
-            build_udf_image(image, partition_length=4000, file_sectors=3000)
+            claimed = build_udf_image(image, partition_length=4000, file_sectors=3000)
+            message = Mock()
 
-            with (
-                patch.object(disc.config, "source_path", image),
-                self.assertRaises(disc_image.IncompleteDiscImageError),
-            ):
-                disc.get_makemkv_source()
+            with patch.object(config, "source_path", image), patch.object(process, "cli_message", message):
+                process.report_incomplete_disc_image(None, "inspect_source", None)
+
+            missing = disc_image.format_size(claimed - image.stat().st_size)
+            message.assert_called_once()
+            self.assertIn(missing, message.call_args.args[0])
 
 
 class MountedImageSourceTests(unittest.TestCase):
