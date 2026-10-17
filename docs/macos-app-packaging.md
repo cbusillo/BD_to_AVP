@@ -99,10 +99,12 @@ metadata links route through one hidden current-build pointer, so publishing a
 new validated build switches both paths at the same atomic filesystem step.
 The metadata records the source commit, merge base with `origin/main`, UTC build
 time, app-tree SHA-256, app version and build, and the local ad-hoc signing
-status. Existing commit-addressed builds are immutable and retained. The
-command serializes concurrent publishers, refuses symlinked or conflicting
-destination objects, and never modifies the production-signed app under
-`/Applications`.
+status. Existing commit-addressed builds are immutable and retained. If a
+build the pointer names was deleted from that folder, the next publish repoints
+the pointer to the new build; a pointer that is not a symlink or that names a
+path outside that folder is refused. The command serializes concurrent
+publishers, refuses symlinked or conflicting destination objects, and never
+modifies the production-signed app under `/Applications`.
 
 The auxiliary launcher receives the direct-distribution entitlements required
 by CPython and extension modules. Those entitlements belong only to the worker,

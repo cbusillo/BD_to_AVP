@@ -1,6 +1,8 @@
 import importlib
 import json
+import os
 import plistlib
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -745,6 +747,81 @@ Load command 3
                 second_directory.resolve() / CURRENT_BUILD_METADATA_NAME,
             )
             self.assertTrue((applications_directory / CURRENT_BUILD_DIRECTORY_NAME / first_commit).is_dir())
+
+    def test_publish_current_app_repoints_pointer_to_removed_build(self) -> None:
+        removed_commit = "a" * 40
+        new_commit = "c" * 40
+        base_main_commit = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            applications_directory = root / "Applications"
+            build_root = applications_directory / CURRENT_BUILD_DIRECTORY_NAME
+
+            with patch("scripts.native_app.verify_codesign"):
+                stable_app = publish_current_app(
+                    make_app_bundle(root / "removed", b"removed build"),
+                    applications_directory=applications_directory,
+                    source_commit=removed_commit,
+                    base_main_commit=base_main_commit,
+                )
+                shutil.rmtree(build_root / removed_commit)
+
+                publish_current_app(
+                    make_app_bundle(root / "new", b"new build"),
+                    applications_directory=applications_directory,
+                    source_commit=new_commit,
+                    base_main_commit=base_main_commit,
+                )
+
+            new_directory = build_root.resolve() / new_commit
+            stable_metadata = applications_directory / CURRENT_METADATA_LINK_NAME
+            self.assertEqual(stable_app.resolve(strict=True), new_directory / NATIVE_APP_NAME)
+            self.assertEqual(stable_metadata.resolve(strict=True), new_directory / CURRENT_BUILD_METADATA_NAME)
+
+    def test_publish_current_app_refuses_dangling_pointer_outside_build_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            applications_directory = root / "Applications"
+            applications_directory.mkdir()
+            current_pointer = applications_directory / CURRENT_POINTER_LINK_NAME
+            outside_target = root / ("a" * 40)
+            current_pointer.symlink_to(outside_target, target_is_directory=True)
+
+            with (
+                patch("scripts.native_app.verify_codesign"),
+                self.assertRaisesRegex(RuntimeError, "outside the immutable build root"),
+            ):
+                publish_current_app(
+                    make_app_bundle(root / "new", b"new build"),
+                    applications_directory=applications_directory,
+                    source_commit="c" * 40,
+                    base_main_commit="b" * 40,
+                )
+
+            self.assertEqual(current_pointer.readlink(), outside_target)
+            self.assertFalse(os.path.lexists(applications_directory / CURRENT_APP_LINK_NAME))
+
+    def test_publish_current_app_refuses_non_symlink_pointer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            applications_directory = root / "Applications"
+            current_pointer = applications_directory / CURRENT_POINTER_LINK_NAME
+            current_pointer.mkdir(parents=True)
+
+            with (
+                patch("scripts.native_app.verify_codesign"),
+                self.assertRaisesRegex(RuntimeError, "Refusing to replace non-symlink path"),
+            ):
+                publish_current_app(
+                    make_app_bundle(root / "new", b"new build"),
+                    applications_directory=applications_directory,
+                    source_commit="c" * 40,
+                    base_main_commit="b" * 40,
+                )
+
+            self.assertTrue(current_pointer.is_dir())
+            self.assertFalse(current_pointer.is_symlink())
+            self.assertFalse(os.path.lexists(applications_directory / CURRENT_APP_LINK_NAME))
 
     def test_publish_current_app_migrates_matching_direct_stable_links(self) -> None:
         old_commit = "a" * 40
