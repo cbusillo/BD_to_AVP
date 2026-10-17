@@ -16,6 +16,7 @@ from unittest.mock import ANY, patch
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.artifact_identity import app_tree_sha256
 from scripts.native_app import (
+    APP_ENTITLEMENTS,
     CURRENT_APP_LINK_NAME,
     CURRENT_BUILD_DIRECTORY_NAME,
     CURRENT_BUILD_METADATA_NAME,
@@ -1260,6 +1261,22 @@ Load command 3
             self.assertNotIn("--options", command)
             self.assertNotIn("runtime", command)
             self.assertIn("--timestamp=none", command)
+
+    def test_app_bundle_keeps_its_own_entitlements_when_signed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            (app_path / "Contents" / "MacOS").mkdir(parents=True)
+            with patch("scripts.native_app.run") as run_mock:
+                sign_package(app_path, "-")
+
+        app_command = next(
+            call.args[0]
+            for call in run_mock.call_args_list
+            if "--sign" in call.args[0] and call.args[0][-1] == str(app_path)
+        )
+        self.assertIn("--entitlements", app_command)
+        self.assertEqual(app_command[app_command.index("--entitlements") + 1], str(APP_ENTITLEMENTS))
+        self.assertTrue(APP_ENTITLEMENTS.is_file())
 
     def test_package_signs_mv_hevc_encoder_before_the_containing_app(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

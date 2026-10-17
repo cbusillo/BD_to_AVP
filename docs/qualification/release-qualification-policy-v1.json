@@ -35,6 +35,7 @@
       ".github/workflows/prerelease.yml",
       ".github/workflows/release-engine.yml",
       ".github/workflows/sparkle-pages.yml",
+      "macos/BluRayToVisionPro/App.entitlements",
       "macos/BluRayToVisionPro/Info-Release.plist",
       "macos/BluRayToVisionPro/Worker.entitlements",
       "macos/project.yml",

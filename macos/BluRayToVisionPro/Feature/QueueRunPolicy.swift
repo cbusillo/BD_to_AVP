@@ -157,17 +157,21 @@ struct QueueRunPolicy: Codable, Equatable {
     var waitsOnBatteryPower: Bool
     /// Wait while macOS reports serious or critical thermal pressure.
     var waitsUnderThermalPressure: Bool
+    /// What the Mac does once a run finishes with nothing left to do. It does not affect when videos start.
+    var postRunAction: QueuePostRunAction
 
     init(
         limitsToOperatingWindows: Bool = false,
         operatingWindows: [QueueOperatingWindow] = [],
         waitsOnBatteryPower: Bool = false,
-        waitsUnderThermalPressure: Bool = false
+        waitsUnderThermalPressure: Bool = false,
+        postRunAction: QueuePostRunAction = .doNothing
     ) {
         self.limitsToOperatingWindows = limitsToOperatingWindows
         self.operatingWindows = operatingWindows
         self.waitsOnBatteryPower = waitsOnBatteryPower
         self.waitsUnderThermalPressure = waitsUnderThermalPressure
+        self.postRunAction = postRunAction
     }
 
     static let none = QueueRunPolicy()
@@ -177,7 +181,7 @@ struct QueueRunPolicy: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case limitsToOperatingWindows, operatingWindows, waitsOnBatteryPower, waitsUnderThermalPressure
+        case limitsToOperatingWindows, operatingWindows, waitsOnBatteryPower, waitsUnderThermalPressure, postRunAction
     }
 
     init(from decoder: Decoder) throws {
@@ -186,7 +190,9 @@ struct QueueRunPolicy: Codable, Equatable {
             limitsToOperatingWindows: try values.decodeIfPresent(Bool.self, forKey: .limitsToOperatingWindows) ?? false,
             operatingWindows: try values.decodeIfPresent([QueueOperatingWindow].self, forKey: .operatingWindows) ?? [],
             waitsOnBatteryPower: try values.decodeIfPresent(Bool.self, forKey: .waitsOnBatteryPower) ?? false,
-            waitsUnderThermalPressure: try values.decodeIfPresent(Bool.self, forKey: .waitsUnderThermalPressure) ?? false
+            waitsUnderThermalPressure: try values.decodeIfPresent(Bool.self, forKey: .waitsUnderThermalPressure) ?? false,
+            // An action this build does not know, from a later build, reads as Do Nothing.
+            postRunAction: (try? values.decodeIfPresent(QueuePostRunAction.self, forKey: .postRunAction)) ?? .doNothing
         )
     }
 }

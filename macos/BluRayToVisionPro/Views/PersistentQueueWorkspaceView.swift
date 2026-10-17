@@ -61,7 +61,30 @@ struct PersistentQueueSidebarView: View {
     var runPolicyDecision: QueueRunPolicyDecision = .inactive
     /// What the run policy did on its own, oldest first.
     var runPolicyActivity: [QueueRunPolicyActivity] = []
+    /// What the "When the queue finishes" setting did, oldest first.
+    var postRunActivity: [QueuePostRunActivity] = []
     var calendar: Calendar = .autoupdatingCurrent
+
+    private struct AutomaticActivityEntry: Identifiable {
+        let id: UUID
+        let occurredAt: Date
+        let message: String
+    }
+
+    /// Run-policy and finish-action entries together, newest first.
+    private var recentAutomaticActivity: [AutomaticActivityEntry] {
+        let policy = runPolicyActivity.map {
+            AutomaticActivityEntry(id: $0.id, occurredAt: $0.occurredAt, message: $0.message(calendar: calendar))
+        }
+        let postRun = postRunActivity.map {
+            AutomaticActivityEntry(id: $0.id, occurredAt: $0.occurredAt, message: $0.message)
+        }
+        return Array((policy + postRun).sorted { $0.occurredAt > $1.occurredAt }.prefix(8))
+    }
+
+    private var hasAutomaticActivity: Bool {
+        !runPolicyActivity.isEmpty || !postRunActivity.isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -199,7 +222,7 @@ struct PersistentQueueSidebarView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Show what the queue did on its own")
-                        .accessibilityLabel("Run Time Activity")
+                        .accessibilityLabel("Queue Activity")
                         .accessibilityIdentifier("run-policy-activity-button")
                         .popover(isPresented: $isShowingRunPolicyActivityFromBanner, arrowEdge: .trailing) {
                             runPolicyActivityList
@@ -276,9 +299,9 @@ struct PersistentQueueSidebarView: View {
                 if commandState.canUndo {
                     Button("Undo Remove", action: undo)
                 }
-                if !runPolicyActivity.isEmpty {
+                if hasAutomaticActivity {
                     Divider()
-                    Button("Run Time Activity…") { isShowingRunPolicyActivity = true }
+                    Button("Queue Activity…") { isShowingRunPolicyActivity = true }
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -569,16 +592,16 @@ struct PersistentQueueSidebarView: View {
 
     var runPolicyActivityList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Run Time Activity")
+            Text("Queue Activity")
                 .font(.headline)
-            Text("What the queue did on its own under its run times and conditions.")
+            Text("What the queue and the Mac did on their own: run times, conditions, and the finish action.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
-            ForEach(runPolicyActivity.suffix(8).reversed()) { activity in
+            ForEach(recentAutomaticActivity) { activity in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(activity.message(calendar: calendar))
+                    Text(activity.message)
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(activity.occurredAt.formatted(date: .abbreviated, time: .shortened))

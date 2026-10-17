@@ -18,6 +18,9 @@ protocol QueueAutomationAdmitting: AnyObject {
     func publishRunPolicyDecision(_ decision: QueueRunPolicyDecision)
     /// Emits when the queue may have changed, so the run policy can be checked again.
     var queueStateChanges: AnyPublisher<Void, Never> { get }
+    /// Emits after a run ends because every video it took on is done, not when it is paused or stopped.
+    var queueRunCompletions: AnyPublisher<Void, Never> { get }
+    func postRunQueueSnapshot() -> QueuePostRunQueueSnapshot
 }
 
 /// Answers whether the app may start a video on its own right now, and records what the policy did.
@@ -30,6 +33,10 @@ protocol QueueRunPolicyGating: AnyObject {
 extension ConversionViewModel: QueueAutomationAdmitting {
     var queueStateChanges: AnyPublisher<Void, Never> {
         objectWillChange.map { _ in () }.eraseToAnyPublisher()
+    }
+
+    var queueRunCompletions: AnyPublisher<Void, Never> {
+        $persistentQueueCompletionRevision.dropFirst().removeDuplicates().map { _ in () }.eraseToAnyPublisher()
     }
 }
 
@@ -72,6 +79,9 @@ enum WatchFolderScanOutcome: Equatable {
 /// condition clears, answers whether a run it started may start another video, and records each
 /// decision in the policy's activity record. Every decision comes from `QueueRunPolicyDecision.decide`
 /// with an injected clock, calendar, and machine conditions.
+///
+/// It owns the "When the queue finishes" setting too, through `postRun`, which decides after each
+/// completed run whether the Mac may sleep or shut down.
 @MainActor
 final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
     typealias DraftFactoryProvider = @MainActor (WatchFolder) -> QueueDraftFactory
@@ -110,6 +120,9 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
     private let machineConditions: any QueueMachineConditionsProviding
     private let writeCompletionCheck: WatchFolderWriteCompletionCheck
     let calendar: Calendar
+    let postRun: QueuePostRunController
+    private var queueCompletionSubscription: AnyCancellable?
+    private var postRunSubscription: AnyCancellable?
     private var runPolicyTimer: (any QueueAutomationTimer)?
     private var runPolicyTask: Task<Void, Never>?
     private var runPolicyEvaluationRequested = false
@@ -137,7 +150,9 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
         machineConditions: (any QueueMachineConditionsProviding)? = nil,
         writeCompletionCheck: WatchFolderWriteCompletionCheck = .system,
-        calendar: Calendar = .autoupdatingCurrent
+        calendar: Calendar = .autoupdatingCurrent,
+        idleTime: @escaping () -> TimeInterval? = SystemHIDIdleTime.current,
+        postRunPerformer: (any QueuePostRunPerforming)? = nil
     ) {
         self.store = store
         self.admitter = admitter
@@ -147,12 +162,24 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
         self.resolveBookmark = resolveBookmark
         self.createBookmark = createBookmark
         self.eventSourceFactory = eventSourceFactory
-        self.timerScheduler = timerScheduler ?? TaskQueueAutomationTimerScheduler(now: now)
+        let timerScheduler = timerScheduler ?? TaskQueueAutomationTimerScheduler(now: now)
+        self.timerScheduler = timerScheduler
         self.workspaceNotificationCenter = workspaceNotificationCenter
         self.machineConditions = machineConditions ?? SystemQueueMachineConditions()
         self.writeCompletionCheck = writeCompletionCheck
         self.calendar = calendar
+        postRun = QueuePostRunController(
+            store: store,
+            queueSnapshot: { [weak admitter] in admitter?.postRunQueueSnapshot() ?? QueuePostRunQueueSnapshot(runState: .running) },
+            idleTime: idleTime,
+            performer: postRunPerformer ?? SystemQueuePostRunPerformer(),
+            timerScheduler: timerScheduler,
+            now: now
+        )
         storeSubscription = store.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        postRunSubscription = postRun.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
         admitter.runPolicyGate = self
@@ -282,8 +309,27 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
             object: nil,
             queue: nil
         ) { [weak self] _ in
-            Task { @MainActor in self?.requestRunPolicyEvaluation() }
+            Task { @MainActor in
+                self?.postRun.systemPowerStateDidChange()
+                self?.requestRunPolicyEvaluation()
+            }
         })
+        notificationObservers.append(center.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in self?.postRun.systemPowerStateDidChange() }
+        })
+        // Delivered on the next turn of the main run loop, after the queue has settled into idle.
+        queueCompletionSubscription = admitter.queueRunCompletions
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else {
+                    return
+                }
+                Task { @MainActor in await self.postRun.queueDidFinish() }
+            }
         machineConditions.startObserving { [weak self] in
             self?.requestRunPolicyEvaluation()
         }
@@ -315,6 +361,8 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
         }
         machineConditions.stopObserving()
         queueChangeSubscription = nil
+        queueCompletionSubscription = nil
+        postRun.stop()
         runPolicyTimer?.cancel()
         runPolicyTimer = nil
     }
@@ -327,6 +375,7 @@ final class QueueAutomationController: ObservableObject, QueueRunPolicyGating {
 
     func updateRunPolicy(_ policy: QueueRunPolicy) throws {
         try store.saveRunPolicy(policy)
+        postRun.settingDidChange()
         requestRunPolicyEvaluation()
     }
 

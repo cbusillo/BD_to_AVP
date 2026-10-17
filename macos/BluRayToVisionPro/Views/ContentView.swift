@@ -472,6 +472,7 @@ struct ContentView: View {
             release: releaseHeldPersistentQueueItem,
             runPolicyDecision: viewModel.runPolicyDecision,
             runPolicyActivity: queueAutomationController.runPolicyActivity,
+            postRunActivity: queueAutomationController.postRun.activity,
             calendar: queueAutomationController.calendar
         )
     }

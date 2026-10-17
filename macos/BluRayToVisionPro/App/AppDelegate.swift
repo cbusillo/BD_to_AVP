@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     weak var movieSharingController: MovieSharingController?
     /// Queue automation lives outside any window so a later menu-bar helper can own it instead.
     weak var queueAutomationController: QueueAutomationController?
+    var postRunCountdownPresenter: QueuePostRunCountdownPresenter?
     private weak var managedWindow: NSWindow?
     private var originalWindowDelegate: NSWindowDelegate?
     private var allowManagedWindowClose = false
