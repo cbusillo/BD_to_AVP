@@ -108,6 +108,7 @@ extend-exclude = ["bd_to_avp/vendor/pgsrip"]
 
 [tool.ruff.lint]
 select = ["E", "F", "B", "RUF"]
+extend-select = ["S501", "S502", "S503", "S504", "S323"]
 
 [tool.mypy]
 python_version = "3.12"
