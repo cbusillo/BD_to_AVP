@@ -1100,6 +1100,19 @@ def validate_version_directory(path: Path, build_root: Path, description: str) -
     return resolved_path
 
 
+def is_removed_build_pointer(pointer: Path, build_root: Path) -> bool:
+    """Return whether a dangling pointer names a removed build inside the build root.
+
+    The link text is checked lexically because a removed target cannot be resolved.
+    """
+    if not pointer.is_symlink() or os.path.exists(pointer):
+        return False
+    lexical_target = Path(os.path.normpath(pointer.parent / os.readlink(pointer)))
+    if lexical_target.parent != build_root or re.fullmatch(r"[0-9a-f]{40}", lexical_target.name) is None:
+        raise RuntimeError(f"Current-build pointer target is outside the immutable build root: {lexical_target}")
+    return not os.path.lexists(lexical_target)
+
+
 def publish_stable_current_links(
     *,
     build_root: Path,
@@ -1117,7 +1130,10 @@ def publish_stable_current_links(
     version_route = Path(CURRENT_BUILD_DIRECTORY_NAME) / version_directory.name
     pointer_directory: Path
 
-    if os.path.lexists(current_pointer):
+    if is_removed_build_pointer(current_pointer, build_root):
+        replace_symlink(version_route, current_pointer)
+        pointer_directory = version_directory
+    elif os.path.lexists(current_pointer):
         pointer_directory = validate_version_directory(
             resolve_symlink(current_pointer, "Current-build pointer"),
             build_root,
