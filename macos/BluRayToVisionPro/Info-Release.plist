@@ -34,6 +34,8 @@
 	<string>bd_to_avp.worker</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>3D Blu-ray to Vision Pro asks macOS to shut down this Mac after the queue finishes, only when you choose Shut Down in Settings.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_bdtoavp-relay._tcp</string>

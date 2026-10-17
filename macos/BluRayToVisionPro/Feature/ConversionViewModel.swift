@@ -421,6 +421,16 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         )
     }
 
+    /// The queue state the "When the queue finishes" setting decides from.
+    func postRunQueueSnapshot() -> QueuePostRunQueueSnapshot {
+        QueuePostRunQueueSnapshot(
+            runState: persistentQueueRunState,
+            hasPendingStartLaterSchedule: offPeakSchedule != nil,
+            itemStates: durableQueueStore.items.map(\.state),
+            hasActiveConversion: hasActiveWork
+        )
+    }
+
     func publishRunPolicyDecision(_ decision: QueueRunPolicyDecision) {
         if runPolicyDecision != decision {
             runPolicyDecision = decision

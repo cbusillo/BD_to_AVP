@@ -95,27 +95,36 @@ struct QueueAutomationDocument: Codable, Equatable {
     var seenSources: [WatchFolderSeenSource]
     var runPolicy: QueueRunPolicy
     var runPolicyActivity: [QueueRunPolicyActivity]
+    /// What the "When the queue finishes" setting did. Kept apart from `runPolicyActivity` so a
+    /// build from before this setting still reads the file; it ignores this key.
+    var postRunActivity: [QueuePostRunActivity]
 
     init(
         version: Int = currentVersion,
         watchFolders: [WatchFolder] = [],
         seenSources: [WatchFolderSeenSource] = [],
         runPolicy: QueueRunPolicy = .none,
-        runPolicyActivity: [QueueRunPolicyActivity] = []
+        runPolicyActivity: [QueueRunPolicyActivity] = [],
+        postRunActivity: [QueuePostRunActivity] = []
     ) {
         self.version = version
         self.watchFolders = watchFolders
         self.seenSources = seenSources
         self.runPolicy = runPolicy
         self.runPolicyActivity = runPolicyActivity
+        self.postRunActivity = postRunActivity
     }
 
     /// The version this document needs: run-policy data is written only when there is some.
     var requiredVersion: Int {
-        runPolicy == .none && runPolicyActivity.isEmpty ? Self.watchFoldersVersion : Self.currentVersion
+        runPolicy == .none && runPolicyActivity.isEmpty && postRunActivity.isEmpty
+            ? Self.watchFoldersVersion
+            : Self.currentVersion
     }
 
-    private enum CodingKeys: String, CodingKey { case version, watchFolders, seenSources, runPolicy, runPolicyActivity }
+    private enum CodingKeys: String, CodingKey {
+        case version, watchFolders, seenSources, runPolicy, runPolicyActivity, postRunActivity
+    }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -128,7 +137,8 @@ struct QueueAutomationDocument: Codable, Equatable {
             watchFolders: try values.decodeIfPresent([WatchFolder].self, forKey: .watchFolders) ?? [],
             seenSources: try values.decodeIfPresent([WatchFolderSeenSource].self, forKey: .seenSources) ?? [],
             runPolicy: try values.decodeIfPresent(QueueRunPolicy.self, forKey: .runPolicy) ?? .none,
-            runPolicyActivity: try values.decodeIfPresent([QueueRunPolicyActivity].self, forKey: .runPolicyActivity) ?? []
+            runPolicyActivity: try values.decodeIfPresent([QueueRunPolicyActivity].self, forKey: .runPolicyActivity) ?? [],
+            postRunActivity: try values.decodeIfPresent([QueuePostRunActivity].self, forKey: .postRunActivity) ?? []
         )
     }
 
@@ -141,6 +151,7 @@ struct QueueAutomationDocument: Codable, Equatable {
         if version >= Self.currentVersion {
             try values.encode(runPolicy, forKey: .runPolicy)
             try values.encode(runPolicyActivity, forKey: .runPolicyActivity)
+            try values.encode(postRunActivity, forKey: .postRunActivity)
         }
     }
 }
@@ -219,6 +230,7 @@ final class QueueAutomationStore: ObservableObject {
     var seenSources: [WatchFolderSeenSource] { document.seenSources }
     var runPolicy: QueueRunPolicy { document.runPolicy }
     var runPolicyActivity: [QueueRunPolicyActivity] { document.runPolicyActivity }
+    var postRunActivity: [QueuePostRunActivity] { document.postRunActivity }
 
     func saveRunPolicy(_ policy: QueueRunPolicy) throws {
         try mutate { document in
@@ -232,6 +244,16 @@ final class QueueAutomationStore: ObservableObject {
             document.runPolicyActivity.append(activity)
             if document.runPolicyActivity.count > Self.maximumRunPolicyActivity {
                 document.runPolicyActivity.removeFirst(document.runPolicyActivity.count - Self.maximumRunPolicyActivity)
+            }
+        }
+    }
+
+    /// Adds an entry to the post-run activity record, keeping only the most recent entries.
+    func recordPostRunActivity(_ activity: QueuePostRunActivity) throws {
+        try mutate { document in
+            document.postRunActivity.append(activity)
+            if document.postRunActivity.count > Self.maximumRunPolicyActivity {
+                document.postRunActivity.removeFirst(document.postRunActivity.count - Self.maximumRunPolicyActivity)
             }
         }
     }

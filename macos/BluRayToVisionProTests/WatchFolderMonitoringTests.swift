@@ -453,6 +453,12 @@ final class WatchFolderMonitoringTests: XCTestCase {
 
         var queueStateChanges: AnyPublisher<Void, Never> { viewModel.queueStateChanges }
 
+        var queueRunCompletions: AnyPublisher<Void, Never> { viewModel.queueRunCompletions }
+
+        func postRunQueueSnapshot() -> QueuePostRunQueueSnapshot {
+            viewModel.postRunQueueSnapshot()
+        }
+
         func runPolicyQueueSnapshot(otherWorkIsActive: Bool) -> QueueRunPolicyQueueSnapshot {
             viewModel.runPolicyQueueSnapshot(otherWorkIsActive: otherWorkIsActive)
         }

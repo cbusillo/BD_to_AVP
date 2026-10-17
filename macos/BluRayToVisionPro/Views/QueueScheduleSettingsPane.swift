@@ -6,6 +6,8 @@ struct QueueScheduleSettingsPane: View {
 
     @State private var errorMessage: String?
     @State private var isShowingDetails = false
+    @State private var postRunPermissionMessage: String?
+    @State private var isCheckingPostRunPermission = false
 
     var body: some View {
         ScrollView {
@@ -79,8 +81,16 @@ struct QueueScheduleSettingsPane: View {
                     Text("Conditions").font(.headline)
                 }
 
+                GroupBox {
+                    QueuePostRunSettingsSection(postRun: controller.postRun, select: selectPostRunAction, permissionMessage: postRunPermissionMessage)
+                        .disabled(isCheckingPostRunPermission)
+                        .padding(8)
+                } label: {
+                    Text("When the Queue Finishes").font(.headline)
+                }
+
                 HStack(spacing: 6) {
-                    Text("Run times and conditions apply while the app is open.")
+                    Text("Run times, conditions, and the finish action apply while the app is open.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button {
@@ -168,6 +178,40 @@ struct QueueScheduleSettingsPane: View {
                 save(policy)
             }
         )
+    }
+
+    /// Saves the finish action. Shut Down is saved only once macOS allows it, asking now while a person is here.
+    private func selectPostRunAction(_ action: QueuePostRunAction) {
+        postRunPermissionMessage = nil
+        guard action == .shutDown else {
+            var policy = controller.runPolicy
+            policy.postRunAction = action
+            save(policy)
+            return
+        }
+        isCheckingPostRunPermission = true
+        Task { @MainActor in
+            defer { isCheckingPostRunPermission = false }
+            let permission = await controller.postRun.requestPermission(for: action)
+            guard permission == .granted else {
+                postRunPermissionMessage = Self.permissionMessage(for: permission)
+                return
+            }
+            var policy = controller.runPolicy
+            policy.postRunAction = action
+            save(policy)
+        }
+    }
+
+    static func permissionMessage(for permission: QueuePostRunPermission) -> String {
+        switch permission {
+        case .granted:
+            ""
+        case .denied, .notDetermined:
+            "macOS has not allowed this app to shut down the Mac, so Shut Down is not on. Allow 3D Blu-ray to Vision Pro in System Settings > Privacy & Security > Automation, then choose Shut Down again."
+        case .unavailable:
+            "macOS could not confirm that this app may shut down the Mac, so Shut Down is not on."
+        }
     }
 
     private func addWindow() {
@@ -297,6 +341,81 @@ private struct OperatingWindowEditorRow: View {
             }
         )
     }
+}
+
+/// The "When the queue finishes" choice, what it will do, and what it last did.
+struct QueuePostRunSettingsSection: View {
+    @ObservedObject var postRun: QueuePostRunController
+    let select: (QueuePostRunAction) -> Void
+    let permissionMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("When the queue finishes", selection: Binding(get: { postRun.action }, set: select)) {
+                ForEach(QueuePostRunAction.allCases) { action in
+                    Text(action.title).tag(action)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .horizontalRadioGroupLayout()
+            .labelsHidden()
+            .accessibilityIdentifier("post-run-action-picker")
+
+            Label(previewText, systemImage: postRun.action == .doNothing ? "power" : "timer")
+                .font(.callout)
+                .foregroundStyle(postRun.action == .doNothing ? Color.secondary : Color.accentColor)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("post-run-action-preview")
+
+            if postRun.action != .doNothing {
+                Text(Self.skipRules(idleMinutes: Int(postRun.idleThreshold / 60)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("post-run-action-skip-rules")
+            }
+
+            if postRun.action == .shutDown {
+                Label(Self.shutDownWarning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("post-run-shut-down-warning")
+            }
+
+            if let permissionMessage {
+                Label(permissionMessage, systemImage: "lock.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("post-run-permission-message")
+            }
+
+            if let last = postRun.activity.last {
+                Text("Last time: \(last.message) \(last.occurredAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("post-run-last-activity")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var previewText: String {
+        switch postRun.action {
+        case .doNothing:
+            "The Mac stays on when the queue finishes."
+        case .sleep, .shutDown:
+            "When every video in the queue has finished, a \(Int(QueuePostRunController.countdownDuration))-second countdown starts, then the Mac will \(postRun.action.verbPhrase). Cancel it, or use the keyboard or mouse, to keep the Mac on."
+        }
+    }
+
+    static func skipRules(idleMinutes: Int) -> String {
+        "Skipped if any video needs attention, is held for review, or has not finished; if someone used the Mac in the last \(idleMinutes) minutes; or while a preview, Movie Sharing, or a relay session is active."
+    }
+
+    static let shutDownWarning = "Shut Down closes every app on this Mac. Apps with unsaved changes can stop it, but save your work before you leave."
 }
 
 /// The rules behind run times, kept out of the pane so it stays short.
