@@ -149,6 +149,8 @@ struct StorageForecastDestinationSummary: Identifiable, Equatable, Sendable {
     let retainedIntermediateBytes: Int64?
     let safetyMarginBytes: Int64?
     let totalPeakRequiredBytes: Int64?
+    /// The peak of the items that could be estimated, before the safety margin.
+    let estimatedPeakBytes: Int64?
     let estimatedItemCount: Int
     let unestimatedItemCount: Int
     let unestimatedReasons: [String]
@@ -158,6 +160,22 @@ struct StorageForecastDestinationSummary: Identifiable, Equatable, Sendable {
 
     var hasUnestimatedItems: Bool {
         unestimatedItemCount > 0
+    }
+
+    /// What the queue sidebar shows for this destination: the full peak, a lower bound when only
+    /// some items could be estimated, or nothing when no item could.
+    var peakSummary: StorageForecastPeakSummary? {
+        if let totalPeakRequiredBytes {
+            return .total(totalPeakRequiredBytes, upperBound: conservativeUpperBound)
+        }
+        if let estimatedPeakBytes, estimatedItemCount > 0 {
+            return .partial(
+                estimatedPeakBytes,
+                upperBound: conservativeUpperBound,
+                unestimatedItemCount: unestimatedItemCount
+            )
+        }
+        return nil
     }
 
     var outputDescription: String {
@@ -191,6 +209,24 @@ struct StorageForecastDestinationSummary: Identifiable, Equatable, Sendable {
     }
 }
 
+enum StorageForecastPeakSummary: Equatable, Sendable {
+    /// Every item was estimated; the peak includes the safety margin.
+    case total(Int64, upperBound: Bool)
+    /// Some items could not be estimated; this covers only the items that could.
+    case partial(Int64, upperBound: Bool, unestimatedItemCount: Int)
+
+    var description: String {
+        switch self {
+        case let .total(bytes, upperBound):
+            "\(upperBound ? "Up to" : "About") \(StorageForecastFormatting.coarse(bytes))"
+        case let .partial(bytes, upperBound, _):
+            upperBound
+                ? "Up to \(StorageForecastFormatting.coarse(bytes)) so far"
+                : "At least \(StorageForecastFormatting.coarse(bytes))"
+        }
+    }
+}
+
 struct QueueStorageSummary: Equatable, Sendable {
     let destinations: [StorageForecastDestinationSummary]
 
@@ -206,6 +242,7 @@ struct QueueStorageSummary: Equatable, Sendable {
             var unestimatedReasons: [String] = []
             var committedBytes: Int64 = 0
             var hasOverflow = false
+            var hasArithmeticOverflow = false
             var conservativeUpperBound = false
 
             mutating func add(_ item: PersistentQueueItem) {
@@ -245,6 +282,7 @@ struct QueueStorageSummary: Equatable, Sendable {
                         unestimatedReasons.append(unavailableReason)
                     }
                 } else if itemOverflow {
+                    hasArithmeticOverflow = true
                     unestimatedItemCount += 1
                     let reason = "The storage forecast exceeds the supported size range."
                     if !unestimatedReasons.contains(reason) {
@@ -265,6 +303,7 @@ struct QueueStorageSummary: Equatable, Sendable {
                     retainedIntermediateBytes: estimatedItemCount > 0 ? retainedIntermediateBytes : nil,
                     safetyMarginBytes: margin,
                     totalPeakRequiredBytes: total,
+                    estimatedPeakBytes: estimatedItemCount > 0 && !hasArithmeticOverflow ? peakRequiredBytes : nil,
                     estimatedItemCount: estimatedItemCount,
                     unestimatedItemCount: unestimatedItemCount,
                     unestimatedReasons: unestimatedReasons,

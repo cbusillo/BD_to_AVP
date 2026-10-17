@@ -285,7 +285,12 @@ parked according to their existing queue policy.
 The sidebar includes a compact **Results** strip once durable outcomes exist,
 with count buttons for completed, failed, and needs-action items. Needs action
 groups choices, interrupted work, and recovery decisions separately from failed
-items; selecting a count jumps to the first matching queued item.
+items; selecting a count jumps to the first matching queued item, and
+**Clear Completed** sits beside the counts. Restored work, run-time and pause
+notices, results, and the storage forecast share one block above the list; the
+forecast lists only destinations with at least one estimated video. In the
+sidebar, **Pause After Current** and **Stop Current** take the place of **Start
+Queue** while a video converts.
 
 Queue notifications are optional and default off in Settings. The app can notify
 when a queue run finishes and/or when a queued item first needs attention during

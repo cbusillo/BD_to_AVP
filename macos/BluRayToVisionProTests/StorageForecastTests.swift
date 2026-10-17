@@ -85,6 +85,28 @@ final class StorageForecastTests: XCTestCase {
         XCTAssertNotNil(summary.destinations[1].totalPeakRequiredBytes)
     }
 
+    func testSidebarPeakIsATotalAPartialLowerBoundOrNothing() throws {
+        let known = try makeItem(ordinal: 0, destination: "/Volumes/A", durationSeconds: 3_600)
+        let unknown = try makeItem(ordinal: 1, destination: "/Volumes/A", durationSeconds: nil, av1: true)
+
+        let knownOnly = try XCTUnwrap(QueueStorageSummary(items: [known]).destinations.first)
+        let knownPeak = try XCTUnwrap(knownOnly.totalPeakRequiredBytes)
+        XCTAssertEqual(knownOnly.peakSummary, .total(knownPeak, upperBound: knownOnly.conservativeUpperBound))
+
+        let mixed = try XCTUnwrap(QueueStorageSummary(items: [known, unknown]).destinations.first)
+        XCTAssertEqual(
+            mixed.peakSummary,
+            .partial(
+                try XCTUnwrap(knownOnly.estimatedPeakBytes),
+                upperBound: mixed.conservativeUpperBound,
+                unestimatedItemCount: 1
+            )
+        )
+
+        let unknownOnly = try XCTUnwrap(QueueStorageSummary(items: [unknown]).destinations.first)
+        XCTAssertNil(unknownOnly.peakSummary)
+    }
+
     func testQueueSummaryRecomputesWhenOrderOrSettingsChange() throws {
         let lowBitrate = try makeItem(
             ordinal: 0,

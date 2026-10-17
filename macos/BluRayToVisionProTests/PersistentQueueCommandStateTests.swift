@@ -73,6 +73,33 @@ final class PersistentQueueCommandStateTests: XCTestCase {
         XCTAssertFalse(previewActive.canStart)
     }
 
+    func testPauseAndStopReplaceStartOnlyWhileAVideoIsConverting() {
+        let waiting = makeItem(ordinal: 0, status: .waiting)
+        let stopping = makeItem(ordinal: 0, status: .stopping)
+        let runStates: [PersistentQueueRunState] = [.idle, .running, .pauseAfterCurrent, .paused]
+        for runState in runStates {
+            for hasActiveWorker in [false, true] {
+                for items in [[waiting], [stopping]] {
+                    let state = makeState(items: items, runState: runState, hasActiveWorker: hasActiveWorker)
+                    // Start stays on screen whenever it can be used.
+                    if state.canStart {
+                        XCTAssertFalse(state.hasCurrentVideoControls, "\(runState)")
+                    }
+                    // Pause and Stop are on screen whenever either can be used, and only then.
+                    XCTAssertEqual(
+                        state.hasCurrentVideoControls,
+                        state.canPauseAfterCurrent || state.canStopCurrent,
+                        "\(runState)"
+                    )
+                    if runState == .idle || runState == .paused {
+                        XCTAssertFalse(state.hasCurrentVideoControls, "\(runState)")
+                    }
+                }
+            }
+        }
+        XCTAssertTrue(makeState(items: [waiting], runState: .running, hasActiveWorker: true).hasCurrentVideoControls)
+    }
+
     func testTerminalAndUnresolvedItemsHaveExpectedAvailability() throws {
         let completed = makeItem(
             ordinal: 0,

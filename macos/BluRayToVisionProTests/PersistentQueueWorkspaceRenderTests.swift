@@ -457,6 +457,76 @@ final class PersistentQueueWorkspaceRenderTests: XCTestCase {
         )
     }
 
+    /// Renders the sidebar at its minimum width while idle with results and a restored item,
+    /// while waiting for a run time, and while running, in light and dark, for review screenshots.
+    func testSidebarStatesRenderAtMinimumWidthAcrossAppearances() throws {
+        let runningItems = try makeItems()
+        let idleItems = try runningItems.map { item in
+            item.isActiveForRunPolicyRender ? try PersistentQueueItem(item: DurableConversionQueueItem(
+                ordinal: 20 + item.ordinal,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: item.draft),
+                state: .waiting
+            )) : item
+        }
+        let calendar = Calendar.autoupdatingCurrent
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))!
+        let nextStart = calendar.date(bySettingHour: 1, minute: 0, second: 0, of: tomorrow)!
+        let runEnds = calendar.date(bySettingHour: 6, minute: 0, second: 0, of: tomorrow)!
+        let activity = [
+            QueueRunPolicyActivity(
+                occurredAt: Date().addingTimeInterval(-2 * 60 * 60),
+                kind: .stoppedStartingNewItems,
+                hold: .outsideRunTimes(nextStart: nextStart),
+                itemCount: 7
+            ),
+        ]
+        let states: [(name: String, items: [PersistentQueueItem], runState: PersistentQueueRunState, decision: QueueRunPolicyDecision)] = [
+            ("idle", idleItems, .idle, .inactive),
+            ("waiting", idleItems, .idle, .waiting(.outsideRunTimes(nextStart: nextStart), itemCount: 7)),
+            ("running", runningItems, .running, .running(until: runEnds)),
+        ]
+        for state in states {
+            for (colorScheme, appearanceName, suffix) in [(ColorScheme.light, NSAppearance.Name.aqua, "light"), (.dark, .darkAqua, "dark")] {
+                let sidebar = makeSidebar(
+                    items: state.items,
+                    selectedItem: nil,
+                    compact: true,
+                    runState: state.runState,
+                    runPolicyDecision: state.decision,
+                    runPolicyActivity: activity
+                )
+                try ReviewScreenshot.capture(
+                    sidebar.preferredColorScheme(colorScheme),
+                    size: CGSize(width: PersistentQueueSidebarView.minimumWidth, height: 820),
+                    appearance: appearanceName,
+                    named: "queue-sidebar-\(state.name)-\(suffix)"
+                )
+            }
+            try render(
+                items: state.items,
+                selectedItem: nil,
+                compact: true,
+                colorScheme: .dark,
+                appearanceName: .darkAqua,
+                sidebarWidth: PersistentQueueSidebarView.minimumWidth,
+                runState: state.runState,
+                runPolicyDecision: state.decision
+            )
+        }
+        // One destination where only some items could be estimated.
+        let storageItems = try makeStorageRenderItems()
+        for (colorScheme, appearanceName, suffix) in [(ColorScheme.light, NSAppearance.Name.aqua, "light"), (.dark, .darkAqua, "dark")] {
+            try ReviewScreenshot.capture(
+                makeSidebar(items: storageItems, selectedItem: nil, compact: true, runState: .idle)
+                    .preferredColorScheme(colorScheme),
+                size: CGSize(width: PersistentQueueSidebarView.minimumWidth, height: 420),
+                appearance: appearanceName,
+                named: "queue-sidebar-partial-forecast-\(suffix)"
+            )
+        }
+    }
+
     func testBottomBarFitsOnOneLineAtTheMinimumSidebarWidth() throws {
         let items = try makeItems()
         let start = Date(timeIntervalSince1970: 1_800_000_000)

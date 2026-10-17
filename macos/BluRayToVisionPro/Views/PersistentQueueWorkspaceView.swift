@@ -68,19 +68,7 @@ struct PersistentQueueSidebarView: View {
             header
             Divider()
             reviewBanner
-            scheduleBanner
-            runPolicyBanner
-            queueSummaryView
-            if let banner {
-                Label(banner.title, systemImage: banner.systemImage)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(banner.tint)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(banner.tint.opacity(0.08))
-                    .accessibilityIdentifier("persistent-queue-banner")
-            }
+            statusArea
             if items.isEmpty {
                 emptyState
             } else {
@@ -150,10 +138,7 @@ struct PersistentQueueSidebarView: View {
             Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.red)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.red.opacity(0.08))
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("off-peak-schedule-error")
         } else if let schedule = commandState.offPeakSchedule {
             VStack(alignment: .leading, spacing: 4) {
@@ -167,10 +152,6 @@ struct PersistentQueueSidebarView: View {
                     .foregroundStyle(.secondary)
             }
             .foregroundStyle(Color.accentColor)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentColor.opacity(0.08))
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("off-peak-schedule-banner")
         } else if let outcome = offPeakScheduleOutcome, outcome.kind == .missed {
@@ -186,9 +167,6 @@ struct PersistentQueueSidebarView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Dismiss missed schedule notice")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(Color.orange.opacity(0.08))
             .accessibilityIdentifier("off-peak-schedule-missed")
         }
     }
@@ -229,36 +207,44 @@ struct PersistentQueueSidebarView: View {
                     }
                 }
                 .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.accentColor.opacity(0.08))
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("run-policy-waiting-banner")
             case let .running(until?):
                 Label(
-                    "Run time ends at \(QueueRunPolicyFormatting.moment(until, relativeTo: context.date)). The current video finishes; no new video starts after that.",
+                    "Run time ends at \(QueueRunPolicyFormatting.moment(until, relativeTo: context.date))",
                     systemImage: "clock.badge.checkmark.fill"
                 )
                 .font(.caption.weight(.medium))
                 .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.accentColor.opacity(0.08))
+                .help(Self.runTimeEndDetail)
+                .accessibilityHint(Self.runTimeEndDetail)
                 .accessibilityIdentifier("run-policy-running-banner")
             case .blockedByOtherWork:
                 Label("A run time is open. Queued videos start when the current task finishes.", systemImage: "clock.fill")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("run-policy-other-work-banner")
             case .inactive, .running(until: nil), .start:
                 EmptyView()
             }
         }
+    }
+
+    private static let runTimeEndDetail = "The current video finishes; no new video starts after that."
+
+    private var hasRunPolicyNotice: Bool {
+        switch runPolicyDecision {
+        case .waiting, .blockedByOtherWork: true
+        case let .running(until): until != nil
+        case .inactive, .start: false
+        }
+    }
+
+    private var hasScheduleNotice: Bool {
+        offPeakScheduleErrorMessage != nil
+            || commandState.offPeakSchedule != nil
+            || offPeakScheduleOutcome?.kind == .missed
     }
 
     private static func runPolicySymbol(for hold: QueueRunPolicyHold) -> String {
@@ -342,31 +328,76 @@ struct PersistentQueueSidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Results and the storage forecast share one compact block above the list.
+    /// One calm block above the list: why the queue is or is not starting, what needs a restart,
+    /// the results so far, and the space the queue needs. Each part shows only when it has
+    /// something to say, and none of them draws its own band.
     @ViewBuilder
-    private var queueSummaryView: some View {
+    private var statusArea: some View {
         let outcome = PersistentQueueOutcomeSummary(items: items)
-        let storage = QueueStorageSummary(items: items)
-        if outcome.hasAnyResults || !storage.destinations.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+        let forecastDestinations = QueueStorageSummary(items: items).destinations.filter { $0.peakSummary != nil }
+        let restoredItems = items.filter(\.isRestored)
+        if hasScheduleNotice || hasRunPolicyNotice || queueStateNotice != nil || !restoredItems.isEmpty
+            || outcome.hasAnyResults || !forecastDestinations.isEmpty
+        {
+            VStack(alignment: .leading, spacing: 8) {
+                scheduleBanner
+                if hasRunPolicyNotice {
+                    runPolicyBanner
+                }
+                if let notice = queueStateNotice {
+                    Label(notice.title, systemImage: notice.systemImage)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(notice.tint)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("persistent-queue-banner")
+                }
+                if !restoredItems.isEmpty {
+                    restoredNotice(restoredItems)
+                }
                 if outcome.hasAnyResults {
                     outcomeSummaryView(outcome)
                 }
-                if !storage.destinations.isEmpty {
-                    storageSummaryView(storage)
+                if !forecastDestinations.isEmpty {
+                    storageSummaryView(forecastDestinations)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.secondary.opacity(0.06))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("persistent-queue-status")
         }
     }
 
-    private func storageSummaryView(_ summary: QueueStorageSummary) -> some View {
+    /// Videos the app was converting when it last quit. They restart only when someone chooses to,
+    /// so the notice stays until each one is restarted or removed.
+    private func restoredNotice(_ restoredItems: [PersistentQueueItem]) -> some View {
+        HStack(spacing: 8) {
+            Label(
+                "\(restoredItems.count) interrupted video\(restoredItems.count == 1 ? "" : "s") to restart",
+                systemImage: "arrow.counterclockwise.circle.fill"
+            )
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button("Show") {
+                selectedID = restoredItems.first?.id
+            }
+            .controlSize(.small)
+            .accessibilityLabel("Show interrupted video")
+        }
+        .help("The app quit while these were converting. They restart only when you choose Restart Safely.")
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("persistent-queue-restored-notice")
+    }
+
+    /// Only destinations with at least one estimated item; the rest have nothing useful to show.
+    private func storageSummaryView(_ destinations: [StorageForecastDestinationSummary]) -> some View {
         DisclosureGroup(isExpanded: $isStorageForecastExpanded) {
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(summary.destinations) { destination in
+                ForEach(destinations) { destination in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(destination.destinationPath)
                             .font(.caption2)
@@ -389,12 +420,16 @@ struct PersistentQueueSidebarView: View {
             }
             .padding(.top, 4)
         } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Storage Forecast")
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Storage")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                ForEach(summary.destinations) { destination in
-                    storagePeakLine(destination)
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(destinations) { destination in
+                        if let peak = destination.peakSummary {
+                            storagePeakLine(destination, peak: peak)
+                        }
+                    }
                 }
             }
         }
@@ -402,7 +437,10 @@ struct PersistentQueueSidebarView: View {
     }
 
     /// The figure people act on, kept visible while the details are collapsed.
-    private func storagePeakLine(_ destination: StorageForecastDestinationSummary) -> some View {
+    private func storagePeakLine(
+        _ destination: StorageForecastDestinationSummary,
+        peak: StorageForecastPeakSummary
+    ) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
                 Text(URL(fileURLWithPath: destination.destinationPath).lastPathComponent)
@@ -410,19 +448,19 @@ struct PersistentQueueSidebarView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
-                Text("Peak \(destination.totalPeakDescription)")
+                Text(peak.description)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            if destination.hasUnestimatedItems {
-                Text("\(destination.unestimatedItemCount) item\(destination.unestimatedItemCount == 1 ? "" : "s") not estimated; totals are partial.")
+            if case let .partial(_, _, unestimatedItemCount) = peak {
+                Text("\(unestimatedItemCount) item\(unestimatedItemCount == 1 ? "" : "s") not estimated yet")
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .help(destination.destinationPath)
+        .help("The most free space \(destination.destinationPath) needs while the queue runs")
     }
 
     private func storageMetric(_ title: String, _ value: String) -> some View {
@@ -443,13 +481,18 @@ struct PersistentQueueSidebarView: View {
         ViewThatFits(in: .horizontal) {
             outcomeRow(summary, showsTitles: true)
             outcomeRow(summary, showsTitles: false)
+            outcomeRow(summary, showsTitles: false, clearTitle: "Clear")
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Results")
         .accessibilityIdentifier("persistent-queue-results-summary")
     }
 
-    private func outcomeRow(_ summary: PersistentQueueOutcomeSummary, showsTitles: Bool) -> some View {
+    private func outcomeRow(
+        _ summary: PersistentQueueOutcomeSummary,
+        showsTitles: Bool,
+        clearTitle: String = "Clear Completed"
+    ) -> some View {
         HStack(spacing: 6) {
             outcomeButton(
                 title: "Completed",
@@ -475,7 +518,18 @@ struct PersistentQueueSidebarView: View {
                 systemImage: "exclamationmark.circle.fill",
                 showsTitle: showsTitles
             )
-            Spacer(minLength: 0)
+            Spacer(minLength: 4)
+            // Clearing sits with the results it clears, which keeps the bottom bar to one line.
+            if summary.completedCount > 0 {
+                Button(clearTitle, action: clearCompleted)
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .help("Remove completed videos from the queue")
+                    .accessibilityLabel("Clear Completed")
+                    .accessibilityIdentifier("persistent-queue-clear-completed")
+            }
         }
     }
 
@@ -586,8 +640,9 @@ struct PersistentQueueSidebarView: View {
         }
     }
 
-    /// The bottom bar. Its editing controls are icons, as in other Mac sidebars, so nothing wraps at
-    /// the minimum sidebar width; each one keeps its name as help and for VoiceOver.
+    /// The bottom bar. Add, Remove and Arrange show their names next to their icons and still fit on
+    /// one line at the minimum sidebar width. Pause After Current and Stop Current take the place
+    /// of Start while a video is converting, since Start cannot be used then.
     var actionBar: some View {
         VStack(spacing: 7) {
             HStack(spacing: 10) {
@@ -602,11 +657,11 @@ struct PersistentQueueSidebarView: View {
                     }
                 } label: {
                     Label("Add", systemImage: "plus")
-                        .labelStyle(.iconOnly)
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Add sources to the queue")
+                .help("Add files, folders, or an inserted disc to the queue")
                 .accessibilityLabel("Add")
                 .accessibilityIdentifier("persistent-queue-add")
 
@@ -614,9 +669,9 @@ struct PersistentQueueSidebarView: View {
                     if let selectedID { remove(selectedID) }
                 } label: {
                     Label("Remove", systemImage: "minus")
-                        .labelStyle(.iconOnly)
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
                 .disabled(!commandState.canRemoveSelectedItem)
                 .help("Remove the selected item from the queue")
                 .accessibilityLabel("Remove")
@@ -640,11 +695,11 @@ struct PersistentQueueSidebarView: View {
                     }
                 } label: {
                     Label("Arrange", systemImage: "arrow.up.arrow.down")
-                        .labelStyle(.iconOnly)
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Arrange the selected item")
+                .help("Move the selected item up, down, or to convert next")
                 .accessibilityLabel("Arrange")
                 .accessibilityHint("Move the selected waiting item with Command-Option-Up Arrow or Command-Option-Down Arrow.")
                 .accessibilityIdentifier("persistent-queue-arrange")
@@ -660,26 +715,32 @@ struct PersistentQueueSidebarView: View {
                     .accessibilityLabel("Undo Remove")
                     .accessibilityIdentifier("persistent-queue-undo")
                 }
-                if !completedItems.isEmpty {
-                    Button("Clear Completed", action: clearCompleted)
-                        .buttonStyle(.borderless)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .accessibilityIdentifier("persistent-queue-clear-completed")
-                }
             }
             VStack(alignment: .trailing, spacing: 8) {
-                HStack(spacing: 8) {
-                    Button(commandState.startTitle, action: start)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!commandState.canStart)
-                        .frame(maxWidth: .infinity)
-                        .accessibilityIdentifier("persistent-queue-start")
-                        .accessibilityLabel(commandState.startTitle)
-                    if commandState.offPeakSchedule == nil {
-                        Button("Start Later…", action: startLater)
+                if commandState.hasCurrentVideoControls {
+                    HStack(spacing: 8) {
+                        Button("Pause After Current", action: pauseAfterCurrent)
+                            .disabled(!commandState.canPauseAfterCurrent)
+                            .accessibilityIdentifier("persistent-queue-pause-after-current")
+                            .accessibilityLabel("Pause queue after the current video")
+                        Button("Stop Current", role: .destructive, action: stopCurrent)
+                            .disabled(!commandState.canStopCurrent)
+                            .accessibilityIdentifier("persistent-queue-stop-current")
+                            .accessibilityLabel("Stop only the current video")
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Button(commandState.startTitle, action: start)
+                            .buttonStyle(.borderedProminent)
                             .disabled(!commandState.canStart)
-                            .accessibilityIdentifier("off-peak-schedule-create")
+                            .frame(maxWidth: .infinity)
+                            .accessibilityIdentifier("persistent-queue-start")
+                            .accessibilityLabel(commandState.startTitle)
+                        if commandState.offPeakSchedule == nil {
+                            Button("Start Later…", action: startLater)
+                                .disabled(!commandState.canStart)
+                                .accessibilityIdentifier("off-peak-schedule-create")
+                        }
                     }
                 }
                 if commandState.offPeakSchedule != nil {
@@ -689,16 +750,6 @@ struct PersistentQueueSidebarView: View {
                         Button("Cancel Schedule", role: .destructive, action: cancelSchedule)
                             .accessibilityIdentifier("off-peak-schedule-cancel")
                     }
-                }
-                HStack(spacing: 8) {
-                    Button("Pause After Current", action: pauseAfterCurrent)
-                        .disabled(!commandState.canPauseAfterCurrent)
-                        .accessibilityIdentifier("persistent-queue-pause-after-current")
-                        .accessibilityLabel("Pause queue after the current video")
-                    Button("Stop Current", role: .destructive, action: stopCurrent)
-                        .disabled(!commandState.canStopCurrent)
-                        .accessibilityIdentifier("persistent-queue-stop-current")
-                        .accessibilityLabel("Stop only the current video")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -731,29 +782,16 @@ struct PersistentQueueSidebarView: View {
     private var selectedItem: PersistentQueueItem? {
         selectedID.flatMap { id in items.first(where: { $0.id == id }) }
     }
-    private var banner: (title: String, systemImage: String, tint: Color)? {
+    /// A pause someone asked for. Restored items and results have their own rows in the status area.
+    private var queueStateNotice: (title: String, systemImage: String, tint: Color)? {
         switch commandState.runState {
         case .pauseAfterCurrent:
-            return ("Pause requested — the current video will finish before the queue pauses.", "pause.circle.fill", .orange)
+            ("Pausing after the current video finishes.", "pause.circle.fill", .orange)
         case .paused:
-            return ("Queue paused — pending videos remain waiting until you resume.", "pause.circle.fill", .secondary)
+            ("Queue paused. Waiting videos stay put until you resume.", "pause.circle.fill", .secondary)
         case .idle, .running:
-            break
+            nil
         }
-        if items.contains(where: \.isRestored) {
-            return ("Queue restored — interrupted videos require an explicit restart.", "arrow.counterclockwise.circle.fill", .orange)
-        }
-        if items.contains(where: { item in
-            switch item.status {
-            case .needsChoice, .attention, .failed:
-                true
-            default:
-                false
-            }
-        }) {
-            return ("Some videos need attention.", "exclamationmark.triangle.fill", .red)
-        }
-        return nil
     }
 }
 
