@@ -13,7 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from scripts.release import ReleaseError, parse_build_version, parse_release_tag, parse_release_version
+from scripts.release import (
+    CHANGE_SCOPED_EVIDENCE_STAGES,
+    ReleaseError,
+    parse_build_version,
+    parse_release_tag,
+    parse_release_version,
+)
 from scripts.release_evidence import (
     ReleaseEvidenceError,
     effective_successful_workflow_run_id,
@@ -1569,7 +1575,7 @@ def _validate_append_only_evidence_index(repo_root: Path, *, base_sha: str) -> l
     ]
 
 
-def _validate_beta_change_scoped_evidence_append(
+def _validate_change_scoped_evidence_append(
     repo_root: Path,
     *,
     base_sha: str,
@@ -1585,18 +1591,22 @@ def _validate_beta_change_scoped_evidence_append(
     ]
     if len(evidence_matches) != 1:
         raise ReleaseMilestoneContextError(
-            "Prepublication Beta evidence requires exactly one change-scoped evidence document."
+            "Prepublication change-scoped evidence requires exactly one change-scoped evidence document."
         )
     evidence_relative, release_tag = evidence_matches[0]
     try:
         version = parse_release_tag(release_tag, allow_legacy_rc=False)
     except ReleaseError as error:
-        raise ReleaseMilestoneContextError(f"Prepublication Beta evidence release tag is invalid: {error}") from error
-    if version.stage != "beta":
-        raise ReleaseMilestoneContextError("Prepublication change-scoped evidence is limited to Beta releases.")
+        raise ReleaseMilestoneContextError(
+            f"Prepublication change-scoped evidence release tag is invalid: {error}"
+        ) from error
+    if version.stage not in CHANGE_SCOPED_EVIDENCE_STAGES:
+        raise ReleaseMilestoneContextError(
+            f"Prepublication change-scoped evidence is limited to {sorted(CHANGE_SCOPED_EVIDENCE_STAGES)} releases."
+        )
     if head_branch != f"qualify/{release_tag}":
         raise ReleaseMilestoneContextError(
-            f"Prepublication Beta evidence must use branch {f'qualify/{release_tag}'!r}."
+            f"Prepublication change-scoped evidence must use branch {f'qualify/{release_tag}'!r}."
         )
     tracked_in_base = subprocess.run(
         ["git", "cat-file", "-e", f"{base_sha}:{evidence_relative}"],
@@ -1605,19 +1615,23 @@ def _validate_beta_change_scoped_evidence_append(
         check=False,
     )
     if tracked_in_base.returncode == 0:
-        raise ReleaseMilestoneContextError("Prepublication Beta evidence document must be new and immutable.")
+        raise ReleaseMilestoneContextError("Prepublication change-scoped evidence document must be new and immutable.")
 
     evidence_path = repo_root / evidence_relative
     evidence_bytes = evidence_path.read_bytes()
-    evidence = _load_json(evidence_path, "prepublication Beta change-scoped evidence")
-    source = _mapping(evidence.get("source"), "prepublication Beta evidence source")
+    evidence = _load_json(evidence_path, "prepublication change-scoped evidence")
+    source = _mapping(evidence.get("source"), "prepublication change-scoped evidence source")
     try:
-        source_version = parse_release_version(_string(source.get("package_version"), "Beta package version"))
-        source_build = parse_build_version(_string(source.get("build_version"), "Beta build version"))
+        source_version = parse_release_version(
+            _string(source.get("package_version"), "change-scoped evidence package version")
+        )
+        source_build = parse_build_version(_string(source.get("build_version"), "change-scoped evidence build version"))
     except ReleaseError as error:
-        raise ReleaseMilestoneContextError(f"Prepublication Beta evidence identity is invalid: {error}") from error
+        raise ReleaseMilestoneContextError(
+            f"Prepublication change-scoped evidence identity is invalid: {error}"
+        ) from error
     if (
-        source_version.stage != "beta"
+        source_version.stage != version.stage
         or source_version.release_tag != release_tag
         or source.get("public_version") != source_version.public_version
         or source.get("release_tag") != release_tag
@@ -1625,12 +1639,13 @@ def _validate_beta_change_scoped_evidence_append(
         or source_build <= 0
     ):
         raise ReleaseMilestoneContextError(
-            "Prepublication Beta evidence source identity must match the release tag and pull-request base SHA."
+            "Prepublication change-scoped evidence source identity must match the release tag "
+            "and pull-request base SHA."
         )
-    failed_run = _mapping(evidence.get("failed_preparation_run"), "prepublication Beta failed run")
-    semantics = _mapping(evidence.get("evidence_source_semantics"), "prepublication Beta evidence semantics")
-    privacy = _mapping(evidence.get("privacy"), "prepublication Beta evidence privacy")
-    acceptance = _mapping(evidence.get("acceptance"), "prepublication Beta evidence acceptance")
+    failed_run = _mapping(evidence.get("failed_preparation_run"), "prepublication change-scoped failed run")
+    semantics = _mapping(evidence.get("evidence_source_semantics"), "prepublication change-scoped evidence semantics")
+    privacy = _mapping(evidence.get("privacy"), "prepublication change-scoped evidence privacy")
+    acceptance = _mapping(evidence.get("acceptance"), "prepublication change-scoped evidence acceptance")
     if (
         evidence.get("schema_version") != 1
         or evidence.get("result") != "accepted_public_safe_summary"
@@ -1640,10 +1655,10 @@ def _validate_beta_change_scoped_evidence_append(
         or semantics.get("index_source") != "signed_artifact_receipt"
         or acceptance.get("passed") is not True
         or acceptance.get("failed_case_count") != 0
-        or list(_sequence(acceptance.get("blocking_case_ids"), "Beta blocking case IDs"))
+        or list(_sequence(acceptance.get("blocking_case_ids"), "change-scoped evidence blocking case IDs"))
     ):
         raise ReleaseMilestoneContextError(
-            "Prepublication Beta evidence must remain public-safe, unsigned-release-scoped, and fully passing."
+            "Prepublication change-scoped evidence must remain public-safe, unsigned-release-scoped, and fully passing."
         )
     for field in (
         "private_paths_recorded",
@@ -1652,23 +1667,23 @@ def _validate_beta_change_scoped_evidence_append(
         "diagnostic_tokens_recorded",
     ):
         if privacy.get(field) is not False:
-            raise ReleaseMilestoneContextError(f"Prepublication Beta evidence privacy.{field} must be false.")
+            raise ReleaseMilestoneContextError(f"Prepublication change-scoped evidence privacy.{field} must be false.")
 
     evidence_cases: dict[str, Mapping[str, Any]] = {}
-    for index, raw_case in enumerate(_sequence(evidence.get("cases"), "prepublication Beta evidence cases")):
-        evidence_case = _mapping(raw_case, f"prepublication Beta evidence case {index}")
-        case_id = _string(evidence_case.get("case_id"), "prepublication Beta evidence case ID")
+    for index, raw_case in enumerate(_sequence(evidence.get("cases"), "prepublication change-scoped evidence cases")):
+        evidence_case = _mapping(raw_case, f"prepublication change-scoped evidence case {index}")
+        case_id = _string(evidence_case.get("case_id"), "prepublication change-scoped evidence case ID")
         if case_id in evidence_cases or evidence_case.get("status") != "passed":
             raise ReleaseMilestoneContextError(
-                "Prepublication Beta evidence cases must be uniquely identified and passed."
+                "Prepublication change-scoped evidence cases must be uniquely identified and passed."
             )
         evidence_cases[case_id] = evidence_case
     if acceptance.get("passed_case_count") != len(evidence_cases):
         raise ReleaseMilestoneContextError(
-            "Prepublication Beta evidence passed_case_count must match the proved case count."
+            "Prepublication change-scoped evidence passed_case_count must match the proved case count."
         )
 
-    policy = _load_json(repo_root / policy_relative, "prepublication Beta qualification policy")
+    policy = _load_json(repo_root / policy_relative, "prepublication change-scoped qualification policy")
     policy_cases = {
         _string(case.get("id"), "qualification policy case ID"): case
         for index, raw_case in enumerate(_sequence(policy.get("cases"), "qualification policy cases"))
@@ -1677,7 +1692,7 @@ def _validate_beta_change_scoped_evidence_append(
     evidence_digest = hashlib.sha256(evidence_bytes).hexdigest()
     receipt_case_ids: set[str] = set()
     for receipt in appended_receipts:
-        case_id = _string(receipt.get("case_id"), "prepublication Beta receipt case ID")
+        case_id = _string(receipt.get("case_id"), "prepublication change-scoped receipt case ID")
         policy_case = policy_cases.get(case_id)
         allowed_sources = (
             list(_sequence(policy_case.get("allowed_evidence_sources"), f"policy case {case_id} evidence sources"))
@@ -1695,9 +1710,9 @@ def _validate_beta_change_scoped_evidence_append(
             or "signed_artifact_receipt" not in allowed_sources
         ):
             raise ReleaseMilestoneContextError(
-                "Prepublication Beta receipts may cover only proved release-candidate Tier 2 cases."
+                "Prepublication change-scoped receipts may cover only proved release-candidate Tier 2 cases."
             )
-        receipt_id = _string(receipt.get("receipt_id"), "prepublication Beta receipt ID")
+        receipt_id = _string(receipt.get("receipt_id"), "prepublication change-scoped receipt ID")
         if (
             receipt.get("status") != "accepted"
             or receipt.get("source") != "signed_artifact_receipt"
@@ -1707,12 +1722,13 @@ def _validate_beta_change_scoped_evidence_append(
             or receipt_id != f"{release_tag}:{case_id}:{base_sha[:7]}"
         ):
             raise ReleaseMilestoneContextError(
-                "Prepublication Beta receipt identity must match the base candidate and change-scoped evidence."
+                "Prepublication change-scoped receipt identity must match the base candidate "
+                "and change-scoped evidence."
             )
         receipt_case_ids.add(case_id)
     if receipt_case_ids != set(evidence_cases):
         raise ReleaseMilestoneContextError(
-            "Prepublication Beta evidence cases and appended receipt cases must match exactly."
+            "Prepublication change-scoped evidence cases and appended receipt cases must match exactly."
         )
 
 
@@ -2319,10 +2335,10 @@ def discover_milestone_receipt(
         change_scoped_mutation = any(CHANGE_SCOPED_EVIDENCE_PATH_PATTERN.fullmatch(path) for path in changed_paths)
         if unbound_candidate and change_scoped_mutation:
             raise ReleaseMilestoneContextError(
-                "Beta change-scoped evidence may not be combined with a Stable qualification reset."
+                "Change-scoped evidence may not be combined with a Stable qualification reset."
             )
         if evidence_index_mutation and not unbound_candidate:
-            _validate_beta_change_scoped_evidence_append(
+            _validate_change_scoped_evidence_append(
                 repo_root,
                 base_sha=base_sha,
                 head_branch=head_branch,

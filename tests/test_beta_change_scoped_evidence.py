@@ -32,7 +32,7 @@ from scripts.qualify_release_scope import load_policy
 from scripts.release import ReleaseMetadata, parse_release_version
 from scripts.release_milestone_context import (
     _validate_append_only_evidence_index,
-    _validate_beta_change_scoped_evidence_append,
+    _validate_change_scoped_evidence_append,
 )
 
 
@@ -58,6 +58,7 @@ def release_metadata(version_text: str, build_version: str = "900") -> ReleaseMe
     )
 
 
+ALPHA = release_metadata("9.8.7a1")
 BETA = release_metadata("9.8.7b1")
 
 
@@ -130,6 +131,7 @@ class FakeRunners:
         self.python_statuses = python_statuses
         self.package_exit = package_exit
         self.calls: list[str] = []
+        self.classifier_command: list[str] = []
         self.package_environment: Mapping[str, str] | None = None
 
     @property
@@ -139,6 +141,7 @@ class FakeRunners:
     def runners(self, candidate_sha: Callable[[], str]) -> Runners:
         def classify(command: Sequence[str], environment: Mapping[str, str] | None) -> CommandResult:
             self.calls.append("classify")
+            self.classifier_command = list(command)
             report = {
                 "candidate_sha": candidate_sha(),
                 "workflow_phase": "preparation",
@@ -178,16 +181,21 @@ class FakeRunners:
 
 
 class BetaChangeScopedEvidenceTests(unittest.TestCase):
+    """Every requirement below runs for each lane stage; see the Alpha subclass."""
+
+    METADATA = BETA
+
     def setUp(self) -> None:
         temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(temporary_directory.cleanup)
         self.root = Path(temporary_directory.name) / "repo"
         self.root.mkdir()
         self.log_dir = Path(temporary_directory.name) / "logs"
-        self.candidate_sha = build_repository(self.root, f"qualify/{BETA.release_tag}")
+        self.candidate_sha = build_repository(self.root, f"qualify/{self.METADATA.release_tag}")
         self.original_index = (self.root / EVIDENCE_INDEX_PATH).read_bytes()
 
-    def produce(self, fake: FakeRunners, metadata: ReleaseMetadata = BETA):
+    def produce(self, fake: FakeRunners, metadata: ReleaseMetadata | None = None):
+        metadata = metadata or self.METADATA
         with contextlib.redirect_stdout(io.StringIO()):
             return produce_change_scoped_evidence(
                 self.root,
@@ -219,15 +227,19 @@ class BetaChangeScopedEvidenceTests(unittest.TestCase):
         git(self.root, "commit", "-qm", "record change-scoped evidence")
         changed_paths = git(self.root, "diff", "--name-only", self.candidate_sha, "HEAD").splitlines()
         appended = _validate_append_only_evidence_index(self.root, base_sha=self.candidate_sha)
-        _validate_beta_change_scoped_evidence_append(
+        _validate_change_scoped_evidence_append(
             self.root,
             base_sha=self.candidate_sha,
-            head_branch=f"qualify/{BETA.release_tag}",
+            head_branch=f"qualify/{self.METADATA.release_tag}",
             changed_paths=changed_paths,
             policy_relative=POLICY_PATH,
             appended_receipts=appended,
         )
         self.assertEqual([receipt["receipt_id"] for receipt in appended], list(result.receipt_ids))
+        stage_argument = fake.classifier_command.index("--release-stage") + 1
+        self.assertEqual(fake.classifier_command[stage_argument], self.METADATA.channel)
+        document = json.loads(document_text)
+        self.assertEqual(document["source"]["release_tag"], self.METADATA.release_tag)
 
     def test_no_blocking_cases_exits_without_running_tests_or_writing(self) -> None:
         fake = FakeRunners([], classifier_exit=0)
@@ -290,13 +302,24 @@ class BetaChangeScopedEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(BetaEvidenceError, "branch"):
             self.produce(FakeRunners(["gui-preview-cancel-cleanup"]))
 
-    def test_refuses_non_beta_release(self) -> None:
-        fake = FakeRunners(["gui-preview-cancel-cleanup"])
+    def test_refuses_stages_outside_the_lane_before_running_anything(self) -> None:
+        for version_text in ("9.8.7rc1", "9.8.7"):
+            metadata = release_metadata(version_text)
+            fake = FakeRunners(["gui-preview-cancel-cleanup"])
+            with self.subTest(version=version_text):
+                # Otherwise-valid checkout for that release, so only the stage can refuse it.
+                git(self.root, "checkout", "-q", "-B", f"qualify/{metadata.release_tag}")
+                with self.assertRaises(BetaEvidenceError):
+                    self.produce(fake, metadata)
 
-        with self.assertRaisesRegex(BetaEvidenceError, "Beta"):
-            self.produce(fake, release_metadata("9.8.7rc1"))
+                self.assertEqual(fake.calls, [])
+                self.assert_nothing_written()
 
-        self.assertEqual(fake.calls, [])
+
+class AlphaChangeScopedEvidenceTests(BetaChangeScopedEvidenceTests):
+    """Alpha uses the Beta lane with identical requirements, so it reruns every case."""
+
+    METADATA = ALPHA
 
 
 class ProofCatalogTests(unittest.TestCase):
