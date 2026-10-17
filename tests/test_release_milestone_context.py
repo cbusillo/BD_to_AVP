@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from scripts.release import (
+    PUBLIC_STAGE_SUFFIXES,
+    STAGE_ORDER,
+    parse_release_tag,
+    parse_release_version,
+)
 from scripts.release_milestone_context import (
     EVIDENCE_INDEX_PATH,
     RELEASE_LEDGER_PATH,
@@ -47,6 +54,11 @@ CHECKSUM_SHA256 = "b" * 64
 APPCAST_SHA256 = "c" * 64
 APP_TREE_SHA256 = "d" * 64
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# The lane's contract: Alpha and Beta prereleases may remediate preparation with
+# change-scoped evidence under identical rules; RC and Stable never may.
+CHANGE_SCOPED_TAGS = ("v0.3.1-alpha.1", "v0.3.1-beta.1")
+NON_CHANGE_SCOPED_TAGS = ("v0.3.1-rc.1", "v0.3.1")
 
 
 class ReleaseMilestoneContextTests(unittest.TestCase):
@@ -695,11 +707,13 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         return base_sha, head_sha
 
     @staticmethod
-    def append_beta_change_scoped_evidence(
+    def append_change_scoped_evidence(
         root: Path,
         *,
+        release_tag: str = "v0.3.1-beta.1",
         case_id: str = "beta-change-scoped-case",
         source_sha: str | None = None,
+        source_package_version: str | None = None,
         receipt_digest: str | None = None,
     ) -> tuple[str, str]:
         base_sha = subprocess.run(
@@ -709,16 +723,18 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             capture_output=True,
             text=True,
         ).stdout.strip()
-        release_tag = "v0.3.1-beta.1"
+        version = parse_release_tag(release_tag, allow_legacy_rc=False)
+        # A source override is a self-consistent identity for another release, not a typo.
+        source_version = parse_release_version(source_package_version) if source_package_version else version
         evidence_relative = f"docs/qualification/{release_tag}-change-scoped-evidence-v1.json"
         evidence_path = root / evidence_relative
         evidence = {
             "schema_version": 1,
-            "qualification_id": "beta-change-scoped-v1",
+            "qualification_id": f"{release_tag}-change-scoped-evidence-v1",
             "result": "accepted_public_safe_summary",
             "source": {
-                "package_version": "0.3.1b1",
-                "public_version": "0.3.1-beta.1",
+                "package_version": source_version.text,
+                "public_version": source_version.public_version,
                 "build_version": "162",
                 "release_tag": release_tag,
                 "source_sha": source_sha or base_sha,
@@ -763,7 +779,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         )
         evidence_index_path.write_text(json.dumps(evidence_index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         subprocess.run(["git", "add", evidence_path, evidence_index_path], cwd=root, check=True)
-        subprocess.run(["git", "commit", "-qm", "append beta evidence"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "append change-scoped evidence"], cwd=root, check=True)
         head_sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=root,
@@ -1943,175 +1959,174 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
 
         self.assertTrue(_requires_unpublished_candidate_recovery(REPO_ROOT, base_candidate))
 
-    def test_allows_beta_change_scoped_evidence_append_without_checked_receipt(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            self.build_repository(root)
-            base_sha, head_sha = self.append_beta_change_scoped_evidence(root)
+    @staticmethod
+    def discover_on_branch(root: Path, base_sha: str, head_sha: str, head_branch: str) -> Any:
+        return discover_milestone_receipt(
+            root,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            head_branch=head_branch,
+            base_repo="cbusillo/BD_to_AVP",
+            head_repo="cbusillo/BD_to_AVP",
+            base_branch="main",
+        )
 
-            discovered = discover_milestone_receipt(
-                root,
-                base_sha=base_sha,
-                head_sha=head_sha,
-                head_branch="qualify/v0.3.1-beta.1",
-                base_repo="cbusillo/BD_to_AVP",
-                head_repo="cbusillo/BD_to_AVP",
-                base_branch="main",
-            )
+    def test_allows_change_scoped_evidence_append_for_lane_stages(self) -> None:
+        for release_tag in CHANGE_SCOPED_TAGS:
+            with self.subTest(release_tag=release_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, head_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
 
-        self.assertIsNone(discovered)
+                discovered = self.discover_on_branch(root, base_sha, head_sha, f"qualify/{release_tag}")
 
-    def test_rejects_beta_change_scoped_evidence_on_wrong_branch(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            self.build_repository(root)
-            base_sha, head_sha = self.append_beta_change_scoped_evidence(root)
+                self.assertIsNone(discovered)
 
-            with self.assertRaisesRegex(ReleaseMilestoneContextError, "qualify/v0.3.1-beta.1"):
-                discover_milestone_receipt(
-                    root,
-                    base_sha=base_sha,
-                    head_sha=head_sha,
-                    head_branch="feature/beta-evidence",
-                    base_repo="cbusillo/BD_to_AVP",
-                    head_repo="cbusillo/BD_to_AVP",
-                    base_branch="main",
+    def test_rejects_change_scoped_evidence_for_stages_outside_lane(self) -> None:
+        # The fixture is the one the lane stages accept, so only the stage differs.
+        for release_tag in NON_CHANGE_SCOPED_TAGS:
+            with self.subTest(release_tag=release_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, head_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+
+                with self.assertRaises(ReleaseMilestoneContextError):
+                    self.discover_on_branch(root, base_sha, head_sha, f"qualify/{release_tag}")
+
+    def test_rejects_change_scoped_evidence_whose_source_names_another_stage(self) -> None:
+        for release_tag in CHANGE_SCOPED_TAGS:
+            version = parse_release_tag(release_tag, allow_legacy_rc=False)
+            for other_stage in sorted(set(STAGE_ORDER) - {version.stage}):
+                other = f"{version.major}.{version.minor}.{version.patch}" + (
+                    "" if other_stage == "stable" else f"{PUBLIC_STAGE_SUFFIXES[other_stage]}1"
+                )
+                with (
+                    self.subTest(release_tag=release_tag, source=other),
+                    tempfile.TemporaryDirectory() as temporary_directory,
+                ):
+                    root = Path(temporary_directory)
+                    self.build_repository(root)
+                    base_sha, head_sha = self.append_change_scoped_evidence(
+                        root, release_tag=release_tag, source_package_version=other
+                    )
+
+                    with self.assertRaisesRegex(ReleaseMilestoneContextError, "source identity"):
+                        self.discover_on_branch(root, base_sha, head_sha, f"qualify/{release_tag}")
+
+    def test_rejects_change_scoped_evidence_on_wrong_branch(self) -> None:
+        for release_tag in CHANGE_SCOPED_TAGS:
+            with self.subTest(release_tag=release_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, head_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+
+                with self.assertRaisesRegex(ReleaseMilestoneContextError, re.escape(f"qualify/{release_tag}")):
+                    self.discover_on_branch(root, base_sha, head_sha, "feature/prerelease-evidence")
+
+    def test_rejects_change_scoped_evidence_digest_mismatch(self) -> None:
+        for release_tag in CHANGE_SCOPED_TAGS:
+            with self.subTest(release_tag=release_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, head_sha = self.append_change_scoped_evidence(
+                    root, release_tag=release_tag, receipt_digest="0" * 64
                 )
 
-    def test_rejects_beta_change_scoped_evidence_digest_mismatch(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            self.build_repository(root)
-            base_sha, head_sha = self.append_beta_change_scoped_evidence(root, receipt_digest="0" * 64)
+                with self.assertRaisesRegex(ReleaseMilestoneContextError, "receipt identity"):
+                    self.discover_on_branch(root, base_sha, head_sha, f"qualify/{release_tag}")
 
-            with self.assertRaisesRegex(ReleaseMilestoneContextError, "receipt identity"):
-                discover_milestone_receipt(
+    def test_rejects_change_scoped_evidence_for_artifact_owned_case(self) -> None:
+        for release_tag in CHANGE_SCOPED_TAGS:
+            with self.subTest(release_tag=release_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, head_sha = self.append_change_scoped_evidence(
                     root,
-                    base_sha=base_sha,
-                    head_sha=head_sha,
-                    head_branch="qualify/v0.3.1-beta.1",
-                    base_repo="cbusillo/BD_to_AVP",
-                    head_repo="cbusillo/BD_to_AVP",
-                    base_branch="main",
+                    release_tag=release_tag,
+                    case_id="profile-save-action-accessibility",
                 )
 
-    def test_rejects_beta_change_scoped_evidence_for_artifact_owned_case(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            self.build_repository(root)
-            base_sha, head_sha = self.append_beta_change_scoped_evidence(
-                root,
-                case_id="profile-save-action-accessibility",
-            )
+                with self.assertRaisesRegex(ReleaseMilestoneContextError, "release-candidate Tier 2"):
+                    self.discover_on_branch(root, base_sha, head_sha, f"qualify/{release_tag}")
 
-            with self.assertRaisesRegex(ReleaseMilestoneContextError, "release-candidate Tier 2"):
-                discover_milestone_receipt(
-                    root,
-                    base_sha=base_sha,
-                    head_sha=head_sha,
-                    head_branch="qualify/v0.3.1-beta.1",
-                    base_repo="cbusillo/BD_to_AVP",
-                    head_repo="cbusillo/BD_to_AVP",
-                    base_branch="main",
+    def test_rejects_change_scoped_evidence_for_non_base_source(self) -> None:
+        for release_tag in CHANGE_SCOPED_TAGS:
+            with self.subTest(release_tag=release_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, head_sha = self.append_change_scoped_evidence(
+                    root, release_tag=release_tag, source_sha="f" * 40
                 )
 
-    def test_rejects_beta_change_scoped_evidence_for_non_base_source(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            self.build_repository(root)
-            base_sha, head_sha = self.append_beta_change_scoped_evidence(root, source_sha="f" * 40)
+                with self.assertRaisesRegex(ReleaseMilestoneContextError, "base SHA"):
+                    self.discover_on_branch(root, base_sha, head_sha, f"qualify/{release_tag}")
 
-            with self.assertRaisesRegex(ReleaseMilestoneContextError, "base SHA"):
-                discover_milestone_receipt(
-                    root,
-                    base_sha=base_sha,
-                    head_sha=head_sha,
-                    head_branch="qualify/v0.3.1-beta.1",
-                    base_repo="cbusillo/BD_to_AVP",
-                    head_repo="cbusillo/BD_to_AVP",
-                    base_branch="main",
+    def test_rejects_change_scoped_evidence_with_policy_mutation(self) -> None:
+        for release_tag in CHANGE_SCOPED_TAGS:
+            with self.subTest(release_tag=release_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, _head_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+                policy_path = root / "docs/qualification/release-qualification-policy-v1.json"
+                policy = json.loads(policy_path.read_text(encoding="utf-8"))
+                policy["policy_id"] = "self-authorized-policy"
+                policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                subprocess.run(["git", "add", policy_path], cwd=root, check=True)
+                subprocess.run(["git", "commit", "--amend", "-qm", "append evidence and policy"], cwd=root, check=True)
+                head_sha = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+                with self.assertRaisesRegex(ReleaseMilestoneContextError, "runner-bound policy"):
+                    self.discover_on_branch(root, base_sha, head_sha, f"qualify/{release_tag}")
+
+    def test_rejects_change_scoped_evidence_with_stable_reset(self) -> None:
+        for release_tag in CHANGE_SCOPED_TAGS:
+            with self.subTest(release_tag=release_tag), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, _head_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+                qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+                qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+                for field in (
+                    "source_git_sha",
+                    "release_run_id",
+                    "release_id",
+                    "dmg_sha256",
+                    "appcast_sha256",
+                    "signed_app_tree_sha256",
+                ):
+                    qualification["candidate"][field] = None
+                qualification["candidate"].update(
+                    {
+                        "package_version": "0.3.1",
+                        "public_version": "0.3.1",
+                        "build_version": "162",
+                        "release_tag": "v0.3.1",
+                        "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1.dmg",
+                    }
                 )
-
-    def test_rejects_beta_change_scoped_evidence_with_policy_mutation(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            self.build_repository(root)
-            base_sha, _head_sha = self.append_beta_change_scoped_evidence(root)
-            policy_path = root / "docs/qualification/release-qualification-policy-v1.json"
-            policy = json.loads(policy_path.read_text(encoding="utf-8"))
-            policy["policy_id"] = "self-authorized-policy"
-            policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            subprocess.run(["git", "add", policy_path], cwd=root, check=True)
-            subprocess.run(["git", "commit", "--amend", "-qm", "append beta evidence and policy"], cwd=root, check=True)
-            head_sha = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-
-            with self.assertRaisesRegex(ReleaseMilestoneContextError, "runner-bound policy"):
-                discover_milestone_receipt(
-                    root,
-                    base_sha=base_sha,
-                    head_sha=head_sha,
-                    head_branch="qualify/v0.3.1-beta.1",
-                    base_repo="cbusillo/BD_to_AVP",
-                    head_repo="cbusillo/BD_to_AVP",
-                    base_branch="main",
+                qualification_path.write_text(json.dumps(qualification) + "\n", encoding="utf-8")
+                subprocess.run(["git", "add", qualification_path], cwd=root, check=True)
+                subprocess.run(
+                    ["git", "commit", "--amend", "-qm", "combine change-scoped evidence and stable reset"],
+                    cwd=root,
+                    check=True,
                 )
+                head_sha = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
 
-    def test_rejects_beta_change_scoped_evidence_with_stable_reset(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            self.build_repository(root)
-            base_sha, _head_sha = self.append_beta_change_scoped_evidence(root)
-            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
-            qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
-            for field in (
-                "source_git_sha",
-                "release_run_id",
-                "release_id",
-                "dmg_sha256",
-                "appcast_sha256",
-                "signed_app_tree_sha256",
-            ):
-                qualification["candidate"][field] = None
-            qualification["candidate"].update(
-                {
-                    "package_version": "0.3.1",
-                    "public_version": "0.3.1",
-                    "build_version": "162",
-                    "release_tag": "v0.3.1",
-                    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1.dmg",
-                }
-            )
-            qualification_path.write_text(json.dumps(qualification) + "\n", encoding="utf-8")
-            subprocess.run(["git", "add", qualification_path], cwd=root, check=True)
-            subprocess.run(
-                ["git", "commit", "--amend", "-qm", "combine beta evidence and stable reset"],
-                cwd=root,
-                check=True,
-            )
-            head_sha = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-
-            with self.assertRaisesRegex(ReleaseMilestoneContextError, "may not be combined"):
-                discover_milestone_receipt(
-                    root,
-                    base_sha=base_sha,
-                    head_sha=head_sha,
-                    head_branch="qualify/v0.3.1-beta.1",
-                    base_repo="cbusillo/BD_to_AVP",
-                    head_repo="cbusillo/BD_to_AVP",
-                    base_branch="main",
-                )
+                with self.assertRaisesRegex(ReleaseMilestoneContextError, "may not be combined"):
+                    self.discover_on_branch(root, base_sha, head_sha, f"qualify/{release_tag}")
 
     def test_rejects_same_version_prepublication_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

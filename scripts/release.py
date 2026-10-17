@@ -72,6 +72,10 @@ DMG_NAME_PREFIX = "3D-Blu-ray-to-Vision-Pro"
 INTERNAL_STAGE_NAMES = {"a": "alpha", "b": "beta", "rc": "rc"}
 PUBLIC_STAGE_SUFFIXES = {"alpha": "a", "beta": "b", "rc": "rc"}
 STAGE_ORDER = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}
+# Prerelease stages whose blocked preparation classification may be remediated with
+# change-scoped Tier 2 evidence. The evidence command and its pull-request validator
+# both read this set; RC and Stable must qualify without that lane.
+CHANGE_SCOPED_EVIDENCE_STAGES = frozenset({"alpha", "beta"})
 BETA3_RECOVERY_SOURCE_VERSION = "0.3.0rc1"
 BETA3_RECOVERY_SOURCE_BUILD = "147"
 BETA3_RECOVERY_TARGET_VERSION = "0.3.0b3"
