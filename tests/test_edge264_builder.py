@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts import build_edge264_macos
+from scripts import build_edge264_macos, edge264_upstream_watch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -293,41 +293,80 @@ class Edge264PinUpdateTests(unittest.TestCase):
 
 
 class Edge264UpstreamWatchTests(unittest.TestCase):
-    """Run the watcher's shell step against a stand-in pin check and gh."""
+    """Run the watcher against a stand-in gh that serves one listing and records every call."""
 
-    def run_watch(self, pending: str, open_issue: str) -> list[str]:
-        workflow = yaml.safe_load(
-            (REPO_ROOT / ".github/workflows/edge264-upstream-watch.yml").read_text(encoding="utf-8")
-        )
-        (step,) = [
-            step for job in workflow["jobs"].values() for step in job["steps"] if "gh issue" in step.get("run", "")
-        ]
+    TITLE = edge264_upstream_watch.DEFAULT_TITLE
+
+    def run_watch(self, pending: str, open_issues: list[dict[str, object]]) -> list[tuple[list[str], str]]:
         with tempfile.TemporaryDirectory() as temp_dir:
             bin_directory = Path(temp_dir)
-            calls = bin_directory / "calls"
-            calls.touch()
-            (bin_directory / "python3").write_text(f"#!/bin/sh\nprintf '%s' '{pending}'\n", encoding="utf-8")
-            (bin_directory / "gh").write_text(
-                f"#!/bin/sh\necho \"$2\" >> '{calls}'\n[ \"$2\" = list ] && printf '%s' '{open_issue}'\nexit 0\n",
+            calls = bin_directory / "calls.jsonl"
+            listing = bin_directory / "listing.json"
+            listing.write_text(json.dumps(open_issues), encoding="utf-8")
+            gh = bin_directory / "gh"
+            gh.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, sys\n"
+                "stdin = sys.stdin.read()\n"
+                f"with open({str(calls)!r}, 'a') as log:\n"
+                "    log.write(json.dumps({'args': sys.argv[1:], 'stdin': stdin}) + '\\n')\n"
+                "if sys.argv[1:3] == ['issue', 'list']:\n"
+                f"    print(open({str(listing)!r}).read())\n",
                 encoding="utf-8",
             )
-            for tool in ("python3", "gh"):
-                (bin_directory / tool).chmod(0o755)
-            subprocess.run(
-                ["/bin/bash", "-e", "-c", step["run"]],
-                env={**step["env"], "PATH": f"{bin_directory}:/usr/bin:/bin", "GH_TOKEN": "unused"},
-                cwd=REPO_ROOT,
-                check=True,
-                capture_output=True,
-            )
-            return calls.read_text(encoding="utf-8").split()
+            gh.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": f"{bin_directory}:{os.environ['PATH']}"}):
+                self.assertEqual(edge264_upstream_watch.main(["--pending", pending, "--title", self.TITLE]), 0)
+            if not calls.exists():
+                return []
+            records = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+            return [(record["args"], record["stdin"]) for record in records]
+
+    @staticmethod
+    def writes(calls: list[tuple[list[str], str]]) -> list[list[str]]:
+        return [arguments[:2] for arguments, _ in calls if arguments[:2] != ["issue", "list"]]
+
+    def open_issue(self, named: str) -> dict[str, object]:
+        return {
+            "number": 954,
+            "title": self.TITLE,
+            "body": "## Original request\n\n<!-- start -->\n"
+            + edge264_upstream_watch.issue_body(named)
+            + "\n<!-- end -->\n\n## Current Status\n\nParked in a draft pull request.",
+        }
 
     def test_a_current_pin_touches_no_issue(self) -> None:
-        self.assertEqual(self.run_watch(pending="", open_issue=""), [])
+        self.assertEqual(self.run_watch(pending="", open_issues=[]), [])
 
-    def test_a_stale_pin_opens_one_issue_and_never_a_second(self) -> None:
-        self.assertEqual(self.run_watch(pending="a" * 40, open_issue=""), ["list", "create"])
-        self.assertEqual(self.run_watch(pending="a" * 40, open_issue="12"), ["list"])
+    def test_a_stale_pin_without_an_issue_opens_one_naming_the_commit(self) -> None:
+        calls = self.run_watch(pending="a" * 40, open_issues=[])
+
+        self.assertEqual(self.writes(calls), [["issue", "create"]])
+        self.assertIn("a" * 40, calls[-1][1])
+
+    def test_an_issue_with_a_similar_title_does_not_count_as_the_tracking_issue(self) -> None:
+        similar = {**self.open_issue("a" * 40), "title": f"Re: {self.TITLE}"}
+
+        self.assertEqual(self.writes(self.run_watch(pending="a" * 40, open_issues=[similar])), [["issue", "create"]])
+
+    def test_an_open_issue_naming_the_same_commit_is_left_alone(self) -> None:
+        calls = self.run_watch(pending="a" * 40, open_issues=[self.open_issue("a" * 40)])
+
+        self.assertEqual(self.writes(calls), [])
+
+    def test_an_open_issue_naming_an_older_commit_is_rewritten_and_commented(self) -> None:
+        issue = self.open_issue("a" * 40)
+        calls = self.run_watch(pending="b" * 40, open_issues=[issue])
+
+        self.assertEqual(self.writes(calls), [["issue", "edit"], ["issue", "comment"]])
+        (edit_arguments, edited_body), (_, comment) = calls[1:]
+        self.assertEqual(edit_arguments[2], "954")
+        self.assertEqual(edited_body, str(issue["body"]).replace("a" * 40, "b" * 40))
+        self.assertIn("b" * 40, comment)
+        # Once updated, the next weekly run sees the new commit and stays quiet.
+        self.assertEqual(
+            self.writes(self.run_watch(pending="b" * 40, open_issues=[{**issue, "body": edited_body}])), []
+        )
 
 
 class Edge264UpdateBranchTests(unittest.TestCase):
