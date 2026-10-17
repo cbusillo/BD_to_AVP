@@ -14,6 +14,11 @@ import ffmpeg
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscTitleSelectionError, get_disc_and_mvc_video_info, MKVCreationError
+from bd_to_avp.modules.disc_image import (
+    DiscImageSourceError,
+    backing_image_for_folder,
+    require_complete_disc_image,
+)
 from bd_to_avp.modules.file import path_is_relative_to
 from bd_to_avp.modules.preview import PreviewRange, resolve_preview_range
 from bd_to_avp.modules.storage_capacity import emit_storage_capacity
@@ -130,7 +135,8 @@ def start_live_source(
     owner: WorkerProcessOwner,
     activity: WorkerActivityReporter,
 ) -> dict[str, object]:
-    source_path = validate_source(job.source)
+    job_source = resolve_job_source(job.source)
+    source_path = job_source.path
     if job.destination is None:
         raise WorkerOperationError("invalid_live_source", "The live source job has no workspace.")
     resolved_source = source_path.resolve()
@@ -140,7 +146,7 @@ def start_live_source(
             "invalid_destination",
             "The live source workspace must be outside the selected source.",
         )
-    normalized_job = replace(job, source=replace(job.source, path=source_path))
+    normalized_job = replace(job, source=job_source)
     try:
         return SSIFLiveSourceService(normalized_job, owner, activity).run()
     except WorkerCancelled:
@@ -161,7 +167,8 @@ def inspect_source(
     *,
     run_context: RunContext | None = None,
 ) -> dict[str, object]:
-    source_path = validate_source(source)
+    source = resolve_job_source(source)
+    source_path = source.path
     if (
         source.kind
         in {
@@ -330,7 +337,13 @@ def _convert_source(
     route_already_reported: bool = False,
     workspace_required_bytes: int | None = None,
 ) -> dict[str, object]:
-    source_path = validate_source(job.source)
+    resolved_source = resolve_job_source(job.source)
+    source_redirected = resolved_source.kind is not job.source.kind
+    if source_redirected and job.job is not None:
+        # The user chose the mounted disc, not the image file; never delete the image for them.
+        job = replace(job, job=replace(job.job, remove_original=False))
+    job = replace(job, source=resolved_source)
+    source_path = resolved_source.path
     destination = job.destination
     encoding = job.encoding
     job_options = job.job
@@ -363,6 +376,13 @@ def _convert_source(
         destination.path / "temp_files",
         role="partial_workspace",
     )
+
+    if source_redirected:
+        activity.log(
+            "Reading the disc image file instead of the mounted disc.",
+            stage="configure",
+            code="mounted_image_redirected",
+        )
 
     owner.check_cancelled()
     with configured_conversion(job, source_path, preview_range=preview_range):
@@ -639,6 +659,22 @@ def route_message(video_route: ResolvedVideoRoute) -> str:
         VideoRouteKind.EXISTING_ARTIFACT: "Using the existing encoded video artifact.",
     }
     return messages[video_route.selected]
+
+
+def resolve_job_source(source: JobSource) -> JobSource:
+    """Validate a source and route mounted or damaged disc images away from the kernel UDF driver."""
+    source_path = validate_source(source)
+    try:
+        if source.kind is WorkerSourceKind.BLU_RAY_FOLDER:
+            backing_image = backing_image_for_folder(source_path)
+            if backing_image is not None:
+                source = replace(source, kind=WorkerSourceKind.DISC_IMAGE, path=backing_image)
+                source_path = validate_source(source)
+        if source.kind is WorkerSourceKind.DISC_IMAGE:
+            require_complete_disc_image(source_path)
+    except DiscImageSourceError as error:
+        raise WorkerOperationError(error.code, error.message) from error
+    return replace(source, path=source_path)
 
 
 def validate_source(source: JobSource) -> Path:
