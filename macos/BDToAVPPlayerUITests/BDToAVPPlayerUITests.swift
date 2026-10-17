@@ -85,11 +85,11 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(startButton.isHittable)
         startButton.tap()
 
-        guard firstHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 30) != nil else {
+        guard waitForHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 30) else {
             XCTFail(app.debugDescription)
             return
         }
-        guard firstHittableButton(labeled: "Done", in: app, timeout: 5) != nil else {
+        guard waitForHittableButton(labeled: "Done", in: app, timeout: 5) else {
             XCTFail(app.debugDescription)
             return
         }
@@ -98,8 +98,8 @@ final class BDToAVPPlayerUITests: XCTestCase {
 
         sleep(5)
 
-        XCTAssertNotNil(firstHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 5))
-        XCTAssertNotNil(firstHittableButton(labeled: "Done", in: app, timeout: 5))
+        XCTAssertTrue(waitForHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 5))
+        XCTAssertTrue(waitForHittableButton(labeled: "Done", in: app, timeout: 5))
     }
 
     private func attachScreenshot(named name: String) {
@@ -117,20 +117,22 @@ final class BDToAVPPlayerUITests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
-    private func firstHittableButton(
+    /// AVKit can present its action window twice, so a label may match a hidden copy as well as
+    /// the visible button. Wait for either of the first two matches to become hittable. Each check
+    /// resolves one element; listing every match and resolving each again could stall on one
+    /// whole-tree accessibility snapshot well past this timeout. CI's per-test execution time
+    /// allowance bounds any single query that still hangs.
+    private func waitForHittableButton(
         labeled label: String,
         in app: XCUIApplication,
         timeout: TimeInterval
-    ) -> XCUIElement? {
-        let buttons = app.buttons.matching(NSPredicate(format: "label == %@", label))
-        let deadline = Date().addingTimeInterval(timeout)
-        repeat {
-            if let button = buttons.allElementsBoundByIndex.first(where: \.isHittable) {
-                return button
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        } while Date() < deadline
-        return nil
+    ) -> Bool {
+        let matches = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        let candidates = [matches.firstMatch, matches.element(boundBy: 1)]
+        let anyHittable = NSPredicate { _, _ in
+            candidates.contains { $0.exists && $0.isHittable }
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: anyHittable, object: nil)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
-
 }

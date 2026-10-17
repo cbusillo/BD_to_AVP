@@ -1,8 +1,10 @@
 """Decide which expensive CI lanes a change needs.
 
-A pull request pays only for the lanes whose inputs it touches. Every lane still
-runs on a push to main and on a manual run, so nothing reaches a release
-unexercised. Anything this script does not recognise runs everything.
+A pull request, and a merge-train candidate built from pull requests, pays only
+for the lanes whose inputs it touches. Every lane still runs on a push to main
+and on a manual run, so nothing reaches a release unexercised. Anything this
+script does not recognise, including a candidate whose base on main cannot be
+found, runs everything.
 """
 
 import argparse
@@ -27,6 +29,9 @@ SHARED_BUILD_INPUTS = (
     "scripts/ci_lanes.py",
 )
 ALL_LANES = ("native", "player")
+# Launchplane pushes merge-train candidates here: main plus the pull requests in the batch.
+TRAIN_CANDIDATE_REF_PREFIX = "refs/heads/launchplane/train/"
+MAIN_REMOTE_REF = "refs/remotes/origin/main"
 
 
 def player_source_prefixes(project: Mapping[str, object]) -> tuple[str, ...]:
@@ -84,17 +89,52 @@ def changed_paths(base: str, repository: Path = REPOSITORY_ROOT) -> list[str]:
     return [path for path in output.split("\0") if path]
 
 
+def git_output(arguments: list[str], repository: Path) -> str | None:
+    result = subprocess.run(["git", *arguments], cwd=repository, capture_output=True, text=True, check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def train_candidate_base(repository: Path = REPOSITORY_ROOT) -> str | None:
+    """The main commit a merge-train candidate was built on, or None when it cannot be trusted."""
+    base = git_output(["merge-base", MAIN_REMOTE_REF, "HEAD"], repository)
+    head = git_output(["rev-parse", "HEAD"], repository)
+    # A candidate that is already main, or main itself, has no pull-request changes to
+    # select lanes from; treat that like an unknown base rather than run nothing.
+    if not base or not head or base == head:
+        return None
+    return base
+
+
+def lane_base(event: str, ref: str, pull_request_base: str, repository: Path = REPOSITORY_ROOT) -> str | None:
+    """The commit to diff against, or None to run every lane."""
+    if event == "pull_request":
+        return pull_request_base or None
+    if event == "push" and ref.startswith(TRAIN_CANDIDATE_REF_PREFIX):
+        return train_candidate_base(repository)
+    return None
+
+
+def selected_lanes(
+    event: str,
+    ref: str,
+    pull_request_base: str,
+    repository: Path = REPOSITORY_ROOT,
+) -> dict[str, bool]:
+    base = lane_base(event, ref, pull_request_base, repository)
+    if base is None:
+        return dict.fromkeys(ALL_LANES, True)
+    project = yaml.safe_load((repository / "macos/project.yml").read_text(encoding="utf-8"))
+    return lanes_for(changed_paths(base, repository), player_source_prefixes(project))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event", required=True, help="GitHub event name.")
+    parser.add_argument("--ref", default="", help="Git ref the run was triggered for (github.ref).")
     parser.add_argument("--base", default="", help="Pull-request base commit.")
     arguments = parser.parse_args()
 
-    if arguments.event == "pull_request" and arguments.base:
-        project = yaml.safe_load((REPOSITORY_ROOT / "macos/project.yml").read_text(encoding="utf-8"))
-        lanes = lanes_for(changed_paths(arguments.base), player_source_prefixes(project))
-    else:
-        lanes = dict.fromkeys(ALL_LANES, True)
+    lanes = selected_lanes(arguments.event, arguments.ref, arguments.base)
 
     lines = [f"{lane}={'true' if wanted else 'false'}" for lane, wanted in lanes.items()]
     print("\n".join(lines))
