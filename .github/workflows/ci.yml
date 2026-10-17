@@ -124,7 +124,10 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Lint
-        run: uv run ruff check .
+        run: |
+          set -euo pipefail
+          lint_command="$(jq -er '.qualityGate.lint.default | select(type == "string" and length > 0)' .github/github.json)"
+          bash -euo pipefail -c "$lint_command"
 
       - name: Type check
         run: uv run mypy bd_to_avp

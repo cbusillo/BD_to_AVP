@@ -189,7 +189,7 @@
       "fix": "uv run ruff format ."
     },
     "lint": {
-      "default": "uv run ruff check ."
+      "default": "uv run ruff check . && uv run --python 3.14 https://raw.githubusercontent.com/cbusillo/codex-skills/2e531a680b16b32dda6d24d4c40de3675c0faaf5/scripts/check_insecure_tls.py"
     },
     "typecheck": {
       "default": "uv run mypy bd_to_avp"
