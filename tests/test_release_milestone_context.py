@@ -2197,6 +2197,33 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     ),
                 )
 
+    def test_rejects_merge_train_candidate_that_changes_more_than_its_source(self) -> None:
+        release_tag = CHANGE_SCOPED_TAGS[0]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, source_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+            self.train_candidate(root, base_sha, source_sha)
+            # Amend the merge so it carries a change its qualifying source never had.
+            (root / "README.md").write_text("added in the merge commit\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-q", "--amend", "--no-edit"], cwd=root, check=True)
+            candidate_sha = self.git_output(root, "rev-parse", "HEAD")
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "clean merge"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=candidate_sha,
+                    head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    pull_request_lookup=self.lookup_returning(
+                        self.source_pull_request(source_sha, f"qualify/{release_tag}")
+                    ),
+                )
+
     def test_ordinary_branch_mismatch_never_looks_up_pull_requests(self) -> None:
         release_tag = CHANGE_SCOPED_TAGS[0]
         with tempfile.TemporaryDirectory() as temporary_directory:

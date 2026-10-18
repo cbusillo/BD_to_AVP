@@ -346,6 +346,29 @@ def train_candidate_source_branch(
             "A merge-train candidate carrying release evidence must merge exactly one pull request onto protected main."
         )
     source_sha = commits[2]
+    # The candidate must be exactly the clean merge of its source, so no evidence can ride in the merge itself.
+    merged = subprocess.run(
+        ["git", "merge-tree", "--write-tree", base_sha, source_sha],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    candidate_tree = subprocess.run(
+        ["git", "rev-parse", f"{head_sha}^{{tree}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if (
+        merged.returncode != 0
+        or candidate_tree.returncode != 0
+        or merged.stdout.split()[:1] != candidate_tree.stdout.split()
+    ):
+        raise ReleaseMilestoneContextError(
+            "A merge-train candidate carrying release evidence must be the clean merge of its source pull request."
+        )
     matches = []
     for pull in pull_request_lookup(source_sha):
         head = _mapping(pull.get("head"), "merge-train source pull-request head")
