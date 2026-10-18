@@ -150,6 +150,10 @@ bd-to-avp --help
 MakeMKV remains a separate optional install for Blu-ray disc input. Install the current macOS version from the
 [MakeMKV] website; existing MKV, MTS, and M2TS sources do not require it.
 
+MakeMKV 2.0 crashes on Blu-ray images and folders without disc encryption, which includes most backups. Until
+MakeMKV fixes this, use MakeMKV 1.18.4 with a registration key (MakeMKV posts a free beta key on its forum). When
+MakeMKV crashes, the app says so and names this as the likely cause, instead of a generic failure.
+
 The manual PyPI path remains available for power users who prefer to manage their own Python environment and FFmpeg.
 
 ## Prerequisites
