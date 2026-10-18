@@ -20,9 +20,11 @@ from scripts.release import (
     parse_release_tag,
     parse_release_version,
 )
+from scripts.ci_lanes import TRAIN_CANDIDATE_REF_PREFIX
 from scripts.release_milestone_context import (
     EVIDENCE_INDEX_PATH,
     RELEASE_LEDGER_PATH,
+    TRAIN_CANDIDATE_BRANCH_PREFIX,
     ReleaseMilestoneContext,
     ReleaseMilestoneContextError,
     _validate_failed_unpublished_candidate,
@@ -1365,6 +1367,31 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
 
         self.assertEqual(discovered, receipt_path)
 
+    def test_release_evidence_receipt_carried_by_merge_train(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = self.build_repository(root)
+            commits = self.git_output(root, "rev-list", "--reverse", "HEAD").splitlines()
+            candidate_sha = self.train_candidate(root, commits[0], commits[-1])
+
+            def discover(branch: str) -> Path | None:
+                return discover_milestone_receipt(
+                    root,
+                    base_sha=commits[0],
+                    head_sha=candidate_sha,
+                    head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    pull_request_lookup=self.lookup_returning(self.source_pull_request(commits[-1], branch)),
+                )
+
+            discovered = discover("automation/release-evidence-v0.3.0")
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "idempotent branch"):
+                discover("copy/evidence-v0.3.0")
+
+        self.assertEqual(discovered, receipt_path)
+
     def test_rejects_untracked_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1709,6 +1736,32 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
 
         self.assertIsNone(discovered)
 
+    def test_prior_receipt_carry_forward_carried_by_merge_train(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, source_sha = self.prepare_published_prior_receipt_transition(root)
+            candidate_sha = self.train_candidate(root, base_sha, source_sha)
+
+            def discover(branch: str) -> Path | None:
+                return discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=candidate_sha,
+                    head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    published_receipt_verifier=lambda _path, _receipt, _digest: None,
+                    pull_request_lookup=self.lookup_returning(self.source_pull_request(source_sha, branch)),
+                )
+
+            discovered = discover("prepare/v0.3.1-beta.2")
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "preparation branch"):
+                discover("feature/carry-receipt")
+
+        self.assertIsNone(discovered)
+
     def discover_terminal_v2_successor(
         self,
         root: Path,
@@ -2022,6 +2075,176 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(ReleaseMilestoneContextError, re.escape(f"qualify/{release_tag}")):
                     self.discover_on_branch(root, base_sha, head_sha, "feature/prerelease-evidence")
+
+    @staticmethod
+    def git_output(root: Path, *arguments: str) -> str:
+        return subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+
+    def train_candidate(self, root: Path, base_sha: str, *source_shas: str) -> str:
+        """Build a merge-train candidate the way Launchplane does: main plus one merge per carried pull request."""
+        subprocess.run(["git", "checkout", "-q", "--detach", base_sha], cwd=root, check=True)
+        for source_sha in source_shas:
+            subprocess.run(["git", "merge", "-q", "--no-ff", "-m", "train", source_sha], cwd=root, check=True)
+        return self.git_output(root, "rev-parse", "HEAD")
+
+    @staticmethod
+    def source_pull_request(
+        source_sha: str,
+        branch: str,
+        *,
+        state: str = "open",
+        base_ref: str = "main",
+        head_repo: str = "cbusillo/BD_to_AVP",
+    ) -> dict[str, object]:
+        return {
+            "state": state,
+            "head": {"sha": source_sha, "ref": branch, "repo": {"full_name": head_repo}},
+            "base": {"ref": base_ref, "repo": {"full_name": "cbusillo/BD_to_AVP"}},
+        }
+
+    @staticmethod
+    def lookup_returning(*pulls: Mapping[str, object]) -> Any:
+        return lambda _sha: list(pulls)
+
+    def test_train_candidate_prefix_matches_ci_lane_selection(self) -> None:
+        self.assertEqual(TRAIN_CANDIDATE_REF_PREFIX, f"refs/heads/{TRAIN_CANDIDATE_BRANCH_PREFIX}")
+
+    def test_allows_change_scoped_evidence_carried_by_merge_train(self) -> None:
+        release_tag = CHANGE_SCOPED_TAGS[0]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, source_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+            candidate_sha = self.train_candidate(root, base_sha, source_sha)
+            looked_up: list[str] = []
+
+            def lookup(sha: str) -> list[Mapping[str, object]]:
+                looked_up.append(sha)
+                return [self.source_pull_request(source_sha, f"qualify/{release_tag}")]
+
+            discovered = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=candidate_sha,
+                head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+                pull_request_lookup=lookup,
+            )
+
+        self.assertIsNone(discovered)
+        self.assertEqual(looked_up, [source_sha])
+
+    def test_rejects_merge_train_evidence_without_one_qualifying_source_pull_request(self) -> None:
+        release_tag = CHANGE_SCOPED_TAGS[0]
+        qualify = f"qualify/{release_tag}"
+        cases: dict[str, Any] = {
+            "source branch is not qualify": lambda sha: [self.source_pull_request(sha, "feature/evidence")],
+            "no pull request": lambda sha: [],
+            "closed pull request": lambda sha: [self.source_pull_request(sha, qualify, state="closed")],
+            "targets another branch": lambda sha: [self.source_pull_request(sha, qualify, base_ref="release")],
+            "from a fork": lambda sha: [self.source_pull_request(sha, qualify, head_repo="someone/BD_to_AVP")],
+            "different head commit": lambda sha: [self.source_pull_request("f" * 40, qualify)],
+            "two pull requests": lambda sha: [
+                self.source_pull_request(sha, qualify),
+                self.source_pull_request(sha, qualify),
+            ],
+        }
+        for case, pulls in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.build_repository(root)
+                base_sha, source_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+                candidate_sha = self.train_candidate(root, base_sha, source_sha)
+
+                with self.assertRaises(ReleaseMilestoneContextError):
+                    discover_milestone_receipt(
+                        root,
+                        base_sha=base_sha,
+                        head_sha=candidate_sha,
+                        head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                        base_repo="cbusillo/BD_to_AVP",
+                        head_repo="cbusillo/BD_to_AVP",
+                        base_branch="main",
+                        pull_request_lookup=pulls,
+                    )
+
+    def test_rejects_merge_train_evidence_batched_with_another_pull_request(self) -> None:
+        release_tag = CHANGE_SCOPED_TAGS[0]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, source_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+            subprocess.run(["git", "checkout", "-q", "-b", "other", base_sha], cwd=root, check=True)
+            (root / "README.md").write_text("another pull request\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "another pull request"], cwd=root, check=True)
+            other_sha = self.git_output(root, "rev-parse", "HEAD")
+            candidate_sha = self.train_candidate(root, base_sha, other_sha, source_sha)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "exactly one pull request"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=candidate_sha,
+                    head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    pull_request_lookup=self.lookup_returning(
+                        self.source_pull_request(source_sha, f"qualify/{release_tag}")
+                    ),
+                )
+
+    def test_rejects_merge_train_candidate_that_changes_more_than_its_source(self) -> None:
+        release_tag = CHANGE_SCOPED_TAGS[0]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, source_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+            self.train_candidate(root, base_sha, source_sha)
+            # Amend the merge so it carries a change its qualifying source never had.
+            (root / "README.md").write_text("added in the merge commit\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-q", "--amend", "--no-edit"], cwd=root, check=True)
+            candidate_sha = self.git_output(root, "rev-parse", "HEAD")
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "clean merge"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=candidate_sha,
+                    head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    pull_request_lookup=self.lookup_returning(
+                        self.source_pull_request(source_sha, f"qualify/{release_tag}")
+                    ),
+                )
+
+    def test_ordinary_branch_mismatch_never_looks_up_pull_requests(self) -> None:
+        release_tag = CHANGE_SCOPED_TAGS[0]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.append_change_scoped_evidence(root, release_tag=release_tag)
+
+            def lookup(_sha: str) -> list[Mapping[str, object]]:
+                raise AssertionError("A non-train pull request must not be resolved through GitHub.")
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, re.escape(f"qualify/{release_tag}")):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="feature/prerelease-evidence",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    pull_request_lookup=lookup,
+                )
 
     def test_rejects_change_scoped_evidence_digest_mismatch(self) -> None:
         for release_tag in CHANGE_SCOPED_TAGS:
@@ -2396,6 +2619,41 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 head_repo="cbusillo/BD_to_AVP",
                 base_branch="main",
             )
+
+        self.assertEqual(discovered, manifest_path)
+
+    def test_manifest_discovery_carried_by_merge_train(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = self.git_output(root, "rev-parse", "HEAD")
+            manifest_path = root / "docs/release-evidence/v0.3.0/qualification-manifest.json"
+            manifest_path.write_text("{}\n", encoding="utf-8")
+            ledger_path = root / RELEASE_LEDGER_PATH
+            ledger_path.write_text(
+                json.dumps({"schema_version": 1, "releases": [self.release_ledger_record(root)]}) + "\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", manifest_path, ledger_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "append release ledger"], cwd=root, check=True)
+            source_sha = self.git_output(root, "rev-parse", "HEAD")
+            candidate_sha = self.train_candidate(root, base_sha, source_sha)
+
+            def discover(branch: str) -> Path | None:
+                return discover_milestone_manifest(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=candidate_sha,
+                    head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    pull_request_lookup=self.lookup_returning(self.source_pull_request(source_sha, branch)),
+                )
+
+            discovered = discover("automation/release-evidence-v0.3.0")
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "idempotent branch"):
+                discover("copy/evidence-v0.3.0")
 
         self.assertEqual(discovered, manifest_path)
 
@@ -2817,6 +3075,40 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
 
         self.assertEqual(discovered, release_tag)
         self.assertEqual(verified, [(root, release_tag, base_sha)])
+
+    def test_terminal_v2_qualification_carried_by_merge_train(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = self.git_output(root, "rev-parse", "HEAD")
+            release_tag = "v1.0.0"
+            bundle = root / "docs/release-evidence" / release_tag
+            bundle.mkdir(parents=True)
+            (bundle / "qualification-v2.json").write_text("{}\n", encoding="utf-8")
+            (root / "docs/release-evidence/index-v2.json").write_text("{}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "docs/release-evidence"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "add terminal v2 evidence"], cwd=root, check=True)
+            source_sha = self.git_output(root, "rev-parse", "HEAD")
+            candidate_sha = self.train_candidate(root, base_sha, source_sha)
+
+            def discover(branch: str) -> str | None:
+                return discover_terminal_v2_qualification(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=candidate_sha,
+                    head_branch=f"{TRAIN_CANDIDATE_BRANCH_PREFIX}batch-1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    qualified_v2_verifier=lambda _root, _tag, _base: {"class": "v2-qualified"},
+                    pull_request_lookup=self.lookup_returning(self.source_pull_request(source_sha, branch)),
+                )
+
+            discovered = discover(f"automation/release-evidence-{release_tag}")
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "idempotent branch"):
+                discover("copy/evidence")
+
+        self.assertEqual(discovered, release_tag)
 
     def test_terminal_v2_qualification_rejects_nonqualified_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

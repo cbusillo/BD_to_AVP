@@ -230,6 +230,7 @@ class BetaChangeScopedEvidenceTests(unittest.TestCase):
         _validate_change_scoped_evidence_append(
             self.root,
             base_sha=self.candidate_sha,
+            head_sha=git(self.root, "rev-parse", "HEAD"),
             head_branch=f"qualify/{self.METADATA.release_tag}",
             changed_paths=changed_paths,
             policy_relative=POLICY_PATH,

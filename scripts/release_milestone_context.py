@@ -63,6 +63,9 @@ FAILED_POST_PUBLICATION_PATH_PATTERN = re.compile(
 RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
+# Launchplane builds each merge-train candidate on a branch under this prefix and opens a
+# batch pull request from it, so the branch a release rule names is the source pull request's.
+TRAIN_CANDIDATE_BRANCH_PREFIX = "launchplane/train/"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CANCELLATION_REASON_PATTERN = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
@@ -299,6 +302,116 @@ def _string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
         raise ReleaseMilestoneContextError(f"{description} must be a non-empty string.")
     return value
+
+
+PullRequestLookup = Callable[[str], Sequence[Mapping[str, Any]]]
+
+
+def lookup_pull_requests_for_commit(commit_sha: str) -> Sequence[Mapping[str, Any]]:
+    result = subprocess.run(
+        ["gh", "api", f"repos/{EXPECTED_REPOSITORY}/commits/{commit_sha}/pulls"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ReleaseMilestoneContextError("Unable to look up the pull request a merge-train candidate carries.")
+    try:
+        pulls = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ReleaseMilestoneContextError(f"Pull-request lookup returned invalid JSON: {error}") from error
+    return [_mapping(pull, "pull request for merge-train source") for pull in _sequence(pulls, "pull requests")]
+
+
+def train_candidate_source_branch(
+    repo_root: Path,
+    *,
+    base_sha: str,
+    head_sha: str,
+    pull_request_lookup: PullRequestLookup,
+) -> str:
+    """The head branch of the one open pull request a merge-train candidate merges onto protected main."""
+    parents = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", head_sha],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if parents.returncode != 0:
+        raise ReleaseMilestoneContextError("Unable to inspect the merge-train candidate commit.")
+    commits = parents.stdout.split()
+    if len(commits) != 3 or commits[1] != base_sha:
+        raise ReleaseMilestoneContextError(
+            "A merge-train candidate carrying release evidence must merge exactly one pull request onto protected main."
+        )
+    source_sha = commits[2]
+    # The candidate must be exactly the clean merge of its source, so no evidence can ride in the merge itself.
+    merged = subprocess.run(
+        ["git", "merge-tree", "--write-tree", base_sha, source_sha],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    candidate_tree = subprocess.run(
+        ["git", "rev-parse", f"{head_sha}^{{tree}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if (
+        merged.returncode != 0
+        or candidate_tree.returncode != 0
+        or merged.stdout.split()[:1] != candidate_tree.stdout.split()
+    ):
+        raise ReleaseMilestoneContextError(
+            "A merge-train candidate carrying release evidence must be the clean merge of its source pull request."
+        )
+    matches = []
+    for pull in pull_request_lookup(source_sha):
+        head = _mapping(pull.get("head"), "merge-train source pull-request head")
+        base = _mapping(pull.get("base"), "merge-train source pull-request base")
+        head_repo = _mapping(head.get("repo"), "merge-train source pull-request head repository")
+        base_repo = _mapping(base.get("repo"), "merge-train source pull-request base repository")
+        if (
+            pull.get("state") == "open"
+            and head.get("sha") == source_sha
+            and base.get("ref") == EXPECTED_BASE_BRANCH
+            and head_repo.get("full_name") == EXPECTED_REPOSITORY
+            and base_repo.get("full_name") == EXPECTED_REPOSITORY
+        ):
+            matches.append(head)
+    if len(matches) != 1:
+        raise ReleaseMilestoneContextError(
+            "A merge-train candidate carrying release evidence must come from exactly one open same-repository "
+            "pull request targeting protected main."
+        )
+    return _string(matches[0].get("ref"), "merge-train source pull-request branch")
+
+
+def require_head_branch(
+    repo_root: Path,
+    *,
+    base_sha: str,
+    head_sha: str,
+    head_branch: str,
+    expected_branch: str,
+    message: str,
+    pull_request_lookup: PullRequestLookup,
+) -> None:
+    """Require the pull request's branch, or on a merge-train candidate the carried pull request's branch."""
+    if head_branch == expected_branch:
+        return
+    if head_branch.startswith(TRAIN_CANDIDATE_BRANCH_PREFIX) and expected_branch == train_candidate_source_branch(
+        repo_root,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        pull_request_lookup=pull_request_lookup,
+    ):
+        return
+    raise ReleaseMilestoneContextError(message)
 
 
 def require_manifest_runner_sha(context: ReleaseMilestoneContext, repo_root: Path, expected_sha: str) -> None:
@@ -1579,10 +1692,12 @@ def _validate_change_scoped_evidence_append(
     repo_root: Path,
     *,
     base_sha: str,
+    head_sha: str,
     head_branch: str,
     changed_paths: Sequence[str],
     policy_relative: str,
     appended_receipts: Sequence[Mapping[str, Any]],
+    pull_request_lookup: PullRequestLookup = lookup_pull_requests_for_commit,
 ) -> None:
     evidence_matches = [
         (path, match.group(1))
@@ -1604,10 +1719,15 @@ def _validate_change_scoped_evidence_append(
         raise ReleaseMilestoneContextError(
             f"Prepublication change-scoped evidence is limited to {sorted(CHANGE_SCOPED_EVIDENCE_STAGES)} releases."
         )
-    if head_branch != f"qualify/{release_tag}":
-        raise ReleaseMilestoneContextError(
-            f"Prepublication change-scoped evidence must use branch {f'qualify/{release_tag}'!r}."
-        )
+    require_head_branch(
+        repo_root,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        head_branch=head_branch,
+        expected_branch=f"qualify/{release_tag}",
+        message=f"Prepublication change-scoped evidence must use branch {f'qualify/{release_tag}'!r}.",
+        pull_request_lookup=pull_request_lookup,
+    )
     tracked_in_base = subprocess.run(
         ["git", "cat-file", "-e", f"{base_sha}:{evidence_relative}"],
         cwd=repo_root,
@@ -1929,6 +2049,7 @@ def discover_terminal_v2_qualification(
     head_repo: str,
     base_branch: str,
     qualified_v2_verifier: QualifiedV2Verifier = verify_qualified_v2_bundle,
+    pull_request_lookup: PullRequestLookup = lookup_pull_requests_for_commit,
 ) -> str | None:
     if base_repo != EXPECTED_REPOSITORY or head_repo != EXPECTED_REPOSITORY or base_branch != EXPECTED_BASE_BRANCH:
         raise ReleaseMilestoneContextError(
@@ -1957,8 +2078,15 @@ def discover_terminal_v2_qualification(
         )
     _qualification_path, release_tag = matches[0]
     expected_branch = f"automation/release-evidence-{release_tag}"
-    if head_branch != expected_branch:
-        raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
+    require_head_branch(
+        repo_root,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        head_branch=head_branch,
+        expected_branch=expected_branch,
+        message=f"Release evidence changes must use idempotent branch {expected_branch!r}.",
+        pull_request_lookup=pull_request_lookup,
+    )
     validate_terminal_v2_diff(repo_root, release_tag, base_sha, changed_paths)
     if RELEASE_V2_INDEX_PATH not in changed_paths:
         raise ReleaseMilestoneContextError("Terminal v2 release evidence must update index-v2.json.")
@@ -2143,6 +2271,7 @@ def discover_milestone_receipt(
     base_branch: str,
     published_receipt_verifier: PublishedReceiptVerifier = verify_published_release_receipt,
     qualified_v2_verifier: QualifiedV2Verifier | None = None,
+    pull_request_lookup: PullRequestLookup = lookup_pull_requests_for_commit,
 ) -> Path | None:
     if base_repo != EXPECTED_REPOSITORY or head_repo != EXPECTED_REPOSITORY or base_branch != EXPECTED_BASE_BRANCH:
         raise ReleaseMilestoneContextError(
@@ -2244,10 +2373,15 @@ def discover_milestone_receipt(
             receipt_relative, release_tag = receipt_matches[0]
             candidate_release_tag = _string(candidate.get("release_tag"), "configured qualification release tag")
             expected_branch = f"prepare/{candidate_release_tag}"
-            if head_branch != expected_branch:
-                raise ReleaseMilestoneContextError(
-                    f"Prior receipt carry-forward must use preparation branch {expected_branch!r}."
-                )
+            require_head_branch(
+                repo_root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch=head_branch,
+                expected_branch=expected_branch,
+                message=f"Prior receipt carry-forward must use preparation branch {expected_branch!r}.",
+                pull_request_lookup=pull_request_lookup,
+            )
             _validate_prepublication_config_transition(
                 repo_root,
                 base_sha=base_sha,
@@ -2341,7 +2475,9 @@ def discover_milestone_receipt(
             _validate_change_scoped_evidence_append(
                 repo_root,
                 base_sha=base_sha,
+                head_sha=head_sha,
                 head_branch=head_branch,
+                pull_request_lookup=pull_request_lookup,
                 changed_paths=changed_paths,
                 policy_relative=policy_relative,
                 appended_receipts=appended_receipts,
@@ -2354,8 +2490,15 @@ def discover_milestone_receipt(
     receipt_relative, release_tag = receipt_matches[0]
     _validate_release_evidence_tag_scope(changed_paths, release_tag)
     expected_branch = f"automation/release-evidence-{release_tag}"
-    if head_branch != expected_branch:
-        raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
+    require_head_branch(
+        repo_root,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        head_branch=head_branch,
+        expected_branch=expected_branch,
+        message=f"Release evidence changes must use idempotent branch {expected_branch!r}.",
+        pull_request_lookup=pull_request_lookup,
+    )
     out_of_scope = [path for path in changed_paths if not path.startswith("docs/")]
     if out_of_scope:
         raise ReleaseMilestoneContextError(f"Release evidence pull requests may change only docs/: {out_of_scope!r}.")
@@ -2381,6 +2524,7 @@ def discover_milestone_manifest(
     base_repo: str,
     head_repo: str,
     base_branch: str,
+    pull_request_lookup: PullRequestLookup = lookup_pull_requests_for_commit,
 ) -> Path | None:
     if base_repo != EXPECTED_REPOSITORY or head_repo != EXPECTED_REPOSITORY or base_branch != EXPECTED_BASE_BRANCH:
         raise ReleaseMilestoneContextError(
@@ -2419,8 +2563,15 @@ def discover_milestone_manifest(
         )
     _validate_release_evidence_tag_scope(changed_paths, release_tag)
     expected_branch = f"automation/release-evidence-{release_tag}"
-    if head_branch != expected_branch:
-        raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
+    require_head_branch(
+        repo_root,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        head_branch=head_branch,
+        expected_branch=expected_branch,
+        message=f"Release evidence changes must use idempotent branch {expected_branch!r}.",
+        pull_request_lookup=pull_request_lookup,
+    )
     out_of_scope = [path for path in changed_paths if not path.startswith("docs/")]
     if out_of_scope:
         raise ReleaseMilestoneContextError(f"Release evidence pull requests may change only docs/: {out_of_scope!r}.")
