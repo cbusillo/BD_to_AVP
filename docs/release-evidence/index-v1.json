@@ -125,6 +125,16 @@
       "source_sha": "b99a9e38c7f00980dd59cc295d90ad7f6032b387",
       "tag": "v0.3.3-beta.5",
       "workflow_run_id": 35514822686
+    },
+    {
+      "publication_record": "docs/release-evidence/v0.3.4-alpha.1/publication-record.json",
+      "published_at": "2026-10-18T03:20:58Z",
+      "receipt": "docs/release-evidence/v0.3.4-alpha.1/release-receipt.json",
+      "receipt_file_sha256": "1347dd13bf9a0f31e0c3fc528fd1b87122bfea6d6e7e870ab86cb19849d644dd",
+      "release_id": 416206639,
+      "source_sha": "1788c62c3438e9616d7bb0f81174b62384447197",
+      "tag": "v0.3.4-alpha.1",
+      "workflow_run_id": 39091581583
     }
   ],
   "schema_version": 1
