@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "qualification_id": "v0.3.4-alpha.1-change-scoped-evidence-v1",
+  "recorded_at": "2026-10-18T02:07:58.277914Z",
+  "source": {
+    "build_version": "178",
+    "package_version": "0.3.4a1",
+    "public_version": "0.3.4-alpha.1",
+    "release_tag": "v0.3.4-alpha.1",
+    "source_sha": "4e4fdfcb899c80f0ef31fca9077b013114346dda"
+  },
+  "failed_preparation_run": {
+    "execution": "local_preparation_classification",
+    "candidate_sha": "4e4fdfcb899c80f0ef31fca9077b013114346dda",
+    "workflow_phase": "preparation",
+    "exit_code": 2,
+    "blocking_case_ids": [
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "malformed-pgs-parser-recovery",
+      "subtitle-partial-output-diagnostics"
+    ],
+    "signing_started": false,
+    "release_identity_created": false,
+    "report_sha256": "16e65677d15d9b91f942ffc883db188e0c36c62bb8d5f00a92b70e9d2dc97a40",
+    "command": "uv run python -m scripts.qualify_release_scope --qualification docs/qualification/v0.3.4-alpha.1-signed-qualification-v1.json --candidate-sha 4e4fdfcb899c80f0ef31fca9077b013114346dda --evidence docs/qualification/release-evidence-v1.json --release-stage alpha --workflow-phase preparation --require-evidence"
+  },
+  "packaged_candidate": {
+    "app_tree_sha256": "adeadcf6e9234306ce71c37f6b4ddd36c32ca2bb25f7a7fb87e870afc5e3e560",
+    "architecture": "arm64",
+    "bundle_identifier": "com.shinycomputers.bd-to-avp",
+    "codesign_verification": "passed",
+    "package_command": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py package",
+    "preview_presentation_smoke": "passed",
+    "signing": "ad_hoc_local",
+    "worker_cancellation_smoke": "passed",
+    "signature_verification": "codesign -dv reports Signature=adhoc and no TeamIdentifier",
+    "worker_protocol_smoke": "passed",
+    "support_diagnostics_endpoint": "https://diagnostics.shinycomputers.com",
+    "toolchain": "Xcode 27.0 (27A266a)",
+    "package_attempts": 1
+  },
+  "evidence_source_semantics": {
+    "developer_id_or_notarization_claimed": false,
+    "index_source": "signed_artifact_receipt",
+    "meaning": "Change-scoped evidence from the exact locally packaged, ad-hoc code-signed app tree; production Developer ID signing remains owned by the guarded release run.",
+    "project_precedent": "docs/qualification/v0.3.3-beta.5-change-scoped-evidence-v1.json"
+  },
+  "validation": {
+    "native_tests": {
+      "command": "uv run python scripts/native_app.py test",
+      "passed": 799,
+      "failed": 0,
+      "skipped": 0,
+      "log_sha256": "49818eb51319122159fe813a76c8ed0fe19d4348c178d741317b2c5cadfa059b"
+    },
+    "focused_python_tests": {
+      "command": "uv run python -m unittest -v tests.test_process_preflight tests.test_subtitles tests.test_vendor_pgsrip_edge_cases",
+      "passed": 98,
+      "failed": 0,
+      "skipped": 0,
+      "log_sha256": "cbff8663335e0e4edf5c5a62fbfc178b463765e6a9882a59a6ded113aba20017"
+    },
+    "packaged_app": {
+      "exit_code": 0,
+      "log_sha256": "a0cbb9985d66c0ef315f3d1f047a9da200c7abfae83e5510847b079307b37d89"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "gui-preview-cancel-cleanup",
+      "observations": {
+        "cancelled_preview_removes_partial_workspace": true,
+        "owned_worker_and_descendant_processes_reaped": true,
+        "packaged_worker_cancellation_smoke": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCancelledPreviewRemovesPartialWorkspace",
+        "macos/BluRayToVisionProTests/WorkerProcessClientTests.swift:testCancellationAllowsWorkerToReapSeparateSessionChild",
+        "scripts/native_app.py:packaged worker cancellation smoke"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "gui-preview-failure-cleanup",
+      "observations": {
+        "destination_workspace_failure_is_actionable": true,
+        "empty_owned_destination_root_removed": true,
+        "transient_cleanup_failure_retried": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspacePreparationFailureIsActionable",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspaceCleanupRemovesEmptyHiddenRoot",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCleanupRetriesTransientRemovalFailure"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "network-generated-final-output",
+      "observations": {
+        "destination_snapshots_preserved_in_batch_preparation": true,
+        "generated_route_job_spec_matches_shared_worker_fixture": true,
+        "final_output_move_returns_destination_path": true,
+        "packaged_worker_protocol_smoke": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testBatchPreparationSnapshotsProfileDestinationAndOptionsPerItem",
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift:testGeneratedRouteJobSpecMatchesSharedWorkerFixture",
+        "tests/test_process_preflight.py:test_output_move_returns_final_output_path",
+        "scripts/native_app.py:smoke_packaged_worker"
+      ],
+      "scope": {
+        "mounted_network_conversion_rerun": false,
+        "prior_real_network_evidence": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "qualification_kind": "exact_candidate_change_scoped_regression"
+      },
+      "status": "passed"
+    },
+    {
+      "case_id": "overwrite-and-conversion-cancel",
+      "observations": {
+        "existing_output_rejected_before_workspace_mutation": true,
+        "resumed_and_unowned_workspaces_preserved": true,
+        "view_model_stop_transitions_to_stopping": true,
+        "owned_workspaces_removed_after_cancellation": true
+      },
+      "proof": [
+        "tests/test_process_preflight.py:test_existing_output_aborts_before_workspace_mutation",
+        "tests/test_process_preflight.py:test_cancelled_conversion_cleans_owned_workspaces",
+        "tests/test_process_preflight.py:test_cancelled_conversion_preserves_unowned_workspaces",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testStopActiveWorkerCancelsConversionAndTransitionsToStopping",
+        "tests/test_process_preflight.py:test_resumed_cancellation_preserves_existing_workspaces"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "malformed-pgs-parser-recovery",
+      "observations": {
+        "declared_pixel_bounds_enforced": true,
+        "malformed_display_sets_isolated": true,
+        "truncated_and_unknown_segments_bounded": true,
+        "usable_peer_subtitles_preserved": true
+      },
+      "proof": [
+        "tests/test_vendor_pgsrip_edge_cases.py:test_rle_exceeding_declared_bounds_raises_value_error",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_decode_rle_image_max_pixels_parameter_raises_on_overflow",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_generate_image_returns_none_for_malformed_rle",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_create_items_skips_malformed_item_and_keeps_good_ones",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_skips_unknown_segment_and_continues",
+        "tests/test_vendor_pgsrip_edge_cases.py:test_truncated_segment_is_ignored"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "subtitle-partial-output-diagnostics",
+      "observations": {
+        "aggregate_track_counts_recorded": true,
+        "cancelled_outcome_distinguished": true,
+        "failed_outcome_distinguished": true,
+        "partial_outcome_distinguished": true,
+        "successful_outcome_distinguished": true
+      },
+      "proof": [
+        "tests/test_subtitles.py:test_completed_event_emitted_after_successful_rip",
+        "tests/test_subtitles.py:test_partial_warning_emitted_when_empty_srts_produced",
+        "tests/test_subtitles.py:test_partial_warning_emitted_when_ripper_skips_a_selected_track",
+        "tests/test_subtitles.py:test_empty_output_emits_failure_before_strict_error",
+        "tests/test_subtitles.py:test_postprocess_error_closes_started_event_with_failure",
+        "tests/test_subtitles.py:test_keyboard_interrupt_closes_started_event_as_cancelled",
+        "tests/test_subtitles.py:test_no_partial_warning_when_all_tracks_succeed"
+      ],
+      "status": "passed"
+    }
+  ],
+  "privacy": {
+    "diagnostic_tokens_recorded": false,
+    "private_hostnames_recorded": false,
+    "private_media_identifiers_recorded": false,
+    "private_paths_recorded": false
+  },
+  "acceptance": {
+    "blocking_case_ids": [],
+    "failed_case_count": 0,
+    "passed": true,
+    "passed_case_count": 6
+  },
+  "result": "accepted_public_safe_summary"
+}
