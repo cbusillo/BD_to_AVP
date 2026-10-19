@@ -590,7 +590,7 @@ jobs:
 
       - name: Retain preparation qualification report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-qualification-preparation-${{ github.run_attempt }}
           path: release-qualification-preparation.json
@@ -750,7 +750,7 @@ jobs:
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -1113,7 +1113,7 @@ jobs:
 
       - name: Upload log on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-release-diagnostics
           path: |
@@ -1181,7 +1181,7 @@ jobs:
       - name: Upload verified release package
         id: release_package
         if: success()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-package
           path: |
@@ -1203,7 +1203,7 @@ jobs:
       id-token: write
     steps:
       - name: Download verified release package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-package
           path: release-package
@@ -1249,7 +1249,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download verified release package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-package
           path: release-package
@@ -1299,7 +1299,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Validate and build distributions
         run: |
@@ -1324,7 +1324,7 @@ jobs:
 
       - name: Upload Python distributions
         id: python_artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: python-distributions
           path: python-distributions
@@ -1348,7 +1348,7 @@ jobs:
       release_notes_sha256: ${{ steps.draft_release.outputs.release_notes_sha256 }}
     steps:
       - name: Download verified release package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-package
           path: release-package
@@ -1573,7 +1573,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable draft release notes
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-notes-source
           path: draft-release-notes.md
@@ -1607,13 +1607,13 @@ jobs:
           python-version: "3.12"
 
       - name: Download verified release package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-package
           path: release-assets
 
       - name: Download immutable draft release notes
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-notes-source
           path: release-notes-source
@@ -1789,7 +1789,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload signed appcast for verification
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: signed-appcast
           path: appcast-site/appcast.xml
@@ -1827,7 +1827,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download signed appcast
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: signed-appcast
           path: signed-appcast
@@ -2200,7 +2200,7 @@ jobs:
       - name: Retain verified release receipt transfer
         id: receipt_artifact
         if: success()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-receipt-${{ github.run_attempt }}
           path: downloaded-release-receipt.json
@@ -2259,7 +2259,7 @@ jobs:
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -2272,13 +2272,13 @@ jobs:
           uv run python scripts/native_app.py generate
 
       - name: Download exact verified package transfer
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.package.outputs.workflow_artifact_id }}
           path: signed-artifact-assets/package
 
       - name: Download exact verified receipt transfer
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.build-receipt.outputs.receipt_artifact_id }}
           path: signed-artifact-assets/receipt
@@ -2348,7 +2348,7 @@ jobs:
 
       - name: Retain signed artifact UI failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: signed-artifact-ui-diagnostics-${{ github.run_attempt }}
           path: signed-artifact-ui-diagnostics
@@ -2358,7 +2358,7 @@ jobs:
       - name: Retain signed artifact UI receipt
         id: signed_ui_artifact
         if: success()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: signed-artifact-ui-${{ github.run_attempt }}
           path: signed-artifact-ui-receipt.json
@@ -2394,7 +2394,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download exact verified receipt transfer
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.build-receipt.outputs.receipt_artifact_id }}
           path: release-receipt-transfer
@@ -2412,7 +2412,7 @@ jobs:
           python -m scripts.release_receipt validate --receipt "$RECEIPT_PATH"
 
       - name: Download signed artifact UI receipt
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.signed-artifact-ui.outputs.artifact_id }}
           path: signed-artifact-ui
@@ -2490,7 +2490,7 @@ jobs:
 
       - name: Retain final qualification report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-qualification-final-${{ github.run_attempt }}
           path: release-qualification-final.json
