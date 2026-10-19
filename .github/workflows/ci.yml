@@ -48,7 +48,7 @@ jobs:
 
       - name: Set up uv
         # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
@@ -85,7 +85,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "24"
           cache: npm
@@ -93,7 +93,7 @@ jobs:
 
       - name: Set up uv
         # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
@@ -185,7 +185,7 @@ jobs:
 
       - name: Preserve native Vision OCR diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: vision-ocr-diagnostics
           path: build/vision-ocr
@@ -284,7 +284,7 @@ jobs:
       - name: Upload post-publication milestone report
         id: milestone-report
         if: always() && steps.milestone-context.outputs.required == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-qualification-milestone-${{ github.run_attempt }}
           path: release-qualification-milestone.json
@@ -339,7 +339,7 @@ jobs:
 
       - name: Set up uv
         # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
@@ -423,7 +423,7 @@ jobs:
 
       - name: Retain installed Mac UI evidence
         if: always() && steps.installed-ui.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ci-installed-ui-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -460,7 +460,7 @@ jobs:
 
       - name: Set up uv
         # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
