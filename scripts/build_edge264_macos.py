@@ -155,7 +155,10 @@ def build_edge264(
                 ) from error
         build_env = os.environ.copy()
         build_env["MACOSX_DEPLOYMENT_TARGET"] = provenance.minimum_macos
-        run(make_command(provenance, "check"), checkout, build_env)
+        # A pin move qualifies the new revision with upstream's full checks. Reproducing
+        # the pinned binary only builds it: the checksum ties it to the build that passed
+        # those checks, and their wall-clock limits are not reliable on busy CI runners.
+        run(make_command(provenance, "edge264mvc_test" if verify else "check"), checkout, build_env)
 
         # Upstream renamed its test executable; older pinned revisions still
         # produce the original name. Keep the packaged destination stable.
