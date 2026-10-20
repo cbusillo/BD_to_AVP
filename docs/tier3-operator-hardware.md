@@ -68,33 +68,19 @@ Pro identity uses only `model_family`, `chip_family`, and `visionos_major`.
 
 ## Guided Collection
 
-Run the collector from the exact release-evidence branch. The release receipt
-must be committed and byte-identical to repository `HEAD`. Use the maintained
-qualification controller so the release receipt is derived from the checked
-release tag and the selected case is confirmed as currently
-`operator_required`. The collector shows a validated public-safe preview,
-including exact release identity, and writes the answers only after a final
-bounded confirmation:
+Run `scripts.tier3_operator_collect` with the candidate's release receipt. The
+receipt must be committed in the repository. Releases after v0.3.4-alpha.1 no
+longer commit one, so this collector only works for earlier releases; #1021
+replaces these receipts with a hands-on note on the release's issue. The
+collector shows a validated public-safe preview, including exact release
+identity, and writes the answers only after a final bounded confirmation:
 
 ```sh
-uv run python -m scripts.release_qualification_controller collect-operator \
-  --release-tag <candidate> \
+uv run python -m scripts.tier3_operator_collect \
+  --release-receipt docs/release-evidence/<candidate>/release-receipt.json \
   --case-id usb-bluray-makemkv \
-  --environment-class dedicated-hardware \
   --output-answers /path/out/usb-bluray-makemkv-answers.json
 ```
-
-The controller validates the same checked status used by `status`, rejects a
-case that is not currently due, and supports `--as-of YYYY-MM-DD` for a
-reproducible expiry boundary. Exit `0` means answers were written, exit `1`
-means the checked release binding or due-case precondition failed, exit `2`
-means bounded collection failed, and exit `3` means the operator cancelled and
-nothing was written.
-
-`scripts.tier3_operator_collect` remains the lower-level compatibility boundary
-for an explicitly approved baseline or diagnostic collection that is not
-currently due. It requires the checked `--release-receipt` path directly and
-does not perform the controller's due-case gate.
 
 For `protected-real-media-conversion`, also pass the private native-worker
 NDJSON stream with `--worker-events` and each app-owned temporary path with
@@ -123,13 +109,9 @@ failed operator-only evidence remains visible and nonblocking.
 
 ## Receipt Build
 
-For a newly published candidate, run from the idempotent
-`automation/release-evidence-<tag>` branch created by the Release Evidence
-workflow. Add operator receipts and their evidence-index entries to that same
-branch when collection is due. Passed receipts use `status: accepted`; skipped
-or failed receipts use matching `skipped` or `failed` index status. Those
-outcomes remain visible in the milestone report but cannot satisfy any automated
-or blocking assertion.
+Passed receipts use `status: accepted`; skipped or failed receipts use
+matching `skipped` or `failed` status. They cannot satisfy any automated or
+blocking assertion.
 
 ```sh
 uv run python -m scripts.tier3_operator_receipt \
@@ -149,15 +131,13 @@ first baseline, receipt expiry, mapped invalidating changes, environment or
 device-family changes, or a maintainer-requested retest. The USB/MakeMKV case
 retains its first-RC baseline. A Stable milestone alone does not force any of
 the three physical cases, and missing, skipped, failed, or due physical evidence
-does not block publication, evidence-branch reconciliation, or milestone
-closeout.
+does not block publication.
 
 ## Validation
 
 ```sh
 uv run python -m unittest tests.test_tier3_operator_receipt
 uv run python -m unittest tests.test_tier3_operator_collect
-uv run python -m unittest tests.test_release_qualification_controller
 uv run python -m scripts.qualify_release_scope --validate-policy
 ```
 

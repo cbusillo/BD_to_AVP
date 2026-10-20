@@ -1,8 +1,5 @@
 # Protected-Main Release Process
 
-Release Evidence v2 record and offline-verification semantics are documented in
-[`release-evidence-v2.md`](release-evidence-v2.md).
-
 The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
@@ -377,8 +374,8 @@ The workflow performs these ordered boundaries:
     attempt, release ID, committed versions/tag/DMG name, signed app tree digest,
     and DMG/checksum/appcast asset IDs and digests. The artifact report is
     uploaded as an Actions artifact before enforcement. Publication cannot
-    proceed until both gates pass. Cases whose exact evidence requires the live
-    published appcast remain visible but deferred to milestone qualification.
+    proceed until both gates pass. The classifier still lists cases tied to the
+    live appcast; the `update-test` job below is what now tests the update path.
     Operator-only physical and native-window presentation evidence is reported
     separately and cannot bypass or satisfy these automated gates.
     The `update-test` job (`.github/workflows/update-test.yml`) also runs before
@@ -402,208 +399,10 @@ The workflow performs these ordered boundaries:
     through the pinned PyPI Trusted Publisher with PEP 740 attestations. The publisher remains in
     `briefcase.yml` and the `pypi` environment so its existing OIDC identity does
     not change.
-14. After either operator workflow completes successfully, the secret-free
-   `Release Evidence` workflow revalidates the completed workflow identity,
-   immutable release, receipt asset, live Pages appcast, and same-run
-   `signed-artifact-ui` Actions artifact while that artifact is unexpired. It
-   copies the exact release receipt, original one-file signed UI Actions ZIP,
-   and signed UI receipt into
-   `docs/release-evidence/<tag>/`, atomically snapshots the updated qualification
-   as immutable `qualification-record.json`, writes a deterministic public-safe
-   `qualification-manifest.json`, writes the publication record and release
-   ledger, updates the rolling qualification and cut packet, writes the durable
-   v2 `CAPTURED` bundle, and directly creates or advances
-   `automation/release-evidence-<tag>` with an actor-bound non-force push. The
-   branch commit plus `capture-v2.json` is the durable capture checkpoint; the
-   workflow uses only `contents: write`, verifies the exact remote SHA and file
-   bytes after pushing, and does not create, comment on, or delete a pull
-   request. Physical hardware and manual Sparkle-window evidence remains visible
-   as passed, failed, skipped, missing, or due, but it does not block
-   reconciliation. When the evidence is ready to merge, an operator opens the
-   normal protected docs-only pull request from the automation branch. Protected
-   CI validates the checked manifest/receipt identities and runs the `milestone`
-   qualification phase; branch protection, review, and normal merge policy remain
-   in force. A reconciliation or
-   milestone failure does not rebuild, replace, or invalidate the correctly
-   published release. If protected `main` advances while the evidence branch is
-   active, refresh the branch by rerunning Release Evidence rather than merging
-   `main` into it. The rerun rebuilds the branch from protected `main` with
-   `uv run python -m scripts.release_evidence_refresh`, never with a textual
-   merge: it copies only files the release owns (its
-   `docs/release-evidence/<tag>/` bundle, its compatibility records under
-   `docs/qualification/`, and its cut packet re-rendered from `main`'s copy by
-   the maintained publication renderer), appends the release's own
-   evidence-index receipts after `main`'s, adds its ledger record through the
-   ledger writer, and regenerates `index-v2.json`. The result is one commit
-   whose parents are the previous branch head and `main`, so the branch keeps
-   its history and contains `main`; rerunning against the same `main` changes
-   nothing. A release-owned file that `main` changed differently, a receipt ID
-   that `main` holds with other content, a receipt for another release, or any
-   branch change outside those paths fails closed. The rolling qualification
-   follows protected `main` whenever `main` changed it. Before a terminal
-   record exists, the rerun then validates the prior manifest against its
-   immutable qualification snapshot and the controller, policy, route table,
-   and case classifications stored at its recorded runner SHA, and refreshes
-   only reviewed-main policy and checkpoint fields while preserving exact
-   release and artifact identity. Once the branch holds `qualification-v2.json`,
-   the manifest is frozen: the rerun only refreshes the branch and does not
-   recapture, rebuild, or rebind the manifest, because the terminal
-   pull-request gate does not need runner freshness. Other bundles keep the
-   rebind, since their pull-request gates still require a fresh manifest.
-
-   The routine order for consecutive Betas is: the next Beta's preparation may
-   carry the previous Beta's exact release receipt (see the carry-forward rule
-   in `docs/release-qualification-policy.md`), and the previous Beta's own
-   evidence lands later as its own pull request, preferably one terminal pull
-   request after its milestone qualification. If runner-bound policy or route
-   inputs change on `main` before that release qualifies, it can no longer
-   qualify against its recorded runner; land it capture-only or as a
-   disposition instead. Manifest preparation selects the newest prior published ancestor
-   that already has a checked immutable release receipt; an unreconciled prior
-   release remains immutable history but cannot serve as a qualification base.
-   If
-   the signed UI artifact expires before the first successful capture, the
-   workflow stops explicitly because that immutable evidence cannot be
-   reconstructed; it never substitutes a rebuilt or operator-authored receipt.
-   Inspect the checked result without dispatching workflows, changing refs, or
-   writing evidence by running:
-
-   ```sh
-   uv run python -m scripts.release_qualification_controller status \
-     --release-tag <tag>
-   ```
-
-   The command validates either the canonical manifest or the legacy checked
-   receipt/publication pair, then reports completed, stale, blocking, optional,
-   and operator-required cases as deterministic JSON. A present but invalid
-   manifest fails closed rather than falling back to legacy evidence. Exit `0`
-   means the status was computed with no blocking cases, exit `2` means the
-   status was computed with blocking cases, and exit `1` means validation or
-   identity resolution failed. Use `--as-of YYYY-MM-DD` when a reproducible
-   Tier 3 expiry boundary is required.
-
-   When `status` reports an operator-assisted case in `operator_required`, run
-   guided collection through the same maintained controller entrypoint from the
-   exact checked evidence branch:
-
-   ```sh
-   uv run python -m scripts.release_qualification_controller collect-operator \
-     --release-tag <tag> \
-     --case-id <operator-case-id> \
-     --environment-class dedicated-hardware \
-     --output-answers /path/out/<operator-case-id>-answers.json
-   ```
-
-   The controller derives the checked release receipt, refuses cases that are
-   not currently due, and delegates to the privacy-safe guided collector. It
-   writes only the validated answers file; the separate Tier 3 receipt builder
-   remains the sole evidence writer. Collection exit `0` means answers were
-   written, exit `1` means controller preconditions failed, exit `2` means
-   bounded collection failed, and exit `3` means the operator cancelled with no
-   public state written.
-
-   When blocking automated cases remain on the canonical evidence branch,
-   run the bounded resume observer from the exact checked
-   `automation/release-evidence-<tag>` branch head:
-
-   ```sh
-   uv run python -m scripts.release_qualification_controller resume \
-     --release-tag <tag>
-   ```
-
-   The first invocation is observational. It verifies the remote evidence head,
-   protected `main`, manifest runner and digest, docs-only branch diff, prior
-   dispatches, job conclusion, and retained artifact metadata. No open pull
-   request is required or queried. If dispatch is the only safe next transition, the JSON
-   response reports the exact required `main` and manifest values. Authorize
-   that one workflow dispatch by repeating the command with both values:
-
-   ```sh
-   uv run python -m scripts.release_qualification_controller resume \
-     --release-tag <tag> \
-     --expected-main-sha <full-main-sha> \
-     --expected-manifest-sha256 <manifest-sha256>
-   ```
-
-   Dispatch requires the `shiny-code-app[bot]` token in `GH_TOKEN`; the
-   controller verifies it through the GraphQL viewer before writing anything
-   and refuses any other identity. Runs already dispatched by the repository
-   owner stay observable. The controller
-   writes a mode-`0600` checkpoint under the shared git directory before the
-   API call, then adopts only the exact run whose display title binds the tag
-   and full manifest digest. An unresolved prepared checkpoint prevents a
-   second dispatch after interruption. Local locking prevents concurrent
-   controller processes from dispatching the same transition. After the
-   visibility window, retrying an unresolved dispatch requires the exact
-   checkpoint self digest through `--retry-checkpoint-sha256` plus the same main
-   and manifest authorization. Failed or expired runs require the exact prior
-   run ID through `--retry-run-id`; they are never retried implicitly. If
-   protected `main` moved, rerun Release Evidence to refresh the manifest before
-   resuming.
-
-   When an exact run failed because of a qualification-runner defect, merge the
-   runner fix through a normal pull request, rerun Release Evidence to refresh
-   the manifest, then run `resume` again. It reports
-   `checkpoint_rebind_required` with the exact `--retry-run-id` and
-   `--retry-checkpoint-sha256` values; rerun with those plus the expected main
-   and manifest digests to dispatch one run on the fixed runner. Do not move or
-   delete the local checkpoint by hand for this case.
-
-   Resume exit `0` means observation completed without an operator decision,
-   exit `20` means an exact operator action or later observation is required,
-   exit `21` means an identity or concurrency safety conflict stopped the
-   transition, and exit `1` means local validation failed. Checkpoints live at
-   `<git-common-dir>/bd-to-avp/release-qualification/<tag>.json`. If later
-   evidence reconciliation advances the evidence branch while blockers remain,
-   first verify that no exact qualification run is queued or active and that the
-   recorded run no longer needs observation; only then remove the stale local
-   checkpoint and rerun the observational command. Never remove a prepared
-   checkpoint merely because its workflow run is slow to appear.
-
-   After a successful run, `resume` automatically revalidates and downloads the
-   exact retained artifact through the automation token. The byte-bounded
-   ZIP is digest-checked, admitted without filesystem extraction, validated
-   against the runner-pinned policy and checked manifest, and converted into a
-   deterministic reconciliation plan. Use `--observe-only` to retain the prior
-   `artifact_available` behavior without downloading. `reconciliation_planned`
-   exits `20` with the canonical plan and its SHA-256; `reconciliation_current`
-   exits `0` when every proposed destination and evidence-index record is
-   already identical. Planning creates no repository files, commits, pushes,
-   or pull requests.
-
-   Apply an exact reviewed plan by echoing its digest:
-
-   ```sh
-   uv run python -m scripts.release_qualification_controller resume \
-     --release-tag <tag> \
-     --apply-plan-sha256 <plan-sha256>
-   ```
-
-   Apply requires the `shiny-code-app[bot]` token, the exact canonical
-   evidence worktree, an unchanged protected `main`, no active exact Milestone
-   Qualification run, and a clean worktree. Before changing
-   files it freezes the authorized plan and exact target bytes in a mode-`0600`,
-   self-digested apply checkpoint adjacent to the dispatch checkpoint. It then
-   uses per-file atomic replacement plus resumable verification for only the
-   planned qualification receipts and append-only evidence index, creates one
-   commit containing the plan and run identities,
-   performs a non-force fast-forward push, and revalidates the exact remote
-   commit and content. Every transition is adopted rather than duplicated after
-   an interruption, including a commit or push whose response was lost. Reruns
-   must repeat the exact `--apply-plan-sha256` unless the serialized state is
-   already `pushed`; `reconciliation_apply_pending` reports that requirement and
-   `reconciliation_applied` exits `0` after the pushed commit is durable. The
-   result contains the pushed commit SHA and no pull-request comment or comment
-   ID.
-
-   The apply checkpoint is
-   `<git-common-dir>/bd-to-avp/release-qualification/<tag>.apply.json` and shares
-   the dispatch checkpoint lock. Never delete it while an apply transition is
-   incomplete; the controller removes it only after the pushed commit and exact
-   remote branch state are revalidated as durable. `artifact_expired` permits a new run only after explicit retry
-   authorization when no validated apply checkpoint or equivalent durable state
-   exists; checked receipts already accepted by `status` remain a no-op after
-   Actions transport expires.
+14. Nothing is committed back to `main` after publication. The release receipt
+   stays attached to the GitHub Release, the update test (step 10) ran before
+   publication, and step 11 and the Pages deployment check the public DMG and
+   live appcast.
 15. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,
@@ -694,14 +493,6 @@ sizes and hashes in `docs/release-evidence/v0.3.0-pypi-recovery.json`.
 The original Actions artifact's recorded expiry was 2026-08-14 and its API
 record is now unavailable. The one-time path is historical, not a current
 dispatch procedure. Do not rebuild or republish this historical release.
-For supported read-only verification of PyPI-reported filenames, sizes and hashes, use:
-
-```sh
-uv run python -m scripts.stable_pypi_recovery verify-pypi --state published
-```
-
-It exits `0` with no output when the published file set matches.
-
 The [Stable cut packet](0.3.0-cut-packet.md#post-publication-pypi-recovery)
 preserves the original contract. The obsolete Stable dispatch input/job and
 workflow-run recovery routing were removed in [#866](https://github.com/cbusillo/BD_to_AVP/issues/866).

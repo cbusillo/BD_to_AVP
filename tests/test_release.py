@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
-from scripts import qualify_release_scope, release, release_evidence_v2
+from scripts import qualify_release_scope, release
 from scripts.beta3_recovery_evidence import BETA3_RECOVERY_EVIDENCE_PATH, Beta3RecoveryEvidenceError
 from scripts.production_identity import PRODUCTION_SPARKLE_PUBLIC_KEY
 
@@ -351,10 +351,6 @@ class ReleaseMetadataTests(unittest.TestCase):
                 self.assertEqual(link_qualification["sha256"], hashlib.sha256(link_path.read_bytes()).hexdigest())
                 self.assertEqual(link_qualification["issue_result"], links["categories"]["issue"]["result"])
 
-        # The evidence verifier checks the publication against the receipt, including
-        # the backfill's non-asset status; it does not pin its explanatory wording.
-        publication_result = release_evidence_v2.verify_tag(REPO_ROOT, candidate["release_tag"], worktree=True)
-        self.assertEqual(publication_result["class"], "legacy-publication-v1")
         publication = json.loads(
             (REPO_ROOT / "docs/release-evidence" / candidate["release_tag"] / "publication-record.json").read_text(
                 encoding="utf-8"

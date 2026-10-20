@@ -99,36 +99,12 @@
     "engineWorkflowPath": ".github/workflows/release-engine.yml",
     "productionPreflightWorkflowPath": ".github/workflows/production-preflight.yml",
     "productionPreflightEngineWorkflowPath": ".github/workflows/production-preflight-engine.yml",
-    "evidenceWorkflowPath": ".github/workflows/release-evidence.yml",
-    "evidenceBranchPattern": "automation/release-evidence-<tag>",
-    "evidenceCapturePath": "docs/release-evidence/<tag>/capture-v2.json",
-    "evidenceCheckpointSemantics": "branch_commit_plus_captured_v2",
-    "evidenceMergeSemantics": "operator_opened_protected_pull_request",
-    "evidenceOrphanAuditWorkflowPath": ".github/workflows/release-evidence-orphan-audit.yml",
-    "evidenceOrphanAuditCommand": "uv run python -m scripts.release_evidence_orphan_audit --repository cbusillo/BD_to_AVP --threshold-hours 72 --owner cbusillo",
-    "evidenceOrphanAuditThresholdHours": 72,
-    "evidenceOrphanAuditOwner": "cbusillo",
-    "evidenceOrphanAuditPermissions": [
-      "contents: read",
-      "issues: write"
-    ],
-    "evidenceOrphanAuditSemantics": "github_rest_tree_blob_inspection_only_no_automation_ref_checkout_fetch_or_execution",
-    "evidenceReconcilePreflightCommand": "uv run python -m scripts.release_evidence_reconcile preflight --release-tag <tag>",
-    "evidenceReconcileCommand": "uv run python -m scripts.release_evidence_reconcile reconcile --release-tag <tag> --evidence-sha <preflight-evidence-sha> --main-sha <preflight-main-sha> --plan-digest <preflight-plan-digest>",
-    "milestoneQualificationWorkflowPath": ".github/workflows/milestone-qualification.yml",
     "qualificationPolicyPath": "docs/qualification/release-qualification-policy-v1.json",
     "qualificationEvidencePath": "docs/qualification/release-evidence-v1.json",
-    "qualificationManifestPath": "docs/release-evidence/<tag>/qualification-manifest.json",
-    "qualificationSnapshotPath": "docs/release-evidence/<tag>/qualification-record.json",
-    "qualificationManifestCommand": "uv run python -m scripts.release_qualification_manifest",
-    "qualificationStatusCommand": "uv run python -m scripts.release_qualification_controller status --release-tag <tag>",
-    "qualificationResumeCommand": "uv run python -m scripts.release_qualification_controller resume --release-tag <tag>",
-    "qualificationCollectOperatorCommand": "uv run python -m scripts.release_qualification_controller collect-operator --release-tag <tag> --case-id <case-id> --environment-class <class> --output-answers <path>",
     "qualificationRecordPath": "docs/qualification/v0.3.4-alpha.1-signed-qualification-v1.json",
     "qualificationReportArtifacts": [
       "release-qualification-preparation-<run-attempt>",
-      "release-qualification-final-<run-attempt>",
-      "release-qualification-milestone-<run-attempt>"
+      "release-qualification-final-<run-attempt>"
     ],
     "workflows": {
       "Stable": {
@@ -163,7 +139,6 @@
     "visionosTestFlight": "docs/visionos-player.md#private-internal-testflight-delivery",
     "visionosExternalTestFlight": "docs/visionos-player.md#external-testflight-delivery",
     "visionosPlayerPrivacy": "docs/visionos-player-privacy.md",
-    "releaseEvidenceV2": "docs/release-evidence-v2.md",
     "releaseQualificationPolicy": "docs/release-qualification-policy.md",
     "tier3CleanMachine": "docs/tier3-clean-machine.md",
     "tier3OperatorHardware": "docs/tier3-operator-hardware.md",
@@ -173,11 +148,9 @@
       ".github/workflows/production-preflight.yml",
       ".github/workflows/production-preflight-engine.yml",
       ".github/workflows/release-engine.yml",
-      ".github/workflows/release-evidence.yml",
-      ".github/workflows/release-evidence-orphan-audit.yml",
-      ".github/workflows/milestone-qualification.yml",
       ".github/workflows/sparkle-pages.yml",
-      ".github/workflows/manage-sparkle-pages.yml"
+      ".github/workflows/manage-sparkle-pages.yml",
+      ".github/workflows/update-test.yml"
     ]
   },
   "qualityGate": {
@@ -199,22 +172,7 @@
       "unitSmoke": "uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs tests",
       "releaseQualificationPolicy": "uv run python -m scripts.qualify_release_scope --validate-policy",
       "releaseQualification": "uv run python -m unittest tests.test_qualify_release_scope",
-      "releaseQualificationStatus": "uv run python -m unittest tests.test_release_qualification_controller",
-      "releaseQualificationResume": "uv run python -m unittest tests.test_release_qualification_resume",
-      "releaseQualificationArtifact": "uv run python -m unittest tests.test_release_qualification_artifact",
-      "releaseQualificationApply": "uv run python -m unittest tests.test_release_qualification_apply",
-      "cancelledReleaseAttempt": "uv run python -m scripts.release_milestone_context --cancelled-attempt-tag v0.3.2-beta.6",
-      "failedPostPublicationQualification": "uv run python -m scripts.release_milestone_context --failed-post-publication-tag v0.3.2-beta.5",
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
-      "releaseEvidenceV2": "uv run python -m unittest tests.test_release_evidence_v2",
-      "releaseEvidenceReconcile": "uv run python -m unittest tests.test_release_evidence_reconcile",
-      "releaseEvidenceReconcilePreflight": "uv run python -m scripts.release_evidence_reconcile preflight --help",
-      "releaseEvidenceOrphanAudit": "uv run python -m unittest tests.test_release_evidence_orphan_audit",
-      "releaseEvidenceV2Qualify": "uv run python -m scripts.release_evidence_v2 qualify --help",
-      "releaseEvidenceV2Dispose": "uv run python -m scripts.release_evidence_v2 dispose --help",
-      "releaseEvidenceV2AllTags": "uv run python -m scripts.release_evidence_v2 --all-tags --worktree --base-revision $(git rev-parse HEAD^)",
-      "releaseEvidenceV2IndexCheck": "uv run python -m scripts.release_evidence_v2 index --check --worktree",
-      "releaseEvidenceV2IndexReplay": "uv run python -m scripts.release_evidence_v2 index --check --revision $(git rev-parse HEAD)",
       "signedArtifactReceipt": "uv run python -m unittest tests.test_signed_artifact_receipt",
       "signedArtifactUi": "uv run python -m unittest tests.test_signed_artifact_ui",
       "preSigningUi": "uv run python -m unittest tests.test_installed_ui_qualification tests.test_pre_signing_ui tests.test_signed_artifact_ui",
@@ -267,11 +225,9 @@
     "Production Preflight",
     "Stable",
     "Prerelease",
-    "Release Evidence",
-    "Release Evidence Orphan Audit",
-    "Milestone Qualification",
     "Manage Sparkle Pages",
-    "Update FFmpeg Vendor Pins"
+    "Update FFmpeg Vendor Pins",
+    "Update Test"
   ],
   "requiredStatusChecks": [
     "validate",
