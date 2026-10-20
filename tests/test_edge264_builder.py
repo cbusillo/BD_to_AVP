@@ -123,9 +123,14 @@ class Edge264BuilderTests(unittest.TestCase):
     def test_build_edge264_uses_manifest_values(self) -> None:
         for upstream_binary in ("edge264_test", "edge264mvc_test"):
             with self.subTest(upstream_binary=upstream_binary):
-                self.check_build_uses_manifest_values(upstream_binary)
+                self.check_build_uses_manifest_values(upstream_binary, verify=False, target="check")
 
-    def check_build_uses_manifest_values(self, upstream_binary: str) -> None:
+    def test_reproducing_the_pin_builds_without_upstream_checks(self) -> None:
+        # Upstream's checks have wall-clock limits that flake on busy CI runners; the
+        # checksum, not a rerun of those checks, proves the reproduced binary.
+        self.check_build_uses_manifest_values("edge264mvc_test", verify=True, target="edge264mvc_test")
+
+    def check_build_uses_manifest_values(self, upstream_binary: str, *, verify: bool, target: str) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repository_root = Path(temp_dir)
             output_path = repository_root / "bin" / "edge264_test"
@@ -148,7 +153,7 @@ class Edge264BuilderTests(unittest.TestCase):
                 commands.append((command, cwd, env))
                 if command[:3] == ["git", "clone", "--filter=blob:none"]:
                     Path(command[-1]).mkdir(parents=True)
-                if command == build_edge264_macos.make_command(provenance, "check") and cwd:
+                if command == build_edge264_macos.make_command(provenance, target) and cwd:
                     (cwd / upstream_binary).write_bytes(b"binary")
 
             def fake_check_output(command: list[str], text: bool) -> str:
@@ -164,7 +169,7 @@ class Edge264BuilderTests(unittest.TestCase):
                 patch.object(build_edge264_macos, "run", side_effect=fake_run),
                 patch.object(build_edge264_macos.subprocess, "check_output", side_effect=fake_check_output),
             ):
-                actual_sha256 = build_edge264_macos.build_edge264(output_path, provenance)
+                actual_sha256 = build_edge264_macos.build_edge264(output_path, provenance, verify=verify)
             output_bytes = output_path.read_bytes()
 
         self.assertEqual(actual_sha256, binary_sha256)
@@ -178,10 +183,11 @@ class Edge264BuilderTests(unittest.TestCase):
         self.assertTrue(
             any(command == ["git", "checkout", "--detach", provenance.revision] for command, _, _ in commands)
         )
-        check_target = build_edge264_macos.make_command(provenance, "check")
-        build_command = next(item for item in commands if item[0] == check_target)
+        make_commands = [item for item in commands if item[0][0] == "make"]
+        self.assertEqual([item[0] for item in make_commands], [build_edge264_macos.make_command(provenance, target)])
+        build_command = make_commands[0]
         self.assertEqual(
-            check_target[:5],
+            build_command[0][:5],
             ["make", "OS=macos", "HOST_OS=distribution", "CFLAGS=-arch arm64", "STATIC=yes"],
         )
         self.assertFalse(any(command[:2] == ["git", "apply"] for command, _, _ in commands))

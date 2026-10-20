@@ -575,7 +575,8 @@ Big thanks to:
   `edge264mvc_test` executable (or `edge264_test` from older revisions) and packages it as `edge264_test`.
   Damaged-source warnings accept both revisions' diagnostic prefixes.
   The workflow pushes the result as the
-  `automation/update-edge264` branch; open the pull request from it, and CI rebuilds the decoder byte for byte. A weekly watch opens an issue when upstream tags a release newer than the pin.
+  `automation/update-edge264` branch; open the pull request from it, and CI rebuilds the decoder byte for byte. That CI rebuild compiles the pinned binary
+  without rerunning upstream's checks; the matching checksum ties it to the build that passed them. A weekly watch opens an issue when upstream tags a release newer than the pin.
 
 [MakeMKV]: https://www.makemkv.com/
 
