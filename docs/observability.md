@@ -175,7 +175,8 @@ bridge so intentional CLI spinner/status text remains visible in that supported
 interface; it is not used for worker protocol or support persistence.
 
 `uv run python scripts/validate_observability_migration.py` is the durable
-qualification guard. It fails when production code introduces a direct process
-spawn outside `bd_to_avp.process_runner`, a conversion/runtime `print` outside
-the reviewed presentation sinks, an ad-hoc `.log` path, or a removed legacy
-symbol. CI runs the guard before formatting, lint, type checking, and tests.
+guard. It fails when production code introduces a direct process spawn outside
+`bd_to_avp.process_runner`, a conversion/runtime `print` outside the reviewed
+presentation sinks (the worker's protocol runs over stdout), or an ad-hoc `.log`
+path. `tests/test_observability_migration.py` runs it over the repository, so
+it runs with the unit tests in CI.

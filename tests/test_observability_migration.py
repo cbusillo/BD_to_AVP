@@ -18,9 +18,7 @@ class ObservabilityMigrationValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             python_root = root / "bd_to_avp"
-            swift_root = root / "macos" / "BluRayToVisionPro"
             python_root.mkdir()
-            swift_root.mkdir(parents=True)
             (python_root / "rogue.py").write_text(
                 "import atexit\n"
                 "import builtins\n"
@@ -33,10 +31,6 @@ class ObservabilityMigrationValidationTests(unittest.TestCase):
                 "atexit.register(kill_child_processes)\n",
                 encoding="utf-8",
             )
-            (swift_root / "Rogue.swift").write_text(
-                'struct Rogue { var diagnosticLog = "" }\n',
-                encoding="utf-8",
-            )
 
             violations = collect_violations(root)
 
@@ -45,7 +39,6 @@ class ObservabilityMigrationValidationTests(unittest.TestCase):
             {
                 "direct-process-call",
                 "global-cleanup-hook",
-                "legacy-symbol",
                 "non-presentation-output",
             },
         )
