@@ -8,7 +8,7 @@ command-line tools.
 This policy keeps the app predictable on clean Macs and makes distribution
 decisions explicit instead of hiding dependency installation behind first launch.
 The normative production identity, version, and Sparkle route matrix are in
-[Production Release Routes](release-routes.md).
+[the release process](release-process.md#versions-builds-and-routes).
 
 ## Current GUI Channel
 

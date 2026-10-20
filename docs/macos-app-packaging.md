@@ -130,7 +130,7 @@ The Release configuration uses:
 The same production identity is used for Stable, RC, Beta, and Alpha. The full
 identity contract also fixes the `direct` distribution value, Apple signing
 team, and approved diagnostics endpoint; see
-[Production Release Routes](release-routes.md).
+[the release process](release-process.md#versions-builds-and-routes).
 
 The Debug configuration uses a Development product and bundle identifier and
 contains no Sparkle distribution metadata. It cannot enroll in a production

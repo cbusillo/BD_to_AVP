@@ -1,5 +1,3 @@
-import hashlib
-import json
 import re
 import stat
 import subprocess
@@ -10,9 +8,7 @@ import unittest
 
 from pathlib import Path
 
-from bd_to_avp.worker.protocol import PROTOCOL_VERSION
-from scripts import qualify_release_scope, release
-from scripts.beta3_recovery_evidence import BETA3_RECOVERY_EVIDENCE_PATH, Beta3RecoveryEvidenceError
+from scripts import release
 from scripts.production_identity import PRODUCTION_SPARKLE_PUBLIC_KEY
 
 
@@ -109,60 +105,18 @@ def fake_lock_runner(stage_root: Path, _uv_executable: str) -> None:
     lock_path.write_text(lock_text, encoding="utf-8")
 
 
-def make_recovery_evidence(root: Path, content: bytes | None = None) -> Path:
-    evidence_path = root / "v0.3.0-beta.3-recovery.json"
-    evidence_path.write_bytes(content if content is not None else BETA3_RECOVERY_EVIDENCE_PATH.read_bytes())
-    return evidence_path
-
-
-def skip_remote_verification(_evidence: object) -> None:
-    return None
-
-
 class ReleaseMetadataTests(unittest.TestCase):
-    def write_qualification_contract(
-        self,
-        root: Path,
-        metadata: release.ReleaseMetadata,
-        *,
-        configured_name: str = "candidate-signed-qualification-v1.json",
-        matching_names: tuple[str, ...] = ("candidate-signed-qualification-v1.json",),
-        candidate_overrides: dict[str, object] | None = None,
-    ) -> Path:
-        config_path = root / ".github" / "github.json"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            json.dumps(
-                {
-                    "releaseOperations": {
-                        "qualificationRecordPath": f"docs/qualification/{configured_name}",
-                    }
-                }
-            ),
-            encoding="utf-8",
+    def test_release_cli_runs_as_a_module_from_a_clean_checkout_root(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "scripts.release", "--help"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
         )
-        qualification_directory = root / "docs" / "qualification"
-        qualification_directory.mkdir(parents=True, exist_ok=True)
-        candidate = {
-            "build_version": metadata.build_version,
-            "dmg_name": metadata.dmg_name,
-            "package_version": metadata.package_version,
-            "public_version": metadata.public_version,
-            "release_tag": metadata.release_tag,
-            "workflow": "Prerelease" if metadata.prerelease else "Stable",
-        }
-        candidate.update(candidate_overrides or {})
-        for name in matching_names:
-            (qualification_directory / name).write_text(
-                json.dumps(
-                    {
-                        "candidate": candidate,
-                        "execution_policy": {"release_stage": metadata.channel},
-                    }
-                ),
-                encoding="utf-8",
-            )
-        return config_path
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("qualification-base", completed.stdout)
 
     def test_repository_keeps_gui_dependency_out_of_cli_base(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
@@ -182,17 +136,6 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertIn(requirement, dev_requirements)
         self.assertNotIn("briefcase", {normalized_requirement_name(requirement) for requirement in dev_requirements})
 
-    def test_published_qualification_records_match_their_archived_evidence(self) -> None:
-        evidence_root = REPO_ROOT / "docs" / "release-evidence"
-        archived = 0
-        for record_path in sorted((REPO_ROOT / "docs" / "qualification").glob("*signed-qualification-v1.json")):
-            release_tag = json.loads(record_path.read_text(encoding="utf-8"))["candidate"]["release_tag"]
-            archived_path = evidence_root / release_tag / "qualification-record.json"
-            if archived_path.is_file():
-                archived += 1
-                self.assertEqual(record_path.read_bytes(), archived_path.read_bytes(), record_path.name)
-        self.assertGreater(archived, 0)
-
     def test_repository_records_candidate_preparation_and_prior_release_history(self) -> None:
         metadata = release.load_release_metadata()
         # pyproject.toml is the single source of the candidate's identity. Assert the derived
@@ -210,363 +153,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(metadata.dmg_name, f"3D-Blu-ray-to-Vision-Pro-{metadata.public_version}.dmg")
         self.assertEqual(metadata.channel, version.channel)
         self.assertEqual(metadata.prerelease, version.prerelease)
-        self.assertEqual(metadata.first_candidate_of_cycle, version.first_candidate_of_cycle)
         self.assertEqual(metadata.make_latest, not version.prerelease)
         self.assertEqual(metadata.publish_pypi, not version.prerelease)
-
-        release.validate_release_cut_packet(metadata)
-        candidate_receipt = REPO_ROOT / "docs" / "release-evidence" / metadata.release_tag / "release-receipt.json"
-
-        github_config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
-        qualification_relative = Path(github_config["releaseOperations"]["qualificationRecordPath"])
-        self.assertEqual(release.validate_configured_qualification_record(metadata), qualification_relative)
-        qualification = json.loads((REPO_ROOT / qualification_relative).read_text(encoding="utf-8"))
-        self.assertEqual(qualification["candidate"]["package_version"], metadata.package_version)
-        self.assertEqual(qualification["candidate"]["public_version"], metadata.public_version)
-        self.assertEqual(qualification["candidate"]["build_version"], metadata.build_version)
-        self.assertEqual(qualification["candidate"]["release_tag"], metadata.release_tag)
-        self.assertEqual(qualification["candidate"]["workflow"], "Prerelease" if metadata.prerelease else "Stable")
-        if not candidate_receipt.is_file():
-            # An unpublished candidate must describe the source it will be built from. Once it is
-            # published the record is history, and development may advance past it.
-            route_table_path = REPO_ROOT / "docs" / "qualification" / "video-quality-route-table-v2.json"
-            route_table = json.loads(route_table_path.read_text(encoding="utf-8"))
-            self.assertEqual(qualification["candidate"]["worker_protocol_version"], PROTOCOL_VERSION)
-            self.assertEqual(qualification["candidate"]["mapping_version"], route_table["mapping_version"])
-            self.assertEqual(
-                qualification["candidate"]["route_table_sha256"],
-                hashlib.sha256(route_table_path.read_bytes()).hexdigest(),
-            )
-        # Each candidate records its own owning issues, so assert the shape rather than the
-        # previous candidate's issue number.
-        self.assertTrue(qualification["issues"])
-        for issue_reference in qualification["issues"]:
-            self.assertRegex(issue_reference, r"^#\d+$")
-        # History only accumulates: a burned build recorded by any earlier candidate stays burned.
-        burned_builds = set(qualification["immutable_history"]["burned_builds"])
-        for earlier_path in (REPO_ROOT / "docs" / "qualification").glob("*signed-qualification-v1.json"):
-            earlier = json.loads(earlier_path.read_text(encoding="utf-8"))
-            if int(earlier["candidate"]["build_version"]) < int(metadata.build_version):
-                earlier_burned = set(earlier.get("immutable_history", {}).get("burned_builds", []))
-                self.assertLessEqual(earlier_burned, burned_builds, earlier_path.name)
-        self.assertNotIn(int(metadata.build_version), burned_builds)
-        # The prior Stable is the newest Stable release with an immutable receipt, not a literal.
-        previous_stable = qualification["immutable_history"]["previous_stable"]
-        stable_tags = [
-            receipt.parent.name
-            for receipt in (REPO_ROOT / "docs" / "release-evidence").glob("v*/release-receipt.json")
-            if re.fullmatch(r"v\d+\.\d+\.\d+", receipt.parent.name) and receipt.parent.name != metadata.release_tag
-        ]
-        newest_stable = max(stable_tags, key=lambda tag: tuple(int(part) for part in tag[1:].split(".")))
-        self.assertEqual(previous_stable["release_tag"], newest_stable)
-        previous_stable_receipt_path = (
-            REPO_ROOT / "docs" / "release-evidence" / previous_stable["release_tag"] / "release-receipt.json"
-        )
-        previous_stable_receipt = json.loads(previous_stable_receipt_path.read_text(encoding="utf-8"))
-        previous_stable_artifacts = {artifact["kind"]: artifact for artifact in previous_stable_receipt["artifacts"]}
-        self.assertEqual(previous_stable_receipt["source_sha"], previous_stable["source_git_sha"])
-        self.assertEqual(previous_stable_receipt["workflow"]["run_id"], previous_stable["release_run_id"])
-        self.assertEqual(previous_stable_receipt["release"]["id"], previous_stable["release_id"])
-        self.assertEqual(previous_stable_receipt["versions"]["package"], previous_stable["package_version"])
-        self.assertEqual(previous_stable_receipt["versions"]["build"], previous_stable["build_version"])
-        self.assertEqual(previous_stable_receipt["signed_app_tree_sha256"], previous_stable["signed_app_tree_sha256"])
-        self.assertEqual(previous_stable_artifacts["dmg"]["sha256"], previous_stable["dmg_sha256"])
-        self.assertEqual(previous_stable_artifacts["appcast"]["sha256"], previous_stable["appcast_sha256"])
-
-        # Use the policy's validator for acceptance membership and migration rules.
-        # Matrix coverage must also include every policy case, rather than a copied list.
-        policy_path = github_config["releaseOperations"]["qualificationPolicyPath"]
-        self.assertEqual(qualification["qualification_policy"]["path"], policy_path)
-        policy = qualify_release_scope.load_policy(REPO_ROOT / policy_path)
-        qualification_id, overrides = qualify_release_scope.load_qualification_overrides(
-            REPO_ROOT / qualification_relative, policy
-        )
-        self.assertEqual(qualification_id, qualification["qualification_id"])
-        required_cases = set(qualification["acceptance"]["required_case_ids"])
-        nonblocking_cases = set(qualification["acceptance"]["nonblocking_case_ids"])
-        self.assertTrue(required_cases.isdisjoint(nonblocking_cases))
-        self.assertEqual(required_cases | nonblocking_cases, set(overrides))
-        if not candidate_receipt.is_file():
-            # Published records are immutable; later policy additions apply to the next candidate.
-            self.assertEqual(set(overrides), {case["id"] for case in policy["cases"]})
-        candidate_identity_fields = (
-            "source_git_sha",
-            "dmg_sha256",
-            "signed_app_tree_sha256",
-            "release_run_id",
-            "release_id",
-            "appcast_sha256",
-        )
-        # The identity is either still preregistered (all null) or exactly the committed receipt's.
-        # Either is valid before and after publication; a partial or mismatched identity is not.
-        candidate_identity = {field: qualification["candidate"][field] for field in candidate_identity_fields}
-        valid_identities = [{field: None for field in candidate_identity_fields}]
-        if candidate_receipt.is_file():
-            receipt = json.loads(candidate_receipt.read_text(encoding="utf-8"))
-            artifacts_by_kind = {artifact["kind"]: artifact for artifact in receipt["artifacts"]}
-            valid_identities.append(
-                {
-                    "source_git_sha": receipt["source_sha"],
-                    "dmg_sha256": artifacts_by_kind["dmg"]["sha256"],
-                    "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
-                    "release_run_id": receipt["workflow"]["run_id"],
-                    "release_id": receipt["release"]["id"],
-                    "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
-                }
-            )
-        self.assertIn(candidate_identity, valid_identities)
-        self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
-        self.assertEqual(qualification["execution_policy"]["release_stage"], metadata.channel)
-        self.assertFalse(qualification["acceptance"]["milestone_complete"])
-        self.assertTrue(
-            qualification["execution_policy"]["macos_signing_requires_fresh_explicit_run_bound_authorization"]
-        )
-        self.assertEqual(qualification["execution_policy"]["approval_required_exit_code"], 20)
-        self.assertFalse(qualification["acceptance"]["passed"])
-
-    def test_historical_rc_qualification_agrees_with_its_evidence(self) -> None:
-        qualification = json.loads(
-            (REPO_ROOT / "docs/qualification/rc3-signed-qualification-v1.json").read_text(encoding="utf-8")
-        )
-        targeted = json.loads(
-            (REPO_ROOT / qualification["immutable_publication"]["targeted_qualification"]).read_text(encoding="utf-8")
-        )
-        candidate = qualification["candidate"]
-        for field, value in targeted["candidate"].items():
-            qualification_field = {"build": "build_version", "source_sha": "source_git_sha"}.get(field, field)
-            self.assertEqual(value, candidate[qualification_field], field)
-        self.assertEqual(targeted["result"], "passed")
-        self.assertEqual(
-            targeted["acceptance"]["blocking_case_ids"], qualification["immutable_publication"]["blocking_case_ids"]
-        )
-        self.assertFalse(targeted["acceptance"]["field_case_open"])
-        matrix_by_id = {case["id"]: case for case in qualification["matrix"]}
-        for case in targeted["cases"]:
-            matrix_case = matrix_by_id[case["id"]]
-            self.assertEqual(case["result"], matrix_case["result"].removesuffix("_nonblocking"), case["id"])
-            link_qualification = case.get("observations", {}).get("content_aware_link_qualification")
-            if link_qualification is not None:
-                link_path = REPO_ROOT / link_qualification["reference"]
-                links = json.loads(link_path.read_text(encoding="utf-8"))
-                self.assertEqual(link_qualification["sha256"], hashlib.sha256(link_path.read_bytes()).hexdigest())
-                self.assertEqual(link_qualification["issue_result"], links["categories"]["issue"]["result"])
-
-        publication = json.loads(
-            (REPO_ROOT / "docs/release-evidence" / candidate["release_tag"] / "publication-record.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        # RC3 was reconstructed after publication, so it cannot claim an uploaded receipt asset.
-        self.assertFalse(publication["immutable_release_receipt_asset"])
-        self.assertIsNone(publication["receipt_asset_id"])
-
-        sparkle_qualification = json.loads(
-            (REPO_ROOT / "docs/qualification/rc1-to-rc2-sparkle-qualification-v2.json").read_text(encoding="utf-8")
-        )
-        for endpoint, record_name in (("from", "rc1"), ("to", "rc2")):
-            record = json.loads(
-                (REPO_ROOT / f"docs/qualification/{record_name}-signed-qualification-v1.json").read_text(
-                    encoding="utf-8"
-                )
-            )
-            for field, value in sparkle_qualification["candidate"][endpoint].items():
-                self.assertEqual(value, record["candidate"][field], f"{endpoint}.{field}")
-        observations = sparkle_qualification["observations"]
-        updated = sparkle_qualification["candidate"]["to"]
-        self.assertEqual(observations["post_update_bundle_version"], updated["package_version"])
-        self.assertEqual(observations["post_update_bundle_build"], updated["build_version"])
-        self.assertEqual(sparkle_qualification["result"], observations["install_and_relaunch"])
-        self.assertEqual(sparkle_qualification["result"], "passed")
-
-    def test_configured_qualification_record_requires_unique_matching_identity(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
-            metadata = release.load_release_metadata(pyproject_path, lock_path)
-            config_path = self.write_qualification_contract(root, metadata)
-
-            self.assertEqual(
-                release.validate_configured_qualification_record(metadata, github_config_path=config_path),
-                Path("docs/qualification/candidate-signed-qualification-v1.json"),
-            )
-
-            (root / "docs/qualification/duplicate-signed-qualification-v1.json").write_text(
-                (root / "docs/qualification/candidate-signed-qualification-v1.json").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(release.ReleaseError, "found 2"):
-                release.validate_configured_qualification_record(metadata, github_config_path=config_path)
-
-    def test_configured_qualification_record_rejects_missing_or_stale_configuration(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
-            metadata = release.load_release_metadata(pyproject_path, lock_path)
-            config_path = self.write_qualification_contract(root, metadata, matching_names=())
-            with self.assertRaisesRegex(release.ReleaseError, "found 0"):
-                release.validate_configured_qualification_record(metadata, github_config_path=config_path)
-
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
-            metadata = release.load_release_metadata(pyproject_path, lock_path)
-            config_path = self.write_qualification_contract(
-                root,
-                metadata,
-                configured_name="stale-signed-qualification-v1.json",
-            )
-            (root / "docs/qualification/stale-signed-qualification-v1.json").write_text(
-                json.dumps(
-                    {
-                        "candidate": {"release_tag": "v1.2.3-beta.1"},
-                        "execution_policy": {"release_stage": "beta"},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(release.ReleaseError, "qualificationRecordPath must select"):
-                release.validate_configured_qualification_record(metadata, github_config_path=config_path)
-
-    def test_configured_qualification_record_rejects_candidate_identity_drift(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
-            metadata = release.load_release_metadata(pyproject_path, lock_path)
-            config_path = self.write_qualification_contract(
-                root,
-                metadata,
-                candidate_overrides={"build_version": "11"},
-            )
-
-            with self.assertRaisesRegex(release.ReleaseError, "build_version"):
-                release.validate_configured_qualification_record(metadata, github_config_path=config_path)
-
-    def test_release_cut_packet_requires_reconciliation_compatible_state(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
-            metadata = release.load_release_metadata(pyproject_path, lock_path)
-            cut_packet = root / "docs/1.2.3-beta.2-cut-packet.md"
-            cut_packet.parent.mkdir(parents=True, exist_ok=True)
-            cut_packet.write_text(f"> {release.CUT_PACKET_PREPARED}\n", encoding="utf-8")
-
-            self.assertEqual(
-                release.validate_release_cut_packet(metadata, repo_root=root),
-                Path("docs/1.2.3-beta.2-cut-packet.md"),
-            )
-
-            cut_packet.write_text(f"> {release.CUT_PACKET_CANCELLED}\n", encoding="utf-8")
-            self.assertEqual(
-                release.validate_release_cut_packet(metadata, repo_root=root),
-                Path("docs/1.2.3-beta.2-cut-packet.md"),
-            )
-
-            cut_packet.write_text(
-                "> **Prepared for guarded Prerelease dispatch; not yet authorized or published.**\n",
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(release.ReleaseError, "prepared, published"):
-                release.validate_release_cut_packet(metadata, repo_root=root)
-
-    def test_committed_cut_packets_satisfy_the_dispatch_validator(self) -> None:
-        recognized_states = (
-            release.CUT_PACKET_PREPARED,
-            release.CUT_PACKET_RECOVERY_PENDING,
-            release.CUT_PACKET_PUBLISHED,
-            release.CUT_PACKET_CANCELLED,
-        )
-        validated = 0
-        for path in sorted((REPO_ROOT / "docs").glob("*-cut-packet.md")):
-            # Every packet is named after a public release identity; parsing it is part of the check.
-            version = release.parse_release_tag(f"v{path.name.removesuffix('-cut-packet.md')}")
-            metadata = release.ReleaseMetadata(
-                package_version=version.text,
-                public_version=version.public_version,
-                build_version="0",  # the validator selects the packet by public version alone
-                release_tag=version.release_tag,
-                release_name=version.release_tag,
-                dmg_name=f"{release.DMG_NAME_PREFIX}-{version.public_version}.dmg",
-                channel=version.channel,
-                prerelease=version.prerelease,
-                first_candidate_of_cycle=version.first_candidate_of_cycle,
-                make_latest=not version.prerelease,
-                publish_pypi=not version.prerelease,
-            )
-            with self.subTest(cut_packet=path.name):
-                if any(state in path.read_text(encoding="utf-8") for state in recognized_states):
-                    self.assertEqual(release.validate_release_cut_packet(metadata), path.relative_to(REPO_ROOT))
-                    validated += 1
-                else:
-                    # Failed, abandoned and recovery-only packets predate the state vocabulary. The
-                    # validator must refuse them rather than treat them as dispatchable.
-                    with self.assertRaises(release.ReleaseError):
-                        release.validate_release_cut_packet(metadata)
-        self.assertGreater(validated, 0)
-
-    def test_published_qualification_records_stay_immutable(self) -> None:
-        def flags(value: object) -> list[object]:
-            if isinstance(value, dict):
-                found = [value["must_not_rebuild"]] if "must_not_rebuild" in value else []
-                return found + [flag for child in value.values() for flag in flags(child)]
-            if isinstance(value, list):
-                return [flag for child in value for flag in flags(child)]
-            return []
-
-        published = 0
-        for path in sorted((REPO_ROOT / "docs" / "qualification").glob("*.json")):
-            record = json.loads(path.read_text(encoding="utf-8"))
-            with self.subTest(record=path.name):
-                # A recorded publication can never be marked rebuildable again.
-                self.assertTrue(all(flag is True for flag in flags(record)))
-                if "immutable_publication" in record:
-                    published += 1
-                    self.assertNotIn(None, record["candidate"].values())
-        self.assertGreater(published, 0)
-
-    def test_beta11_qualification_remains_historical_receipt(self) -> None:
-        qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "beta11-shared-signed-qualification-v1.json").read_text(
-                encoding="utf-8"
-            )
-        )
-
-        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0b11")
-        self.assertEqual(qualification["candidate"]["build_version"], "156")
-        self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
-        self.assertEqual(qualification["candidate"]["mapping_version"], 2)
-        self.assertEqual(
-            qualification["candidate"]["route_table_sha256"],
-            "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
-        )
-        self.assertFalse(qualification["acceptance"]["signed_beta_complete"])
-        self.assertFalse(qualification["acceptance"]["passed"])
-
-    def test_repository_beta3_recovery_evidence_is_exact(self) -> None:
-        evidence = release.validate_beta3_recovery_evidence()
-
-        self.assertEqual(evidence["schema_version"], 2)
-        self.assertEqual(evidence["repository"], "cbusillo/BD_to_AVP")
-        self.assertEqual(evidence["transition"]["target"]["release_tag"], "v0.3.0-beta.3")
-
-    def test_reviewed_source_identity_matches_the_pre_recovery_base_commit(self) -> None:
-        evidence = release.validate_beta3_recovery_evidence()
-        source_identity = evidence["source_identity"]
-        base_commit = source_identity["base_commit"]
-
-        self.assertEqual(
-            subprocess.check_output(
-                ["git", "show", "-s", "--format=%T", base_commit],
-                cwd=REPO_ROOT,
-                text=True,
-            ).strip(),
-            source_identity["tree"],
-        )
-        for relative_path, expected_digest in source_identity["files"].items():
-            content = subprocess.check_output(
-                ["git", "show", f"{base_commit}:{relative_path}"],
-                cwd=REPO_ROOT,
-            )
-            self.assertEqual(hashlib.sha256(content).hexdigest(), expected_digest)
 
     def test_beta3_seed_metadata_uses_the_production_beta_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -584,19 +172,18 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.3.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
-        self.assertFalse(metadata.first_candidate_of_cycle)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
     def test_metadata_maps_internal_versions_to_public_release_identity(self) -> None:
         cases = (
-            ("1.2.4a1", "1.2.4-alpha.1", "alpha", True, True),
-            ("1.2.4b2", "1.2.4-beta.2", "beta", True, False),
-            ("1.2.4rc1", "1.2.4-rc.1", "rc", True, True),
-            ("1.2.4rc3", "1.2.4-rc.3", "rc", True, False),
-            ("1.2.4", "1.2.4", "stable", False, False),
+            ("1.2.4a1", "1.2.4-alpha.1", "alpha", True),
+            ("1.2.4b2", "1.2.4-beta.2", "beta", True),
+            ("1.2.4rc1", "1.2.4-rc.1", "rc", True),
+            ("1.2.4rc3", "1.2.4-rc.3", "rc", True),
+            ("1.2.4", "1.2.4", "stable", False),
         )
-        for package_version, public_version, channel, prerelease, first_candidate in cases:
+        for package_version, public_version, channel, prerelease in cases:
             with self.subTest(package_version=package_version), tempfile.TemporaryDirectory() as temp_dir:
                 pyproject_path, lock_path = make_release_files(
                     Path(temp_dir),
@@ -613,8 +200,6 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(metadata.dmg_name, f"3D-Blu-ray-to-Vision-Pro-{public_version}.dmg")
             self.assertEqual(metadata.channel, channel)
             self.assertEqual(metadata.prerelease, prerelease)
-            self.assertEqual(metadata.first_candidate_of_cycle, first_candidate)
-            self.assertEqual(metadata.github_outputs()["first_candidate_of_cycle"], str(first_candidate).lower())
             self.assertEqual(metadata.make_latest, not prerelease)
             self.assertEqual(metadata.publish_pypi, not prerelease)
 
@@ -941,24 +526,6 @@ class QualificationUpdateBaseTests(unittest.TestCase):
         self.assertEqual(selection.prior_tag, "v1.2.4-beta.1")
         self.assertEqual(selection.sparkle_route, "rc")
 
-    def test_qualification_base_skips_prior_releases_without_checked_receipts(self) -> None:
-        history = [
-            published_release("v1.2.3"),
-            published_release("v1.2.4-beta.1", prerelease=True),
-        ]
-
-        selection = release.select_qualification_update_base(
-            "v1.2.4-beta.2",
-            history,
-            "beta-head",
-            eligible_prior_tags={"v1.2.3"},
-            tag_exists=lambda _tag_name: True,
-            is_ancestor=lambda _tag_name, _head_ref: True,
-        )
-
-        self.assertEqual(selection.prior_tag, "v1.2.3")
-        self.assertEqual(selection.sparkle_route, "beta")
-
     def test_first_prerelease_uses_candidate_route_after_stable(self) -> None:
         selection = release.select_qualification_update_base(
             "v1.2.4-beta.1",
@@ -1200,366 +767,7 @@ source = { registry = "https://pypi.org/simple" }
                 )
 
 
-class Beta3RecoveryTests(unittest.TestCase):
-    def test_release_cli_runs_as_a_module_from_a_clean_checkout_root(self) -> None:
-        completed = subprocess.run(
-            [sys.executable, "-m", "scripts.release", "--help"],
-            cwd=REPO_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("recover-beta3", completed.stdout)
-
-    def test_recovery_cli_exposes_no_version_or_build_override(self) -> None:
-        args = release.build_parser().parse_args(["recover-beta3"])
-
-        self.assertEqual(args.command, "recover-beta3")
-        self.assertFalse(hasattr(args, "version"))
-        self.assertFalse(hasattr(args, "build"))
-        self.assertFalse(hasattr(args, "pyproject"))
-        self.assertFalse(hasattr(args, "lock"))
-        self.assertFalse(hasattr(args, "macos_project"))
-        self.assertFalse(hasattr(args, "uv"))
-
-    def test_recovery_accepts_only_the_exact_source_target_and_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-            evidence_path = make_recovery_evidence(root)
-
-            metadata = release.recover_beta3(
-                pyproject_path=pyproject_path,
-                lock_path=lock_path,
-                macos_project_path=macos_project_path,
-                evidence_path=evidence_path,
-                lock_runner=fake_lock_runner,
-                remote_verifier=skip_remote_verification,
-            )
-
-            with pyproject_path.open("rb") as handle:
-                pyproject = tomllib.load(handle)
-            with lock_path.open("rb") as handle:
-                lock = tomllib.load(handle)
-            project_text = macos_project_path.read_text(encoding="utf-8")
-
-        self.assertEqual(metadata.package_version, "0.3.0b3")
-        self.assertEqual(metadata.public_version, "0.3.0-beta.3")
-        self.assertEqual(metadata.build_version, "148")
-        self.assertEqual(metadata.release_tag, "v0.3.0-beta.3")
-        self.assertEqual(metadata.channel, "beta")
-        self.assertEqual(pyproject["project"]["version"], "0.3.0b3")
-        self.assertEqual(
-            pyproject["tool"]["bd_to_avp"]["build_version"],
-            "148",
-        )
-        self.assertEqual(lock["package"][0]["version"], "0.3.0b3")
-        self.assertIn("MARKETING_VERSION: 0.3.0b3", project_text)
-        self.assertIn("CURRENT_PROJECT_VERSION: 148", project_text)
-
-    def test_recovery_rejects_bad_evidence_before_writes(self) -> None:
-        reviewed_evidence = BETA3_RECOVERY_EVIDENCE_PATH.read_bytes()
-        evidence_cases: list[tuple[str, bytes | None]] = [
-            ("missing", None),
-            ("malformed", b"{"),
-            (
-                "mismatched",
-                reviewed_evidence.replace(b'"artifact_count": 0', b'"artifact_count": 1'),
-            ),
-        ]
-
-        for name, content in evidence_cases:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
-                root = Path(temp_dir)
-                pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-                macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-                evidence_path = root / "evidence.json"
-                if content is not None:
-                    evidence_path.write_bytes(content)
-                originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
-                lock_called = False
-
-                def unexpected_lock(_stage_root: Path, _uv_executable: str) -> None:
-                    nonlocal lock_called
-                    lock_called = True
-
-                with self.assertRaises(release.ReleaseError):
-                    release.recover_beta3(
-                        pyproject_path=pyproject_path,
-                        lock_path=lock_path,
-                        macos_project_path=macos_project_path,
-                        evidence_path=evidence_path,
-                        lock_runner=unexpected_lock,
-                        remote_verifier=skip_remote_verification,
-                    )
-
-                self.assertFalse(lock_called)
-                for path, original in originals.items():
-                    self.assertEqual(path.read_bytes(), original)
-
-    def test_recovery_rejects_wrong_current_metadata_without_writes(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="146")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="146")
-            evidence_path = make_recovery_evidence(root)
-            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
-            lock_called = False
-
-            def unexpected_lock(_stage_root: Path, _uv_executable: str) -> None:
-                nonlocal lock_called
-                lock_called = True
-
-            with self.assertRaisesRegex(release.ReleaseError, "requires exact source metadata"):
-                release.recover_beta3(
-                    pyproject_path=pyproject_path,
-                    lock_path=lock_path,
-                    macos_project_path=macos_project_path,
-                    evidence_path=evidence_path,
-                    lock_runner=unexpected_lock,
-                    remote_verifier=skip_remote_verification,
-                )
-
-            self.assertFalse(lock_called)
-            for path, original in originals.items():
-                self.assertEqual(path.read_bytes(), original)
-
-    def test_recovery_is_atomic_when_lock_refresh_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-            evidence_path = make_recovery_evidence(root)
-            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
-
-            def fail_lock(_stage_root: Path, _uv_executable: str) -> None:
-                raise subprocess.CalledProcessError(1, ["uv", "lock"])
-
-            with self.assertRaises(subprocess.CalledProcessError):
-                release.recover_beta3(
-                    pyproject_path=pyproject_path,
-                    lock_path=lock_path,
-                    macos_project_path=macos_project_path,
-                    evidence_path=evidence_path,
-                    lock_runner=fail_lock,
-                    remote_verifier=skip_remote_verification,
-                )
-
-            for path, original in originals.items():
-                self.assertEqual(path.read_bytes(), original)
-
-    def test_recovery_rejects_remote_drift_before_lock_refresh(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-            evidence_path = make_recovery_evidence(root)
-            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
-            lock_called = False
-
-            def reject_remote_state(_evidence: object) -> None:
-                raise Beta3RecoveryEvidenceError("remote release state changed")
-
-            def unexpected_lock(_stage_root: Path, _uv_executable: str) -> None:
-                nonlocal lock_called
-                lock_called = True
-
-            with self.assertRaisesRegex(release.ReleaseError, "remote release state changed"):
-                release.recover_beta3(
-                    pyproject_path=pyproject_path,
-                    lock_path=lock_path,
-                    macos_project_path=macos_project_path,
-                    evidence_path=evidence_path,
-                    lock_runner=unexpected_lock,
-                    remote_verifier=reject_remote_state,
-                )
-
-            self.assertFalse(lock_called)
-            for path, original in originals.items():
-                self.assertEqual(path.read_bytes(), original)
-
-    def test_recovery_rechecks_remote_state_immediately_before_commit(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-            evidence_path = make_recovery_evidence(root)
-            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
-            verification_count = 0
-            events: list[str] = []
-
-            def remote_changes_after_staging(_evidence: object) -> None:
-                nonlocal verification_count
-                verification_count += 1
-                events.append(f"verify-{verification_count}")
-                if verification_count == 2:
-                    raise Beta3RecoveryEvidenceError("remote state changed before commit")
-
-            def observe_transaction(event: str, _path: Path) -> None:
-                events.append(event)
-
-            with self.assertRaisesRegex(release.ReleaseError, "remote state changed before commit"):
-                release.recover_beta3(
-                    pyproject_path=pyproject_path,
-                    lock_path=lock_path,
-                    macos_project_path=macos_project_path,
-                    evidence_path=evidence_path,
-                    lock_runner=fake_lock_runner,
-                    remote_verifier=remote_changes_after_staging,
-                    transaction_observer=observe_transaction,
-                )
-
-            self.assertEqual(verification_count, 2)
-            self.assertGreater(
-                events.index("verify-2"),
-                max(index for index, event in enumerate(events) if event == "file-applied"),
-            )
-            self.assertNotIn("journal-committed", events)
-            for path, original in originals.items():
-                self.assertEqual(path.read_bytes(), original)
-
-    def test_recovery_rejects_source_drift_during_remote_verification(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-            evidence_path = make_recovery_evidence(root)
-            original_pyproject = pyproject_path.read_bytes()
-
-            def mutate_source(_evidence: object) -> None:
-                pyproject_path.write_bytes(original_pyproject + b"\n# concurrent drift\n")
-
-            with self.assertRaisesRegex(release.ReleaseError, "changed after identity validation"):
-                release.recover_beta3(
-                    pyproject_path=pyproject_path,
-                    lock_path=lock_path,
-                    macos_project_path=macos_project_path,
-                    evidence_path=evidence_path,
-                    lock_runner=fake_lock_runner,
-                    remote_verifier=mutate_source,
-                )
-
-    def test_recovery_rejects_target_drift_during_commit_point_verification(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-            evidence_path = make_recovery_evidence(root)
-            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
-            verification_count = 0
-
-            def mutate_target_at_commit(_evidence: object) -> None:
-                nonlocal verification_count
-                verification_count += 1
-                if verification_count == 2:
-                    pyproject_path.write_bytes(originals[pyproject_path])
-
-            with self.assertRaisesRegex(release.ReleaseError, "changed during final validation"):
-                release.recover_beta3(
-                    pyproject_path=pyproject_path,
-                    lock_path=lock_path,
-                    macos_project_path=macos_project_path,
-                    evidence_path=evidence_path,
-                    lock_runner=fake_lock_runner,
-                    remote_verifier=mutate_target_at_commit,
-                )
-
-            self.assertEqual(verification_count, 2)
-            for path, original in originals.items():
-                self.assertEqual(path.read_bytes(), original)
-            self.assertFalse((root / release.TRANSACTION_JOURNAL_NAME).exists())
-
-    def test_recovery_rejects_production_identity_drift(self) -> None:
-        cases = (
-            ("feed", "pyproject.toml", "https://cbusillo.github.io/BD_to_AVP/appcast.xml", "https://example.test/feed"),
-            ("public-key", "sparkle-public-ed-key.txt", PRODUCTION_SPARKLE_PUBLIC_KEY, "invalid-key"),
-            ("bundle", "project.yml", "com.shinycomputers.bd-to-avp", "com.example.changed"),
-        )
-        for name, filename, original_value, replacement in cases:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
-                root = Path(temp_dir)
-                pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-                macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-                evidence_path = make_recovery_evidence(root)
-                changed_path = root / filename
-                changed_path.write_text(
-                    changed_path.read_text(encoding="utf-8").replace(original_value, replacement),
-                    encoding="utf-8",
-                )
-
-                with self.assertRaisesRegex(release.ReleaseError, "source identity is invalid"):
-                    release.recover_beta3(
-                        pyproject_path=pyproject_path,
-                        lock_path=lock_path,
-                        macos_project_path=macos_project_path,
-                        evidence_path=evidence_path,
-                        lock_runner=fake_lock_runner,
-                        remote_verifier=skip_remote_verification,
-                    )
-
-    def test_recovery_rejects_unrelated_lockfile_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-            evidence_path = make_recovery_evidence(root)
-
-            def change_unrelated_lock_data(stage_root: Path, uv_executable: str) -> None:
-                fake_lock_runner(stage_root, uv_executable)
-                staged_lock = stage_root / "uv.lock"
-                staged_lock.write_text(
-                    staged_lock.read_text(encoding="utf-8") + '\n[unexpected]\nvalue = "drift"\n',
-                    encoding="utf-8",
-                )
-
-            with self.assertRaisesRegex(release.ReleaseError, "other than the editable project version"):
-                release.recover_beta3(
-                    pyproject_path=pyproject_path,
-                    lock_path=lock_path,
-                    macos_project_path=macos_project_path,
-                    evidence_path=evidence_path,
-                    lock_runner=change_unrelated_lock_data,
-                    remote_verifier=skip_remote_verification,
-                )
-
-    def test_recovery_rolls_back_interrupt_after_each_file_replacement(self) -> None:
-        class SimulatedInterrupt(BaseException):
-            pass
-
-        for stop_after in (1, 2, 3):
-            with self.subTest(stop_after=stop_after), tempfile.TemporaryDirectory() as temp_dir:
-                root = Path(temp_dir)
-                pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-                macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-                evidence_path = make_recovery_evidence(root)
-                originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
-                applied = 0
-
-                def interrupt(event: str, _path: Path, expected_stop: int = stop_after) -> None:
-                    nonlocal applied
-                    if event == "file-applied":
-                        applied += 1
-                        if applied == expected_stop:
-                            raise SimulatedInterrupt
-
-                with self.assertRaises(SimulatedInterrupt):
-                    release.recover_beta3(
-                        pyproject_path=pyproject_path,
-                        lock_path=lock_path,
-                        macos_project_path=macos_project_path,
-                        evidence_path=evidence_path,
-                        lock_runner=fake_lock_runner,
-                        remote_verifier=skip_remote_verification,
-                        transaction_observer=interrupt,
-                    )
-
-                for path, original in originals.items():
-                    self.assertEqual(path.read_bytes(), original)
-                self.assertFalse((root / release.TRANSACTION_JOURNAL_NAME).exists())
-
+class ReleaseTransactionTests(unittest.TestCase):
     def test_prepared_transaction_journal_restores_original_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1622,34 +830,39 @@ class Beta3RecoveryTests(unittest.TestCase):
                         lock_runner=fake_lock_runner,
                     )
 
-    def test_recovery_rerun_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
-            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
-            evidence_path = make_recovery_evidence(root)
-            release.recover_beta3(
-                pyproject_path=pyproject_path,
-                lock_path=lock_path,
-                macos_project_path=macos_project_path,
-                evidence_path=evidence_path,
-                lock_runner=fake_lock_runner,
-                remote_verifier=skip_remote_verification,
-            )
-            recovered = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+    def test_prepare_rolls_back_interrupt_after_each_file_replacement(self) -> None:
+        class SimulatedInterrupt(BaseException):
+            pass
 
-            with self.assertRaisesRegex(release.ReleaseError, "requires exact source metadata"):
-                release.recover_beta3(
-                    pyproject_path=pyproject_path,
-                    lock_path=lock_path,
-                    macos_project_path=macos_project_path,
-                    evidence_path=evidence_path,
-                    lock_runner=fake_lock_runner,
-                    remote_verifier=skip_remote_verification,
-                )
+        for stop_after in (1, 2, 3):
+            with self.subTest(stop_after=stop_after), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                pyproject_path, lock_path = make_release_files(root, version="1.2.3", build="10")
+                macos_project_path = make_macos_project(root, version="1.2.3", build="10")
+                originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+                applied = 0
 
-            for path, recovered_content in recovered.items():
-                self.assertEqual(path.read_bytes(), recovered_content)
+                def interrupt(event: str, _path: Path, expected_stop: int = stop_after) -> None:
+                    nonlocal applied
+                    if event == "file-applied":
+                        applied += 1
+                        if applied == expected_stop:
+                            raise SimulatedInterrupt
+
+                with self.assertRaises(SimulatedInterrupt):
+                    release.prepare_release(
+                        "1.2.4",
+                        "11",
+                        pyproject_path=pyproject_path,
+                        lock_path=lock_path,
+                        macos_project_path=macos_project_path,
+                        lock_runner=fake_lock_runner,
+                        transaction_observer=interrupt,
+                    )
+
+                for path, original in originals.items():
+                    self.assertEqual(path.read_bytes(), original)
+                self.assertFalse((root / release.TRANSACTION_JOURNAL_NAME).exists())
 
 
 if __name__ == "__main__":

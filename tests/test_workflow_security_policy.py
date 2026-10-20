@@ -340,7 +340,7 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
 
         self.assertEqual(
             set(package["needs"]),
-            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
+            {"policy", "prepare", "pre-signing-package"},
         )
         self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
@@ -878,7 +878,7 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertIn("operator_workflow_path", policy["outputs"])
         self.assertIn("policy", direct_needs(workflow["jobs"]["prepare"]))
         self.assertLessEqual(
-            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
+            {"policy", "prepare", "pre-signing-package"},
             direct_needs(workflow["jobs"]["package"]),
         )
 
@@ -940,27 +940,23 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
                 "verify-draft",
                 "build-receipt",
                 "signed-artifact-ui",
-                "qualify-artifact",
+                "update-test",
             },
             direct_needs(jobs["publish-release"]),
         )
         self.assertIn("needs.create-draft.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.signed-artifact-ui.result == 'success'", jobs["publish-release"]["if"])
-        self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
+        self.assertIn("needs.update-test.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.build-python.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.build-receipt.result == 'success'", jobs["publish-release"]["if"])
 
-    def test_qualification_gates_block_signing_and_publication(self) -> None:
+    def test_preflight_gates_block_signing_and_publication(self) -> None:
         workflow = load_release_engine()
-        load_workflow("production-preflight-engine.yml")
         jobs = workflow["jobs"]
-        qualify_prep = jobs["qualify-preparation"]
         pre_signing_policy = jobs["pre-signing-policy"]
         pre_signing = jobs["pre-signing-package"]
-        package = jobs["package"]
-        build_receipt = jobs["build-receipt"]
         signed_ui = jobs["signed-artifact-ui"]
-        qualify_artifact = jobs["qualify-artifact"]
+        update_test = jobs["update-test"]
 
         operators = [load_workflow("briefcase.yml"), load_workflow("prerelease.yml")]
         self.assertTrue(
@@ -969,108 +965,21 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
                 for operator in operators
             )
         )
-        self.assertIn("qualify-preparation", set(jobs["package"]["needs"]))
         self.assertIn("pre-signing-package", set(jobs["package"]["needs"]))
-        self.assertIn("qualify-preparation", set(jobs["build-python"]["needs"]))
-        self.assertLessEqual({"prepare"}, direct_needs(qualify_prep))
-        self.assertLessEqual({"policy", "prepare", "qualify-preparation"}, direct_needs(pre_signing_policy))
+        self.assertLessEqual({"policy", "prepare"}, direct_needs(pre_signing_policy))
         self.assertLessEqual({"pre-signing-policy"}, direct_needs(pre_signing))
-        self.assertIn("qualify-artifact", set(jobs["publish-release"]["needs"]))
-        self.assertIn("signed-artifact-ui", set(jobs["publish-release"]["needs"]))
-        self.assertIn("signed-artifact-ui", set(qualify_artifact["needs"]))
-        self.assertIn("needs.signed-artifact-ui.result == 'success'", jobs["publish-release"]["if"])
-        self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
-        self.assertNotIn("environment", qualify_prep)
-        self.assertNotIn("environment", pre_signing_policy)
-        self.assertNotIn("environment", pre_signing)
-        self.assertNotIn("environment", signed_ui)
-        self.assertNotIn("environment", qualify_artifact)
-        self.assertLessEqual(write_permissions(qualify_prep["permissions"]), write_permissions({"contents": "read"}))
-        self.assertLessEqual(
-            write_permissions(pre_signing_policy["permissions"]), write_permissions({"contents": "read"})
-        )
-        self.assertLessEqual(write_permissions(pre_signing["permissions"]), write_permissions({"contents": "read"}))
-        self.assertLessEqual(write_permissions(signed_ui["permissions"]), write_permissions({"contents": "read"}))
-        self.assertLessEqual(
-            write_permissions(qualify_artifact["permissions"]), write_permissions({"contents": "read"})
-        )
-        self.assertIn("steps.release_package.outputs.artifact-id", package["outputs"]["workflow_artifact_id"])
-        self.assertIn("steps.receipt_artifact.outputs.artifact-id", build_receipt["outputs"]["receipt_artifact_id"])
         self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
-        self.assertNotIn("RELEASE_QUALIFICATION_RECORD", workflow["env"])
-        self.assertIn("first_candidate_of_cycle", jobs["prepare"]["outputs"])
-        self.assertEqual(
-            jobs["prepare"]["outputs"]["qualification_record"],
-            "${{ steps.metadata.outputs.qualification_record }}",
+        for name in ("signed-artifact-ui", "update-test"):
+            self.assertIn(name, set(jobs["publish-release"]["needs"]))
+            self.assertIn(f"needs.{name}.result == 'success'", jobs["publish-release"]["if"])
+        for job in (pre_signing_policy, pre_signing, signed_ui, update_test):
+            self.assertNotIn("environment", job)
+        for job in (pre_signing_policy, signed_ui, update_test):
+            self.assertLessEqual(write_permissions(job["permissions"]), write_permissions({"contents": "read"}))
+        self.assertIn("steps.release_package.outputs.artifact-id", jobs["package"]["outputs"]["workflow_artifact_id"])
+        self.assertIn(
+            "steps.receipt_artifact.outputs.artifact-id", jobs["build-receipt"]["outputs"]["receipt_artifact_id"]
         )
-        self.assertEqual(
-            next(step for step in qualify_prep["steps"] if step.get("id") == "qualification")["env"][
-                "RELEASE_QUALIFICATION_RECORD"
-            ],
-            "${{ needs.prepare.outputs.qualification_record }}",
-        )
-        prep_uploads = [step for step in qualify_prep["steps"] if "upload-artifact" in step.get("uses", "")]
-        artifact_uploads = [step for step in qualify_artifact["steps"] if "upload-artifact" in step.get("uses", "")]
-        package_uploads = [step for step in package["steps"] if "upload-artifact" in step.get("uses", "")]
-        receipt_uploads = [step for step in build_receipt["steps"] if "upload-artifact" in step.get("uses", "")]
-        signed_ui_uploads = [step for step in signed_ui["steps"] if "upload-artifact" in step.get("uses", "")]
-        self.assertGreaterEqual(len(prep_uploads), 1)
-        release_package_uploads = [step for step in package_uploads if step.get("id") == "release_package"]
-        self.assertGreaterEqual(len(release_package_uploads), 1)
-        self.assertGreaterEqual(len(receipt_uploads), 1)
-        self.assertEqual(receipt_uploads[0]["id"], "receipt_artifact")
-        self.assertEqual(receipt_uploads[0]["if"], "success()")
-        self.assertEqual(receipt_uploads[0]["with"]["if-no-files-found"], "error")
-        self.assertGreaterEqual(len(signed_ui_uploads), 2)
-        self.assertGreaterEqual(len(artifact_uploads), 1)
-        receipt_upload = next(step for step in signed_ui_uploads if step.get("id") == "signed_ui_artifact")
-        diagnostics_upload = next(step for step in signed_ui_uploads if step.get("if") == "failure()")
-        self.assertEqual(receipt_upload["if"], "success()")
-        self.assertEqual(receipt_upload["with"]["if-no-files-found"], "error")
-        self.assertIn(diagnostics_upload["with"]["if-no-files-found"], {"warn", "error"})
-        signed_ui_input_downloads = [step for step in signed_ui["steps"] if "download-artifact" in step.get("uses", "")]
-        self.assertGreaterEqual(len(signed_ui_input_downloads), 2)
-        signed_ui_input_ids = {step["with"]["artifact-ids"] for step in signed_ui_input_downloads}
-        self.assertEqual(
-            signed_ui_input_ids,
-            {
-                "${{ needs.package.outputs.workflow_artifact_id }}",
-                "${{ needs.build-receipt.outputs.receipt_artifact_id }}",
-            },
-        )
-        artifact_input_downloads = [
-            step for step in qualify_artifact["steps"] if "download-artifact" in step.get("uses", "")
-        ]
-        self.assertGreaterEqual(len(artifact_input_downloads), 2)
-        artifact_input_ids = {step["with"]["artifact-ids"] for step in artifact_input_downloads}
-        self.assertEqual(
-            artifact_input_ids,
-            {
-                "${{ needs.build-receipt.outputs.receipt_artifact_id }}",
-                "${{ needs.signed-artifact-ui.outputs.artifact_id }}",
-            },
-        )
-        self.assertTrue(all("name" not in step["with"] for step in artifact_input_downloads))
-        self.assertEqual(prep_uploads[0]["if"], "always()")
-        self.assertEqual(artifact_uploads[0]["if"], "always()")
-        prep_checkouts = [
-            step for step in qualify_prep["steps"] if step.get("uses", "").startswith("actions/checkout@")
-        ]
-        for checkout in prep_checkouts:
-            self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-            self.assertEqual(checkout["with"]["persist-credentials"], "false")
-
-        release_operations = load_github_config()["releaseOperations"]
-        self.assertEqual(workflow["env"]["RELEASE_QUALIFICATION_POLICY"], release_operations["qualificationPolicyPath"])
-        self.assertEqual(
-            workflow["env"]["RELEASE_QUALIFICATION_EVIDENCE"], release_operations["qualificationEvidencePath"]
-        )
-        artifact_checkouts = [
-            step for step in qualify_artifact["steps"] if step.get("uses", "").startswith("actions/checkout@")
-        ]
-        for checkout in artifact_checkouts:
-            self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-            self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
     def test_release_receipt_depends_on_verified_artifacts(self) -> None:
         workflow = load_release_engine()

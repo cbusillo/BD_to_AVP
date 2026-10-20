@@ -187,17 +187,13 @@ class SignedArtifactUITests(unittest.TestCase):
             operations.running = True
             config = SignedArtifactUIConfig(
                 repo=Path.cwd(),
-                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
                 release_receipt=root / "release-receipt.json",
                 dmg=root / "candidate.dmg",
                 qualification_root=root / "workspace",
                 evidence_directory=root / "evidence",
-                output_receipt=root / "signed-artifact-ui-receipt.json",
-                case_id="profile-save-action-accessibility",
                 release_notes_url=RELEASES_URL,
                 workflow_run_id=12345,
                 workflow_run_attempt=2,
-                release_receipt_asset_id=4,
                 release_receipt_file_sha256="0" * 64,
             )
 
@@ -235,17 +231,13 @@ class SignedArtifactUITests(unittest.TestCase):
             diagnostics = root / "diagnostics"
             config = SignedArtifactUIConfig(
                 repo=Path.cwd(),
-                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
                 release_receipt=release_receipt,
                 dmg=dmg,
                 qualification_root=root / "workspace",
                 evidence_directory=root / "evidence",
-                output_receipt=root / "signed-artifact-ui-receipt.json",
-                case_id="profile-save-action-accessibility",
                 release_notes_url=RELEASES_URL,
                 workflow_run_id=12345,
                 workflow_run_attempt=2,
-                release_receipt_asset_id=4,
                 release_receipt_file_sha256=release_receipt_sha256,
                 failure_diagnostics_directory=diagnostics,
             )
@@ -258,39 +250,32 @@ class SignedArtifactUITests(unittest.TestCase):
             self.assertTrue((diagnostics / "InstalledUI-candidate.xcresult" / "Info.plist").is_file())
             self.assertTrue((diagnostics / "InstalledUIEvidence" / "partial.json").is_file())
 
-    def test_runner_installs_exact_dmg_and_writes_bound_receipt(self) -> None:
+    def test_runner_installs_the_exact_dmg_and_returns_its_ui_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             app = make_app(root / "source")
             dmg = root / "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg"
             dmg.write_bytes(b"candidate-dmg")
             release_receipt, release_receipt_sha256 = self._make_release_receipt(root, app, dmg)
-            output_receipt = root / "signed-artifact-ui-receipt.json"
             config = SignedArtifactUIConfig(
                 repo=Path.cwd(),
-                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
                 release_receipt=release_receipt,
                 dmg=dmg,
                 qualification_root=root / "workspace",
                 evidence_directory=root / "evidence",
-                output_receipt=output_receipt,
-                case_id="profile-save-action-accessibility",
                 release_notes_url=RELEASES_URL,
                 workflow_run_id=12345,
                 workflow_run_attempt=2,
-                release_receipt_asset_id=4,
                 release_receipt_file_sha256=release_receipt_sha256,
             )
 
             operations = FakeOperations(app)
-            receipt = run(config, operations)
+            evidence = run(config, operations)
 
-            self.assertTrue(output_receipt.exists())
+            self.assertTrue(evidence)
+            self.assertTrue(config.evidence_directory.is_dir())
             self.assertFalse(config.qualification_root.exists())
             self.assertEqual(operations.install_mount_point, config.qualification_root / "Mount")
-            self.assertEqual(receipt["case_id"], "profile-save-action-accessibility")
-            self.assertEqual(receipt["release_receipt"]["asset_id"], 4)
-            self.assertEqual(receipt["dmg"]["name"], dmg.name)
 
     def test_runner_rejects_profile_save_without_exactly_one_new_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -301,17 +286,13 @@ class SignedArtifactUITests(unittest.TestCase):
             release_receipt, release_receipt_sha256 = self._make_release_receipt(root, app, dmg)
             config = SignedArtifactUIConfig(
                 repo=Path.cwd(),
-                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
                 release_receipt=release_receipt,
                 dmg=dmg,
                 qualification_root=root / "workspace",
                 evidence_directory=root / "evidence",
-                output_receipt=root / "signed-artifact-ui-receipt.json",
-                case_id="profile-save-action-accessibility",
                 release_notes_url=RELEASES_URL,
                 workflow_run_id=12345,
                 workflow_run_attempt=2,
-                release_receipt_asset_id=4,
                 release_receipt_file_sha256=release_receipt_sha256,
             )
             operations = FakeOperations(app)
@@ -320,7 +301,6 @@ class SignedArtifactUITests(unittest.TestCase):
             with self.assertRaisesRegex(CleanMachineError, "did not add exactly one profile"):
                 run(config, operations)
 
-            self.assertFalse(config.output_receipt.exists())
             self.assertFalse(config.evidence_directory.exists())
 
     def test_runner_removes_partial_outputs_on_mismatch(self) -> None:
@@ -328,28 +308,22 @@ class SignedArtifactUITests(unittest.TestCase):
             root = Path(temporary_directory)
             release_receipt = root / "release-receipt.json"
             release_receipt.write_text("{}", encoding="utf-8")
-            output_receipt = root / "signed-artifact-ui-receipt.json"
             evidence = root / "evidence"
             config = SignedArtifactUIConfig(
                 repo=Path.cwd(),
-                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
                 release_receipt=release_receipt,
                 dmg=root / "missing.dmg",
                 qualification_root=root / "workspace",
                 evidence_directory=evidence,
-                output_receipt=output_receipt,
-                case_id="profile-save-action-accessibility",
                 release_notes_url=RELEASES_URL,
                 workflow_run_id=12345,
                 workflow_run_attempt=2,
-                release_receipt_asset_id=4,
                 release_receipt_file_sha256="0" * 64,
             )
 
             with self.assertRaises(SignedArtifactUIError):
                 run(config, FakeOperations(root))
 
-            self.assertFalse(output_receipt.exists())
             self.assertFalse(evidence.exists())
 
 
