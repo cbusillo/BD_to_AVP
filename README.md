@@ -117,7 +117,7 @@ notes passed, so RC 3's signed qualification is complete.
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.
 
-See [Production Release Routes](docs/release-routes.md) for Stable, RC, Beta,
+See [the release process](docs/release-process.md#versions-builds-and-routes) for Stable, RC, Beta,
 and Alpha update eligibility, version mapping, and publication policy.
 
 The [Conversion Setup Beta Test Guide](docs/conversion-setup-beta-test-guide.md)

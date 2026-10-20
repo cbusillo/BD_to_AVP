@@ -1,7 +1,8 @@
 # Direction and Execution
 
 Read the Director's [overall DIRECTION.md](https://github.com/cbusillo/direction/blob/HEAD/DIRECTION.md)
-before working here. This repository has no DIRECTION.md of its own.
+before working here. This repository has no DIRECTION.md of its own. The
+Director (cbusillo) is this product's Client.
 Use the maintained [executing loop](https://github.com/cbusillo/codex-skills/blob/main/skills/references/executing-loop.md)
 and its owning skills for issue claims, linked worktrees, bot commits, review,
 landing, and closeout. AGENTS.md is the sole agent-instruction filename;
@@ -47,21 +48,6 @@ Release-specific requirements below still apply when release work is authorized.
 
 # Tests
 
-- A test earns its place only if it fails when the product is broken and passes
-  when someone makes an intended change. If a version bump, toolchain bump,
-  runner change or reworded workflow step would fail it, it is the wrong test.
-- Never assert a literal that is defined elsewhere in the repository (version,
-  build number, protocol version, toolchain, digest, file name). Assert that
-  the sources agree, or derive the expectation from the single source of truth.
-- Never assert workflow, script or document *text* (`assertIn("...", str(job))`,
-  `step["run"]`, file contents). Check workflow structure by rule in
-  `tests/test_workflow_security_policy.py`, or extract the script and run it.
-- Code that loads or verifies a committed document must not depend on the state
-  of the working tree. Check live files only on the path that acts on them.
-- Do not add generated inventories, counts or snapshots that must be
-  regenerated or hand-registered when an unrelated file changes.
-- Keep byte-exact and digest gates on real artifacts and immutable evidence:
-  the CI rebuild comparison of bundled tools, archived release evidence, and
-  the signing approval contract.
-- Removing or replacing tests: list what was removed and why in the pull
-  request, and show planted faults that the remaining suite still catches.
+Follow the shared [Tests rule](https://github.com/cbusillo/codex-skills/blob/main/instructions/global.md#tests).
+Here, release workflow structure is checked by rule in
+`tests/test_workflow_security_policy.py`.

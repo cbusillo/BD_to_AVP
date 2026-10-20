@@ -132,8 +132,6 @@ permissions:
 
 env:
   GH_REPO: ${{ github.repository }}
-  RELEASE_QUALIFICATION_EVIDENCE: docs/qualification/release-evidence-v1.json
-  RELEASE_QUALIFICATION_POLICY: docs/qualification/release-qualification-policy-v1.json
   XCODEGEN_VERSION: 2.45.4
   XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
   XCODE_VERSION: "27.0"
@@ -246,7 +244,6 @@ jobs:
       first_candidate_of_cycle: ${{ steps.metadata.outputs.first_candidate_of_cycle }}
       make_latest: ${{ steps.metadata.outputs.make_latest }}
       publish_pypi: ${{ steps.metadata.outputs.publish_pypi }}
-      qualification_record: ${{ steps.metadata.outputs.qualification_record }}
       previous_release_tag: ${{ steps.release_history.outputs.previous_release_tag }}
       base_snapshot_tag: ${{ steps.feed_state.outputs.base_snapshot_tag }}
     steps:
@@ -344,17 +341,6 @@ jobs:
             echo "Multiple GitHub Releases use tag $RELEASE_TAG." >&2
             exit 1
           fi
-
-      - name: Revalidate Beta 3 recovery premise
-        id: beta3-recovery
-        if: steps.metadata.outputs.release_tag == 'v0.3.0-beta.3'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          python -m scripts.beta3_recovery_evidence
-          --allow-beta3-draft
-          --allow-github-actions-contents-write-token
-          --expected-sha "$GITHUB_SHA"
 
       - name: Resolve channel-aware base for generated notes
         id: release_history
@@ -540,80 +526,11 @@ jobs:
               ;;
           esac
 
-  qualify-preparation:
-    name: Qualify release preparation
-    needs:
-      - prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout exact candidate and qualification evidence
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.sha }}
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - name: Classify preparation evidence
-        id: qualification
-        env:
-          FIRST_CANDIDATE_OF_CYCLE: ${{ needs.prepare.outputs.first_candidate_of_cycle }}
-          RELEASE_QUALIFICATION_RECORD: ${{ needs.prepare.outputs.qualification_record }}
-          RELEASE_STAGE: ${{ needs.prepare.outputs.channel }}
-        run: |
-          set -euo pipefail
-          FIRST_CANDIDATE_ARGS=()
-          if [ "$FIRST_CANDIDATE_OF_CYCLE" = "true" ]; then
-            FIRST_CANDIDATE_ARGS+=(--first-candidate-of-cycle)
-          fi
-          set +e
-          python -m scripts.qualify_release_scope \
-            --policy "$RELEASE_QUALIFICATION_POLICY" \
-            --qualification "$RELEASE_QUALIFICATION_RECORD" \
-            --evidence "$RELEASE_QUALIFICATION_EVIDENCE" \
-            --candidate-sha "$GITHUB_SHA" \
-            --release-stage "$RELEASE_STAGE" \
-            --workflow-phase preparation \
-            "${FIRST_CANDIDATE_ARGS[@]}" \
-            --output release-qualification-preparation.json \
-            --require-evidence
-          EXIT_CODE=$?
-          set -e
-          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-
-      - name: Retain preparation qualification report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: release-qualification-preparation-${{ github.run_attempt }}
-          path: release-qualification-preparation.json
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Enforce preparation qualification
-        if: always()
-        env:
-          QUALIFICATION_EXIT_CODE: ${{ steps.qualification.outputs.exit_code }}
-        run: |
-          set -euo pipefail
-          if [ "$QUALIFICATION_EXIT_CODE" != "0" ]; then
-            echo "Release preparation qualification failed with exit code $QUALIFICATION_EXIT_CODE." >&2
-            exit "$QUALIFICATION_EXIT_CODE"
-          fi
-
   pre-signing-policy:
     name: Revalidate guarded release policy before production preflight
     needs:
       - policy
       - prepare
-      - qualify-preparation
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -668,7 +585,6 @@ jobs:
     needs:
       - policy
       - prepare
-      - qualify-preparation
       - pre-signing-package
     runs-on: xcode-27
     timeout-minutes: 180
@@ -1277,7 +1193,6 @@ jobs:
     name: Build stable Python distributions
     needs:
       - prepare
-      - qualify-preparation
     if: needs.prepare.outputs.publish_pypi == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -2220,10 +2135,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-    outputs:
-      artifact_id: ${{ steps.signed_ui_artifact.outputs.artifact-id }}
-      receipt_path: ${{ steps.ui.outputs.receipt_path }}
-      receipt_file_sha256: ${{ steps.ui.outputs.receipt_file_sha256 }}
     steps:
       - name: Checkout exact candidate UI tests
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -2324,27 +2235,18 @@ jobs:
         id: ui
         env:
           DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
-          RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
           RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
         run: |
           set -euo pipefail
           uv run python -m scripts.signed_artifact_ui \
-            --policy "$RELEASE_QUALIFICATION_POLICY" \
             --release-receipt signed-artifact-assets/receipt/downloaded-release-receipt.json \
             --dmg "signed-artifact-assets/package/$DMG_NAME" \
             --qualification-root "$RUNNER_TEMP/signed-artifact-ui" \
             --evidence-directory signed-artifact-ui-evidence \
-            --output-receipt signed-artifact-ui-receipt.json \
             --failure-diagnostics-directory signed-artifact-ui-diagnostics \
             --workflow-run-id "$GITHUB_RUN_ID" \
             --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --release-receipt-asset-id "$RECEIPT_ASSET_ID" \
             --release-receipt-file-sha256 "$RECEIPT_FILE_SHA256"
-          RECEIPT_FILE_SHA256=$(shasum -a 256 signed-artifact-ui-receipt.json | awk '{print $1}')
-          {
-            echo "receipt_path=signed-artifact-ui-receipt.json"
-            echo "receipt_file_sha256=$RECEIPT_FILE_SHA256"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Retain signed artifact UI failure diagnostics
         if: failure()
@@ -2354,159 +2256,6 @@ jobs:
           path: signed-artifact-ui-diagnostics
           if-no-files-found: warn
           retention-days: 7
-
-      - name: Retain signed artifact UI receipt
-        id: signed_ui_artifact
-        if: success()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: signed-artifact-ui-${{ github.run_attempt }}
-          path: signed-artifact-ui-receipt.json
-          if-no-files-found: error
-          retention-days: 7
-
-  qualify-artifact:
-    name: Qualify exact release artifact
-    needs:
-      - policy
-      - prepare
-      - package
-      - create-draft
-      - publish-appcast
-      - verify-draft
-      - build-receipt
-      - signed-artifact-ui
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout exact candidate and qualification evidence
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.sha }}
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - name: Download exact verified receipt transfer
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          artifact-ids: ${{ needs.build-receipt.outputs.receipt_artifact_id }}
-          path: release-receipt-transfer
-
-      - name: Verify release receipt transfer
-        env:
-          EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
-        run: |
-          set -euo pipefail
-          RECEIPT_PATH="release-receipt-transfer/downloaded-release-receipt.json"
-          if [ "$(sha256sum "$RECEIPT_PATH" | awk '{print $1}')" != "$EXPECTED_RECEIPT_FILE_SHA256" ]; then
-            echo "Release receipt digest mismatch before artifact qualification." >&2
-            exit 1
-          fi
-          python -m scripts.release_receipt validate --receipt "$RECEIPT_PATH"
-
-      - name: Download signed artifact UI receipt
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          artifact-ids: ${{ needs.signed-artifact-ui.outputs.artifact_id }}
-          path: signed-artifact-ui
-
-      - name: Classify exact artifact evidence
-        id: qualification
-        env:
-          APPCAST_ASSET_ID: ${{ needs.verify-draft.outputs.appcast_asset_id }}
-          APPCAST_SHA256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
-          CHECKSUM_ASSET_ID: ${{ needs.verify-draft.outputs.checksum_asset_id }}
-          CHECKSUM_SHA256: ${{ needs.verify-draft.outputs.checksum_sha256 }}
-          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
-          DMG_ASSET_ID: ${{ needs.verify-draft.outputs.dmg_asset_id }}
-          DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
-          DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
-          DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
-          FIRST_CANDIDATE_OF_CYCLE: ${{ needs.prepare.outputs.first_candidate_of_cycle }}
-          PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
-          PUBLIC_VERSION: ${{ needs.prepare.outputs.public_version }}
-          RELEASE_QUALIFICATION_RECORD: ${{ needs.prepare.outputs.qualification_record }}
-          RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
-          RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
-          RECEIPT_SELF_SHA256: ${{ needs.build-receipt.outputs.receipt_sha256 }}
-          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
-          RELEASE_ROUTE: ${{ needs.policy.outputs.release_route }}
-          RELEASE_STAGE: ${{ needs.prepare.outputs.channel }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
-          RELEASE_RECEIPT_PATH: release-receipt-transfer/downloaded-release-receipt.json
-          SIGNED_APP_TREE_SHA256: ${{ needs.package.outputs.signed_app_tree_sha256 }}
-          SIGNED_ARTIFACT_RECEIPT: signed-artifact-ui/${{ needs.signed-artifact-ui.outputs.receipt_path }}
-          SIGNED_ARTIFACT_RECEIPT_SHA256: ${{ needs.signed-artifact-ui.outputs.receipt_file_sha256 }}
-        run: |
-          set -euo pipefail
-          FIRST_CANDIDATE_ARGS=()
-          if [ "$FIRST_CANDIDATE_OF_CYCLE" = "true" ]; then
-            FIRST_CANDIDATE_ARGS+=(--first-candidate-of-cycle)
-          fi
-          set +e
-          python -m scripts.qualify_release_scope \
-            --policy "$RELEASE_QUALIFICATION_POLICY" \
-            --qualification "$RELEASE_QUALIFICATION_RECORD" \
-            --evidence "$RELEASE_QUALIFICATION_EVIDENCE" \
-            --candidate-sha "$GITHUB_SHA" \
-            --release-stage "$RELEASE_STAGE" \
-            --workflow-phase artifact \
-            "${FIRST_CANDIDATE_ARGS[@]}" \
-            --release-receipt "$RELEASE_RECEIPT_PATH" \
-            --signed-artifact-receipt "$SIGNED_ARTIFACT_RECEIPT" \
-            --signed-artifact-receipt-sha256 "$SIGNED_ARTIFACT_RECEIPT_SHA256" \
-            --release-route "$RELEASE_ROUTE" \
-            --workflow-run-id "$GITHUB_RUN_ID" \
-            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --release-id "$RELEASE_ID" \
-            --package-version "$PACKAGE_VERSION" \
-            --public-version "$PUBLIC_VERSION" \
-            --build-version "$BUILD_VERSION" \
-            --release-tag "$RELEASE_TAG" \
-            --dmg-name "$DMG_NAME" \
-            --release-receipt-asset-id "$RECEIPT_ASSET_ID" \
-            --release-receipt-sha256 "$RECEIPT_FILE_SHA256" \
-            --release-receipt-self-sha256 "$RECEIPT_SELF_SHA256" \
-            --signed-app-tree-sha256 "$SIGNED_APP_TREE_SHA256" \
-            --dmg-asset-id "$DMG_ASSET_ID" \
-            --dmg-size "$DMG_SIZE" \
-            --dmg-sha256 "$DMG_SHA256" \
-            --checksum-asset-id "$CHECKSUM_ASSET_ID" \
-            --checksum-sha256 "$CHECKSUM_SHA256" \
-            --appcast-asset-id "$APPCAST_ASSET_ID" \
-            --appcast-sha256 "$APPCAST_SHA256" \
-            --output release-qualification-final.json \
-            --require-evidence
-          EXIT_CODE=$?
-          set -e
-          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
-
-      - name: Retain final qualification report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: release-qualification-final-${{ github.run_attempt }}
-          path: release-qualification-final.json
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Enforce exact artifact qualification
-        if: always()
-        env:
-          QUALIFICATION_EXIT_CODE: ${{ steps.qualification.outputs.exit_code }}
-        run: |
-          set -euo pipefail
-          if [ "$QUALIFICATION_EXIT_CODE" != "0" ]; then
-            echo "Exact artifact qualification failed with exit code $QUALIFICATION_EXIT_CODE." >&2
-            exit "$QUALIFICATION_EXIT_CODE"
-          fi
 
   update-test:
     name: Update the prior release to this candidate
@@ -2535,7 +2284,6 @@ jobs:
       - verify-draft
       - build-receipt
       - signed-artifact-ui
-      - qualify-artifact
       - update-test
     if: >-
       !cancelled() &&
@@ -2545,7 +2293,6 @@ jobs:
       needs.verify-draft.result == 'success' &&
       needs.build-receipt.result == 'success' &&
       needs.signed-artifact-ui.result == 'success' &&
-      needs.qualify-artifact.result == 'success' &&
       needs.update-test.result == 'success' &&
       (
         needs.prepare.outputs.publish_pypi != 'true' ||

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from scripts.release_receipt import (
     ArtifactReceiptExpectation,
-    DEFAULT_POLICY_PATH,
     ReleaseReceiptError,
     build_receipt,
     file_sha256,
@@ -144,29 +143,6 @@ class ReleaseReceiptTests(unittest.TestCase):
         facts["artifacts"][0]["name"] = "wrong.dmg"
         with self.assertRaisesRegex(ReleaseReceiptError, "dmg asset name"):
             build_receipt(facts)
-
-    def test_build_requires_explicit_verification_mapping_for_every_tier1_case(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            policy = json.loads(DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))
-            policy["cases"].append(
-                {
-                    "id": "new-tier1-case",
-                    "tier": 1,
-                    "blocking_phase": "publication",
-                    "invalidates_on": {"paths": [], "contracts": ["release-engine"]},
-                    "allowed_evidence_sources": ["release_run_receipt"],
-                    "carry_forward": {
-                        "allowed": False,
-                        "requires_prior_accepted_receipt": False,
-                        "requires_clean_invalidation": False,
-                    },
-                }
-            )
-            policy_path = Path(temporary_directory) / "policy.json"
-            policy_path.write_text(json.dumps(policy), encoding="utf-8")
-
-            with self.assertRaisesRegex(ReleaseReceiptError, "explicit receipt verification mappings"):
-                build_receipt(receipt_facts(), policy_path)
 
     def test_artifact_validation_accepts_only_the_exact_same_run_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -16,7 +16,6 @@ from scripts.release_workflow_policy import RECEIPT_ACTORS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_POLICY_PATH = REPO_ROOT / "docs" / "qualification" / "release-qualification-policy-v1.json"
 RECEIPT_ASSET_NAME = "release-receipt.json"
 RECEIPT_TYPE = "bd-to-avp-release-engine"
 SCHEMA_VERSION = 1
@@ -151,28 +150,7 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _tier1_case_ids(policy_path: Path) -> list[str]:
-    policy = _load_json(policy_path, "release qualification policy")
-    if policy.get("schema_version") != 1:
-        raise ReleaseReceiptError("Release qualification policy schema_version must be 1.")
-    case_ids: list[str] = []
-    for index, raw_case in enumerate(_sequence(policy.get("cases"), "release qualification cases")):
-        case = _mapping(raw_case, f"release qualification case {index}")
-        if case.get("tier") == 1:
-            case_ids.append(_string(case.get("id"), f"release qualification case {index} id"))
-    if not case_ids or len(case_ids) != len(set(case_ids)):
-        raise ReleaseReceiptError("Release qualification policy must define unique Tier 1 case IDs.")
-    policy_case_ids = set(case_ids)
-    mapped_case_ids = set(TIER1_CASE_VERIFICATIONS)
-    if policy_case_ids != mapped_case_ids:
-        raise ReleaseReceiptError(
-            "Release qualification Tier 1 cases require explicit receipt verification mappings; "
-            f"unmapped={sorted(policy_case_ids - mapped_case_ids)}, stale={sorted(mapped_case_ids - policy_case_ids)}."
-        )
-    return sorted(policy_case_ids)
-
-
-def build_receipt(facts: Mapping[str, Any], policy_path: Path = DEFAULT_POLICY_PATH) -> dict[str, Any]:
+def build_receipt(facts: Mapping[str, Any]) -> dict[str, Any]:
     route = _string(facts.get("release_route"), "release_route")
     if route not in ROUTES:
         raise ReleaseReceiptError(f"release_route must be one of {sorted(ROUTES)}.")
@@ -226,7 +204,7 @@ def build_receipt(facts: Mapping[str, Any], policy_path: Path = DEFAULT_POLICY_P
         "schema_version": SCHEMA_VERSION,
         "signed_app_tree_sha256": _sha256(facts.get("signed_app_tree_sha256"), "signed_app_tree_sha256"),
         "source_sha": source_sha,
-        "tier1_case_references": _tier1_case_ids(policy_path),
+        "tier1_case_references": sorted(TIER1_CASE_VERIFICATIONS),
         "verification": {field: "passed" for field in VERIFICATION_FIELDS},
         "versions": {
             "build": _string(facts.get("build_version"), "build_version"),
@@ -503,7 +481,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     build_parser = subparsers.add_parser("build", help="Build a release receipt from verified workflow facts.")
     build_parser.add_argument("--facts", type=Path, required=True)
-    build_parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY_PATH)
     build_parser.add_argument("--output", type=Path, required=True)
 
     validate_parser = subparsers.add_parser("validate", help="Validate an existing release receipt.")
@@ -512,7 +489,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
-            receipt = build_receipt(_load_json(args.facts, "release receipt facts"), args.policy)
+            receipt = build_receipt(_load_json(args.facts, "release receipt facts"))
             write_receipt(receipt, args.output)
         else:
             validate_receipt(_load_json(args.receipt, "release receipt"))

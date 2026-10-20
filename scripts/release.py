@@ -15,26 +15,11 @@ import subprocess
 import tempfile
 import tomllib
 
-from collections.abc import Collection, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
-
-from scripts.beta3_recovery_evidence import (
-    BETA3_RECOVERY_EVIDENCE_PATH,
-    Beta3RecoveryEvidenceError,
-    load_beta3_recovery_evidence,
-    verify_beta3_remote_state,
-)
-from scripts.production_identity import (
-    PRODUCTION_BUNDLE_IDENTIFIER,
-    PRODUCTION_DISTRIBUTION_CHANNEL,
-    PRODUCTION_FEED_URL,
-    PRODUCTION_PRODUCT_NAME,
-    PRODUCTION_SPARKLE_PUBLIC_KEY,
-    validate_production_public_key,
-)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -42,8 +27,6 @@ PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 LOCK_PATH = REPO_ROOT / "uv.lock"
 MACOS_PROJECT_PATH = REPO_ROOT / "macos" / "project.yml"
 PUBLIC_KEY_PATH = REPO_ROOT / "sparkle-public-ed-key.txt"
-GITHUB_CONFIG_PATH = REPO_ROOT / ".github" / "github.json"
-SIGNED_QUALIFICATION_GLOB = "*-signed-qualification-v1.json"
 TRANSACTION_JOURNAL_NAME = ".bd-to-avp-release-transaction.json"
 TRANSACTION_SCHEMA = "bd_to_avp.release_metadata_transaction"
 TRANSACTION_SCHEMA_VERSION = 1
@@ -75,15 +58,6 @@ STAGE_ORDER = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}
 # Prerelease stages whose blocked preparation classification may be remediated with
 # change-scoped Tier 2 evidence. The evidence command and its pull-request validator
 # both read this set; RC and Stable must qualify without that lane.
-CHANGE_SCOPED_EVIDENCE_STAGES = frozenset({"alpha", "beta"})
-BETA3_RECOVERY_SOURCE_VERSION = "0.3.0rc1"
-BETA3_RECOVERY_SOURCE_BUILD = "147"
-BETA3_RECOVERY_TARGET_VERSION = "0.3.0b3"
-BETA3_RECOVERY_TARGET_BUILD = "148"
-CUT_PACKET_PREPARED = "**Prepared metadata; publication pending.**"
-CUT_PACKET_RECOVERY_PENDING = "**Published and immutable; PyPI recovery pending.**"
-CUT_PACKET_PUBLISHED = "**Published and immutable.**"
-CUT_PACKET_CANCELLED = "**Cancelled, unpublished, signed attempt; release identity permanently burned.**"
 
 
 class ReleaseError(RuntimeError):
@@ -170,7 +144,6 @@ class QualificationUpdateBase:
 
 
 LockRunner = Callable[[Path, str], None]
-RemoteEvidenceVerifier = Callable[[Mapping[str, Any]], None]
 TransactionObserver = Callable[[str, Path], None]
 PrecommitValidator = Callable[[], None]
 TagExists = Callable[[str], bool]
@@ -362,7 +335,6 @@ def select_qualification_update_base(
     release_history: Any,
     head_ref: str,
     *,
-    eligible_prior_tags: Collection[str] | None = None,
     tag_exists: TagExists = _git_tag_exists,
     is_ancestor: AncestorCheck = _git_tag_is_ancestor,
 ) -> QualificationUpdateBase:
@@ -372,7 +344,6 @@ def select_qualification_update_base(
             release
             for release in _published_releases(release_history)
             if release.version.order_key < current_version.order_key
-            and (eligible_prior_tags is None or release.tag_name in eligible_prior_tags)
         ),
         key=lambda release: release.version.order_key,
         reverse=True,
@@ -400,15 +371,6 @@ def _load_toml(path: Path) -> dict[str, Any]:
             return tomllib.load(handle)
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise ReleaseError(f"Unable to load {path}: {error}") from error
-
-
-def validate_beta3_recovery_evidence(
-    evidence_path: Path = BETA3_RECOVERY_EVIDENCE_PATH,
-) -> dict[str, Any]:
-    try:
-        return load_beta3_recovery_evidence(evidence_path)
-    except Beta3RecoveryEvidenceError as error:
-        raise ReleaseError(str(error)) from error
 
 
 def _locked_project_version(lock_path: Path) -> str:
@@ -505,164 +467,6 @@ def _validate_macos_project_metadata(path: Path, pyproject: dict[str, Any], vers
         raise ReleaseError("Production macOS project metadata is inconsistent:\n" + "\n".join(mismatches))
 
 
-def _validate_beta3_recovery_source_identity(
-    pyproject_path: Path,
-    lock_path: Path,
-    macos_project_path: Path,
-    evidence: Mapping[str, Any],
-) -> dict[Path, str] | None:
-    operated_paths = (pyproject_path, lock_path, macos_project_path)
-    for path in operated_paths:
-        if path.is_symlink() or not path.is_file():
-            raise ReleaseError(f"Beta 3 recovery requires a regular non-symlink source file: {path}")
-    pyproject = _load_toml(pyproject_path)
-    try:
-        project = pyproject["project"]
-        app = pyproject["tool"]["bd_to_avp"]
-        sparkle = app["sparkle"]
-    except (KeyError, TypeError) as error:
-        raise ReleaseError("Beta 3 recovery source is missing production identity metadata.") from error
-    expected_values = {
-        "project.name": (project.get("name"), "bd_to_avp"),
-        "tool.bd_to_avp.project_name": (app.get("project_name"), PRODUCTION_PRODUCT_NAME),
-        "tool.bd_to_avp.bundle_identifier": (app.get("bundle_identifier"), PRODUCTION_BUNDLE_IDENTIFIER),
-        "tool.bd_to_avp.formal_name": (app.get("formal_name"), PRODUCTION_PRODUCT_NAME),
-        "BDToAVPDistributionChannel": (
-            app.get("distribution_channel"),
-            PRODUCTION_DISTRIBUTION_CHANNEL,
-        ),
-        "SUFeedURL": (sparkle.get("feed_url"), PRODUCTION_FEED_URL),
-        "SUPublicEDKey": (sparkle.get("public_key"), PRODUCTION_SPARKLE_PUBLIC_KEY),
-        "SUAllowsAutomaticUpdates": (sparkle.get("allows_automatic_updates"), False),
-        "SUVerifyUpdateBeforeExtraction": (sparkle.get("verify_update_before_extraction"), True),
-    }
-    mismatches = [
-        f"{name}: expected {expected!r}, found {actual!r}"
-        for name, (actual, expected) in expected_values.items()
-        if actual != expected
-    ]
-    if "enables_automatic_checks" in sparkle:
-        mismatches.append("SUEnableAutomaticChecks must remain unset")
-    public_key_path = pyproject_path.parent / PUBLIC_KEY_PATH.name
-    try:
-        public_key = public_key_path.read_text(encoding="utf-8").strip()
-        validate_production_public_key(public_key)
-    except (OSError, ValueError) as error:
-        mismatches.append(f"production Sparkle public key: {error}")
-    try:
-        project_text = macos_project_path.read_text(encoding="utf-8")
-        base_path = ("targets", "BluRayToVisionPro", "settings", "base")
-        release_path = ("targets", "BluRayToVisionPro", "settings", "configs", "Release")
-        project_expectations = {
-            "PRODUCT_BUNDLE_IDENTIFIER": PRODUCTION_BUNDLE_IDENTIFIER,
-            "PRODUCT_NAME": PRODUCTION_PRODUCT_NAME,
-            "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT": "",
-        }
-        for key, expected in project_expectations.items():
-            actual = _yaml_mapping_value(project_text, base_path, key)
-            if actual != expected:
-                mismatches.append(f"{key}: expected {expected!r}, found {actual!r}")
-        expected_release_plist = "BluRayToVisionPro/Info-Release.plist"
-        release_plist = _yaml_mapping_value(project_text, release_path, "INFOPLIST_FILE")
-        if release_plist != expected_release_plist:
-            mismatches.append(f"INFOPLIST_FILE: expected {expected_release_plist!r}, found {release_plist!r}")
-    except (OSError, UnicodeDecodeError, ReleaseError) as error:
-        mismatches.append(f"production macOS project identity: {error}")
-    canonical_paths = tuple(path.resolve() for path in operated_paths) == (
-        PYPROJECT_PATH.resolve(),
-        LOCK_PATH.resolve(),
-        MACOS_PROJECT_PATH.resolve(),
-    )
-    expected_original_digests: dict[Path, str] | None = None
-    if canonical_paths:
-        source_identity = evidence.get("source_identity")
-        if not isinstance(source_identity, Mapping):
-            mismatches.append("reviewed source identity is missing")
-        else:
-            source_files = source_identity.get("files")
-            if not isinstance(source_files, Mapping):
-                mismatches.append("reviewed source file digests are missing")
-            else:
-                expected_original_digests = {}
-                for relative_path, path in (
-                    ("pyproject.toml", pyproject_path),
-                    ("uv.lock", lock_path),
-                    ("macos/project.yml", macos_project_path),
-                ):
-                    expected_digest = source_files.get(relative_path)
-                    actual_digest = _sha256(path.read_bytes())
-                    if expected_digest != actual_digest:
-                        mismatches.append(
-                            f"{relative_path} source digest: expected {expected_digest!r}, found {actual_digest!r}"
-                        )
-                    if isinstance(expected_digest, str):
-                        expected_original_digests[path.resolve()] = expected_digest
-            base_commit = source_identity.get("base_commit")
-            expected_tree = source_identity.get("tree")
-            try:
-                repository_root = subprocess.run(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    check=True,
-                    cwd=REPO_ROOT,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-                origin_url = subprocess.run(
-                    ["git", "remote", "get-url", "origin"],
-                    check=True,
-                    cwd=REPO_ROOT,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-                actual_tree = subprocess.run(
-                    ["git", "show", "-s", "--format=%T", str(base_commit)],
-                    check=True,
-                    cwd=REPO_ROOT,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-                subprocess.run(
-                    ["git", "merge-base", "--is-ancestor", str(base_commit), "HEAD"],
-                    check=True,
-                    cwd=REPO_ROOT,
-                    capture_output=True,
-                    text=True,
-                )
-                source_status = subprocess.run(
-                    [
-                        "git",
-                        "status",
-                        "--porcelain",
-                        "--",
-                        "pyproject.toml",
-                        "uv.lock",
-                        "macos/project.yml",
-                        "sparkle-public-ed-key.txt",
-                    ],
-                    check=True,
-                    cwd=REPO_ROOT,
-                    capture_output=True,
-                    text=True,
-                ).stdout
-            except (OSError, subprocess.CalledProcessError) as error:
-                mismatches.append(f"reviewed Git source identity: {error}")
-            else:
-                normalized_origin = origin_url.removesuffix(".git").rstrip("/")
-                if Path(repository_root).resolve() != REPO_ROOT.resolve():
-                    mismatches.append(f"Git top-level must be {REPO_ROOT}, found {repository_root!r}")
-                if normalized_origin != "https://github.com/cbusillo/BD_to_AVP":
-                    mismatches.append(f"origin must be the production GitHub repository, found {origin_url!r}")
-                if actual_tree != expected_tree:
-                    mismatches.append(f"reviewed source tree: expected {expected_tree!r}, found {actual_tree!r}")
-                if source_status:
-                    mismatches.append("reviewed source files must be clean before recovery")
-    if mismatches:
-        raise ReleaseError("Beta 3 recovery source identity is invalid:\n" + "\n".join(mismatches))
-    if expected_original_digests is None:
-        expected_original_digests = {path.resolve(): _sha256(path.read_bytes()) for path in operated_paths}
-    return expected_original_digests
-
-
 def load_release_metadata(
     pyproject_path: Path = PYPROJECT_PATH,
     lock_path: Path = LOCK_PATH,
@@ -707,86 +511,6 @@ def load_release_metadata(
         make_latest=not version.prerelease,
         publish_pypi=not version.prerelease,
     )
-
-
-def validate_configured_qualification_record(
-    metadata: ReleaseMetadata,
-    *,
-    github_config_path: Path = GITHUB_CONFIG_PATH,
-) -> Path:
-    try:
-        config = json.loads(github_config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ReleaseError(f"Unable to load GitHub release configuration from {github_config_path}: {error}") from error
-    if not isinstance(config, dict) or not isinstance(config.get("releaseOperations"), dict):
-        raise ReleaseError("GitHub release configuration must define releaseOperations.")
-    configured_value = config["releaseOperations"].get("qualificationRecordPath")
-    if not isinstance(configured_value, str) or not configured_value:
-        raise ReleaseError("GitHub release configuration must define qualificationRecordPath.")
-    configured_relative = Path(configured_value)
-    if configured_relative.is_absolute() or ".." in configured_relative.parts or configured_value.startswith("./"):
-        raise ReleaseError("qualificationRecordPath must be a canonical repository-relative path.")
-
-    repo_root = github_config_path.parent.parent
-    qualification_directory = repo_root / "docs" / "qualification"
-    matches: list[Path] = []
-    configured_document: Mapping[str, Any] | None = None
-    for path in sorted(qualification_directory.glob(SIGNED_QUALIFICATION_GLOB)):
-        try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise ReleaseError(f"Unable to load signed qualification record from {path}: {error}") from error
-        if not isinstance(document, dict):
-            raise ReleaseError(f"Signed qualification record must be a JSON object: {path}")
-        candidate = document.get("candidate")
-        if isinstance(candidate, dict) and candidate.get("release_tag") == metadata.release_tag:
-            matches.append(path)
-        if path == repo_root / configured_relative:
-            configured_document = document
-
-    if len(matches) != 1:
-        raise ReleaseError(
-            f"Expected exactly one signed qualification record for {metadata.release_tag}; found {len(matches)}."
-        )
-    configured_path = repo_root / configured_relative
-    if matches[0] != configured_path or configured_document is None:
-        raise ReleaseError(
-            "qualificationRecordPath must select the unique signed qualification record for the committed release."
-        )
-
-    candidate = configured_document.get("candidate")
-    execution_policy = configured_document.get("execution_policy")
-    if not isinstance(candidate, dict) or not isinstance(execution_policy, dict):
-        raise ReleaseError("Configured signed qualification record must define candidate and execution_policy objects.")
-    expected_candidate = {
-        "build_version": metadata.build_version,
-        "dmg_name": metadata.dmg_name,
-        "package_version": metadata.package_version,
-        "public_version": metadata.public_version,
-        "release_tag": metadata.release_tag,
-        "workflow": "Prerelease" if metadata.prerelease else "Stable",
-    }
-    mismatches = [field for field, expected in expected_candidate.items() if candidate.get(field) != expected]
-    if mismatches:
-        raise ReleaseError(f"Configured signed qualification candidate identity differs for fields: {mismatches}.")
-    if execution_policy.get("release_stage") != metadata.channel:
-        raise ReleaseError("Configured signed qualification release_stage differs from committed release metadata.")
-    return configured_relative
-
-
-def validate_release_cut_packet(metadata: ReleaseMetadata, *, repo_root: Path = REPO_ROOT) -> Path:
-    relative = Path("docs") / f"{metadata.public_version}-cut-packet.md"
-    path = repo_root / relative
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise ReleaseError(f"Unable to load release cut packet from {path}: {error}") from error
-    recognized_states = (CUT_PACKET_PREPARED, CUT_PACKET_RECOVERY_PENDING, CUT_PACKET_PUBLISHED, CUT_PACKET_CANCELLED)
-    if sum(state in text for state in recognized_states) != 1:
-        raise ReleaseError(
-            "Release cut packet must declare exactly one prepared, published, recovery-pending, or cancelled state."
-        )
-    return relative
 
 
 def _replace_section_value(text: str, section: str, key: str, value: str) -> str:
@@ -1094,7 +818,6 @@ def _write_release_metadata(
     lock_runner: LockRunner,
     transaction_observer: TransactionObserver | None = None,
     precommit_validator: PrecommitValidator | None = None,
-    expected_original_digests: Mapping[Path, str] | None = None,
 ) -> ReleaseMetadata:
     original_pyproject = pyproject_path.read_bytes()
     original_lock = lock_path.read_bytes()
@@ -1105,12 +828,6 @@ def _write_release_metadata(
     }
     if macos_project_path is not None and original_macos_project is not None:
         original_contents[macos_project_path.resolve()] = original_macos_project
-    if expected_original_digests is not None:
-        if set(expected_original_digests) != set(original_contents):
-            raise ReleaseError("Beta 3 recovery source digest set does not match the operated release files.")
-        for path, content in original_contents.items():
-            if _sha256(content) != expected_original_digests[path]:
-                raise ReleaseError(f"Beta 3 recovery source changed after identity validation: {path}")
     if load_release_metadata(pyproject_path, lock_path, macos_project_path) != current:
         raise ReleaseError("Release files changed before release preparation; no updates were applied.")
 
@@ -1237,64 +954,6 @@ def prepare_release(
         )
 
 
-def recover_beta3(
-    *,
-    pyproject_path: Path = PYPROJECT_PATH,
-    lock_path: Path = LOCK_PATH,
-    macos_project_path: Path | None = None,
-    evidence_path: Path = BETA3_RECOVERY_EVIDENCE_PATH,
-    lock_runner: LockRunner = refresh_uv_lock,
-    remote_verifier: RemoteEvidenceVerifier = verify_beta3_remote_state,
-    transaction_observer: TransactionObserver | None = None,
-) -> ReleaseMetadata:
-    evidence = validate_beta3_recovery_evidence(evidence_path)
-    macos_project_path = _resolve_macos_project_path(pyproject_path, lock_path, macos_project_path)
-    if macos_project_path is None:
-        raise ReleaseError("Beta 3 recovery requires the production macOS project metadata.")
-    expected_paths = [pyproject_path, lock_path, macos_project_path]
-    with _release_metadata_lock(pyproject_path):
-        _recover_interrupted_transaction(_transaction_journal_path(pyproject_path), expected_paths)
-        expected_original_digests = _validate_beta3_recovery_source_identity(
-            pyproject_path,
-            lock_path,
-            macos_project_path,
-            evidence,
-        )
-        current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
-        if (
-            current.package_version != BETA3_RECOVERY_SOURCE_VERSION
-            or current.build_version != BETA3_RECOVERY_SOURCE_BUILD
-        ):
-            raise ReleaseError(
-                "Beta 3 recovery requires exact source metadata "
-                f"{BETA3_RECOVERY_SOURCE_VERSION} build {BETA3_RECOVERY_SOURCE_BUILD}; "
-                f"found {current.package_version} build {current.build_version}."
-            )
-
-        def verify_remote_premise() -> None:
-            try:
-                remote_verifier(evidence)
-            except Beta3RecoveryEvidenceError as error:
-                raise ReleaseError(str(error)) from error
-
-        verify_remote_premise()
-        target_version = parse_release_version(BETA3_RECOVERY_TARGET_VERSION)
-        target_build = parse_build_version(BETA3_RECOVERY_TARGET_BUILD)
-        return _write_release_metadata(
-            target_version,
-            target_build,
-            current,
-            pyproject_path=pyproject_path,
-            lock_path=lock_path,
-            macos_project_path=macos_project_path,
-            uv_executable="uv",
-            lock_runner=lock_runner,
-            transaction_observer=transaction_observer,
-            precommit_validator=verify_remote_premise,
-            expected_original_digests=expected_original_digests,
-        )
-
-
 def _add_paths(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pyproject", type=Path, default=PYPROJECT_PATH)
     parser.add_argument("--lock", type=Path, default=LOCK_PATH)
@@ -1328,7 +987,6 @@ def build_parser() -> argparse.ArgumentParser:
     qualification_base.add_argument("--release-tag", required=True)
     qualification_base.add_argument("--releases-json", type=Path, required=True)
     qualification_base.add_argument("--head-ref", required=True)
-    qualification_base.add_argument("--checked-receipts-root", type=Path)
     qualification_base.add_argument("--github-output", type=Path)
 
     prepare = commands.add_parser("prepare", help="Atomically prepare a newer committed release version and build.")
@@ -1336,12 +994,6 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--version", required=True)
     prepare.add_argument("--build", required=True)
     prepare.add_argument("--uv", default="uv")
-
-    recover_beta3_parser = commands.add_parser(
-        "recover-beta3",
-        help="Apply the audited one-time 0.3.0rc1 build 147 to 0.3.0b3 build 148 recovery.",
-    )
-    recover_beta3_parser.add_argument("--evidence", type=Path, default=BETA3_RECOVERY_EVIDENCE_PATH)
 
     validate_tag = commands.add_parser("validate-tag", help="Validate a v-prefixed release tag.")
     validate_tag.add_argument("tag")
@@ -1373,26 +1025,13 @@ def main(argv: list[str] | None = None) -> int:
             release_history = json.loads(args.releases_json.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ReleaseError(f"Unable to load GitHub release history from {args.releases_json}: {error}") from error
-        eligible_prior_tags = None
-        if args.checked_receipts_root is not None:
-            eligible_prior_tags = {
-                path.parent.name
-                for path in args.checked_receipts_root.glob("v*/release-receipt.json")
-                if path.is_file()
-            }
-        selection = select_qualification_update_base(
-            args.release_tag,
-            release_history,
-            args.head_ref,
-            eligible_prior_tags=eligible_prior_tags,
-        )
+        selection = select_qualification_update_base(args.release_tag, release_history, args.head_ref)
         if args.github_output:
             with args.github_output.open("a", encoding="utf-8") as handle:
                 handle.write(f"prior_tag={selection.prior_tag}\n")
                 handle.write(f"sparkle_route={selection.sparkle_route}\n")
         print(json.dumps(asdict(selection), sort_keys=True))
         return 0
-    qualification_record: Path | None = None
     if args.command == "prepare":
         metadata = prepare_release(
             args.version,
@@ -1402,19 +1041,12 @@ def main(argv: list[str] | None = None) -> int:
             macos_project_path=args.macos_project,
             uv_executable=args.uv,
         )
-    elif args.command == "recover-beta3":
-        metadata = recover_beta3(evidence_path=args.evidence)
     else:
         metadata = load_release_metadata(args.pyproject, args.lock, args.macos_project)
-        qualification_record = validate_configured_qualification_record(metadata)
-        validate_release_cut_packet(metadata)
     if args.command == "metadata" and args.github_output:
-        if qualification_record is None:
-            raise ReleaseError("Release metadata did not resolve a configured qualification record.")
         with args.github_output.open("a", encoding="utf-8") as handle:
             for key, value in metadata.github_outputs().items():
                 handle.write(f"{key}={value}\n")
-            handle.write(f"qualification_record={qualification_record.as_posix()}\n")
     print(json.dumps(asdict(metadata), sort_keys=True))
     return 0
 
