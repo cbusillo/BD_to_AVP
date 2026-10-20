@@ -1910,7 +1910,7 @@ class _LocalFeedHandler(http.server.SimpleHTTPRequestHandler):
         super().do_HEAD()
 
     def log_message(self, format: str, *args: Any) -> None:
-        del format, args
+        return
 
 
 @dataclass(frozen=True)
