@@ -2508,6 +2508,23 @@ jobs:
             exit "$QUALIFICATION_EXIT_CODE"
           fi
 
+  update-test:
+    name: Update the prior release to this candidate
+    needs:
+      - prepare
+      - package
+      - publish-appcast
+      - build-receipt
+    uses: ./.github/workflows/update-test.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.release_tag }}
+      package_artifact_id: ${{ needs.package.outputs.workflow_artifact_id }}
+      receipt_artifact_id: ${{ needs.build-receipt.outputs.receipt_artifact_id }}
+      appcast_sha256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
+    permissions:
+      actions: read
+      contents: read
+
   publish-release:
     name: Publish verified GitHub Release
     needs:
@@ -2519,6 +2536,7 @@ jobs:
       - build-receipt
       - signed-artifact-ui
       - qualify-artifact
+      - update-test
     if: >-
       !cancelled() &&
       needs.create-draft.result == 'success' &&
@@ -2528,6 +2546,7 @@ jobs:
       needs.build-receipt.result == 'success' &&
       needs.signed-artifact-ui.result == 'success' &&
       needs.qualify-artifact.result == 'success' &&
+      needs.update-test.result == 'success' &&
       (
         needs.prepare.outputs.publish_pypi != 'true' ||
         needs.build-python.result == 'success'
