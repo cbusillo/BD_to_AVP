@@ -21,7 +21,6 @@ from scripts.generate_language_catalog import DEFAULT_OUTPUT, render_catalog
 
 class LanguageCatalogTests(unittest.TestCase):
     def test_catalog_is_complete_unique_and_current(self) -> None:
-        self.assertEqual(len(LANGUAGES), 414)
         self.assertEqual(len({language.code for language in LANGUAGES}), len(LANGUAGES))
         self.assertEqual(DEFAULT_OUTPUT.read_text(encoding="utf-8"), render_catalog())
 

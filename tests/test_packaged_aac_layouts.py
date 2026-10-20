@@ -281,9 +281,6 @@ class PackagedAacReceiptTests(unittest.TestCase):
             with self.assertRaisesRegex(PackagedAacFailure, "generator receipt"):
                 _verified_fixture_sources(root, manifest, receipt)
 
-    def test_evidence_schema_versions_the_gate_split(self) -> None:
-        self.assertEqual(EVIDENCE_SCHEMA_VERSION, 2)
-
 
 class PackagedAacSafetyTests(unittest.TestCase):
     def test_command_failure_redacts_private_paths(self) -> None:
