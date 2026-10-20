@@ -1,0 +1,183 @@
+---
+name: Update Test
+
+# Installs the previous published release, points it at a locally served copy of the candidate's appcast, and
+# lets Sparkle update it. The release engine calls this before publication. A pull request that changes the test
+# runs it against the newest published release, so a broken harness shows up before a release needs it.
+"on":
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Candidate release tag including the v prefix
+        required: true
+        type: string
+      package_artifact_id:
+        description: Workflow artifact holding the verified candidate DMG
+        required: true
+        type: string
+      receipt_artifact_id:
+        description: Workflow artifact holding the candidate release receipt
+        required: true
+        type: string
+      appcast_sha256:
+        description: SHA-256 of the signed appcast the release will deploy
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/update-test.yml
+      - scripts/tier3_clean_machine.py
+
+permissions: {}
+
+env:
+  GH_REPO: ${{ github.repository }}
+  XCODEGEN_VERSION: 2.45.4
+  XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
+  XCODE_VERSION: "27.0"
+  XCODE_BUILD_VERSION: 27A266a
+
+jobs:
+  update:
+    name: Update the prior release to the candidate
+    runs-on: xcode-27
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact candidate code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Select pinned macOS UI toolchain
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ ! -d "$XCODE_PATH" ]; then
+            echo "Pinned Xcode path is unavailable: $XCODE_PATH" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_PATH"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode $XCODE_VERSION"
+          test "$(xcodebuild -version | sed -n '2p')" = "Build version $XCODE_BUILD_VERSION"
+
+      - name: Install pinned XcodeGen
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$ARCHIVE" | shasum -a 256 --check
+          ditto -x -k "$ARCHIVE" "$RUNNER_TEMP"
+          test "$("$RUNNER_TEMP/xcodegen/bin/xcodegen" --version)" = "Version: $XCODEGEN_VERSION"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies and generate Xcode project
+        run: |
+          set -euo pipefail
+          uv python install 3.12
+          uv sync --locked --all-groups --python 3.12
+          uv run python scripts/native_app.py generate
+
+      - name: Download the candidate package
+        if: inputs.release_tag != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ inputs.package_artifact_id }}
+          path: update-inputs/candidate
+
+      - name: Download the candidate receipt
+        if: inputs.release_tag != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ inputs.receipt_artifact_id }}
+          path: update-inputs/candidate
+
+      - name: Download the staged appcast
+        if: inputs.release_tag != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: signed-appcast
+          path: update-inputs/candidate
+
+      - name: Resolve candidate and prior releases
+        env:
+          APPCAST_SHA256: ${{ inputs.appcast_sha256 }}
+          CALLED_RELEASE_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CANDIDATE=update-inputs/candidate
+          PRIOR=update-inputs/prior
+          mkdir -p "$CANDIDATE" "$PRIOR"
+          if [ -n "$CALLED_RELEASE_TAG" ]; then
+            CANDIDATE_TAG="$CALLED_RELEASE_TAG"
+            HEAD_REF="$GITHUB_SHA"
+            mv "$CANDIDATE/downloaded-release-receipt.json" "$CANDIDATE/release-receipt.json"
+            test "$(shasum -a 256 "$CANDIDATE/appcast.xml" | awk '{print $1}')" = "$APPCAST_SHA256"
+          else
+            CANDIDATE_TAG=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+            HEAD_REF="refs/tags/$CANDIDATE_TAG"
+            gh release download "$CANDIDATE_TAG" --dir "$CANDIDATE" \
+              --pattern '*.dmg' --pattern release-receipt.json --pattern appcast.xml
+          fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq -s 'add' > releases.json
+          uv run python -m scripts.release qualification-base \
+            --release-tag "$CANDIDATE_TAG" \
+            --releases-json releases.json \
+            --head-ref "$HEAD_REF" \
+            --github-output "$GITHUB_OUTPUT" > base.json
+          PRIOR_TAG=$(jq -er '.prior_tag | select(length > 0)' base.json)
+          gh release download "$PRIOR_TAG" --dir "$PRIOR" --pattern '*.dmg' --pattern release-receipt.json
+          dmg_name() { jq -er '[.artifacts[] | select(.kind == "dmg")] | if length == 1 then .[0].name else error("one DMG") end' "$1"; }
+          {
+            echo "CANDIDATE_TAG=$CANDIDATE_TAG"
+            echo "CANDIDATE_DMG=$CANDIDATE/$(dmg_name "$CANDIDATE/release-receipt.json")"
+            echo "PRIOR_TAG=$PRIOR_TAG"
+            echo "PRIOR_DMG=$PRIOR/$(dmg_name "$PRIOR/release-receipt.json")"
+            echo "ROUTE=$(jq -er .sparkle_route base.json)"
+          } >> "$GITHUB_ENV"
+
+      - name: Update the prior release through the local feed
+        env:
+          BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.tier3_clean_machine update-test \
+            --candidate-release-receipt update-inputs/candidate/release-receipt.json \
+            --candidate-dmg "$CANDIDATE_DMG" \
+            --prior-release-receipt update-inputs/prior/release-receipt.json \
+            --prior-dmg "$PRIOR_DMG" \
+            --staged-appcast update-inputs/candidate/appcast.xml \
+            --qualification-root "$RUNNER_TEMP/update-test-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --route "$ROUTE" \
+            --environment-class resettable-vm \
+            --result update-test-output/result.json \
+            --evidence-directory update-test-output/evidence \
+            --diagnostics-output update-test-output/sparkle-diagnostics.json
+          {
+            echo "## Update test: $PRIOR_TAG to $CANDIDATE_TAG on the $ROUTE route"
+            echo
+            echo "Sparkle installed the candidate from the local feed, relaunched it, and kept the saved profiles."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the update test output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: update-test-${{ github.run_attempt }}
+          path: update-test-output
+          if-no-files-found: ignore
+          retention-days: 30

@@ -381,6 +381,11 @@ The workflow performs these ordered boundaries:
     published appcast remain visible but deferred to milestone qualification.
     Operator-only physical and native-window presentation evidence is reported
     separately and cannot bypass or satisfy these automated gates.
+    The `update-test` job (`.github/workflows/update-test.yml`) also runs before
+    publication on every channel. It installs the newest lower published
+    release, points it at a locally served copy of the signed appcast, lets
+    Sparkle install the candidate, and confirms the relaunched app's identity
+    and saved profiles. It fails if Sparkle never fetched the local feed.
 11. Publish the verified draft only if it still targets the current `main` HEAD.
    The release body is hashed again immediately before and after publication so
    edits cannot silently diverge from the updater notes. The reusable engine
