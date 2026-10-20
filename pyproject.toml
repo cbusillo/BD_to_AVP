@@ -59,7 +59,7 @@ runtime-build = [
     # Keep Meson/Ninja aligned with vendor/ssif-probe-macos-arm64.toml for exact rebuilds.
     "meson==1.12.1",
     "ninja==1.13.2",
-    "setuptools==84.0.0",
+    "setuptools==84.2.1",
     "wheel==0.48.0",
 ]
 
