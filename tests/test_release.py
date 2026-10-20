@@ -153,7 +153,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(metadata.dmg_name, f"3D-Blu-ray-to-Vision-Pro-{metadata.public_version}.dmg")
         self.assertEqual(metadata.channel, version.channel)
         self.assertEqual(metadata.prerelease, version.prerelease)
-        self.assertEqual(metadata.first_candidate_of_cycle, version.first_candidate_of_cycle)
         self.assertEqual(metadata.make_latest, not version.prerelease)
         self.assertEqual(metadata.publish_pypi, not version.prerelease)
 
@@ -173,19 +172,18 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.3.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
-        self.assertFalse(metadata.first_candidate_of_cycle)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
     def test_metadata_maps_internal_versions_to_public_release_identity(self) -> None:
         cases = (
-            ("1.2.4a1", "1.2.4-alpha.1", "alpha", True, True),
-            ("1.2.4b2", "1.2.4-beta.2", "beta", True, False),
-            ("1.2.4rc1", "1.2.4-rc.1", "rc", True, True),
-            ("1.2.4rc3", "1.2.4-rc.3", "rc", True, False),
-            ("1.2.4", "1.2.4", "stable", False, False),
+            ("1.2.4a1", "1.2.4-alpha.1", "alpha", True),
+            ("1.2.4b2", "1.2.4-beta.2", "beta", True),
+            ("1.2.4rc1", "1.2.4-rc.1", "rc", True),
+            ("1.2.4rc3", "1.2.4-rc.3", "rc", True),
+            ("1.2.4", "1.2.4", "stable", False),
         )
-        for package_version, public_version, channel, prerelease, first_candidate in cases:
+        for package_version, public_version, channel, prerelease in cases:
             with self.subTest(package_version=package_version), tempfile.TemporaryDirectory() as temp_dir:
                 pyproject_path, lock_path = make_release_files(
                     Path(temp_dir),
@@ -202,8 +200,6 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(metadata.dmg_name, f"3D-Blu-ray-to-Vision-Pro-{public_version}.dmg")
             self.assertEqual(metadata.channel, channel)
             self.assertEqual(metadata.prerelease, prerelease)
-            self.assertEqual(metadata.first_candidate_of_cycle, first_candidate)
-            self.assertEqual(metadata.github_outputs()["first_candidate_of_cycle"], str(first_candidate).lower())
             self.assertEqual(metadata.make_latest, not prerelease)
             self.assertEqual(metadata.publish_pypi, not prerelease)
 
@@ -769,6 +765,104 @@ source = { registry = "https://pypi.org/simple" }
                     lock_path=lock_path,
                     lock_runner=fake_lock_runner,
                 )
+
+
+class ReleaseTransactionTests(unittest.TestCase):
+    def test_prepared_transaction_journal_restores_original_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root)
+            macos_project_path = make_macos_project(root)
+            files = [
+                release.TransactionFile(
+                    path=path,
+                    original=path.read_bytes(),
+                    target=path.read_bytes() + b"\n# target\n",
+                )
+                for path in (pyproject_path, lock_path, macos_project_path)
+            ]
+            journal_path = root / release.TRANSACTION_JOURNAL_NAME
+            release._write_transaction_journal(journal_path, release._transaction_payload(files, "prepared"))
+            release._atomic_write(files[0].path, files[0].target)
+
+            release._recover_interrupted_transaction(journal_path, [file.path for file in files])
+
+            for file in files:
+                self.assertEqual(file.path.read_bytes(), file.original)
+            self.assertFalse(journal_path.exists())
+
+    def test_committed_transaction_journal_preserves_target_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root)
+            macos_project_path = make_macos_project(root)
+            files = [
+                release.TransactionFile(
+                    path=path,
+                    original=path.read_bytes(),
+                    target=path.read_bytes() + b"\n# target\n",
+                )
+                for path in (pyproject_path, lock_path, macos_project_path)
+            ]
+            journal_path = root / release.TRANSACTION_JOURNAL_NAME
+            for file in files:
+                release._atomic_write(file.path, file.target)
+            release._write_transaction_journal(journal_path, release._transaction_payload(files, "committed"))
+
+            release._recover_interrupted_transaction(journal_path, [file.path for file in files])
+
+            for file in files:
+                self.assertEqual(file.path.read_bytes(), file.target)
+            self.assertFalse(journal_path.exists())
+
+    def test_release_metadata_lock_rejects_concurrent_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="1.2.3", build="10")
+
+            with release._release_metadata_lock(pyproject_path):
+                with self.assertRaisesRegex(release.ReleaseError, "already running"):
+                    release.prepare_release(
+                        "1.2.4",
+                        "11",
+                        pyproject_path=pyproject_path,
+                        lock_path=lock_path,
+                        lock_runner=fake_lock_runner,
+                    )
+
+    def test_prepare_rolls_back_interrupt_after_each_file_replacement(self) -> None:
+        class SimulatedInterrupt(BaseException):
+            pass
+
+        for stop_after in (1, 2, 3):
+            with self.subTest(stop_after=stop_after), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                pyproject_path, lock_path = make_release_files(root, version="1.2.3", build="10")
+                macos_project_path = make_macos_project(root, version="1.2.3", build="10")
+                originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+                applied = 0
+
+                def interrupt(event: str, _path: Path, expected_stop: int = stop_after) -> None:
+                    nonlocal applied
+                    if event == "file-applied":
+                        applied += 1
+                        if applied == expected_stop:
+                            raise SimulatedInterrupt
+
+                with self.assertRaises(SimulatedInterrupt):
+                    release.prepare_release(
+                        "1.2.4",
+                        "11",
+                        pyproject_path=pyproject_path,
+                        lock_path=lock_path,
+                        macos_project_path=macos_project_path,
+                        lock_runner=fake_lock_runner,
+                        transaction_observer=interrupt,
+                    )
+
+                for path, original in originals.items():
+                    self.assertEqual(path.read_bytes(), original)
+                self.assertFalse((root / release.TRANSACTION_JOURNAL_NAME).exists())
 
 
 if __name__ == "__main__":

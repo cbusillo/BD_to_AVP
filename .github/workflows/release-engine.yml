@@ -241,7 +241,6 @@ jobs:
       dmg_name: ${{ steps.metadata.outputs.dmg_name }}
       channel: ${{ steps.metadata.outputs.channel }}
       prerelease: ${{ steps.metadata.outputs.prerelease }}
-      first_candidate_of_cycle: ${{ steps.metadata.outputs.first_candidate_of_cycle }}
       make_latest: ${{ steps.metadata.outputs.make_latest }}
       publish_pypi: ${{ steps.metadata.outputs.publish_pypi }}
       previous_release_tag: ${{ steps.release_history.outputs.previous_release_tag }}

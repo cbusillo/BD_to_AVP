@@ -55,9 +55,6 @@ DMG_NAME_PREFIX = "3D-Blu-ray-to-Vision-Pro"
 INTERNAL_STAGE_NAMES = {"a": "alpha", "b": "beta", "rc": "rc"}
 PUBLIC_STAGE_SUFFIXES = {"alpha": "a", "beta": "b", "rc": "rc"}
 STAGE_ORDER = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}
-# Prerelease stages whose blocked preparation classification may be remediated with
-# change-scoped Tier 2 evidence. The evidence command and its pull-request validator
-# both read this set; RC and Stable must qualify without that lane.
 
 
 class ReleaseError(RuntimeError):
@@ -97,10 +94,6 @@ class ReleaseVersion:
         return self.stage if self.prerelease else "stable"
 
     @property
-    def first_candidate_of_cycle(self) -> bool:
-        return self.prerelease_number == 1
-
-    @property
     def order_key(self) -> tuple[int, int, int, int, int]:
         return (
             self.major,
@@ -121,7 +114,6 @@ class ReleaseMetadata:
     dmg_name: str
     channel: str
     prerelease: bool
-    first_candidate_of_cycle: bool
     make_latest: bool
     publish_pypi: bool
 
@@ -145,7 +137,6 @@ class QualificationUpdateBase:
 
 LockRunner = Callable[[Path, str], None]
 TransactionObserver = Callable[[str, Path], None]
-PrecommitValidator = Callable[[], None]
 TagExists = Callable[[str], bool]
 AncestorCheck = Callable[[str, str], bool]
 
@@ -507,7 +498,6 @@ def load_release_metadata(
         dmg_name=f"{DMG_NAME_PREFIX}-{version.public_version}.dmg",
         channel=version.channel,
         prerelease=version.prerelease,
-        first_candidate_of_cycle=version.first_candidate_of_cycle,
         make_latest=not version.prerelease,
         publish_pypi=not version.prerelease,
     )
@@ -761,7 +751,6 @@ def _apply_metadata_transaction(
     journal_path: Path,
     validate: Callable[[], ReleaseMetadata],
     observer: TransactionObserver | None = None,
-    precommit_validator: PrecommitValidator | None = None,
 ) -> ReleaseMetadata:
     expected_paths = [file.path for file in files]
     prepared = _transaction_payload(files, "prepared")
@@ -776,8 +765,6 @@ def _apply_metadata_transaction(
             if observer is not None:
                 observer("file-applied", file.path)
         metadata = validate()
-        if precommit_validator is not None:
-            precommit_validator()
         for file in files:
             if file.path.read_bytes() != file.target:
                 raise ReleaseError(f"Release file changed during final validation: {file.path}")
@@ -817,7 +804,6 @@ def _write_release_metadata(
     uv_executable: str,
     lock_runner: LockRunner,
     transaction_observer: TransactionObserver | None = None,
-    precommit_validator: PrecommitValidator | None = None,
 ) -> ReleaseMetadata:
     original_pyproject = pyproject_path.read_bytes()
     original_lock = lock_path.read_bytes()
@@ -912,7 +898,6 @@ def _write_release_metadata(
         _transaction_journal_path(pyproject_path),
         lambda: load_release_metadata(pyproject_path, lock_path, macos_project_path),
         transaction_observer,
-        precommit_validator,
     )
 
 
