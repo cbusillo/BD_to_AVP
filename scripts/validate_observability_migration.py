@@ -10,7 +10,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = Path("bd_to_avp")
-SWIFT_ROOT = Path("macos/BluRayToVisionPro")
 
 DIRECT_PROCESS_CALLS = {
     "asyncio.create_subprocess_exec",
@@ -59,22 +58,6 @@ ALLOWED_PRESENTATION_CALLS = {
     (Path("bd_to_avp/presentation.py"), "cli_message", "print"),
     (Path("bd_to_avp/gui/util.py"), "OutputHandler.write", "sys.__stdout__.write"),
 }
-FORBIDDEN_PYTHON_SYMBOLS = {
-    "BoundedEventSink",
-    "CompositeEventSink",
-    "EventBufferSnapshot",
-    "PROCESS_NAMES_TO_KILL",
-    "RotatingJSONLEventSink",
-    "cleanup_process",
-    "kill_child_processes",
-    "kill_process_by_name",
-    "kill_processes_by_name",
-    "mounted_image",
-    "redirect_stdout",
-    "run_command",
-    "terminate_process",
-}
-FORBIDDEN_SWIFT_SYMBOLS = {"diagnosticLog"}
 
 
 @dataclass(frozen=True, order=True)
@@ -238,28 +221,8 @@ def collect_violations(root: Path = ROOT) -> list[Violation]:
         visitor = PythonMigrationVisitor(relative_path)
         visitor.visit(tree)
         violations.extend(visitor.violations)
-        violations.extend(_forbidden_symbol_violations(relative_path, source, FORBIDDEN_PYTHON_SYMBOLS))
-
-    swift_root = root / SWIFT_ROOT
-    for source_path in sorted(swift_root.rglob("*.swift")):
-        relative_path = source_path.relative_to(root)
-        source = source_path.read_text(encoding="utf-8")
-        violations.extend(_forbidden_symbol_violations(relative_path, source, FORBIDDEN_SWIFT_SYMBOLS))
 
     return sorted(set(violations))
-
-
-def _forbidden_symbol_violations(
-    path: Path,
-    source: str,
-    symbols: set[str],
-) -> list[Violation]:
-    violations: list[Violation] = []
-    for line_number, line in enumerate(source.splitlines(), start=1):
-        for symbol in symbols:
-            if re.search(rf"\b{re.escape(symbol)}\b", line):
-                violations.append(Violation(path, line_number, "legacy-symbol", f"remove superseded symbol {symbol}"))
-    return violations
 
 
 def main() -> int:

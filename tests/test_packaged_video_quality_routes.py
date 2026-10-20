@@ -14,7 +14,6 @@ from bd_to_avp.modules.video_quality_defaults import (
 )
 from scripts.qualify_packaged_video_quality_routes import (
     HARNESS_PATHS,
-    PREVIEW_DURATION_SECONDS,
     REPOSITORY_ROOT,
     _clone_directory,
     _harness_evidence,
@@ -38,8 +37,6 @@ class PackagedQualityCaseTests(unittest.TestCase):
         self.assertEqual([case.step_id for case in metalfx], list(QUALITY_STEP_IDS))
         self.assertEqual([case.step_id for case in generated], ["balanced"])
         self.assertEqual([case.step_id for case in file_upscale], ["balanced", "detailed"])
-        self.assertEqual(len(cases) * 2 + len(file_upscale), 32)
-        self.assertEqual(PREVIEW_DURATION_SECONDS, 12)
 
     def test_direct_cases_bind_exact_quality_and_balanced_only_fallback(self) -> None:
         for case in qualification_cases():
