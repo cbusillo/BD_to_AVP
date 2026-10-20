@@ -1190,7 +1190,6 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 app_path=system_applications / APP_NAME,
                 home=runner_home,
                 kind="system-applications-real-home",
-                smoke_home=config.qualification_root / "SmokeHome",
             )
             with patch("scripts.tier3_clean_machine._runtime_layout", return_value=layout):
                 self.run_update(config, operations)

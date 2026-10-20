@@ -498,10 +498,8 @@ preserves the original contract. The obsolete Stable dispatch input/job and
 workflow-run recovery routing were removed in [#866](https://github.com/cbusillo/BD_to_AVP/issues/866).
 Normal Stable publication still runs through the guarded release engine.
 Immutable recovery, publication and qualification evidence remains preserved.
-Treat the frozen `remove_after_verified_recovery` flag as historical. The helper
-retains `load_evidence`/`verify-pypi`, and `scripts.release_evidence` retains the
-`--recovery-workflow-run` CLI option for offline historical validation and
-reconciliation; it is no longer invoked by the release-evidence workflow.
+Treat the frozen `remove_after_verified_recovery` flag as historical. The recovery
+helper and the evidence tooling were deleted in #1020.
 
 For the Beta 3 seed, a pre-publication failure leaves the existing feed and all
 published assets unchanged: retain the matching draft for an exact retry or stop

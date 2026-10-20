@@ -326,7 +326,6 @@ class RuntimeLayout:
     app_path: Path
     home: Path
     kind: str
-    smoke_home: Path
 
 
 @dataclass(frozen=True)
@@ -539,13 +538,11 @@ def _account_home() -> Path:
 
 def _runtime_layout(config: QualificationConfig) -> RuntimeLayout:
     qualification_root = config.qualification_root.resolve()
-    smoke_home = qualification_root / "SmokeHome"
     if config.environment_class == RESTORABLE_LOCATION_ENVIRONMENT_CLASS:
         return RuntimeLayout(
             app_path=qualification_root / "Applications" / APP_NAME,
             home=qualification_root / "Home",
             kind="owned-root-synthetic-home",
-            smoke_home=smoke_home,
         )
     if config.environment_class != RESETTABLE_VM_ENVIRONMENT_CLASS:
         raise CleanMachineError("This runner does not support the requested qualification environment class.")
@@ -576,7 +573,6 @@ def _runtime_layout(config: QualificationConfig) -> RuntimeLayout:
         app_path=SYSTEM_APPLICATIONS_DIRECTORY / APP_NAME,
         home=account_home,
         kind="system-applications-real-home",
-        smoke_home=smoke_home,
     )
 
 
