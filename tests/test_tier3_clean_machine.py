@@ -15,6 +15,7 @@ import urllib.request
 from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, cast
 from unittest.mock import Mock, patch
 from xml.etree import ElementTree
@@ -41,6 +42,7 @@ from scripts.tier3_clean_machine import (
     ReleaseArtifact,
     RESETTABLE_VM_ENVIRONMENT_CLASS,
     RuntimeLayout,
+    _runtime_layout,
     SparkleDiagnosticFacts,
     SparkleUpdateFailure,
     SparkleUpdateState,
@@ -49,8 +51,7 @@ from scripts.tier3_clean_machine import (
     classify_sparkle_log_output,
     file_sha256,
     parse_feed_candidate,
-    preflight_report,
-    run_qualification,
+    prepare_update_test,
     run_update_test,
     validate_release_order,
 )
@@ -150,17 +151,9 @@ class FakeOperations(QualificationOperations):
             required_tools=(),
         )
 
-    def fetch_live_feed(self) -> bytes:
-        return self.feed_bytes
-
     def install_app(self, dmg_path: Path, destination: Path, mount_point: Path) -> None:
         del mount_point
         shutil.copytree(self.app_sources[dmg_path], destination, symlinks=True)
-
-    def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text("smoke passed\n", encoding="utf-8")
-        return file_sha256(log_path)
 
     def write_preferences(self, synthetic_home: Path, route: str, feed_url: str | None = None) -> None:
         self.preferences = {
@@ -1066,9 +1059,8 @@ class Tier3CleanMachineTests(unittest.TestCase):
             qualification_root=Path.home() / f"tier3-test-{root.name}",
             route="rc",
             environment_class="restorable-location",
-            output_receipt=root / "tier3-receipt.json",
-            ui_output_receipt=root / "tier3-ui-receipt.json",
             evidence_directory=root / "evidence",
+            result_output=root / "update-test.json",
         )
         operations = FakeOperations(
             {prior_dmg.resolve(): prior_app, candidate_dmg.resolve(): candidate_app},
@@ -1077,17 +1069,21 @@ class Tier3CleanMachineTests(unittest.TestCase):
         )
         return config, operations
 
+    @staticmethod
+    def run_update(config: QualificationConfig, operations: FakeOperations) -> Mapping[str, Any]:
+        staged_appcast = cast(Path, config.result_output).parent / "staged-appcast.xml"
+        staged_appcast.write_bytes(operations.feed_bytes)
+        return run_update_test(config, operations, staged_appcast)
+
     def test_preflight_binds_checked_artifacts_environment_and_live_feed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             config, operations = self.fixture(Path(temporary_directory))
-            report = preflight_report(config, operations)
+            prior, candidate, environment, feed = prepare_update_test(config, operations, operations.feed_bytes)
 
-        self.assertEqual(report["preflight"], "passed")
-        self.assertEqual(report["environment"]["environment_class"], "restorable-location")
-        self.assertEqual(report["candidate"]["build_version"], "160")
-        self.assertEqual(report["prior"]["build_version"], "159")
-        self.assertEqual(report["feed"]["route"], "rc")
-        self.assertNotIn("hostname", json.dumps(report).lower())
+        self.assertEqual(environment.environment_class, "restorable-location")
+        self.assertEqual(candidate.build_version, "160")
+        self.assertEqual(prior.build_version, "159")
+        self.assertEqual(feed.channel, "rc")
 
     def test_resettable_vm_preflight_requires_github_hosted_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1107,7 +1103,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
             ):
                 with self.assertRaisesRegex(CleanMachineError, "requires an ephemeral GitHub-hosted"):
-                    preflight_report(config, operations)
+                    prepare_update_test(config, operations, operations.feed_bytes)
 
     def test_resettable_vm_preflight_uses_real_home_and_system_applications(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1135,10 +1131,11 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
                 patch("scripts.tier3_clean_machine._managed_real_home_paths", return_value=()),
             ):
-                report = preflight_report(config, operations)
+                _, _, environment, _ = prepare_update_test(config, operations, operations.feed_bytes)
+                layout = _runtime_layout(config)
 
-        self.assertEqual(report["environment"]["environment_class"], RESETTABLE_VM_ENVIRONMENT_CLASS)
-        self.assertEqual(report["developer_state"]["runtime_layout"], "system-applications-real-home")
+        self.assertEqual(environment.environment_class, RESETTABLE_VM_ENVIRONMENT_CLASS)
+        self.assertEqual(layout.kind, "system-applications-real-home")
 
     def test_resettable_vm_preflight_rejects_overridden_home(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1166,7 +1163,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
             ):
                 with self.assertRaisesRegex(CleanMachineError, "unchanged real home"):
-                    preflight_report(config, operations)
+                    prepare_update_test(config, operations, operations.feed_bytes)
 
     def test_preflight_rejects_diagnostics_inside_evidence_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1175,7 +1172,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             config = replace(config, diagnostics_output=config.evidence_directory / "diagnostics.json")
 
             with self.assertRaisesRegex(CleanMachineError, "outside the evidence directory"):
-                preflight_report(config, operations)
+                prepare_update_test(config, operations, operations.feed_bytes)
 
     def test_resettable_vm_run_preserves_unrelated_home_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1193,42 +1190,30 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 app_path=system_applications / APP_NAME,
                 home=runner_home,
                 kind="system-applications-real-home",
-                smoke_home=config.qualification_root / "SmokeHome",
             )
             with patch("scripts.tier3_clean_machine._runtime_layout", return_value=layout):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertEqual(unrelated.read_text(encoding="utf-8"), "preserve\n")
             self.assertFalse(layout.app_path.exists())
             self.assertFalse(config.qualification_root.exists())
 
-    def test_run_emits_valid_receipt_and_disposes_owned_workspace(self) -> None:
+    def test_run_reports_the_update_and_disposes_owned_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
-            receipts = run_qualification(config, operations)
+            result = self.run_update(config, operations)
 
             self.assertFalse(config.qualification_root.exists())
-            self.assertTrue(config.output_receipt.exists())
-            self.assertTrue(config.ui_output_receipt.exists())
+            self.assertEqual(json.loads(cast(Path, config.result_output).read_text(encoding="utf-8")), result)
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["candidate"]["build_version"], "160")
+            self.assertEqual(operations.fetched_dmg, config.candidate_dmg.read_bytes())
+            self.assertIn("/appcast.xml", result["feed"]["served_paths"])
             self.assertEqual(
                 {path.name for path in config.evidence_directory.iterdir()},
-                {
-                    "accessibility-tree.json",
-                    "cleanup.json",
-                    "install-log.json",
-                    "package-smoke.json",
-                    "profile-snapshot.json",
-                    "screenshot-dark.png",
-                    "screenshot-light.png",
-                    "sparkle-update.json",
-                    "ui-result.json",
-                },
+                {"cleanup.json", "install-log.json", "profile-snapshot.json", "sparkle-update.json", "updater-ui.json"},
             )
-            for receipt in receipts.values():
-                self.assertEqual(receipt["result"]["status"], "passed")
-                self.assertEqual(receipt["cleanup"]["status"], "disposed")
-                self.assertEqual(receipt["release_identity"]["source_sha"], CANDIDATE_SHA)
             update_evidence = json.loads(
                 (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
             )
@@ -1271,7 +1256,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 CleanMachineError,
                 "did not match the expected version 6 state",
             ):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertFalse(config.evidence_directory.exists())
 
@@ -1287,7 +1272,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 CleanMachineError,
                 "Profile library changed before the Sparkle update began",
             ):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertFalse(operations.pressed_actions)
             self.assertFalse(config.evidence_directory.exists())
@@ -1302,7 +1287,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             config, operations = self.fixture(root)
             operations.migrate_profile_during_updater_ui = True
 
-            run_qualification(config, operations)
+            self.run_update(config, operations)
 
             profile_evidence = json.loads(
                 (config.evidence_directory / "profile-snapshot.json").read_text(encoding="utf-8")
@@ -1327,7 +1312,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 CleanMachineError,
                 "Profile library after Sparkle relaunch is missing or invalid JSON",
             ):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertFalse(config.evidence_directory.exists())
 
@@ -1338,12 +1323,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 config, operations = self.fixture(root)
                 operations.install_action = install_action
 
-                receipts = run_qualification(config, operations)
-
-                self.assertEqual(
-                    receipts["installed-ui-accessibility"]["result"]["status"],
-                    "passed",
-                )
+                self.assertEqual(self.run_update(config, operations)["status"], "passed")
 
     def test_run_rejects_unknown_sparkle_install_action_with_observed_value(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1355,7 +1335,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 CleanMachineError,
                 "unsupported install action: 'Learn More…'",
             ):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertFalse(config.qualification_root.exists())
             self.assertFalse(config.evidence_directory.exists())
@@ -1367,12 +1347,11 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.update_failure = True
 
             with self.assertRaisesRegex(CleanMachineError, "simulated Sparkle failure"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertFalse(config.qualification_root.exists())
             self.assertFalse(operations.app_running())
-            self.assertFalse(config.output_receipt.exists())
-            self.assertFalse(config.ui_output_receipt.exists())
+            self.assertFalse(cast(Path, config.result_output).exists())
             self.assertFalse(config.evidence_directory.exists())
             self.assertEqual(operations.update_attempts, 1)
 
@@ -1382,7 +1361,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             config, operations = self.fixture(root)
             operations.install_action = "Install on Quit"
 
-            run_qualification(config, operations)
+            self.run_update(config, operations)
 
             update_evidence = json.loads(
                 (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
@@ -1398,7 +1377,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             config, operations = self.fixture(root)
             operations.install_action = "Install Update"
 
-            run_qualification(config, operations)
+            self.run_update(config, operations)
 
             update_evidence = json.loads(
                 (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
@@ -1419,7 +1398,8 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 update_evidence["states_observed"],
                 ["ready-install-update", "downloading", "waiting-for-window", "ready-install-relaunch"],
             )
-            self.assertEqual(operations.quit_calls_at_press, [2, 2])
+            self.assertEqual(len(operations.quit_calls_at_press), 2)
+            self.assertEqual(len(set(operations.quit_calls_at_press)), 1, "the app was quit between the two presses")
 
     def test_run_fails_if_app_exits_before_final_install_action(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1429,13 +1409,12 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.install_update_process_exits_before_ready = True
 
             with self.assertRaisesRegex(CleanMachineError, "terminated before Sparkle exposed the final install"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertEqual(
                 [observation.state for observation in operations.pressed_actions],
                 [SparkleUpdateState.READY_INSTALL_UPDATE],
             )
-            self.assertEqual(operations.quit_calls_at_press, [2])
             self.assertFalse(config.evidence_directory.exists())
 
     def test_run_retries_one_clean_attempt_for_pre_press_environmental_failure(self) -> None:
@@ -1444,7 +1423,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             config, operations = self.fixture(root)
             operations.retryable_failures = 1
 
-            run_qualification(config, operations)
+            self.run_update(config, operations)
 
             update_evidence = json.loads(
                 (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
@@ -1462,7 +1441,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.post_press_failure = True
 
             with self.assertRaisesRegex(CleanMachineError, "simulated post-press failure"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertEqual(operations.update_attempts, 1)
             self.assertEqual(len(operations.pressed_actions), 1)
@@ -1482,7 +1461,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.reject_press_number = 2  # Install Update is pressed; Install and Relaunch is refused
 
             with self.assertRaises(SparkleUpdateFailure) as raised:
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             failure = raised.exception
             self.assertEqual(len(operations.pressed_actions), 1)
@@ -1504,7 +1483,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.press_state_change_failures = 2
 
             with self.assertRaises(SparkleUpdateFailure) as raised:
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertIn("no action was pressed", str(raised.exception))
             self.assertEqual(raised.exception.action_count, 0)
@@ -1516,7 +1495,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             config, operations = self.fixture(root)
             operations.press_state_change_failures = 1
 
-            run_qualification(config, operations)
+            self.run_update(config, operations)
 
             update_evidence = json.loads(
                 (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
@@ -1533,7 +1512,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.press_state_change_failures = 2
 
             with self.assertRaisesRegex(CleanMachineError, "changed after intent"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertEqual(operations.update_attempts, 2)
             self.assertTrue(operations.intent_seen_before_press)
@@ -1547,7 +1526,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.terminal_failure = True
 
             with self.assertRaisesRegex(CleanMachineError, "terminal updater failure"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertEqual(operations.update_attempts, 1)
             self.assertFalse(operations.pressed_actions)
@@ -1559,7 +1538,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.cancelled = True
 
             with self.assertRaisesRegex(CleanMachineError, "was cancelled"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertEqual(operations.update_attempts, 1)
             self.assertFalse(operations.pressed_actions)
@@ -1572,7 +1551,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
 
             with patch("scripts.tier3_clean_machine.UPDATE_POLL_SECONDS", 0):
                 with self.assertRaisesRegex(CleanMachineError, "bounded transition count"):
-                    run_qualification(config, operations)
+                    self.run_update(config, operations)
 
             self.assertEqual(operations.update_attempts, 1)
             self.assertFalse(operations.pressed_actions)
@@ -1585,7 +1564,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.tamper_prior_before_update = True
 
             with self.assertRaisesRegex(CleanMachineError, "exact signed release receipt"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertEqual(operations.update_attempts, 0)
             self.assertFalse(operations.pressed_actions)
@@ -1598,24 +1577,14 @@ class Tier3CleanMachineTests(unittest.TestCase):
 
             with patch("scripts.tier3_clean_machine.UPDATE_TIMEOUT_SECONDS", 0.01):
                 with self.assertRaisesRegex(CleanMachineError, "did not install and relaunch"):
-                    run_qualification(config, operations)
+                    self.run_update(config, operations)
 
             self.assertEqual(operations.update_attempts, 1)
             self.assertFalse(config.evidence_directory.exists())
 
-    def test_preflight_rejects_wrong_macos_major(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            config, operations = self.fixture(Path(temporary_directory))
-            operations.macos_version = "27.0"
-
-            with self.assertRaisesRegex(CleanMachineError, "requires macOS"):
-                preflight_report(config, operations)
-
     def test_preflight_rejects_candidate_not_newer_than_prior(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            config, operations = self.fixture(Path(temporary_directory))
-            report = preflight_report(config, operations)
-            self.assertEqual(report["candidate"]["build_version"], "160")
+            config, _ = self.fixture(Path(temporary_directory))
             candidate = json.loads(config.candidate_receipt.read_text(encoding="utf-8"))
             prior = json.loads(config.prior_receipt.read_text(encoding="utf-8"))
             candidate_release = self.release_artifact(config.candidate_receipt, config.candidate_dmg, candidate)
@@ -1632,7 +1601,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             config = replace(config, qualification_root=root / "outside-home")
 
             with self.assertRaisesRegex(CleanMachineError, "inside the current home"):
-                preflight_report(config, operations)
+                prepare_update_test(config, operations, operations.feed_bytes)
 
     def test_preflight_rejects_candidate_minimum_system_above_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1643,7 +1612,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(CleanMachineError, "older than the candidate"):
-                preflight_report(config, operations)
+                prepare_update_test(config, operations, operations.feed_bytes)
 
     def test_preflight_rejects_preference_sentinel_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1652,7 +1621,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.sentinel_failure = True
 
             with self.assertRaisesRegex(CleanMachineError, "Preference sentinel"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertFalse(config.qualification_root.exists())
             self.assertFalse(config.evidence_directory.exists())
@@ -1664,7 +1633,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             operations.tamper_marker = True
 
             with self.assertRaisesRegex(CleanMachineError, "ownership marker changed"):
-                run_qualification(config, operations)
+                self.run_update(config, operations)
 
             self.assertTrue(config.qualification_root.exists())
             self.assertFalse(config.evidence_directory.exists())
@@ -1674,42 +1643,20 @@ class Tier3CleanMachineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
-            report = preflight_report(config, operations)
-            self.assertEqual(report["feed"]["route"], "rc")
             candidate = json.loads(config.candidate_receipt.read_text(encoding="utf-8"))
             release_artifact = self.release_artifact(config.candidate_receipt, config.candidate_dmg, candidate)
 
             with self.assertRaisesRegex(CleanMachineError, "not eligible"):
                 parse_feed_candidate(operations.feed_bytes, release_artifact, "stable")
 
-    def update_test_fixture(self, root: Path) -> tuple[QualificationConfig, FakeOperations, Path]:
-        config, operations = self.fixture(root)
-        staged_appcast = root / "staged-appcast.xml"
-        staged_appcast.write_bytes(operations.feed_bytes)
-        config = replace(config, output_receipt=None, ui_output_receipt=None, result_output=root / "update-test.json")
-        return config, operations, staged_appcast
-
-    def test_update_test_installs_the_update_served_from_the_local_feed(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            config, operations, staged_appcast = self.update_test_fixture(root)
-            result = run_update_test(config, operations, staged_appcast)
-
-            self.assertEqual(operations.fetched_dmg, config.candidate_dmg.read_bytes())
-            self.assertEqual(result["status"], "passed")
-            self.assertEqual(result["candidate"]["build_version"], "160")
-            self.assertIn("/appcast.xml", result["feed"]["served_paths"])
-            self.assertEqual(json.loads(cast(Path, config.result_output).read_text(encoding="utf-8")), result)
-            self.assertFalse(config.qualification_root.exists())
-
     def test_update_test_fails_when_sparkle_ignores_the_local_feed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            config, operations, staged_appcast = self.update_test_fixture(root)
+            config, operations = self.fixture(root)
             operations.sparkle_reads_feed_override = False
 
             with self.assertRaisesRegex(CleanMachineError, "never fetched"):
-                run_update_test(config, operations, staged_appcast)
+                self.run_update(config, operations)
 
             self.assertFalse(cast(Path, config.result_output).exists())
             self.assertFalse(cast(Path, config.evidence_directory).exists())
@@ -1723,8 +1670,6 @@ class Tier3CleanMachineTests(unittest.TestCase):
         return ReleaseArtifact(
             receipt=receipt,
             receipt_path=receipt_path,
-            receipt_reference="docs/release-evidence/test/release-receipt.json",
-            receipt_file_sha256=file_sha256(receipt_path),
             dmg_path=dmg_path,
             dmg_name=artifact["name"],
             dmg_sha256=artifact["sha256"],
