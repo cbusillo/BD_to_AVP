@@ -42,7 +42,7 @@ The production SwiftUI project exact-pins the same Sparkle 2.9.4 package. A
 single observable update controller owns Sparkle's automatic-check preference,
 the shared `BDToAVPUpdateChannel` selection, check availability, Settings
 controls, and Help commands. It exposes Stable, RC, Beta, and Alpha using the
-four routes in [Production Release Routes](release-routes.md). Existing Stable
+four routes in [the release process](release-process.md#versions-builds-and-routes). Existing Stable
 and RC preferences stay at those routes until an explicit selection changes
 them. It starts Sparkle only when the bundle has the complete
 direct-distribution policy: `direct` channel, HTTPS feed, public key, automatic
@@ -144,7 +144,7 @@ Python runtime entitlements.
 
 `CFBundleShortVersionString` remains the canonical internal PEP 440 version,
 such as `0.3.0b3`, `0.3.0rc1`, or `0.3.0`. Public tags, titles, and DMG names
-use the separate readable forms defined in `release-routes.md`; tooling must not
+use the separate readable forms defined in [the release process](release-process.md#versions-builds-and-routes); tooling must not
 derive one form by adding or removing `v`.
 
 PEP 440 prerelease strings are an intentional direct-DMG exception to Apple's

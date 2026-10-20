@@ -219,7 +219,7 @@ checksum are re-downloaded and verified before the draft is published.
 ## Sparkle Update Smoke (After Enablement)
 
 This is the installed-app acceptance smoke for the route contract in
-[Production Release Routes](release-routes.md).
+[the release process](release-process.md#versions-builds-and-routes).
 
 1. Install an older signed/notarized production DMG in `/Applications` and
    launch it from there. Do not test updates while running from a mounted DMG.

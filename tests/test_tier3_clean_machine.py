@@ -999,9 +999,6 @@ class Tier3CleanMachineTests(unittest.TestCase):
     def fixture(self, root: Path) -> tuple[QualificationConfig, FakeOperations]:
         repo = root / "repo"
         repo.mkdir()
-        policy_path = repo / "docs" / "qualification" / "release-qualification-policy-v1.json"
-        policy_path.parent.mkdir(parents=True)
-        shutil.copy2(REPO_ROOT / "docs" / "qualification" / "release-qualification-policy-v1.json", policy_path)
 
         prior_app = self.make_app(root, "0.3.0rc2", "159", "prior")
         candidate_app = self.make_app(root, "0.3.0rc3", "160", "candidate")

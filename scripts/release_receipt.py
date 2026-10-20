@@ -6,7 +6,6 @@ import json
 import re
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -16,7 +15,6 @@ from scripts.release_workflow_policy import RECEIPT_ACTORS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_POLICY_PATH = REPO_ROOT / "docs" / "qualification" / "release-qualification-policy-v1.json"
 RECEIPT_ASSET_NAME = "release-receipt.json"
 RECEIPT_TYPE = "bd-to-avp-release-engine"
 SCHEMA_VERSION = 1
@@ -49,31 +47,6 @@ TIER1_CASE_VERIFICATIONS = {
 
 class ReleaseReceiptError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True)
-class ArtifactReceiptExpectation:
-    candidate_sha: str
-    release_route: str
-    workflow_run_id: int
-    workflow_run_attempt: int
-    release_id: int
-    package_version: str
-    public_version: str
-    build_version: str
-    release_tag: str
-    dmg_name: str
-    receipt_asset_id: int
-    receipt_file_sha256: str
-    receipt_sha256: str
-    signed_app_tree_sha256: str
-    dmg_asset_id: int
-    dmg_size: int
-    dmg_sha256: str
-    checksum_asset_id: int
-    checksum_sha256: str
-    appcast_asset_id: int
-    appcast_sha256: str
 
 
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
@@ -151,28 +124,7 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _tier1_case_ids(policy_path: Path) -> list[str]:
-    policy = _load_json(policy_path, "release qualification policy")
-    if policy.get("schema_version") != 1:
-        raise ReleaseReceiptError("Release qualification policy schema_version must be 1.")
-    case_ids: list[str] = []
-    for index, raw_case in enumerate(_sequence(policy.get("cases"), "release qualification cases")):
-        case = _mapping(raw_case, f"release qualification case {index}")
-        if case.get("tier") == 1:
-            case_ids.append(_string(case.get("id"), f"release qualification case {index} id"))
-    if not case_ids or len(case_ids) != len(set(case_ids)):
-        raise ReleaseReceiptError("Release qualification policy must define unique Tier 1 case IDs.")
-    policy_case_ids = set(case_ids)
-    mapped_case_ids = set(TIER1_CASE_VERIFICATIONS)
-    if policy_case_ids != mapped_case_ids:
-        raise ReleaseReceiptError(
-            "Release qualification Tier 1 cases require explicit receipt verification mappings; "
-            f"unmapped={sorted(policy_case_ids - mapped_case_ids)}, stale={sorted(mapped_case_ids - policy_case_ids)}."
-        )
-    return sorted(policy_case_ids)
-
-
-def build_receipt(facts: Mapping[str, Any], policy_path: Path = DEFAULT_POLICY_PATH) -> dict[str, Any]:
+def build_receipt(facts: Mapping[str, Any]) -> dict[str, Any]:
     route = _string(facts.get("release_route"), "release_route")
     if route not in ROUTES:
         raise ReleaseReceiptError(f"release_route must be one of {sorted(ROUTES)}.")
@@ -226,7 +178,7 @@ def build_receipt(facts: Mapping[str, Any], policy_path: Path = DEFAULT_POLICY_P
         "schema_version": SCHEMA_VERSION,
         "signed_app_tree_sha256": _sha256(facts.get("signed_app_tree_sha256"), "signed_app_tree_sha256"),
         "source_sha": source_sha,
-        "tier1_case_references": _tier1_case_ids(policy_path),
+        "tier1_case_references": sorted(TIER1_CASE_VERIFICATIONS),
         "verification": {field: "passed" for field in VERIFICATION_FIELDS},
         "versions": {
             "build": _string(facts.get("build_version"), "build_version"),
@@ -391,107 +343,6 @@ def validate_receipt(receipt: Mapping[str, Any]) -> None:
         raise ReleaseReceiptError("Release receipt self-digest mismatch.")
 
 
-def load_validated_checked_receipt(path: Path) -> tuple[Mapping[str, Any], str]:
-    try:
-        content = path.read_bytes()
-    except OSError as error:
-        raise ReleaseReceiptError(f"Unable to read checked release receipt at {path}: {error}") from error
-    try:
-        receipt = _mapping(json.loads(content), "checked release receipt")
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ReleaseReceiptError(f"Invalid JSON in checked release receipt at {path}: {error}") from error
-    validate_receipt(receipt)
-    return receipt, hashlib.sha256(content).hexdigest()
-
-
-def load_validated_artifact_receipt(
-    path: Path,
-    expectation: ArtifactReceiptExpectation,
-) -> Mapping[str, Any]:
-    try:
-        content = path.read_bytes()
-    except OSError as error:
-        raise ReleaseReceiptError(f"Unable to read artifact release receipt at {path}: {error}") from error
-    expected_file_digest = _sha256(expectation.receipt_file_sha256, "expected receipt file SHA-256")
-    if hashlib.sha256(content).hexdigest() != expected_file_digest:
-        raise ReleaseReceiptError("Artifact release receipt file digest does not match the expected digest.")
-    try:
-        receipt = _mapping(json.loads(content), "artifact release receipt")
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ReleaseReceiptError(f"Invalid JSON in artifact release receipt at {path}: {error}") from error
-    validate_receipt(receipt)
-    if receipt.get("receipt_sha256") != _sha256(expectation.receipt_sha256, "expected receipt self SHA-256"):
-        raise ReleaseReceiptError("Artifact release receipt self-digest does not match the expected digest.")
-
-    candidate_sha = _sha(expectation.candidate_sha, "expected candidate SHA")
-    if receipt.get("source_sha") != candidate_sha:
-        raise ReleaseReceiptError("Artifact release receipt is stale or bound to the wrong candidate SHA.")
-    release_route = _string(expectation.release_route, "expected release route")
-    if release_route not in ROUTES:
-        raise ReleaseReceiptError(f"Expected release route must be one of {sorted(ROUTES)}.")
-    if receipt.get("release_route") != release_route:
-        raise ReleaseReceiptError("Artifact release receipt is bound to the wrong release route.")
-
-    workflow = _mapping(receipt.get("workflow"), "workflow")
-    expected_run_id = _integer(expectation.workflow_run_id, "expected workflow run ID")
-    expected_run_attempt = _integer(expectation.workflow_run_attempt, "expected workflow run attempt")
-    if workflow.get("run_id") != expected_run_id or workflow.get("run_attempt") != expected_run_attempt:
-        raise ReleaseReceiptError("Artifact release receipt is not bound to the exact workflow run and attempt.")
-
-    release = _mapping(receipt.get("release"), "release")
-    if release.get("id") != _integer(expectation.release_id, "expected release ID"):
-        raise ReleaseReceiptError("Artifact release receipt is bound to the wrong GitHub release ID.")
-    expected_release_tag = _string(expectation.release_tag, "expected release tag")
-    if release.get("tag") != expected_release_tag or release.get("name") != expected_release_tag:
-        raise ReleaseReceiptError("Artifact release receipt tag or name does not match the committed release metadata.")
-    versions = _mapping(receipt.get("versions"), "versions")
-    expected_versions = {
-        "package": _string(expectation.package_version, "expected package version"),
-        "public": _string(expectation.public_version, "expected public version"),
-        "build": _string(expectation.build_version, "expected build version"),
-    }
-    if any(versions.get(field) != value for field, value in expected_versions.items()):
-        raise ReleaseReceiptError("Artifact release receipt versions do not match the committed release metadata.")
-    expected_app_tree_digest = _sha256(
-        expectation.signed_app_tree_sha256,
-        "expected signed app tree SHA-256",
-    )
-    if receipt.get("signed_app_tree_sha256") != expected_app_tree_digest:
-        raise ReleaseReceiptError("Artifact release receipt signed app tree digest does not match.")
-
-    expected_artifacts = {
-        "dmg": (
-            _integer(expectation.dmg_asset_id, "expected DMG asset ID"),
-            _sha256(expectation.dmg_sha256, "expected DMG SHA-256"),
-        ),
-        "checksum": (
-            _integer(expectation.checksum_asset_id, "expected checksum asset ID"),
-            _sha256(expectation.checksum_sha256, "expected checksum SHA-256"),
-        ),
-        "appcast": (
-            _integer(expectation.appcast_asset_id, "expected appcast asset ID"),
-            _sha256(expectation.appcast_sha256, "expected appcast SHA-256"),
-        ),
-    }
-    artifacts = {
-        cast(str, artifact["kind"]): artifact
-        for artifact in (
-            _mapping(raw_artifact, "artifact") for raw_artifact in _sequence(receipt.get("artifacts"), "artifacts")
-        )
-    }
-    for kind, (expected_asset_id, expected_digest) in expected_artifacts.items():
-        artifact = artifacts[kind]
-        if artifact.get("asset_id") != expected_asset_id:
-            raise ReleaseReceiptError(f"Artifact release receipt {kind} asset ID does not match.")
-        if artifact.get("sha256") != expected_digest:
-            raise ReleaseReceiptError(f"Artifact release receipt {kind} digest does not match.")
-    if artifacts["dmg"].get("name") != _string(expectation.dmg_name, "expected DMG name"):
-        raise ReleaseReceiptError("Artifact release receipt DMG name does not match the committed release metadata.")
-    if artifacts["dmg"].get("size_bytes") != _integer(expectation.dmg_size, "expected DMG size"):
-        raise ReleaseReceiptError("Artifact release receipt DMG size does not match the committed release metadata.")
-    return receipt
-
-
 def write_receipt(receipt: Mapping[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -503,7 +354,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     build_parser = subparsers.add_parser("build", help="Build a release receipt from verified workflow facts.")
     build_parser.add_argument("--facts", type=Path, required=True)
-    build_parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY_PATH)
     build_parser.add_argument("--output", type=Path, required=True)
 
     validate_parser = subparsers.add_parser("validate", help="Validate an existing release receipt.")
@@ -512,7 +362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
-            receipt = build_receipt(_load_json(args.facts, "release receipt facts"), args.policy)
+            receipt = build_receipt(_load_json(args.facts, "release receipt facts"))
             write_receipt(receipt, args.output)
         else:
             validate_receipt(_load_json(args.receipt, "release receipt"))
