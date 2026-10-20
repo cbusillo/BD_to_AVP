@@ -18,9 +18,6 @@ from typing import Any, ClassVar
 
 import yaml
 
-from scripts import release
-from scripts.release_evidence_v2 import qualification_template_path
-from scripts.release_qualification_resume import ResumeIdentity
 from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
 from scripts.release_workflow_policy import (
     APPROVAL_ENVIRONMENT,
@@ -219,8 +216,7 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         for name in (
             "production-preflight.yml",
             "production-preflight-engine.yml",
-            "milestone-qualification.yml",
-            "release-evidence.yml",
+            "update-test.yml",
         ):
             with self.subTest(workflow=name):
                 workflow = load_workflow(name)
@@ -239,41 +235,39 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
                 self.assertEqual(environment["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
 
     def test_clean_machine_commands_select_the_ephemeral_runner_contract(self) -> None:
-        steps = load_workflow("milestone-qualification.yml")["jobs"]["qualify"]["steps"]
-        for ident in ("clean-machine-preflight", "clean-machine-run"):
-            step = next(step for step in steps if step.get("id") == ident)
-            with self.subTest(step=ident), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                inputs = root / "qualification-inputs"
-                inputs.mkdir()
-                (inputs / "paths.env").write_text(
-                    "CANDIDATE_DMG=candidate.dmg\nPRIOR_TAG=v1.0.0\nPRIOR_DMG=prior.dmg\nROUTE=stable\n",
-                    encoding="utf-8",
-                )
-                calls = root / "calls"
-                uv = root / "uv"
-                uv.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$CALLS"\n', encoding="utf-8")
-                uv.chmod(0o700)
-                result = subprocess.run(
-                    ["/bin/bash", "-c", step["run"]],
-                    cwd=root,
-                    env={
-                        "PATH": f"{root}:/usr/bin:/bin",
-                        "CALLS": str(calls),
-                        "RUNNER_TEMP": str(root),
-                        "GITHUB_RUN_ID": "100",
-                        "GITHUB_RUN_ATTEMPT": "1",
-                        "CANDIDATE_TAG": "v1.1.0",
-                    },
-                    capture_output=True,
-                    check=False,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                arguments = calls.read_text(encoding="utf-8").splitlines()
-                self.assertIn("scripts.tier3_clean_machine", arguments)
-                self.assertEqual(arguments.count("--environment-class"), 1)
-                self.assertEqual(arguments[arguments.index("--environment-class") + 1], RESETTABLE_VM_ENVIRONMENT_CLASS)
-                self.assertEqual(step["env"]["BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT"], "${{ runner.environment }}")
+        steps = load_workflow("update-test.yml")["jobs"]["update"]["steps"]
+        step = next(step for step in steps if step.get("id") == "update-test")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = root / "calls"
+            uv = root / "uv"
+            uv.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$CALLS"\n', encoding="utf-8")
+            uv.chmod(0o700)
+            result = subprocess.run(
+                ["/bin/bash", "-c", step["run"]],
+                cwd=root,
+                env={
+                    "PATH": f"{root}:/usr/bin:/bin",
+                    "CALLS": str(calls),
+                    "RUNNER_TEMP": str(root),
+                    "GITHUB_RUN_ID": "100",
+                    "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_STEP_SUMMARY": str(root / "summary"),
+                    "CANDIDATE_TAG": "v1.1.0",
+                    "CANDIDATE_DMG": "candidate.dmg",
+                    "PRIOR_TAG": "v1.0.0",
+                    "PRIOR_DMG": "prior.dmg",
+                    "ROUTE": "stable",
+                },
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            arguments = calls.read_text(encoding="utf-8").splitlines()
+            self.assertIn("scripts.tier3_clean_machine", arguments)
+            self.assertEqual(arguments.count("--environment-class"), 1)
+            self.assertEqual(arguments[arguments.index("--environment-class") + 1], RESETTABLE_VM_ENVIRONMENT_CLASS)
+            self.assertEqual(step["env"]["BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT"], "${{ runner.environment }}")
 
     def test_release_independent_production_preflight_is_secret_free_and_non_publishing(self) -> None:
         manual = load_workflow("production-preflight.yml")
@@ -354,92 +348,6 @@ class ReleaseWorkflowSecurityContractTests(unittest.TestCase):
         self.assertIn("dmg_size", package["outputs"])
         self.assertEqual(package_step["env"]["DMG_NAME"], "${{ needs.prepare.outputs.dmg_name }}")
         next(step for step in package["steps"] if step.get("id") == "notary-credentials")
-
-    def test_post_release_evidence_workflow_is_secret_free_and_idempotent(self) -> None:
-        workflow = load_workflow("release-evidence.yml")
-        jobs = workflow["jobs"]
-        prepare = jobs["validate-and-prepare"]
-        publish = jobs["publish-evidence-branch"]
-
-        self.assertEqual(set(workflow["on"]["workflow_run"]["workflows"]), {"Stable", "Prerelease"})
-        self.assertEqual(prepare["permissions"], {"actions": "read", "contents": "read"})
-        self.assertEqual(publish["permissions"], {"contents": "write"})
-        self.assertNotIn("environment", prepare)
-        self.assertNotIn("environment", publish)
-        evidence_writers = [
-            step for step in prepare["steps"] if step.get("id") in {"signed-ui", "reconcile", "capture-v2"}
-        ]
-        self.assertEqual(len(evidence_writers), 3)
-        self.assertEqual(len({step["if"] for step in evidence_writers}), 1)
-        conflict_step = next(step for step in publish["steps"] if step.get("id") == "evidence-conflict")
-        self.assertEqual(
-            conflict_step["env"]["EXPECTED_MAIN_SHA"],
-            "${{ needs.validate-and-prepare.outputs.base_main_sha }}",
-        )
-        actor_step = next(step for step in publish["steps"] if step.get("id") == "evidence-parent")
-        self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_ID"], "${{ github.actor_id }}")
-        self.assertEqual(actor_step["env"]["EVIDENCE_ACTOR_LOGIN"], "${{ github.actor }}")
-
-        next(step for step in publish["steps"] if step.get("id") == "publish")
-
-    def test_milestone_qualification_is_hosted_secret_free_and_read_only(self) -> None:
-        workflow = load_workflow("milestone-qualification.yml")
-        dispatch = workflow["on"]["workflow_dispatch"]
-        qualify = workflow["jobs"]["qualify"]
-        steps = qualify["steps"]
-        by_id = {step.get("id"): step for step in steps}
-        checkout = by_id["checkout"]
-        upload = by_id["qualification-receipts"]
-        diagnostics_upload = by_id["sparkle-diagnostics"]
-
-        self.assertEqual(
-            set(dispatch["inputs"]),
-            {"candidate_tag", "manifest_sha256"},
-        )
-        self.assertEqual(workflow["permissions"], {})
-        self.assertEqual(qualify["permissions"], {"actions": "read", "contents": "read"})
-        # Only the automation identity, or the repository owner, may start a qualification job.
-        self.assertEqual(
-            {clause.strip() for clause in qualify["if"].split("||")},
-            {f"github.actor == '{REQUIRED_ACTOR}'", "github.actor == github.repository_owner"},
-        )
-        self.assertNotIn("environment", qualify)
-        self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
-        self.assertEqual(checkout["with"]["fetch-depth"], "0")
-        self.assertEqual(checkout["with"]["persist-credentials"], "false")
-        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-        self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
-        self.assertRegex(diagnostics_upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
-        self.assertEqual(
-            diagnostics_upload["if"],
-            "${{ failure() && hashFiles('qualification-output/sparkle-install-diagnostics.json') != '' }}",
-        )
-        self.assertEqual(
-            diagnostics_upload["with"]["path"],
-            "qualification-output/sparkle-install-diagnostics.json",
-        )
-
-    def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:
-        workflow = load_workflow("ci.yml")
-        job = next(
-            job
-            for job in workflow["jobs"].values()
-            if any(step.get("id") == "milestone-context" for step in job.get("steps", []))
-        )
-        by_id = {step.get("id"): step for step in job["steps"]}
-        context = by_id["milestone-context"]
-        classify = by_id["milestone-qualification"]
-        upload = by_id["milestone-report"]
-        summarize = by_id["milestone-summary"]
-        enforce = by_id["milestone-enforce"]
-
-        self.assertEqual(context["if"], "github.event_name == 'pull_request'")
-        self.assertEqual(context["env"], {"GH_TOKEN": "${{ github.token }}"})
-        for step in (classify, upload, summarize, enforce):
-            self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
-        self.assertEqual(classify["continue-on-error"], "true")
-        self.assertEqual(upload["with"]["if-no-files-found"], "error")
-        self.assertIn("release-qualification-milestone-${{ github.run_attempt }}", upload["with"]["name"])
 
     def test_stable_pypi_publish_uses_oidc_trusted_publishing(self) -> None:
         operator = load_workflow("briefcase.yml")
@@ -720,110 +628,6 @@ class StablePublicationGuardTests(unittest.TestCase):
                     self.assertNotEqual(self.run_guard(**{field: actor}), 0)
 
 
-class EvidenceCompletionSourceTests(unittest.TestCase):
-    def test_evidence_uses_the_completed_run_identity(self) -> None:
-        workflow = load_workflows()["release-evidence.yml"]
-        steps = [
-            step
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", [])
-            if "COMPLETED_RUN_ID" in step.get("env", {})
-        ]
-        self.assertEqual(len(steps), 1)
-        step = steps[0]
-        for title in ("Stable", "Prerelease", "Stable PyPI recovery"):
-            with self.subTest(title=title), tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / "outputs"
-                environment = {
-                    "PATH": "/usr/bin:/bin",
-                    "GITHUB_OUTPUT": str(output),
-                    "COMPLETED_RUN_ID": "123",
-                    "COMPLETED_SOURCE_SHA": "a" * 40,
-                    "COMPLETED_DISPLAY_TITLE": title,
-                }
-                result = subprocess.run(
-                    ["/bin/bash", "-c", step["run"]], env=environment, capture_output=True, check=False
-                )
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                self.assertEqual(values["release_run_id"], environment["COMPLETED_RUN_ID"])
-                self.assertEqual(values["release_source_sha"], environment["COMPLETED_SOURCE_SHA"])
-
-
-class EvidenceBranchIdentityTests(unittest.TestCase):
-    def run_preparation(self, root: Path, **overrides: str) -> subprocess.CompletedProcess[bytes]:
-        self.git(root, "init", "-q")
-        self.git(
-            root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base"
-        )
-        workflow = load_workflows()["release-evidence.yml"]
-        step = next(
-            step
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", [])
-            if "EVIDENCE_ACTOR_LOGIN" in step.get("env", {})
-        )
-        return subprocess.run(
-            ["/bin/bash", "-c", step["run"]],
-            cwd=root,
-            env={
-                "PATH": "/usr/bin:/bin",
-                "HOME": str(root),
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "EVIDENCE_ACTOR_ID": "1234",
-                "EVIDENCE_ACTOR_LOGIN": REQUIRED_ACTOR,
-                "EVIDENCE_REF": "automation/release-evidence-test",
-                "EXPECTED_EXISTING_BRANCH_SHA": "",
-                "EXPECTED_MAIN_SHA": self.git(root, "rev-parse", "HEAD"),
-                **overrides,
-            },
-            capture_output=True,
-            check=False,
-        )
-
-    @staticmethod
-    def git(root: Path, *arguments: str) -> str:
-        return subprocess.run(
-            ["git", *arguments],
-            cwd=root,
-            env={"PATH": "/usr/bin:/bin", "HOME": str(root), "GIT_CONFIG_NOSYSTEM": "1"},
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-
-    def test_app_identity_can_create_and_author_the_evidence_branch(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            result = self.run_preparation(root)
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
-            self.git(root, "commit", "--allow-empty", "-qm", "evidence")
-            self.assertEqual(self.git(root, "show", "-s", "--format=%an", "HEAD"), REQUIRED_ACTOR)
-            self.assertEqual(
-                self.git(root, "show", "-s", "--format=%ae", "HEAD"),
-                f"1234+{REQUIRED_ACTOR}@users.noreply.github.com",
-            )
-
-    def test_invalid_actor_metadata_is_rejected_before_branch_creation(self) -> None:
-        for field, value in (
-            ("EVIDENCE_ACTOR_LOGIN", ""),
-            ("EVIDENCE_ACTOR_LOGIN", "app[bot"),
-            ("EVIDENCE_ACTOR_LOGIN", "app[bot]extra"),
-            ("EVIDENCE_ACTOR_LOGIN", "app\nname"),
-            ("EVIDENCE_ACTOR_ID", "0"),
-            ("EVIDENCE_ACTOR_ID", "not-a-number"),
-        ):
-            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                self.assertNotEqual(self.run_preparation(root, **{field: value}).returncode, 0)
-                self.assertEqual(self.git(root, "branch", "--list", "automation/release-evidence-test"), "")
-
-
-# Post-publication qualification compiles a test helper on the macOS release that
-# the qualification policy names; it builds nothing that ships.
-QUALIFICATION_ONLY_WORKFLOWS = {"milestone-qualification.yml"}
-
-
 class ToolchainAgreementTests(unittest.TestCase):
     """One Xcode toolchain builds everything that ships; the tests do not care which one."""
 
@@ -834,8 +638,6 @@ class ToolchainAgreementTests(unittest.TestCase):
         )
         declared = {("bundled edge264", provenance["xcode_version"], provenance["xcode_build_version"])}
         for workflow_name, workflow in load_workflows().items():
-            if workflow_name in QUALIFICATION_ONLY_WORKFLOWS:
-                continue
             environment = workflow.get("env") or {}
             if "XCODE_VERSION" in environment:
                 declared.add(
@@ -845,41 +647,6 @@ class ToolchainAgreementTests(unittest.TestCase):
                 self.assertEqual(selected, provenance["xcode_version"], workflow_name)
         self.assertGreater(len(declared), 1)
         self.assertEqual(len({(version, build) for _, version, build in declared}), 1, sorted(declared))
-
-    def test_post_publication_qualification_runs_on_a_macos_release_the_policy_allows(self) -> None:
-        repository = WORKFLOW_DIRECTORY.parents[1]
-        policy = json.loads(
-            (repository / "docs/qualification/release-qualification-policy-v1.json").read_text(encoding="utf-8")
-        )
-        allowed = {
-            str(major)
-            for case in policy["cases"]
-            for major in (case.get("environment") or {}).get("macos_major_versions", [])
-        }
-        self.assertTrue(allowed)
-        for workflow_name in QUALIFICATION_ONLY_WORKFLOWS:
-            for job_name, job in load_workflows()[workflow_name]["jobs"].items():
-                # Execute the platform guard before the Xcode selection, with synthetic OS facts.
-                script = next(step["run"] for step in job["steps"] if "XCODE_PATH=" in step.get("run", ""))
-                platform_guard = script[: script.index("XCODE_PATH=")]
-                accepted = set()
-                outside = {"0", str(min(map(int, allowed)) - 1), str(max(map(int, allowed)) + 1)}
-                for major in allowed | outside:
-                    with self.subTest(workflow=workflow_name, job=job_name, macos=major):
-                        result = subprocess.run(
-                            [
-                                "/bin/bash",
-                                "-c",
-                                'uname() { echo arm64; }; sw_vers() { echo "$FIXTURE_MACOS"; };\n' + platform_guard,
-                            ],
-                            env={"PATH": "/usr/bin:/bin", "FIXTURE_MACOS": f"{major}.0"},
-                            capture_output=True,
-                            check=False,
-                        )
-                        if result.returncode == 0:
-                            accepted.add(major)
-                self.assertTrue(accepted, (workflow_name, job_name))
-                self.assertLessEqual(accepted, allowed)
 
     def test_no_job_runs_on_a_self_hosted_runner(self) -> None:
         for workflow_name, workflow in load_workflows().items():
@@ -973,30 +740,6 @@ class ReleasePublicationFreshnessTests(unittest.TestCase):
 
 
 class ReleaseWorkflowWiringTests(unittest.TestCase):
-    def test_qualification_run_title_agrees_with_resume_identity(self) -> None:
-        identity = ResumeIdentity(
-            release_tag="v1.2.3",
-            candidate_sha="a" * 40,
-            release_id=1,
-            manifest_sha256="b" * 64,
-            runner_sha="c" * 40,
-            main_sha="c" * 40,
-            evidence_ref="automation/release-evidence-v1.2.3",
-            evidence_sha="d" * 40,
-            evidence_base_sha="e" * 40,
-            release_receipt_file_sha256="f" * 64,
-            signed_ui_artifact_id=2,
-            signed_ui_artifact_sha256="1" * 64,
-            policy_sha256="2" * 64,
-            policy_checkpoint_sha256="3" * 64,
-            route_table_sha256="4" * 64,
-            controller_runner_sha256="5" * 64,
-        )
-        inputs = {"candidate_tag": identity.release_tag, "manifest_sha256": identity.manifest_sha256}
-        title = load_workflow("milestone-qualification.yml")["run-name"]
-        rendered = re.sub(r"\$\{\{\s*inputs\.(\w+)\s*\}\}", lambda match: inputs[match[1]], title)
-        self.assertEqual(rendered, identity.workflow_display_title)
-
     def test_ci_checkouts_leave_no_credentials(self) -> None:
         workflow = load_workflow("ci.yml")
         checkouts = [
@@ -1322,12 +1065,6 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertEqual(
             workflow["env"]["RELEASE_QUALIFICATION_EVIDENCE"], release_operations["qualificationEvidencePath"]
         )
-        # Preparation and evidence capture must select the same route-specific record.
-        metadata = release.load_release_metadata()
-        expected_qualification_record = qualification_template_path(
-            metadata.release_tag, "prerelease" if metadata.prerelease else "stable"
-        )
-        self.assertEqual(release_operations["qualificationRecordPath"], expected_qualification_record)
         artifact_checkouts = [
             step for step in qualify_artifact["steps"] if step.get("uses", "").startswith("actions/checkout@")
         ]

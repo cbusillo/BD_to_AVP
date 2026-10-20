@@ -30,10 +30,6 @@ from scripts.beta_change_scoped_evidence import (
 )
 from scripts.qualify_release_scope import load_policy
 from scripts.release import ReleaseMetadata, parse_release_version
-from scripts.release_milestone_context import (
-    _validate_append_only_evidence_index,
-    _validate_change_scoped_evidence_append,
-)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -223,20 +219,6 @@ class BetaChangeScopedEvidenceTests(unittest.TestCase):
         self.assertEqual(
             fake.package_environment[SUPPORT_DIAGNOSTICS_ENDPOINT_ENV], DEFAULT_SUPPORT_DIAGNOSTICS_ENDPOINT
         )
-        git(self.root, "add", ".")
-        git(self.root, "commit", "-qm", "record change-scoped evidence")
-        changed_paths = git(self.root, "diff", "--name-only", self.candidate_sha, "HEAD").splitlines()
-        appended = _validate_append_only_evidence_index(self.root, base_sha=self.candidate_sha)
-        _validate_change_scoped_evidence_append(
-            self.root,
-            base_sha=self.candidate_sha,
-            head_sha=git(self.root, "rev-parse", "HEAD"),
-            head_branch=f"qualify/{self.METADATA.release_tag}",
-            changed_paths=changed_paths,
-            policy_relative=POLICY_PATH,
-            appended_receipts=appended,
-        )
-        self.assertEqual([receipt["receipt_id"] for receipt in appended], list(result.receipt_ids))
         stage_argument = fake.classifier_command.index("--release-stage") + 1
         self.assertEqual(fake.classifier_command[stage_argument], self.METADATA.channel)
         document = json.loads(document_text)

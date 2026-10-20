@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from scripts.release import RELEASE_IDENTITY_PATHS, is_release_identity_only_change
-from scripts.release_evidence import effective_successful_workflow_run_id
 from scripts.release_receipt import (
     ArtifactReceiptExpectation,
     ReleaseReceiptError,
@@ -83,6 +82,33 @@ class QualificationScopeError(RuntimeError):
 ChangedPaths = Callable[[str, str], set[str]]
 IsAncestor = Callable[[str, str], bool]
 ReferenceContent = Callable[[str], bytes]
+
+
+def effective_successful_workflow_run_id(
+    record: Mapping[str, Any],
+    *,
+    run_id_field: str = "workflow_run_id",
+) -> int | None:
+    run_id = record.get(run_id_field)
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        return None
+    if record.get("workflow_conclusion") == "success":
+        return run_id
+    if record.get("workflow_conclusion") != "failure":
+        return None
+    recovery = record.get("recovery_workflow_run")
+    if not isinstance(recovery, Mapping) or recovery.get("operation") != "pypi_recovery":
+        return None
+    recovery_run_id = recovery.get("workflow_run_id")
+    if (
+        recovery.get("workflow_conclusion") != "success"
+        or isinstance(recovery_run_id, bool)
+        or not isinstance(recovery_run_id, int)
+        or recovery_run_id <= 0
+        or recovery_run_id == run_id
+    ):
+        return None
+    return recovery_run_id
 
 
 def _mapping(value: object, description: str) -> Mapping[str, Any]:

@@ -1,261 +1,81 @@
-# Tier 3 Clean-Machine And Sparkle Qualification
+# Sparkle Update Test
 
-`scripts/tier3_clean_machine.py` collects the automated
-`clean-machine-signed-update` and `installed-ui-accessibility` evidence declared
-by the release qualification policy. It operates only on immutable signed
-release artifacts and never signs, notarizes, publishes, approves an
-environment, or changes the live appcast.
+`scripts/tier3_clean_machine.py update-test` checks the update path testers
+actually use: an installed older release finds the candidate through Sparkle,
+installs it, relaunches, and keeps its settings. It operates only on immutable
+signed artifacts and never signs, notarizes, publishes, approves an environment,
+or changes the live appcast.
 
-## Maintained Environment
+## Where It Runs
 
-Two maintained layouts run on Apple Silicon macOS 26. The local
-`restorable-location` lane requires a dedicated qualification root under the
-current user's home, creates an isolated synthetic home, installs the app under
-that owned root, and deletes the complete root after bounded cleanup. The
-workflow-only `resettable-vm` lane runs on GitHub-hosted macOS, keeps the
-runner's real account home unchanged, installs the signed app in normal
-`/Applications`, and keeps scratch data under `RUNNER_TEMP`. It fails before
-mutation on local or self-hosted machines, when the app destination already
-exists, or when app-owned state is already present in the runner home.
+`.github/workflows/update-test.yml` runs it on GitHub's hosted Apple Silicon
+`xcode-27` image:
 
-The host must provide:
+- **Before publication.** The release engine calls it after the signed
+  appcast and release receipt exist, and `publish-release` waits for it on
+  every channel. It installs the newest lower published release that is an
+  ancestor of the candidate (`scripts.release qualification-base`), and uses
+  the same-run package, receipt and signed appcast.
+- **On a pull request** that changes the workflow or the script, against the
+  newest published release, so a broken harness shows up before a release
+  needs it.
 
-- macOS 26 on `arm64`;
-- Accessibility control for the terminal or automation host;
-- Xcode with `xcodebuild`, plus `defaults`, `ditto`, `hdiutil`, `log`, `open`,
-  and `osascript`;
-- enough free space for both DMGs, two candidate copies, and 2 GiB of working
-  headroom;
-- no running production app process; and
-- network access to the real public appcast.
+The hosted `resettable-vm` layout keeps the runner's real home, installs into
+`/Applications`, and keeps scratch data under `RUNNER_TEMP`. It refuses to run on
+local or self-hosted machines, or when the app or app-owned state already
+exists. The `restorable-location` layout is for local debugging only and keeps
+everything under a dedicated root in the current home.
 
-When the operator workstation is not running the policy-required macOS major
-version, use the owner-dispatched `Milestone Qualification` workflow instead of
-weakening the environment check. The workflow runs the collector in the
-`resettable-vm` layout on the GitHub-hosted `macos-26` image with read-only
-repository and Actions access. It
-accepts only the canonical `automation/release-evidence-<tag>` branch at its
-exact remote head, rejects non-documentation differences from protected
-`main`, validates the checked qualification manifest by its self digest,
-downloads both DMGs by the asset IDs in their checked receipts, and uses the
-checked signed-artifact UI receipt and original one-file Actions ZIP captured
-by Release Evidence while the artifact was unexpired. It cannot push, edit a release, approve an
-environment, or access release secrets.
+## Local Feed
 
-Dispatch it from protected `main` only after its workflow definition is present
-there and the canonical evidence branch contains the checked manifest:
+The candidate isn't public yet, so the test serves a copy of the signed appcast
+and the candidate DMG from `127.0.0.1`, with the candidate's download URL
+rewritten to the local server. The appcast is not signed as a whole, and each
+DMG keeps its EdDSA signature, so the rewrite doesn't weaken Sparkle's checks.
+The test writes `SUFeedURL` into the prior app's user defaults, which Sparkle
+2.9.4 reads before `Info.plist`. The run fails unless the local server served
+both the appcast and the DMG, so it can never pass by reading the live feed.
 
-Prefer the qualification controller's `resume` command in
-[the release process](release-process.md#release-orchestration), which dispatches
-through the `shiny-code-app[bot]` automation identity with checkpointed run
-adoption. The job runs only for that identity or the repository owner, and the
-controller never dispatches with the personal account. A direct dispatch must
-use the automation credentials:
+## What A Run Does
 
-```sh
-GH_TOKEN=<shiny-code-app[bot] installation token> \
-  gh workflow run milestone-qualification.yml \
-    --ref main \
-    -f candidate_tag=v0.3.0 \
-    -f manifest_sha256=<qualification-manifest-self-sha256>
-```
+1. Install the exact prior release from its DMG and check its bundle identity
+   and signed app tree against its release receipt.
+2. Seed the version 5 profile fixture, the update route, an unrelated
+   preference sentinel, and the local `SUFeedURL`.
+3. Run the installed-app XCUITest updater phase against the prior app: Sparkle
+   controls and the candidate's release-notes URL, without installing.
+4. Revalidate the prior bundle, choose `Check for Updates…`, and drive Sparkle
+   through a bounded state machine. Sparkle 2.9.4's first `Install Update`
+   starts download and extraction; the harness waits, then requires and presses
+   `SUStatusInstallAndRelaunch`. Install-on-quit terminates the prior app,
+   waits for the candidate on disk, and launches it.
+5. Verify the relaunched candidate's identity and replacement process, the
+   preserved route and sentinel, and the exact version 6 profile migration.
+6. Quit, detach every DMG, verify the cleanup ownership marker, and delete the
+   qualification root. The hosted layout also removes only the exact verified
+   app and allowlisted app-owned home state.
+7. Write one small `result.json` plus bounded evidence files.
 
-The successful run uploads the validated signed-artifact UI receipt, both Tier
-3 receipts, normalized evidence, checked manifest digest, evidence branch SHA,
-and a bounded run summary with 30-day retention. A failed pre-update validation
-or Sparkle installation uploads a separate `sparkle-install-diagnostics.json`
-artifact containing only fixed classifications, runtime-layout enums,
-directory-state enums, process state, and installed-build state; it excludes
-raw unified logs, paths, usernames, hostnames, process IDs, Accessibility
-output, and exception text.
-Download successful outputs,
-validate them again, and add the accepted receipts to the same evidence branch.
-The hosted collector proves the real Sparkle install/relaunch path, exact
-appcast-bound release-notes URL, and installed accessibility semantics. The
-guarded release engine separately proves that the embedded Markdown and
-full-notes URL match the immutable release-note source. Targeted native-window
-appearance capture remains useful operational evidence when Sparkle or
-release-note rendering changes, but missing or failed
-desktop capture does not block release evidence reconciliation.
-
-Homebrew may be installed on the host. The package smoke and launched app use a
-system-only runtime `PATH`; host developer tools are not accepted as packaged
-dependencies.
-
-## Inputs
-
-Both the prior and candidate release receipts must be committed at the current
-repository `HEAD`. Their local DMGs must match the exact names, sizes, and
-SHA-256 digests in those receipts. The candidate build must be newer than the
-prior build and must be present on the live public appcast for the selected
-route.
-
-For a newly published candidate, run from the idempotent
-`automation/release-evidence-<tag>` branch created by the Release Evidence
-workflow. Add the validated Tier 3 receipts and their evidence-index entries to
-that branch. Protected CI's `milestone` classifier remains red until all
-blocking automated receipts are present. It reports optional presentation and
-physical evidence without making those operator-only outcomes release blockers;
-do not create a parallel evidence branch.
-
-Run the read-only preflight first:
-
-```sh
-uv run python -m scripts.tier3_clean_machine preflight \
-  --candidate-release-receipt docs/release-evidence/<candidate>/release-receipt.json \
-  --candidate-dmg ~/Downloads/<candidate>.dmg \
-  --prior-release-receipt docs/release-evidence/<prior>/release-receipt.json \
-  --prior-dmg ~/Downloads/<prior>.dmg \
-  --qualification-root ~/Tier3-BD-to-AVP-Qualification \
-  --route rc \
-  --environment-class restorable-location
-```
-
-Preflight validates checked receipt bytes, both DMGs, build ordering, the
-environment, free space, Accessibility, process state, required tools, network
-access, appcast structure, source-bound release notes, enclosure identity, and
-route eligibility. Its JSON output omits hostnames, usernames, and local paths.
-
-## Qualification Run
-
-After preflight passes, run:
-
-```sh
-uv run python -m scripts.tier3_clean_machine run \
-  --candidate-release-receipt docs/release-evidence/<candidate>/release-receipt.json \
-  --candidate-dmg ~/Downloads/<candidate>.dmg \
-  --prior-release-receipt docs/release-evidence/<prior>/release-receipt.json \
-  --prior-dmg ~/Downloads/<prior>.dmg \
-  --qualification-root ~/Tier3-BD-to-AVP-Qualification \
-  --route rc \
-  --environment-class restorable-location \
-  --output-receipt /path/out/clean-machine-signed-update.json \
-  --ui-output-receipt /path/out/installed-ui-accessibility.json \
-  --evidence-directory /path/out/clean-machine-signed-update-evidence
-```
-
-The runner performs this bounded sequence:
-
-1. Install the exact candidate from its DMG, verify bundle and signed app-tree
-   identity, and run `scripts/smoke_release_app.py` from the installed copy.
-2. Clear the owned smoke location, install the exact prior release, and seed a
-   valid profile library plus route and unrelated preference sentinels in the
-   selected runtime home. The hosted lane uses the real runner home; the local
-   lane uses its synthetic home.
-3. Run the installed-app XCUITest lane against the exact prior app, verifying
-   Sparkle controls and the source-bound release-notes URL without installing.
-4. Revalidate the exact prior bundle and signed app tree immediately before
-   updater interaction, invoke `Check for Updates…`, and drive Sparkle through
-   an explicit bounded state machine. Identifier-scoped observations distinguish
-   downloading, install-and-relaunch, install-on-quit, cancellation, terminal
-   failure, and unknown states. Sparkle 2.9.4's initial `Install Update` action
-   begins download/extraction and must not be mistaken for an already-staged
-   install or the final relaunch confirmation.
-5. Durably record each selected action inside the owned qualification root
-   before pressing it. After the initial `Install Update`, tolerate the alert
-   closing while the exact prior app remains running, wait through download and
-   extraction, then require and press Sparkle's
-   `SUStatusInstallAndRelaunch` final action. Only then wait for the exact
-   candidate and replacement process. Install-on-quit explicitly terminates the
-   prior app, waits for the exact candidate on disk, and launches that
-   candidate. The harness never quits the app merely because the initial alert
-   disappeared.
-6. Verify the final candidate bundle, build, signed app tree, and replacement
-   running process, then verify the selected route and unrelated preference are
-   preserved. The harness seeds the version 5 profile fixture and accepts the
-   exact version 6 migration either when the prior release first launches or
-   during the candidate relaunch. It records which boundary performed the
-   migration and requires the exact expected version 6 document afterward,
-   preserving profile identity, encoding options, and safe pipeline defaults
-   while removing legacy per-run defaults that version 6 intentionally no
-   longer stores.
-7. Run the candidate installed-app XCUITest lane. It verifies main-window
-   readiness, profile-save accessibility and success, updater settings, the
-   public releases link, and cropped light/dark app-window screenshots.
-8. Quit the app, detach every mounted DMG, verify the cleanup ownership marker,
-   and delete the qualification root with raw XCTest and build output. The
-   hosted lane additionally removes only the exact verified prior/candidate app
-   and allowlisted app-owned home state. It refuses to delete an unknown or
-   partially replaced bundle and relies on VM teardown for containment.
-9. Emit normalized public-safe evidence and validated receipts for both policy
-   cases with `cleanup.status = disposed`.
-
-Every mount, subprocess, network request, GUI wait, update wait, and cleanup
-action has a timeout. Raw package-smoke output remains inside the disposable
-root and is deleted; public evidence records only its SHA-256 digest. Raw AX
-trees, XCTest logs, `.xcresult` bundles, local paths, and full-screen captures
-are deleted. Retained screenshots contain only the app window. A failed run
-does not emit either accepted receipt.
-
-Timeout failures include only bounded public-safe state context: the final
-state, action count, process relation, and ordered state enum history. They do
-not retain raw Accessibility output, paths, process IDs, usernames, or
-hostnames.
-
-The updater state machine prefers Sparkle's `SUUpdateAlert`,
-`SPUUserUpdateChoiceInstall`, and `SUStatusInstallAndRelaunch` identifiers. A
-title fallback is permitted only inside the single owned updater window and is
-recorded in evidence. The
-selected action, state, exact prior/candidate identities, attempt number, and
-transition history are atomically written and synced before an asynchronous
-press. That journal remains disposable; normalized `sparkle-update.json`
-retains bounded public-safe action, window-match, state, attempt, route, and
-candidate-version fields plus the journal and intent SHA-256 digests. It never
-retains window text, local paths, usernames, hostnames, or raw AX output.
-
-One clean retry is allowed only for a classified pre-press application-start,
-update-menu, update-window timeout, or guarded state-change race where the
-updater changed after durable intent but before any action was pressed. The
-first attempt must fully dispose its owned root and app process before retry.
-Cancellation, updater-reported failure, unknown UI, identity mismatch,
-preference/profile drift, action-limit failure, and every failure after a press
-are terminal. No other implicit retry occurs.
-
-Native Sparkle-window presentation sampling remains visible operational
-evidence but is nonblocking. The state-machine result, exact release-note source,
-and installed accessibility semantics remain the automated blocking contract;
-missing or failed manual presentation capture does not alter the runner result.
+Each selected action is written and synced before it is pressed. One clean
+retry is allowed only for a classified pre-press timeout or an updater change
+between recording the intent and pressing. Cancellation, updater failure,
+unknown UI, identity mismatch, preference or profile drift, and every failure
+after a press are final.
 
 If the cleanup ownership marker is missing or changed, the runner refuses to
-delete the qualification root because it can no longer prove ownership. It
-removes partial public outputs, reports the ownership failure, and leaves that
-root for operator inspection. After confirming that the location contains only
-qualification data, remove it manually before retrying with the same path.
+delete the qualification root and leaves it for inspection.
 
 ## Validation
-
-The deterministic runner fixtures use fake signed app trees, checked release
-receipts, a generated valid appcast, isolated preferences, and a simulated
-Sparkle replacement/relaunch:
 
 ```sh
 uv run python -m unittest tests.test_tier3_clean_machine
 ```
 
-The real lane must still run on the declared macOS 26 environment and a newer
-published candidate before its receipt can be checked into the release evidence
-index.
+The fixtures use fake signed app trees, real release receipts, a generated
+appcast served over local HTTP, and a simulated Sparkle that fetches the feed
+and DMG through the `SUFeedURL` preference.
 
-### Check harness changes before a release
-
-A change to `collect_ui_evidence` in `scripts/tier3_clean_machine.py` or to
-`macos/BluRayToVisionProUITests/InstalledUIAcceptanceTests.swift` can be checked
-on a hosted runner without cutting a release. The CI Mac app lane's "Installed
-Mac UI smoke" step (`scripts.pre_signing_ui`) runs the same candidate UI test
-against the ad-hoc packaged app. It keeps the artifact
-`ci-installed-ui-<run>-<attempt>` with the screenshots, UI result and
-accessibility tree. Download it and look at the screenshots before merging.
-Doing this on #804 caught two defects that local tests could not see: the Dock
-covering the window, and Sparkle's second-launch prompt.
-
-Milestone Qualification cannot be dispatched again against a Beta that has
-already qualified. Its bind step requires the manifest's `runner_sha` to equal
-current `main` and the `automation/release-evidence-<tag>` branch to contain
-current `main`. A change to the updater press (`_updater_press_script`) therefore
-first runs for real in the next Beta's post-publication qualification. Say so in
-the pull request that changes it.
-
-Two platform facts matter when reading these screenshots. AppKit ignores
+Two platform facts matter when reading UI screenshots. AppKit ignores
 `-AppleInterfaceStyle` as a launch argument, so dark mode comes only from the
 system setting; `-NSRequiresAquaSystemAppearance YES` does force light.
 `CFFIXED_USER_HOME` redirects file APIs but not `UserDefaults`, so an installed

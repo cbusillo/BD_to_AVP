@@ -151,6 +151,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Update the prior release through the local feed
+        id: update-test
         env:
           BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |

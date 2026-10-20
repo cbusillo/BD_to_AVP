@@ -18,7 +18,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.request
 import uuid
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -30,19 +29,11 @@ from urllib.parse import quote, urlsplit
 from xml.etree import ElementTree
 
 from scripts.artifact_identity import app_tree_sha256
-from scripts.qualify_release_scope import DEFAULT_POLICY_PATH, load_policy
 from scripts.release_receipt import ReleaseReceiptError, validate_receipt as validate_release_receipt
 from scripts.sparkle_appcast import AppcastError, SPARKLE, validate_appcast_channel
-from scripts.tier3_receipt import (
-    Tier3ReceiptError,
-    build_receipt as build_tier3_receipt,
-    validate_receipt as validate_tier3_receipt,
-)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CLEAN_MACHINE_CASE_ID = "clean-machine-signed-update"
-INSTALLED_UI_CASE_ID = "installed-ui-accessibility"
 APP_NAME = "3D Blu-ray to Vision Pro.app"
 BUNDLE_IDENTIFIER = "com.shinycomputers.bd-to-avp"
 RESTORABLE_LOCATION_ENVIRONMENT_CLASS = "restorable-location"
@@ -305,8 +296,6 @@ class BundleIdentity:
 class ReleaseArtifact:
     receipt: Mapping[str, Any]
     receipt_path: Path
-    receipt_reference: str
-    receipt_file_sha256: str
     dmg_path: Path
     dmg_name: str
     dmg_sha256: str
@@ -337,7 +326,6 @@ class RuntimeLayout:
     app_path: Path
     home: Path
     kind: str
-    smoke_home: Path
 
 
 @dataclass(frozen=True)
@@ -371,8 +359,6 @@ class QualificationConfig:
     qualification_root: Path
     route: str
     environment_class: str
-    output_receipt: Path | None = None
-    ui_output_receipt: Path | None = None
     evidence_directory: Path | None = None
     diagnostics_output: Path | None = None
     result_output: Path | None = None
@@ -414,13 +400,7 @@ class QualificationOperations(Protocol):
     def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts:
         raise NotImplementedError
 
-    def fetch_live_feed(self) -> bytes:
-        raise NotImplementedError
-
     def install_app(self, dmg_path: Path, destination: Path, mount_point: Path) -> None:
-        raise NotImplementedError
-
-    def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
         raise NotImplementedError
 
     def write_preferences(self, synthetic_home: Path, route: str, feed_url: str | None = None) -> None:
@@ -558,13 +538,11 @@ def _account_home() -> Path:
 
 def _runtime_layout(config: QualificationConfig) -> RuntimeLayout:
     qualification_root = config.qualification_root.resolve()
-    smoke_home = qualification_root / "SmokeHome"
     if config.environment_class == RESTORABLE_LOCATION_ENVIRONMENT_CLASS:
         return RuntimeLayout(
             app_path=qualification_root / "Applications" / APP_NAME,
             home=qualification_root / "Home",
             kind="owned-root-synthetic-home",
-            smoke_home=smoke_home,
         )
     if config.environment_class != RESETTABLE_VM_ENVIRONMENT_CLASS:
         raise CleanMachineError("This runner does not support the requested qualification environment class.")
@@ -595,7 +573,6 @@ def _runtime_layout(config: QualificationConfig) -> RuntimeLayout:
         app_path=SYSTEM_APPLICATIONS_DIRECTORY / APP_NAME,
         home=account_home,
         kind="system-applications-real-home",
-        smoke_home=smoke_home,
     )
 
 
@@ -728,38 +705,7 @@ def _sparkle_script_failure(error: CleanMachineError, *, action_pressed: bool) -
     )
 
 
-def _relative_checked_path(repo: Path, path: Path, description: str) -> str:
-    repo = repo.resolve()
-    resolved = path.resolve()
-    try:
-        reference = resolved.relative_to(repo).as_posix()
-    except ValueError as error:
-        raise CleanMachineError(f"{description} must be inside the repository.") from error
-    result = subprocess.run(
-        ["git", "show", f"HEAD:{reference}"],
-        cwd=repo,
-        capture_output=True,
-        timeout=COMMAND_TIMEOUT_SECONDS,
-    )
-    if result.returncode != 0:
-        raise CleanMachineError(f"{description} must be checked at repository HEAD: {reference}")
-    local_bytes = resolved.read_bytes()
-    if result.stdout != local_bytes:
-        raise CleanMachineError(f"{description} differs from the checked repository HEAD: {reference}")
-    return reference
-
-
-def load_release_artifact(
-    repo: Path,
-    receipt_path: Path,
-    dmg_path: Path,
-    *,
-    description: str,
-    checked: bool = True,
-) -> ReleaseArtifact:
-    reference = (
-        _relative_checked_path(repo, receipt_path, f"{description} release receipt") if checked else receipt_path.name
-    )
+def load_release_artifact(receipt_path: Path, dmg_path: Path, *, description: str) -> ReleaseArtifact:
     try:
         receipt = _mapping(json.loads(receipt_path.read_text(encoding="utf-8")), f"{description} release receipt")
     except (OSError, json.JSONDecodeError) as error:
@@ -797,8 +743,6 @@ def load_release_artifact(
     return ReleaseArtifact(
         receipt=receipt,
         receipt_path=receipt_path.resolve(),
-        receipt_reference=reference,
-        receipt_file_sha256=file_sha256(receipt_path),
         dmg_path=dmg_path.resolve(),
         dmg_name=expected_name,
         dmg_sha256=expected_sha256,
@@ -937,34 +881,6 @@ def verify_installed_app(app_path: Path, release: ReleaseArtifact) -> BundleIden
     if app_tree_sha256(app_path) != release.signed_app_tree_sha256:
         raise CleanMachineError("Installed app tree does not match the exact signed release receipt.")
     return identity
-
-
-def validate_environment(
-    facts: EnvironmentFacts,
-    case: Mapping[str, Any],
-    *,
-    required_free_bytes: int,
-) -> None:
-    environment = _mapping(case.get("environment"), "Tier 3 case environment")
-    if facts.environment_class not in set(cast(Sequence[str], environment.get("classes", []))):
-        raise CleanMachineError("Qualification environment class is not allowed by policy.")
-    if facts.environment_class not in {
-        RESTORABLE_LOCATION_ENVIRONMENT_CLASS,
-        RESETTABLE_VM_ENVIRONMENT_CLASS,
-    }:
-        raise CleanMachineError("This runner does not support the requested qualification environment class.")
-    if facts.architecture not in set(cast(Sequence[str], environment.get("architectures", []))):
-        raise CleanMachineError("Qualification architecture is not allowed by policy.")
-    try:
-        macos_major = int(facts.macos_version.split(".", maxsplit=1)[0])
-    except ValueError as error:
-        raise CleanMachineError("Qualification macOS version is not canonical.") from error
-    required_versions = tuple(cast(Sequence[int], environment.get("macos_major_versions", [])))
-    if macos_major not in set(required_versions):
-        raise CleanMachineError(
-            f"Qualification requires macOS major versions {required_versions}, found {facts.macos_version}."
-        )
-    validate_runner_state(facts, required_free_bytes=required_free_bytes)
 
 
 def validate_runner_state(facts: EnvironmentFacts, *, required_free_bytes: int) -> None:
@@ -1189,18 +1105,6 @@ class MacOSOperations:
         )
 
     @staticmethod
-    def fetch_live_feed() -> bytes:
-        request = urllib.request.Request(LIVE_FEED_URL, headers={"User-Agent": "BD-to-AVP-Tier3/1"})
-        try:
-            with urllib.request.urlopen(request, timeout=NETWORK_TIMEOUT_SECONDS) as response:
-                content = response.read(MAX_FEED_BYTES + 1)
-        except OSError as error:
-            raise CleanMachineError(f"Unable to download live appcast: {error}") from error
-        if len(content) > MAX_FEED_BYTES:
-            raise CleanMachineError("Live appcast exceeds the bounded feed size.")
-        return content
-
-    @staticmethod
     def _mount_dmg(dmg_path: Path, mount_point: Path) -> Path:
         mount_point.mkdir(parents=True)
         result = subprocess.run(
@@ -1259,21 +1163,6 @@ class MacOSOperations:
             self._run(["ditto", str(candidates[0]), str(destination)], timeout=SMOKE_TIMEOUT_SECONDS)
         finally:
             self._detach_mounts([mount_point])
-
-    def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
-        env = self._runtime_env(synthetic_home)
-        result = subprocess.run(
-            [sys.executable, str(REPO_ROOT / "scripts" / "smoke_release_app.py"), "--app-path", str(app_path)],
-            capture_output=True,
-            timeout=SMOKE_TIMEOUT_SECONDS,
-            env=env,
-        )
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        raw_log = result.stdout + b"\n--- stderr ---\n" + result.stderr
-        log_path.write_bytes(raw_log)
-        if result.returncode != 0:
-            raise CleanMachineError("Maintained installed-app package smoke failed.")
-        return hashlib.sha256(raw_log).hexdigest()
 
     def write_preferences(self, synthetic_home: Path, route: str, feed_url: str | None = None) -> None:
         synthetic_home.mkdir(parents=True, exist_ok=True)
@@ -1784,56 +1673,6 @@ end run"""
         return UPDATER_GUARD_HANDLERS + UPDATER_PRESS_RUN
 
 
-def _case_policy(policy: Mapping[str, Any], case_id: str) -> Mapping[str, Any]:
-    matches = [
-        _mapping(item, "qualification case")
-        for item in _sequence(policy.get("cases"), "qualification cases")
-        if _mapping(item, "qualification case").get("id") == case_id
-    ]
-    if len(matches) != 1:
-        raise CleanMachineError(f"Policy must define exactly one {case_id!r} case.")
-    return matches[0]
-
-
-def prepare_qualification(
-    config: QualificationConfig,
-    operations: QualificationOperations,
-) -> tuple[
-    Mapping[str, Any],
-    Mapping[str, Any],
-    Mapping[str, Any],
-    ReleaseArtifact,
-    ReleaseArtifact,
-    EnvironmentFacts,
-    FeedCandidate,
-]:
-    repo = config.repo.resolve()
-    policy = load_policy(repo / DEFAULT_POLICY_PATH.relative_to(REPO_ROOT))
-    clean_machine_case = _case_policy(policy, CLEAN_MACHINE_CASE_ID)
-    installed_ui_case = _case_policy(policy, INSTALLED_UI_CASE_ID)
-    candidate = load_release_artifact(
-        repo,
-        config.candidate_receipt,
-        config.candidate_dmg,
-        description="candidate",
-    )
-    prior = load_release_artifact(
-        repo,
-        config.prior_receipt,
-        config.prior_dmg,
-        description="prior",
-    )
-    validate_release_order(prior, candidate)
-    _validate_run_layout(config)
-    required_free_bytes = BASE_FREE_SPACE_BYTES + prior.dmg_size + (candidate.dmg_size * 2)
-    environment = operations.inspect_environment(config.qualification_root.resolve(), config.environment_class)
-    validate_environment(environment, clean_machine_case, required_free_bytes=required_free_bytes)
-    validate_environment(environment, installed_ui_case, required_free_bytes=required_free_bytes)
-    feed = parse_feed_candidate(operations.fetch_live_feed(), candidate, config.route)
-    _validate_minimum_system(environment, feed)
-    return policy, clean_machine_case, installed_ui_case, prior, candidate, environment, feed
-
-
 def _validate_minimum_system(environment: EnvironmentFacts, feed: FeedCandidate) -> None:
     if _version_tuple(environment.macos_version, "Environment macOS version") < _version_tuple(
         feed.minimum_system_version,
@@ -1852,16 +1691,6 @@ def _validate_run_layout(config: QualificationConfig) -> None:
         qualification_root == Path.home().resolve() or Path.home().resolve() not in qualification_root.parents
     ):
         raise CleanMachineError("Qualification root must be a dedicated location inside the current home directory.")
-    if config.output_receipt is not None and qualification_root in config.output_receipt.resolve().parents:
-        raise CleanMachineError("Output receipt must be outside the disposable qualification root.")
-    if config.ui_output_receipt is not None and qualification_root in config.ui_output_receipt.resolve().parents:
-        raise CleanMachineError("Installed UI output receipt must be outside the disposable qualification root.")
-    if (
-        config.output_receipt is not None
-        and config.ui_output_receipt is not None
-        and config.output_receipt.resolve() == config.ui_output_receipt.resolve()
-    ):
-        raise CleanMachineError("Clean-machine and installed UI receipts must use different output paths.")
     if config.evidence_directory is not None and qualification_root in config.evidence_directory.resolve().parents:
         raise CleanMachineError("Evidence directory must be outside the disposable qualification root.")
     if config.diagnostics_output is not None and qualification_root in config.diagnostics_output.resolve().parents:
@@ -1869,12 +1698,10 @@ def _validate_run_layout(config: QualificationConfig) -> None:
     if config.result_output is not None and qualification_root in config.result_output.resolve().parents:
         raise CleanMachineError("Update test result must be outside the disposable qualification root.")
     file_output_paths = [
-        path.resolve()
-        for path in (config.output_receipt, config.ui_output_receipt, config.diagnostics_output, config.result_output)
-        if path is not None
+        path.resolve() for path in (config.diagnostics_output, config.result_output) if path is not None
     ]
     if len(file_output_paths) != len(set(file_output_paths)):
-        raise CleanMachineError("Qualification receipt and diagnostics outputs must use distinct paths.")
+        raise CleanMachineError("Update test result and diagnostics outputs must use distinct paths.")
     if config.evidence_directory is not None:
         evidence_directory = config.evidence_directory.resolve()
         if any(path == evidence_directory or evidence_directory in path.parents for path in file_output_paths):
@@ -1966,12 +1793,8 @@ def prepare_update_test(
     operations: QualificationOperations,
     staged_feed: bytes,
 ) -> tuple[ReleaseArtifact, ReleaseArtifact, EnvironmentFacts, FeedCandidate]:
-    candidate = load_release_artifact(
-        config.repo, config.candidate_receipt, config.candidate_dmg, description="candidate", checked=False
-    )
-    prior = load_release_artifact(
-        config.repo, config.prior_receipt, config.prior_dmg, description="prior", checked=False
-    )
+    candidate = load_release_artifact(config.candidate_receipt, config.candidate_dmg, description="candidate")
+    prior = load_release_artifact(config.prior_receipt, config.prior_dmg, description="prior")
     validate_release_order(prior, candidate)
     _validate_run_layout(config)
     environment = operations.inspect_environment(config.qualification_root.resolve(), config.environment_class)
@@ -1984,50 +1807,6 @@ def prepare_update_test(
     feed = parse_feed_candidate(staged_feed, candidate, config.route)
     _validate_minimum_system(environment, feed)
     return prior, candidate, environment, feed
-
-
-def preflight_report(
-    config: QualificationConfig,
-    operations: QualificationOperations,
-) -> Mapping[str, Any]:
-    _, _, _, prior, candidate, environment, feed = prepare_qualification(config, operations)
-    runtime_layout = _runtime_layout(config)
-    return {
-        "candidate": {
-            "build_version": candidate.build_version,
-            "dmg_sha256": candidate.dmg_sha256,
-            "package_version": candidate.package_version,
-            "release_tag": candidate.release_tag,
-            "source_sha": candidate.source_sha,
-        },
-        "developer_state": {
-            "homebrew_present": environment.homebrew_present,
-            "runtime_layout": runtime_layout.kind,
-            "runtime_path": "sanitized-system-only",
-        },
-        "environment": {
-            "architecture": environment.architecture,
-            "environment_class": environment.environment_class,
-            "free_bytes": environment.free_bytes,
-            "macos_build": environment.macos_build,
-            "macos_version": environment.macos_version,
-        },
-        "feed": {
-            "candidate_channel": feed.channel,
-            "candidate_download_url_sha256": hashlib.sha256(feed.download_url.encode()).hexdigest(),
-            "feed_sha256": feed.feed_sha256,
-            "route": config.route,
-        },
-        "prior": {
-            "build_version": prior.build_version,
-            "dmg_sha256": prior.dmg_sha256,
-            "package_version": prior.package_version,
-            "release_tag": prior.release_tag,
-            "source_sha": prior.source_sha,
-        },
-        "preflight": "passed",
-        "schema_version": 1,
-    }
 
 
 def _perform_sparkle_update(
@@ -2390,15 +2169,6 @@ def _validate_profile_after_update(
     return file_sha256(profile_path), profile_after
 
 
-def _reset_runtime_workspace(app_path: Path, synthetic_home: Path, installed_release: ReleaseArtifact) -> None:
-    if app_path.exists():
-        verify_installed_app(app_path, installed_release)
-        shutil.rmtree(app_path)
-    if synthetic_home.exists():
-        shutil.rmtree(synthetic_home)
-    synthetic_home.mkdir(parents=True)
-
-
 def _diagnostic_app_state(app_path: Path, prior: ReleaseArtifact, candidate: ReleaseArtifact) -> str:
     if not app_path.exists():
         return "missing"
@@ -2534,12 +2304,7 @@ def _normalize_installed_ui_evidence(
             f"Installed UI updater evidence contains an unsupported install action: {install_action!r}; "
             f"expected one of {list(SPARKLE_INSTALL_ACTIONS)!r}."
         )
-
-    return normalize_installed_ui_candidate_evidence(
-        raw_directory,
-        evidence_directory,
-        release_notes_url=feed.release_notes_url,
-    )
+    return {"updater-ui": _write_json(evidence_directory / "updater-ui.json", updater)}
 
 
 def normalize_installed_ui_candidate_evidence(
@@ -2703,136 +2468,6 @@ def normalize_installed_ui_candidate_evidence(
     }
 
 
-def _build_checked_receipt(
-    *,
-    policy: Mapping[str, Any],
-    case: Mapping[str, Any],
-    candidate: ReleaseArtifact,
-    environment: EnvironmentFacts,
-    assertions: Mapping[str, str],
-    evidence: Sequence[Mapping[str, str]],
-    cleanup_status: str,
-    cleanup_digest: str,
-    started_at: str,
-    completed_at: str,
-    repo: Path,
-) -> Mapping[str, Any]:
-    required_assertions = set(cast(Sequence[str], case["required_assertions"]))
-    if set(assertions) != required_assertions:
-        raise CleanMachineError(
-            f"Runner assertion contract changed; code={sorted(assertions)}, policy={sorted(required_assertions)}."
-        )
-    receipt = build_tier3_receipt(
-        {
-            "assertions": dict(assertions),
-            "cleanup": {"status": cleanup_status, "evidence_sha256": cleanup_digest},
-            "completed_at": completed_at,
-            "environment": {
-                "architecture": environment.architecture,
-                "environment_class": environment.environment_class,
-                "macos_build": environment.macos_build,
-                "macos_version": environment.macos_version,
-            },
-            "evidence": list(evidence),
-            "evidence_source": "tier3_automation_receipt",
-            "hardware": {"class": "none", "identity": {}},
-            "release_receipt_file_sha256": candidate.receipt_file_sha256,
-            "release_receipt_reference": candidate.receipt_reference,
-            "result": {"status": "passed", "reason_code": "all_assertions_passed"},
-            "started_at": started_at,
-        },
-        policy_id=_string(policy.get("policy_id"), "policy_id"),
-        case=case,
-        release_receipt=candidate.receipt,
-    )
-    try:
-        validate_tier3_receipt(
-            receipt,
-            policy_id=_string(policy.get("policy_id"), "policy_id"),
-            case=case,
-            reference_content=lambda reference: (repo / reference).read_bytes(),
-        )
-    except Tier3ReceiptError as error:
-        raise CleanMachineError(f"Generated Tier 3 receipt is invalid: {error}") from error
-    return receipt
-
-
-def _run_qualification(
-    config: QualificationConfig,
-    operations: QualificationOperations,
-    *,
-    attempt: int = 1,
-    retry_reason_code: str | None = None,
-) -> Mapping[str, Mapping[str, Any]]:
-    if config.output_receipt is None or config.ui_output_receipt is None or config.evidence_directory is None:
-        raise CleanMachineError("Run mode requires both output receipts and the evidence directory path.")
-    output_receipt = config.output_receipt.resolve()
-    ui_output_receipt = config.ui_output_receipt.resolve()
-    evidence_directory = config.evidence_directory.resolve()
-    if output_receipt.exists() or ui_output_receipt.exists() or evidence_directory.exists():
-        raise CleanMachineError("Output receipts and evidence directory must not already exist.")
-
-    policy, clean_machine_case, installed_ui_case, prior, candidate, environment, feed = prepare_qualification(
-        config, operations
-    )
-    evidence = _execute_update(
-        config,
-        operations,
-        prior=prior,
-        candidate=candidate,
-        environment=environment,
-        feed=feed,
-        attempt=attempt,
-        retry_reason_code=retry_reason_code,
-    )
-    clean_machine_assertions = {
-        "exact-app-installed": "passed",
-        "final-identity-matched": "passed",
-        "package-smoke-passed": "passed",
-        "preconditions-proven": "passed",
-        "profile-preserved": "passed",
-        "sparkle-relaunch-passed": "passed",
-    }
-    clean_machine_receipt = _build_checked_receipt(
-        policy=policy,
-        case=clean_machine_case,
-        candidate=candidate,
-        environment=evidence.environment,
-        assertions=clean_machine_assertions,
-        evidence=[{"kind": kind, "sha256": digest} for kind, digest in evidence.digests.items()],
-        cleanup_status=evidence.cleanup_status,
-        cleanup_digest=evidence.digests["cleanup"],
-        started_at=evidence.started_at,
-        completed_at=evidence.completed_at,
-        repo=config.repo.resolve(),
-    )
-    installed_ui_receipt = _build_checked_receipt(
-        policy=policy,
-        case=installed_ui_case,
-        candidate=candidate,
-        environment=evidence.environment,
-        assertions={
-            "main-window-ready": "passed",
-            "profile-save-accessible": "passed",
-            "profile-save-succeeded": "passed",
-            "release-note-links-bound": "passed",
-            "updater-controls-accessible": "passed",
-        },
-        evidence=[{"kind": kind, "sha256": digest} for kind, digest in sorted(evidence.ui_evidence_digests.items())],
-        cleanup_status=evidence.cleanup_status,
-        cleanup_digest=evidence.digests["cleanup"],
-        started_at=evidence.started_at,
-        completed_at=evidence.completed_at,
-        repo=config.repo.resolve(),
-    )
-    _write_json(output_receipt, clean_machine_receipt)
-    _write_json(ui_output_receipt, installed_ui_receipt)
-    return {
-        CLEAN_MACHINE_CASE_ID: clean_machine_receipt,
-        INSTALLED_UI_CASE_ID: installed_ui_receipt,
-    }
-
-
 def _execute_update(
     config: QualificationConfig,
     operations: QualificationOperations,
@@ -2853,22 +2488,12 @@ def _execute_update(
     runtime_layout = _runtime_layout(config)
     synthetic_home = runtime_layout.home
     app_path = runtime_layout.app_path
-    log_path = qualification_root / "Logs" / "package-smoke.log"
     raw_ui_directory = qualification_root / "InstalledUIEvidence"
     marker_path = qualification_root / ".bd-to-avp-tier3-owned.json"
     qualification_root.mkdir(parents=True)
     marker = {"owner": "bd-to-avp-tier3-clean-machine", "run_id": str(uuid.uuid4())}
     marker_path.write_text(json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
     try:
-        runtime_layout.smoke_home.mkdir(parents=True)
-        operations.install_app(candidate.dmg_path, app_path, qualification_root / "Mount")
-        candidate_install_identity = verify_installed_app(app_path, candidate)
-        package_smoke_log_sha256 = operations.smoke_app(app_path, runtime_layout.smoke_home, log_path)
-        operations.quit_app()
-        if operations.app_running():
-            raise CleanMachineError("Candidate package smoke left the production app running.")
-
-        _reset_runtime_workspace(app_path, runtime_layout.smoke_home, candidate)
         synthetic_home.mkdir(parents=True, exist_ok=True)
         operations.install_app(prior.dmg_path, app_path, qualification_root / "Mount")
         prior_identity = verify_installed_app(app_path, prior)
@@ -2968,42 +2593,17 @@ def _execute_update(
         profile_after_sha256, profile_after = _validate_profile_after_update(profile_path, profile_before)
         if route_after != config.route or sentinel_after != SENTINEL_VALUE:
             raise CleanMachineError("Update route or unrelated preference changed across Sparkle relaunch.")
-
         operations.quit_app()
-        operations.collect_ui_evidence(
-            repo=config.repo.resolve(),
-            phase="candidate",
-            app_path=app_path,
-            synthetic_home=synthetic_home,
-            output_directory=raw_ui_directory,
-            release_notes_url=feed.release_notes_url,
-        )
-        operations.quit_app()
-        if operations.app_running():
-            raise CleanMachineError("Installed UI candidate inspection left the production app running.")
 
         evidence_directory.mkdir(parents=True)
         install_digest = _write_json(
             evidence_directory / "install-log.json",
             {
-                "candidate": {
-                    "build_version": candidate_install_identity.build_version,
-                    "package_version": candidate_install_identity.package_version,
-                    "signed_app_tree_sha256": candidate.signed_app_tree_sha256,
-                },
                 "prior": {
                     "build_version": prior_identity.build_version,
                     "package_version": prior_identity.package_version,
                     "signed_app_tree_sha256": prior.signed_app_tree_sha256,
                 },
-                "status": "passed",
-            },
-        )
-        package_digest = _write_json(
-            evidence_directory / "package-smoke.json",
-            {
-                "maintained_smoke": "scripts/smoke_release_app.py",
-                "raw_log_sha256": package_smoke_log_sha256,
                 "status": "passed",
             },
         )
@@ -3096,7 +2696,6 @@ def _execute_update(
         environment=environment,
         digests={
             "install-log": install_digest,
-            "package-smoke": package_digest,
             "sparkle-update": update_digest,
             "profile-snapshot": profile_digest,
             "cleanup": cleanup_digest,
@@ -3105,30 +2704,6 @@ def _execute_update(
         cleanup_status=cleanup_status,
         started_at=started_at,
         completed_at=_utc_timestamp(),
-    )
-
-
-def run_qualification(
-    config: QualificationConfig, operations: QualificationOperations
-) -> Mapping[str, Mapping[str, Any]]:
-    def remove_partial_outputs() -> None:
-        if config.output_receipt is not None and config.output_receipt.exists():
-            config.output_receipt.unlink()
-        if config.ui_output_receipt is not None and config.ui_output_receipt.exists():
-            config.ui_output_receipt.unlink()
-        if config.evidence_directory is not None and config.evidence_directory.exists():
-            shutil.rmtree(config.evidence_directory)
-
-    return _run_with_one_retry(
-        config,
-        operations,
-        lambda attempt, retry_reason_code: _run_qualification(
-            config,
-            operations,
-            attempt=attempt,
-            retry_reason_code=retry_reason_code,
-        ),
-        remove_partial_outputs,
     )
 
 
@@ -3264,32 +2839,27 @@ def _run_with_one_retry(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Qualify exact signed-app installation and Sparkle update evidence.")
+    parser = argparse.ArgumentParser(
+        description="Update an installed prior release to the candidate through a local feed."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("preflight", "run", "update-test"):
-        subparser = subparsers.add_parser(command)
-        subparser.add_argument("--repo", type=Path, default=REPO_ROOT)
-        subparser.add_argument("--candidate-release-receipt", type=Path, required=True)
-        subparser.add_argument("--candidate-dmg", type=Path, required=True)
-        subparser.add_argument("--prior-release-receipt", type=Path, required=True)
-        subparser.add_argument("--prior-dmg", type=Path, required=True)
-        subparser.add_argument("--qualification-root", type=Path, required=True)
-        subparser.add_argument("--route", choices=tuple(ROUTE_CHANNELS), required=True)
-        subparser.add_argument(
-            "--environment-class",
-            choices=(RESTORABLE_LOCATION_ENVIRONMENT_CLASS, RESETTABLE_VM_ENVIRONMENT_CLASS),
-            required=True,
-        )
-        if command == "run":
-            subparser.add_argument("--output-receipt", type=Path, required=True)
-            subparser.add_argument("--ui-output-receipt", type=Path, required=True)
-            subparser.add_argument("--evidence-directory", type=Path, required=True)
-            subparser.add_argument("--diagnostics-output", type=Path)
-        if command == "update-test":
-            subparser.add_argument("--staged-appcast", type=Path, required=True)
-            subparser.add_argument("--result", type=Path, required=True)
-            subparser.add_argument("--evidence-directory", type=Path, required=True)
-            subparser.add_argument("--diagnostics-output", type=Path)
+    subparser = subparsers.add_parser("update-test")
+    subparser.add_argument("--repo", type=Path, default=REPO_ROOT)
+    subparser.add_argument("--candidate-release-receipt", type=Path, required=True)
+    subparser.add_argument("--candidate-dmg", type=Path, required=True)
+    subparser.add_argument("--prior-release-receipt", type=Path, required=True)
+    subparser.add_argument("--prior-dmg", type=Path, required=True)
+    subparser.add_argument("--staged-appcast", type=Path, required=True)
+    subparser.add_argument("--qualification-root", type=Path, required=True)
+    subparser.add_argument("--route", choices=tuple(ROUTE_CHANNELS), required=True)
+    subparser.add_argument(
+        "--environment-class",
+        choices=(RESTORABLE_LOCATION_ENVIRONMENT_CLASS, RESETTABLE_VM_ENVIRONMENT_CLASS),
+        required=True,
+    )
+    subparser.add_argument("--result", type=Path, required=True)
+    subparser.add_argument("--evidence-directory", type=Path, required=True)
+    subparser.add_argument("--diagnostics-output", type=Path)
     return parser
 
 
@@ -3303,35 +2873,16 @@ def _config_from_args(args: argparse.Namespace) -> QualificationConfig:
         qualification_root=args.qualification_root,
         route=args.route,
         environment_class=args.environment_class,
-        output_receipt=getattr(args, "output_receipt", None),
-        ui_output_receipt=getattr(args, "ui_output_receipt", None),
-        evidence_directory=getattr(args, "evidence_directory", None),
-        diagnostics_output=getattr(args, "diagnostics_output", None),
-        result_output=getattr(args, "result", None),
+        evidence_directory=args.evidence_directory,
+        diagnostics_output=args.diagnostics_output,
+        result_output=args.result,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config = _config_from_args(args)
-    operations = MacOSOperations()
     try:
-        if args.command == "preflight":
-            payload = preflight_report(config, operations)
-        elif args.command == "update-test":
-            payload = run_update_test(config, operations, args.staged_appcast)
-        else:
-            receipts = run_qualification(config, operations)
-            payload = {
-                "receipts": [
-                    {
-                        "case_id": receipt["case_id"],
-                        "receipt_sha256": receipt["receipt_sha256"],
-                        "result": receipt["result"],
-                    }
-                    for _, receipt in sorted(receipts.items())
-                ]
-            }
+        payload = run_update_test(_config_from_args(args), MacOSOperations(), args.staged_appcast)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     except (CleanMachineError, OSError, subprocess.TimeoutExpired) as error:
