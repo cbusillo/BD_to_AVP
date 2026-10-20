@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import contextlib
 import enum
+import functools
 import hashlib
+import http.server
 import json
 import os
 import platform
@@ -13,16 +15,18 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import urllib.request
 import uuid
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol, cast
-from urllib.parse import quote
+from typing import Any, Protocol, TypeVar, cast
+from urllib.parse import quote, urlsplit
 from xml.etree import ElementTree
 
 from scripts.artifact_identity import app_tree_sha256
@@ -48,6 +52,10 @@ PREFERENCES_DOMAIN = BUNDLE_IDENTIFIER
 UPDATE_ROUTE_KEY = "BDToAVPUpdateChannel"
 SENTINEL_KEY = "BDToAVPTier3Sentinel"
 AUTOMATIC_CHECKS_KEY = "SUEnableAutomaticChecks"
+# Sparkle reads SUFeedURL from user defaults before Info.plist, so a test can point the signed app at a local feed.
+FEED_URL_KEY = "SUFeedURL"
+LOCAL_FEED_HOST = "127.0.0.1"
+LOCAL_FEED_NAME = "appcast.xml"
 SENTINEL_VALUE = "tier3-preserve"
 LIVE_FEED_URL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
 RELEASES_URL = "https://github.com/cbusillo/BD_to_AVP/releases"
@@ -367,6 +375,17 @@ class QualificationConfig:
     ui_output_receipt: Path | None = None
     evidence_directory: Path | None = None
     diagnostics_output: Path | None = None
+    result_output: Path | None = None
+
+
+@dataclass(frozen=True)
+class RunEvidence:
+    environment: EnvironmentFacts
+    digests: Mapping[str, str]
+    ui_evidence_digests: Mapping[str, str]
+    cleanup_status: str
+    started_at: str
+    completed_at: str
 
 
 @dataclass(frozen=True)
@@ -404,7 +423,7 @@ class QualificationOperations(Protocol):
     def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
         raise NotImplementedError
 
-    def write_preferences(self, synthetic_home: Path, route: str) -> None:
+    def write_preferences(self, synthetic_home: Path, route: str, feed_url: str | None = None) -> None:
         raise NotImplementedError
 
     def read_preference(self, synthetic_home: Path, key: str) -> str:
@@ -736,8 +755,11 @@ def load_release_artifact(
     dmg_path: Path,
     *,
     description: str,
+    checked: bool = True,
 ) -> ReleaseArtifact:
-    reference = _relative_checked_path(repo, receipt_path, f"{description} release receipt")
+    reference = (
+        _relative_checked_path(repo, receipt_path, f"{description} release receipt") if checked else receipt_path.name
+    )
     try:
         receipt = _mapping(json.loads(receipt_path.read_text(encoding="utf-8")), f"{description} release receipt")
     except (OSError, json.JSONDecodeError) as error:
@@ -805,6 +827,10 @@ def validate_release_order(prior: ReleaseArtifact, candidate: ReleaseArtifact) -
         raise CleanMachineError("Prior and candidate releases must bind different immutable artifacts.")
 
 
+def release_download_url(candidate: ReleaseArtifact) -> str:
+    return f"{RELEASES_URL}/download/{candidate.release_tag}/{quote(candidate.dmg_name)}"
+
+
 def parse_feed_candidate(feed_bytes: bytes, candidate: ReleaseArtifact, route: str) -> FeedCandidate:
     if len(feed_bytes) > MAX_FEED_BYTES:
         raise CleanMachineError("Live appcast exceeds the bounded feed size.")
@@ -843,9 +869,7 @@ def parse_feed_candidate(feed_bytes: bytes, candidate: ReleaseArtifact, route: s
     enclosure = item.find("enclosure")
     if enclosure is None:
         raise CleanMachineError("Live appcast candidate is missing its enclosure.")
-    expected_url = (
-        f"https://github.com/cbusillo/BD_to_AVP/releases/download/{candidate.release_tag}/{quote(candidate.dmg_name)}"
-    )
+    expected_url = release_download_url(candidate)
     download_url = enclosure.get("url", "")
     if download_url != expected_url:
         raise CleanMachineError("Live appcast candidate enclosure is not bound to the exact release DMG.")
@@ -940,6 +964,10 @@ def validate_environment(
         raise CleanMachineError(
             f"Qualification requires macOS major versions {required_versions}, found {facts.macos_version}."
         )
+    validate_runner_state(facts, required_free_bytes=required_free_bytes)
+
+
+def validate_runner_state(facts: EnvironmentFacts, *, required_free_bytes: int) -> None:
     if APPLE_BUILD_PATTERN.fullmatch(facts.macos_build) is None:
         raise CleanMachineError("Qualification macOS build is not a public Apple build identifier.")
     if facts.free_bytes < required_free_bytes:
@@ -1247,10 +1275,12 @@ class MacOSOperations:
             raise CleanMachineError("Maintained installed-app package smoke failed.")
         return hashlib.sha256(raw_log).hexdigest()
 
-    def write_preferences(self, synthetic_home: Path, route: str) -> None:
+    def write_preferences(self, synthetic_home: Path, route: str, feed_url: str | None = None) -> None:
         synthetic_home.mkdir(parents=True, exist_ok=True)
         env = self._runtime_env(synthetic_home)
         self._run(["defaults", "write", PREFERENCES_DOMAIN, UPDATE_ROUTE_KEY, route], env=env)
+        if feed_url is not None:
+            self._run(["defaults", "write", PREFERENCES_DOMAIN, FEED_URL_KEY, feed_url], env=env)
         self._run(["defaults", "write", PREFERENCES_DOMAIN, SENTINEL_KEY, SENTINEL_VALUE], env=env)
         self._run(
             ["defaults", "write", PREFERENCES_DOMAIN, AUTOMATIC_CHECKS_KEY, "-bool", "false"],
@@ -1794,6 +1824,25 @@ def prepare_qualification(
         description="prior",
     )
     validate_release_order(prior, candidate)
+    _validate_run_layout(config)
+    required_free_bytes = BASE_FREE_SPACE_BYTES + prior.dmg_size + (candidate.dmg_size * 2)
+    environment = operations.inspect_environment(config.qualification_root.resolve(), config.environment_class)
+    validate_environment(environment, clean_machine_case, required_free_bytes=required_free_bytes)
+    validate_environment(environment, installed_ui_case, required_free_bytes=required_free_bytes)
+    feed = parse_feed_candidate(operations.fetch_live_feed(), candidate, config.route)
+    _validate_minimum_system(environment, feed)
+    return policy, clean_machine_case, installed_ui_case, prior, candidate, environment, feed
+
+
+def _validate_minimum_system(environment: EnvironmentFacts, feed: FeedCandidate) -> None:
+    if _version_tuple(environment.macos_version, "Environment macOS version") < _version_tuple(
+        feed.minimum_system_version,
+        "Appcast minimum system version",
+    ):
+        raise CleanMachineError("Qualification environment is older than the candidate appcast minimum system version.")
+
+
+def _validate_run_layout(config: QualificationConfig) -> None:
     if config.route not in ROUTE_CHANNELS:
         raise CleanMachineError(f"Unsupported update route: {config.route}")
     qualification_root = config.qualification_root.resolve()
@@ -1817,9 +1866,11 @@ def prepare_qualification(
         raise CleanMachineError("Evidence directory must be outside the disposable qualification root.")
     if config.diagnostics_output is not None and qualification_root in config.diagnostics_output.resolve().parents:
         raise CleanMachineError("Diagnostics output must be outside the disposable qualification root.")
+    if config.result_output is not None and qualification_root in config.result_output.resolve().parents:
+        raise CleanMachineError("Update test result must be outside the disposable qualification root.")
     file_output_paths = [
         path.resolve()
-        for path in (config.output_receipt, config.ui_output_receipt, config.diagnostics_output)
+        for path in (config.output_receipt, config.ui_output_receipt, config.diagnostics_output, config.result_output)
         if path is not None
     ]
     if len(file_output_paths) != len(set(file_output_paths)):
@@ -1835,17 +1886,104 @@ def prepare_qualification(
         path.exists() or path.is_symlink() for path in _managed_real_home_paths(runtime_layout.home)
     ):
         raise CleanMachineError("The resettable-vm runner has preexisting managed application state.")
-    required_free_bytes = BASE_FREE_SPACE_BYTES + prior.dmg_size + (candidate.dmg_size * 2)
-    environment = operations.inspect_environment(qualification_root, config.environment_class)
-    validate_environment(environment, clean_machine_case, required_free_bytes=required_free_bytes)
-    validate_environment(environment, installed_ui_case, required_free_bytes=required_free_bytes)
-    feed = parse_feed_candidate(operations.fetch_live_feed(), candidate, config.route)
-    if _version_tuple(environment.macos_version, "Environment macOS version") < _version_tuple(
-        feed.minimum_system_version,
-        "Appcast minimum system version",
-    ):
-        raise CleanMachineError("Qualification environment is older than the candidate appcast minimum system version.")
-    return policy, clean_machine_case, installed_ui_case, prior, candidate, environment, feed
+
+
+class _LocalFeedServer(http.server.ThreadingHTTPServer):
+    def __init__(self, directory: Path) -> None:
+        self.requested_paths: list[str] = []
+        self.requested_lock = threading.Lock()
+        super().__init__((LOCAL_FEED_HOST, 0), functools.partial(_LocalFeedHandler, directory=str(directory)))
+
+
+class _LocalFeedHandler(http.server.SimpleHTTPRequestHandler):
+    def _record_request(self) -> None:
+        server = cast(_LocalFeedServer, self.server)
+        with server.requested_lock:
+            server.requested_paths.append(urlsplit(self.path).path)
+
+    def do_GET(self) -> None:
+        self._record_request()
+        super().do_GET()
+
+    def do_HEAD(self) -> None:
+        self._record_request()
+        super().do_HEAD()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        del format, args
+
+
+@dataclass(frozen=True)
+class LocalFeed:
+    feed_url: str
+    feed_path: str
+    dmg_path: str
+    server: _LocalFeedServer
+
+    def requested_paths(self) -> tuple[str, ...]:
+        with self.server.requested_lock:
+            paths = tuple(self.server.requested_paths)
+        return paths
+
+    def require_used(self) -> None:
+        requested = set(self.requested_paths())
+        missing = [path for path in (self.feed_path, self.dmg_path) if path not in requested]
+        if missing:
+            raise CleanMachineError(
+                f"Sparkle never fetched {', '.join(missing)} from the local feed, so the update did not come from it."
+            )
+
+
+@contextlib.contextmanager
+def serve_local_feed(staged_feed: bytes, candidate: ReleaseArtifact) -> Iterator[LocalFeed]:
+    release_url = release_download_url(candidate).encode()
+    if staged_feed.count(release_url) != 1:
+        raise CleanMachineError("Staged appcast must name the candidate release DMG exactly once.")
+    with tempfile.TemporaryDirectory(prefix="bd-to-avp-local-feed-") as temporary_directory:
+        root = Path(temporary_directory)
+        (root / candidate.dmg_name).symlink_to(candidate.dmg_path)
+        server = _LocalFeedServer(root)
+        base_url = f"http://{LOCAL_FEED_HOST}:{server.server_address[1]}"
+        dmg_path = f"/{quote(candidate.dmg_name)}"
+        (root / LOCAL_FEED_NAME).write_bytes(staged_feed.replace(release_url, f"{base_url}{dmg_path}".encode()))
+        thread = threading.Thread(target=server.serve_forever, name="bd-to-avp-local-feed", daemon=True)
+        thread.start()
+        try:
+            yield LocalFeed(
+                feed_url=f"{base_url}/{LOCAL_FEED_NAME}",
+                feed_path=f"/{LOCAL_FEED_NAME}",
+                dmg_path=dmg_path,
+                server=server,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=NETWORK_TIMEOUT_SECONDS)
+
+
+def prepare_update_test(
+    config: QualificationConfig,
+    operations: QualificationOperations,
+    staged_feed: bytes,
+) -> tuple[ReleaseArtifact, ReleaseArtifact, EnvironmentFacts, FeedCandidate]:
+    candidate = load_release_artifact(
+        config.repo, config.candidate_receipt, config.candidate_dmg, description="candidate", checked=False
+    )
+    prior = load_release_artifact(
+        config.repo, config.prior_receipt, config.prior_dmg, description="prior", checked=False
+    )
+    validate_release_order(prior, candidate)
+    _validate_run_layout(config)
+    environment = operations.inspect_environment(config.qualification_root.resolve(), config.environment_class)
+    if environment.architecture != "arm64":
+        raise CleanMachineError("The update test requires an Apple silicon runner.")
+    validate_runner_state(
+        environment,
+        required_free_bytes=BASE_FREE_SPACE_BYTES + prior.dmg_size + (candidate.dmg_size * 2),
+    )
+    feed = parse_feed_candidate(staged_feed, candidate, config.route)
+    _validate_minimum_system(environment, feed)
+    return prior, candidate, environment, feed
 
 
 def preflight_report(
@@ -2637,6 +2775,79 @@ def _run_qualification(
     policy, clean_machine_case, installed_ui_case, prior, candidate, environment, feed = prepare_qualification(
         config, operations
     )
+    evidence = _execute_update(
+        config,
+        operations,
+        prior=prior,
+        candidate=candidate,
+        environment=environment,
+        feed=feed,
+        attempt=attempt,
+        retry_reason_code=retry_reason_code,
+    )
+    clean_machine_assertions = {
+        "exact-app-installed": "passed",
+        "final-identity-matched": "passed",
+        "package-smoke-passed": "passed",
+        "preconditions-proven": "passed",
+        "profile-preserved": "passed",
+        "sparkle-relaunch-passed": "passed",
+    }
+    clean_machine_receipt = _build_checked_receipt(
+        policy=policy,
+        case=clean_machine_case,
+        candidate=candidate,
+        environment=evidence.environment,
+        assertions=clean_machine_assertions,
+        evidence=[{"kind": kind, "sha256": digest} for kind, digest in evidence.digests.items()],
+        cleanup_status=evidence.cleanup_status,
+        cleanup_digest=evidence.digests["cleanup"],
+        started_at=evidence.started_at,
+        completed_at=evidence.completed_at,
+        repo=config.repo.resolve(),
+    )
+    installed_ui_receipt = _build_checked_receipt(
+        policy=policy,
+        case=installed_ui_case,
+        candidate=candidate,
+        environment=evidence.environment,
+        assertions={
+            "main-window-ready": "passed",
+            "profile-save-accessible": "passed",
+            "profile-save-succeeded": "passed",
+            "release-note-links-bound": "passed",
+            "updater-controls-accessible": "passed",
+        },
+        evidence=[{"kind": kind, "sha256": digest} for kind, digest in sorted(evidence.ui_evidence_digests.items())],
+        cleanup_status=evidence.cleanup_status,
+        cleanup_digest=evidence.digests["cleanup"],
+        started_at=evidence.started_at,
+        completed_at=evidence.completed_at,
+        repo=config.repo.resolve(),
+    )
+    _write_json(output_receipt, clean_machine_receipt)
+    _write_json(ui_output_receipt, installed_ui_receipt)
+    return {
+        CLEAN_MACHINE_CASE_ID: clean_machine_receipt,
+        INSTALLED_UI_CASE_ID: installed_ui_receipt,
+    }
+
+
+def _execute_update(
+    config: QualificationConfig,
+    operations: QualificationOperations,
+    *,
+    prior: ReleaseArtifact,
+    candidate: ReleaseArtifact,
+    environment: EnvironmentFacts,
+    feed: FeedCandidate,
+    attempt: int,
+    retry_reason_code: str | None,
+    feed_url: str | None = None,
+) -> RunEvidence:
+    if config.evidence_directory is None:
+        raise CleanMachineError("Running the update requires an evidence directory path.")
+    evidence_directory = config.evidence_directory.resolve()
     started_at = _utc_timestamp()
     qualification_root = config.qualification_root.resolve()
     runtime_layout = _runtime_layout(config)
@@ -2662,7 +2873,7 @@ def _run_qualification(
         operations.install_app(prior.dmg_path, app_path, qualification_root / "Mount")
         prior_identity = verify_installed_app(app_path, prior)
         profile_path, seeded_profile = _seed_profile(synthetic_home)
-        operations.write_preferences(synthetic_home, config.route)
+        operations.write_preferences(synthetic_home, config.route, feed_url)
         if operations.read_preference(synthetic_home, UPDATE_ROUTE_KEY) != config.route:
             raise CleanMachineError("Update route did not persist before launching the prior release.")
         if operations.read_preference(synthetic_home, SENTINEL_KEY) != SENTINEL_VALUE:
@@ -2881,59 +3092,20 @@ def _run_qualification(
         },
     )
 
-    completed_at = _utc_timestamp()
-    clean_machine_assertions = {
-        "exact-app-installed": "passed",
-        "final-identity-matched": "passed",
-        "package-smoke-passed": "passed",
-        "preconditions-proven": "passed",
-        "profile-preserved": "passed",
-        "sparkle-relaunch-passed": "passed",
-    }
-    clean_machine_receipt = _build_checked_receipt(
-        policy=policy,
-        case=clean_machine_case,
-        candidate=candidate,
+    return RunEvidence(
         environment=environment,
-        assertions=clean_machine_assertions,
-        evidence=[
-            {"kind": "install-log", "sha256": install_digest},
-            {"kind": "package-smoke", "sha256": package_digest},
-            {"kind": "sparkle-update", "sha256": update_digest},
-            {"kind": "profile-snapshot", "sha256": profile_digest},
-            {"kind": "cleanup", "sha256": cleanup_digest},
-        ],
-        cleanup_status=cleanup_status,
-        cleanup_digest=cleanup_digest,
-        started_at=started_at,
-        completed_at=completed_at,
-        repo=config.repo.resolve(),
-    )
-    installed_ui_receipt = _build_checked_receipt(
-        policy=policy,
-        case=installed_ui_case,
-        candidate=candidate,
-        environment=environment,
-        assertions={
-            "main-window-ready": "passed",
-            "profile-save-accessible": "passed",
-            "profile-save-succeeded": "passed",
-            "release-note-links-bound": "passed",
-            "updater-controls-accessible": "passed",
+        digests={
+            "install-log": install_digest,
+            "package-smoke": package_digest,
+            "sparkle-update": update_digest,
+            "profile-snapshot": profile_digest,
+            "cleanup": cleanup_digest,
         },
-        evidence=[{"kind": kind, "sha256": digest} for kind, digest in sorted(ui_evidence_digests.items())],
+        ui_evidence_digests=ui_evidence_digests,
         cleanup_status=cleanup_status,
-        cleanup_digest=cleanup_digest,
         started_at=started_at,
-        completed_at=completed_at,
-        repo=config.repo.resolve(),
+        completed_at=_utc_timestamp(),
     )
-    _write_json(output_receipt, clean_machine_receipt)
-    _write_json(ui_output_receipt, installed_ui_receipt)
-    return {
-        CLEAN_MACHINE_CASE_ID: clean_machine_receipt,
-        INSTALLED_UI_CASE_ID: installed_ui_receipt,
-    }
 
 
 def run_qualification(
@@ -2947,18 +3119,126 @@ def run_qualification(
         if config.evidence_directory is not None and config.evidence_directory.exists():
             shutil.rmtree(config.evidence_directory)
 
+    return _run_with_one_retry(
+        config,
+        operations,
+        lambda attempt, retry_reason_code: _run_qualification(
+            config,
+            operations,
+            attempt=attempt,
+            retry_reason_code=retry_reason_code,
+        ),
+        remove_partial_outputs,
+    )
+
+
+def run_update_test(
+    config: QualificationConfig,
+    operations: QualificationOperations,
+    staged_appcast: Path,
+) -> Mapping[str, Any]:
+    if config.result_output is None or config.evidence_directory is None:
+        raise CleanMachineError("The update test requires a result path and an evidence directory path.")
+    result_output = config.result_output
+    evidence_directory = config.evidence_directory
+    if result_output.exists() or evidence_directory.exists():
+        raise CleanMachineError("Update test result and evidence directory must not already exist.")
+    try:
+        staged_feed = staged_appcast.read_bytes()
+    except OSError as error:
+        raise CleanMachineError(f"Unable to read the staged appcast: {error}") from error
+    if len(staged_feed) > MAX_FEED_BYTES:
+        raise CleanMachineError("Staged appcast exceeds the bounded feed size.")
+
+    def remove_partial_outputs() -> None:
+        result_output.unlink(missing_ok=True)
+        if evidence_directory.exists():
+            shutil.rmtree(evidence_directory)
+
+    def run_attempt(attempt: int, retry_reason_code: str | None) -> Mapping[str, Any]:
+        prior, candidate, environment, feed = prepare_update_test(config, operations, staged_feed)
+        with serve_local_feed(staged_feed, candidate) as local_feed:
+            evidence = _execute_update(
+                config,
+                operations,
+                prior=prior,
+                candidate=candidate,
+                environment=environment,
+                feed=feed,
+                attempt=attempt,
+                retry_reason_code=retry_reason_code,
+                feed_url=local_feed.feed_url,
+            )
+            local_feed.require_used()
+            served_paths = sorted(set(local_feed.requested_paths()))
+        return _update_test_result(config, prior, candidate, feed, evidence, served_paths)
+
+    result = _run_with_one_retry(config, operations, run_attempt, remove_partial_outputs)
+    try:
+        _write_json(result_output, result)
+    except BaseException:
+        remove_partial_outputs()
+        raise
+    return result
+
+
+def _update_test_result(
+    config: QualificationConfig,
+    prior: ReleaseArtifact,
+    candidate: ReleaseArtifact,
+    feed: FeedCandidate,
+    evidence: RunEvidence,
+    served_paths: list[str],
+) -> Mapping[str, Any]:
+    return {
+        "candidate": {
+            "build_version": candidate.build_version,
+            "dmg_sha256": candidate.dmg_sha256,
+            "package_version": candidate.package_version,
+            "release_tag": candidate.release_tag,
+        },
+        "completed_at": evidence.completed_at,
+        "environment": {
+            "architecture": evidence.environment.architecture,
+            "environment_class": evidence.environment.environment_class,
+            "macos_build": evidence.environment.macos_build,
+            "macos_version": evidence.environment.macos_version,
+        },
+        "evidence_sha256": {**evidence.digests, **evidence.ui_evidence_digests},
+        "feed": {
+            "candidate_channel": feed.channel,
+            "served_paths": served_paths,
+            "staged_appcast_sha256": feed.feed_sha256,
+        },
+        "prior": {
+            "build_version": prior.build_version,
+            "dmg_sha256": prior.dmg_sha256,
+            "package_version": prior.package_version,
+            "release_tag": prior.release_tag,
+        },
+        "route": config.route,
+        "schema_version": 1,
+        "started_at": evidence.started_at,
+        "status": "passed",
+    }
+
+
+_AttemptResult = TypeVar("_AttemptResult")
+
+
+def _run_with_one_retry(
+    config: QualificationConfig,
+    operations: QualificationOperations,
+    run_attempt: Callable[[int, str | None], _AttemptResult],
+    remove_partial_outputs: Callable[[], None],
+) -> _AttemptResult:
     if config.diagnostics_output is not None and config.diagnostics_output.exists():
         raise CleanMachineError("Diagnostics output must not already exist.")
 
     retry_reason_code: str | None = None
     for attempt in (1, 2):
         try:
-            return _run_qualification(
-                config,
-                operations,
-                attempt=attempt,
-                retry_reason_code=retry_reason_code,
-            )
+            return run_attempt(attempt, retry_reason_code)
         except SparkleUpdateFailure as error:
             remove_partial_outputs()
             runtime_layout = _runtime_layout(config)
@@ -2986,7 +3266,7 @@ def run_qualification(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Qualify exact signed-app installation and Sparkle update evidence.")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("preflight", "run"):
+    for command in ("preflight", "run", "update-test"):
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--repo", type=Path, default=REPO_ROOT)
         subparser.add_argument("--candidate-release-receipt", type=Path, required=True)
@@ -3003,6 +3283,11 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "run":
             subparser.add_argument("--output-receipt", type=Path, required=True)
             subparser.add_argument("--ui-output-receipt", type=Path, required=True)
+            subparser.add_argument("--evidence-directory", type=Path, required=True)
+            subparser.add_argument("--diagnostics-output", type=Path)
+        if command == "update-test":
+            subparser.add_argument("--staged-appcast", type=Path, required=True)
+            subparser.add_argument("--result", type=Path, required=True)
             subparser.add_argument("--evidence-directory", type=Path, required=True)
             subparser.add_argument("--diagnostics-output", type=Path)
     return parser
@@ -3022,6 +3307,7 @@ def _config_from_args(args: argparse.Namespace) -> QualificationConfig:
         ui_output_receipt=getattr(args, "ui_output_receipt", None),
         evidence_directory=getattr(args, "evidence_directory", None),
         diagnostics_output=getattr(args, "diagnostics_output", None),
+        result_output=getattr(args, "result", None),
     )
 
 
@@ -3032,6 +3318,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "preflight":
             payload = preflight_report(config, operations)
+        elif args.command == "update-test":
+            payload = run_update_test(config, operations, args.staged_appcast)
         else:
             receipts = run_qualification(config, operations)
             payload = {

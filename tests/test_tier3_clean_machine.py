@@ -10,12 +10,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.request
 
 from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import Mock, patch
+from xml.etree import ElementTree
 
 from scripts import sparkle_appcast
 from scripts.artifact_identity import app_tree_sha256
@@ -49,6 +51,7 @@ from scripts.tier3_clean_machine import (
     parse_feed_candidate,
     preflight_report,
     run_qualification,
+    run_update_test,
     validate_release_order,
 )
 
@@ -120,6 +123,19 @@ class FakeOperations(QualificationOperations):
         self.profile_after_relaunch = PROFILE_FIXTURE_V6_PATH.read_bytes()
         self.migrate_profile_during_updater_ui = False
         self.tamper_profile_before_update = False
+        self.sparkle_reads_feed_override = True
+        self.fetched_dmg: bytes | None = None
+
+    def _fetch_update_like_sparkle(self) -> None:
+        feed_url = self.preferences.get("SUFeedURL")
+        if feed_url is None or not self.sparkle_reads_feed_override:
+            return
+        with urllib.request.urlopen(feed_url, timeout=10) as response:
+            feed = ElementTree.fromstring(response.read())
+        enclosure = next(item.find("enclosure") for item in feed.iter("item"))
+        assert enclosure is not None
+        with urllib.request.urlopen(enclosure.get("url", ""), timeout=10) as response:
+            self.fetched_dmg = response.read()
 
     def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts:
         return EnvironmentFacts(
@@ -146,12 +162,14 @@ class FakeOperations(QualificationOperations):
         log_path.write_text("smoke passed\n", encoding="utf-8")
         return file_sha256(log_path)
 
-    def write_preferences(self, synthetic_home: Path, route: str) -> None:
+    def write_preferences(self, synthetic_home: Path, route: str, feed_url: str | None = None) -> None:
         self.preferences = {
             "BDToAVPUpdateChannel": route,
             "BDToAVPTier3Sentinel": "changed" if self.sentinel_failure else "tier3-preserve",
             "SUEnableAutomaticChecks": "0",
         }
+        if feed_url is not None:
+            self.preferences["SUFeedURL"] = feed_url
 
     def read_preference(self, synthetic_home: Path, key: str) -> str:
         return self.preferences[key]
@@ -172,6 +190,7 @@ class FakeOperations(QualificationOperations):
         self.current_app_path = app_path
         self.current_synthetic_home = synthetic_home
         self.update_attempts += 1
+        self._fetch_update_like_sparkle()
         if self.retryable_failures > 0:
             self.retryable_failures -= 1
             raise SparkleUpdateFailure(
@@ -1662,6 +1681,38 @@ class Tier3CleanMachineTests(unittest.TestCase):
 
             with self.assertRaisesRegex(CleanMachineError, "not eligible"):
                 parse_feed_candidate(operations.feed_bytes, release_artifact, "stable")
+
+    def update_test_fixture(self, root: Path) -> tuple[QualificationConfig, FakeOperations, Path]:
+        config, operations = self.fixture(root)
+        staged_appcast = root / "staged-appcast.xml"
+        staged_appcast.write_bytes(operations.feed_bytes)
+        config = replace(config, output_receipt=None, ui_output_receipt=None, result_output=root / "update-test.json")
+        return config, operations, staged_appcast
+
+    def test_update_test_installs_the_update_served_from_the_local_feed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations, staged_appcast = self.update_test_fixture(root)
+            result = run_update_test(config, operations, staged_appcast)
+
+            self.assertEqual(operations.fetched_dmg, config.candidate_dmg.read_bytes())
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["candidate"]["build_version"], "160")
+            self.assertIn("/appcast.xml", result["feed"]["served_paths"])
+            self.assertEqual(json.loads(cast(Path, config.result_output).read_text(encoding="utf-8")), result)
+            self.assertFalse(config.qualification_root.exists())
+
+    def test_update_test_fails_when_sparkle_ignores_the_local_feed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations, staged_appcast = self.update_test_fixture(root)
+            operations.sparkle_reads_feed_override = False
+
+            with self.assertRaisesRegex(CleanMachineError, "never fetched"):
+                run_update_test(config, operations, staged_appcast)
+
+            self.assertFalse(cast(Path, config.result_output).exists())
+            self.assertFalse(cast(Path, config.evidence_directory).exists())
 
     @staticmethod
     def release_artifact(receipt_path: Path, dmg_path: Path, receipt: dict[str, Any]) -> ReleaseArtifact:
