@@ -14,6 +14,8 @@ import time
 import unittest
 import unittest.mock as mock
 
+from typing import Any
+
 from pathlib import Path
 
 from bd_to_avp.worker import source_handoff
@@ -320,7 +322,7 @@ class HandoffOperationTests(SourceHandoffTestCase):
         recorder.start()
         self.addCleanup(recorder.stop)
 
-    def run_job(self, job: JobSpec) -> list[dict[str, object]]:
+    def run_job(self, job: JobSpec) -> list[dict[str, Any]]:
         line = json.dumps(self.raw_request(job))
         output = io.StringIO()
         run_worker(io.StringIO(line + "\n"), output, io.StringIO())

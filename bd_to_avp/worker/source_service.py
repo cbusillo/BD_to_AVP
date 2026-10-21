@@ -551,7 +551,7 @@ class SSIFProbeRunner:
         """Confirms the source is still the file the host authorized.
 
         With a handoff the held descriptor is checked with ``fstat`` and the path is never
-        touched. Otherwise the path must not be a symbolic link, and the file opened without
+        touched. Otherwise, the path must not be a symbolic link, and the file opened without
         following links must match the host's identity. Without an identity this is a no-op.
         """
         from bd_to_avp.worker.source_handoff import SOURCE_CHANGED, SOURCE_CHANGED_MESSAGE, identity_matches
