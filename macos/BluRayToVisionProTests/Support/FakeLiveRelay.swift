@@ -217,17 +217,24 @@ func makeFakeLiveStreamRequest(playlist: Int = 800, audioPID: Int = 4352) -> Liv
 /// A reference model of the Mac host's live admission contract (`LiveStartAdmissionSlot`,
 /// `LiveStartLimits`), driven by a fake clock. Host and player fakes use it as the Mac side.
 actor FakeLiveStartAdmission {
-    private struct TombstoneKey: Hashable {
+    private struct StartIdentity: Hashable {
         let parentSessionID: RelaySessionIdentifier
         let startID: UUID
+    }
+
+    /// The remembered outcome of an admitted start, consulted before the slot.
+    private struct StartRecord {
+        let key: LiveStartKey
+        var outcome: LiveStartOutcome
+        var expiresAt: Date
     }
 
     private let starter: any LiveRelayStreamStarting
     private let liveParentSessionIDs: Set<RelaySessionIdentifier>
     private(set) var now: Date
     private(set) var slot: LiveStartAdmissionSlot = .empty
-    private var streamIDs: [LiveStartKey: UUID] = [:]
-    private var tombstones: [TombstoneKey: Date] = [:]
+    private var history: [StartIdentity: StartRecord] = [:]
+    private var tombstones: [StartIdentity: Date] = [:]
     private var admittedStarts: [RelaySessionIdentifier: [Date]] = [:]
 
     init(
@@ -250,9 +257,13 @@ actor FakeLiveStartAdmission {
     }
 
     func start(_ key: LiveStartKey, request: LiveStreamRequest) async -> LiveStartOutcome {
+        let identity = StartIdentity(parentSessionID: key.parentSessionID, startID: key.startID)
         while true {
             expire()
-            if tombstones[TombstoneKey(parentSessionID: key.parentSessionID, startID: key.startID)] != nil {
+            if let record = history[identity] {
+                return record.key == key ? record.outcome : .conflict
+            }
+            if tombstones[identity] != nil {
                 return .cancelled
             }
             switch slot {
@@ -260,15 +271,8 @@ actor FakeLiveStartAdmission {
                 await settle(task)
                 continue
             case .reserved, .running:
-                let held = slot.key!
-                if held == key, let streamID = streamIDs[key] {
-                    return .started(streamID: streamID)
-                }
-                if held.parentSessionID != key.parentSessionID {
+                if slot.key!.parentSessionID != key.parentSessionID {
                     return .busy
-                }
-                if held.startID == key.startID {
-                    return .conflict
                 }
                 await drain(reason: .replaced)
                 continue
@@ -281,7 +285,11 @@ actor FakeLiveStartAdmission {
                 let streamID = LiveStreamIdentifier.make(excluding: liveParentSessionIDs)
                 let starter = starter
                 let startTask = Task { try await starter.start(request, id: streamID) }
-                streamIDs[key] = streamID
+                history[identity] = StartRecord(
+                    key: key,
+                    outcome: .started(streamID: streamID),
+                    expiresAt: now.addingTimeInterval(LiveStartLimits.tombstoneLifetime)
+                )
                 slot = .reserved(key, startTask: startTask)
                 Task { await self.install(key, from: startTask) }
                 return .started(streamID: streamID)
@@ -291,12 +299,18 @@ actor FakeLiveStartAdmission {
 
     func cancel(parentSessionID: RelaySessionIdentifier, startID: UUID) async -> LiveCancelOutcome {
         expire()
-        if let held = slot.key, held.parentSessionID == parentSessionID, held.startID == startID {
-            await drain(reason: .cancelled)
+        let identity = StartIdentity(parentSessionID: parentSessionID, startID: startID)
+        if var record = history[identity] {
+            // Recorded before the drain, so a retry arriving meanwhile is refused. Never limited.
+            record.outcome = .cancelled
+            record.expiresAt = max(record.expiresAt, now.addingTimeInterval(LiveStartLimits.tombstoneLifetime))
+            history[identity] = record
+            if let held = slot.key, held.parentSessionID == parentSessionID, held.startID == startID {
+                await drain(reason: .cancelled)
+            }
             return .acknowledged
         }
-        let tombstone = TombstoneKey(parentSessionID: parentSessionID, startID: startID)
-        if tombstones[tombstone] != nil {
+        if tombstones[identity] != nil {
             return .acknowledged
         }
         let sessionTombstones = tombstones.keys.filter { $0.parentSessionID == parentSessionID }.count
@@ -305,7 +319,7 @@ actor FakeLiveStartAdmission {
         else {
             return .retryLater
         }
-        tombstones[tombstone] = now.addingTimeInterval(LiveStartLimits.tombstoneLifetime)
+        tombstones[identity] = now.addingTimeInterval(LiveStartLimits.tombstoneLifetime)
         return .acknowledged
     }
 
@@ -344,6 +358,8 @@ actor FakeLiveStartAdmission {
     }
 
     private func expire() {
+        let heldKey = slot.key
+        history = history.filter { $0.value.expiresAt > now || $0.value.key == heldKey }
         tombstones = tombstones.filter { $0.value > now }
         let windowStart = now.addingTimeInterval(-60)
         admittedStarts = admittedStarts.mapValues { $0.filter { $0 > windowStart } }

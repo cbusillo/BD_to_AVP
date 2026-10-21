@@ -100,10 +100,13 @@ extension RelayHTTPResponse {
 ///   `startTask` returned. Only then may the owner set the slot to `empty`.
 /// - A start that finds the slot draining awaits `drainTask` and then rechecks the slot. A start
 ///   that finds the slot held by another session gets `busy`.
-/// - Cancel by `startID` drains a reserved or running slot with that key. With no such slot it
-///   records a tombstone `(parentSessionID, startID)` so a later start with that ID gets
-///   `cancelled`. A cancel that matches a reserved or running key or an existing tombstone is
-///   never limited; tombstones are never removed before they expire (`LiveStartLimits`).
+/// - A start first consults the start records (`LiveStartKey`): a known `startID` returns its
+///   recorded outcome or `conflict` without touching the slot.
+/// - Cancel by `startID` marks an admitted start's record cancelled, then drains the slot if that
+///   start holds it. For a `startID` never admitted it records a tombstone
+///   `(parentSessionID, startID)` so a later start with that ID gets `cancelled`. A cancel that
+///   matches a record or an existing tombstone is never limited; tombstones are never removed
+///   before they expire (`LiveStartLimits`).
 enum LiveStartAdmissionSlot {
     case empty
     case reserved(LiveStartKey, startTask: Task<any LiveRelayStreaming, Error>)

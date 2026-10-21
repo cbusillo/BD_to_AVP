@@ -132,6 +132,65 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
         XCTAssertEqual(conflict, .conflict)
     }
 
+    func testRetryAfterCancellingAnAdmittedStartIsRefused() async throws {
+        let starter = FakeLiveRelayStreamStarter()
+        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let start = key(sessionA)
+        _ = await admission.start(start, request: makeFakeLiveStreamRequest())
+        await starter.waitForCalls(1)
+
+        let cancel = await admission.cancel(parentSessionID: sessionA, startID: start.startID)
+        let retry = await admission.start(start, request: makeFakeLiveStreamRequest())
+
+        XCTAssertEqual(cancel, .acknowledged)
+        XCTAssertEqual(retry, .cancelled)
+        let calls = await starter.calls.count
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testRetryOfAReplacedStartReturnsItsStreamWithoutDisturbingTheCurrentOne() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
+        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let first = key(sessionA)
+        let original = await admission.start(first, request: makeFakeLiveStreamRequest())
+        _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
+        await starter.waitForCalls(2)
+        try await waitUntil {
+            if case .running = await admission.slot { return true }
+            return false
+        }
+
+        let retry = await admission.start(first, request: makeFakeLiveStreamRequest())
+
+        XCTAssertEqual(retry, original)
+        let calls = await starter.calls.count
+        XCTAssertEqual(calls, 2)
+        let current = await starter.launched[1]
+        let currentStopCalls = await current.stopCalls
+        XCTAssertEqual(currentStopCalls, [])
+    }
+
+    func testRetryWithChangedParametersAfterReleaseIsAConflict() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
+        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let original = key(sessionA)
+        _ = await admission.start(original, request: makeFakeLiveStreamRequest())
+        await admission.release(reason: .sessionEnded)
+        let changed = LiveStartKey(
+            parentSessionID: original.parentSessionID,
+            startID: original.startID,
+            titleID: "other title",
+            revision: original.revision,
+            audioPID: original.audioPID
+        )
+
+        let retry = await admission.start(changed, request: makeFakeLiveStreamRequest())
+
+        XCTAssertEqual(retry, .conflict)
+        let calls = await starter.calls.count
+        XCTAssertEqual(calls, 1)
+    }
+
     func testCancelBeforeStartLeavesATombstoneThatExpires() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
         let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])

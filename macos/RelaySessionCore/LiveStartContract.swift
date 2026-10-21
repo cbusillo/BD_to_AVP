@@ -1,7 +1,13 @@
 import Foundation
 
-/// Identifies one live start request. A repeated start with the same key is the same start;
-/// the same `startID` with different parameters is a conflict.
+/// Identifies one live start request.
+///
+/// The host remembers each admitted start's outcome by `(parentSessionID, startID)` for
+/// `LiveStartLimits.tombstoneLifetime` after it was admitted or cancelled, and for as long as it
+/// holds the slot. It consults that record before the slot: a retry with the same key gets the
+/// recorded outcome (the original `streamID`, or `cancelled`) even after the start was replaced,
+/// released, or failed, and a retry with different parameters gets `conflict`. Neither touches
+/// the slot.
 struct LiveStartKey: Hashable, Sendable {
     let parentSessionID: RelaySessionIdentifier
     let startID: UUID
@@ -21,8 +27,9 @@ enum LiveStartOutcome: Equatable, Sendable {
 
 /// Result of `POST /movies/v1/live/cancel`.
 ///
-/// - `acknowledged` (204) guarantees that a start with that `startID` never runs. A start that is
-///   already reserved or running is drained.
+/// - `acknowledged` (204) guarantees that a start with that `startID` never runs again. For an
+///   admitted start, the host records the cancellation before it drains a reserved or running
+///   slot, so a retry within the record's lifetime gets `cancelled`.
 /// - `retryLater` (signed 429 with a `LiveCancelRetryLater` body) gives no guarantee, and the
 ///   host records nothing. The client keeps retrying until `clientCancelDeadlineAfterStart`.
 enum LiveCancelOutcome: Equatable, Sendable {
@@ -45,9 +52,11 @@ struct LiveCancelRetryLater: Codable, Equatable, Sendable {
 
 /// Admission bounds for live starts and cancels on the Mac host.
 ///
-/// - A cancel that matches a reserved or running start, or repeats an existing tombstone, is
-///   never limited.
-/// - Only a cancel that would create a new tombstone counts against
+/// - A cancel that matches an admitted start's record (reserved, running, or already ended), or
+///   repeats an existing tombstone, is never limited. Those records are bounded by
+///   `startsPerSessionPerMinute`, not by the tombstone table.
+/// - Only a cancel for a `startID` the host has never admitted creates a tombstone, and only it
+///   counts against
 ///   `tombstoneCancelsPerSessionPerMinute` and `tombstoneCapacity`; a refused one gets
 ///   `retryLater`.
 /// - A tombstone lives exactly `tombstoneLifetime` and is never removed before that.
