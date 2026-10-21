@@ -16,7 +16,18 @@ Request:
   "type": "job.start",
   "job_id": "…",
   "operation": "start_live_hls",
-  "source": {"kind": "disc_image", "path": "/absolute/source.iso"},
+  "source": {
+    "kind": "disc_image",
+    "path": "/absolute/source.iso",
+    "identity": {
+      "device": 16777234,
+      "inode": 123456789,
+      "size_bytes": 41234567168,
+      "modification_seconds": 1760000000,
+      "modification_nanoseconds": 123456789
+    },
+    "descriptor_handoff": {"socket_path": "/var/folders/…/T/bdtoavp-Ab12Cd/s", "token": "…"}
+  },
   "destination": {"path": "/absolute/empty/workspace"},
   "live_hls": {
     "playlist": 1005,
@@ -24,14 +35,7 @@ Request:
     "retention_seconds": 120,
     "retention_max_bytes": 268435456,
     "maximum_pairs": 14434,
-    "viewer_lead_seconds": 30,
-    "source_identity": {
-      "device": 16777234,
-      "inode": 123456789,
-      "size_bytes": 41234567168,
-      "modification_seconds": 1760000000,
-      "modification_nanoseconds": 123456789
-    }
+    "viewer_lead_seconds": 30
   }
 }
 ```
@@ -43,13 +47,17 @@ the source.
 
 `viewer_lead_seconds` is optional, from 10 through half of
 `retention_seconds`; it turns on viewer pacing (see Backpressure).
-`source_identity` is optional and is what the host saw when it authorized the
-file. When present, the worker checks it before inspection and again before the
-source read: the path must not be a symbolic link, and the file opened without
-following links must have that device (low 32 bits), inode, size, and
-modification time. A mismatch fails with `live_source_changed`. The Mac relay
-sends both; the request shape is in
-`tests/fixtures/native_worker_start_live_hls_v13.json`.
+`source.identity` is optional and is what the host saw when it authorized the
+file. `source.descriptor_handoff` is how the Mac hands the worker the ISO it
+opened under the approved folder's security scope, so the worker needs no
+consent of its own to read a network share or a protected folder; see
+[the v13 protocol](native-worker-protocol-v13.md#live-source-identity-and-descriptor-handoff).
+The worker checks the identity before inspection and again before the source
+read. With a handoff, both checks are `fstat` on the received descriptor, and
+`ssif_probe` reads it as `/dev/fd/N`; the worker never opens the path. Without
+one, the path must not be a symbolic link, and the file opened without
+following links must match. A mismatch fails with `live_source_changed`. The
+request shape is in `tests/fixtures/native_worker_start_live_hls_v13.json`.
 
 The worker emits `artifact.ready` with a `live_hls` payload naming the manifest
 and playlist once the first segment, playlist, and manifest are durable. The
@@ -231,7 +239,7 @@ own code, `live_video_decode_failed`, `live_video_normalize_failed`,
 The Mac serves a live stream through the authenticated relay
 (`macos/BluRayToVisionPro/Relay/Live/`). Each stream runs its own worker on a
 fresh `~/Library/Caches/<bundle>/LiveHLS/<stream-id>` workspace with 120-second
-and 256 MiB retention and a 30-second viewer lead, and sends `source_identity`
+and 256 MiB retention and a 30-second viewer lead, and sends `source.identity`
 from the source lease.
 
 - **Following.** The relay polls `live-hls.json` every 250 ms and rereads it only

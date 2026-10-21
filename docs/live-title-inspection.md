@@ -15,12 +15,22 @@ Request:
   "type": "job.start",
   "job_id": "…",
   "operation": "inspect_live_title",
-  "source": {"kind": "disc_image", "path": "/absolute/source.iso"}
+  "source": {
+    "kind": "disc_image",
+    "path": "/absolute/source.iso",
+    "identity": {"device": 16777234, "inode": 123456789, "size_bytes": 41234567168,
+                 "modification_seconds": 1760000000, "modification_nanoseconds": 123456789},
+    "descriptor_handoff": {"socket_path": "/var/folders/…/T/bdtoavp-Ab12Cd/s", "token": "…"}
+  }
 }
 ```
 
 The source must be an ISO or Blu-ray folder. The request has no destination, no
-options, and no `title_id`. A Blu-ray folder that is a mounted disc image is read
+options, and no `title_id`. `identity` and `descriptor_handoff` are optional and
+work as for `start_live_hls`
+([v13 protocol](native-worker-protocol-v13.md#live-source-identity-and-descriptor-handoff)):
+with a handoff the worker checks the received descriptor with `fstat`, runs
+`ssif_probe titles /dev/fd/N`, and never opens the path. A Blu-ray folder that is a mounted disc image is read
 from its backing ISO, as for the other operations.
 
 ## Selection
