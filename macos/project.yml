@@ -189,6 +189,7 @@ targets:
       visionOS: "26.0"
     sources:
       - path: BDToAVPPlayerTests
+      - path: BluRayToVisionProTests/RelayLiveStreamSessionTests.swift
     dependencies:
       - target: BDToAVPPlayer
     settings:

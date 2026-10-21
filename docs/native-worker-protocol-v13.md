@@ -92,6 +92,25 @@ The runner refreshes monotonic time after probing output files and immediately
 before each grant. Slow filesystem probes or earlier acknowledgement delivery
 cannot reuse an older poll timestamp to bypass the extension window.
 
+## Viewer position command
+
+```json
+{
+  "protocol_version":13,
+  "type":"job.viewer_position",
+  "job_id":"c1ebce77-0460-462b-bd7e-8498c0355267",
+  "position_microseconds":42000000
+}
+```
+
+These are the only allowed fields. `position_microseconds` is an integer from
+0 through 2^53 giving a live viewer's playhead. The latest position wins and an
+accepted position has no acknowledgement; a rejection uses the `control.result`
+codes below. The worker capability is `viewer_position_v1`, and a host sends
+this command only to a worker whose `worker.ready` lists it. The current worker
+lists only `keep_waiting_v1`. The shape is in
+`tests/fixtures/native_worker_viewer_position_v13.json`.
+
 ## Reliable result event
 
 `control.result` uses the ordinary worker event envelope and sequence. The
