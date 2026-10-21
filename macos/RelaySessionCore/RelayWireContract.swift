@@ -11,6 +11,7 @@ enum RelayWireContract {
     static let playlistSnapshotPath = "/relay/v1/playlist.json"
     static let finishPath = "/relay/v1/control/finish"
     static let cancelPath = "/relay/v1/control/cancel"
+    static let positionPath = "/relay/v1/control/position"
     static let mediaPathPrefix = "/relay/v1/media/"
 
     static let authenticationHeader = "x-bdtoavp-relay-auth"
@@ -30,6 +31,38 @@ struct RelayPairingCandidateEnvelope: Codable, Sendable {
 
 struct RelayPairingConfirmationEnvelope: Codable, Sendable {
     let confirmation: RelayPairingConfirmationResponse
+}
+
+/// Body of `POST positionPath`: the player's playhead on a live stream. The derived stream
+/// session that signs the request already identifies the stream.
+struct RelayViewerPosition: Codable, Equatable, Sendable {
+    let positionMilliseconds: Int64
+}
+
+/// Signed body of every live relay route once its stream has ended (410) or failed (503).
+/// A stream ID that is not current, whether it ended long ago or was never issued, gets
+/// `stream_ended` with code `notCurrentCode`, signed under the session re-derived from the
+/// parent and the request's session ID. An unsigned 401 still means the parent session ended.
+struct RelayLiveStreamEnded: Codable, Equatable, Sendable {
+    static let notCurrentCode = "not_current"
+
+    enum Kind: String, Codable, Sendable {
+        case streamEnded = "stream_ended"
+        case streamFailed = "stream_failed"
+
+        var statusCode: Int {
+            switch self {
+            case .streamEnded:
+                410
+            case .streamFailed:
+                503
+            }
+        }
+    }
+
+    let error: Kind
+    let code: String?
+    let message: String?
 }
 
 struct RelayPlaylistSnapshot: Codable, Equatable, Sendable {
