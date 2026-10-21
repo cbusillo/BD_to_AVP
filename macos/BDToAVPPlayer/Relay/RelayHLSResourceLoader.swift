@@ -121,6 +121,13 @@ enum RelayAuthenticatedResponseVerifier {
         signer: any RelayRequestSigning,
         now: Date
     ) throws {
+        // An unsigned, empty 401 is how the Mac says the session is gone. It is not
+        // authenticated, so all it can do is end playback and ask to pair again.
+        if response.statusCode == 401,
+           response.value(forHTTPHeaderField: RelayWireContract.responseAuthenticationHeader) == nil,
+           data.isEmpty {
+            throw RelayTransportError.sessionRevoked
+        }
         guard let encodedAuthentication = response.value(
             forHTTPHeaderField: RelayWireContract.responseAuthenticationHeader
         ), encodedAuthentication.utf8.count <= RelayWireContract.maximumAuthenticationHeaderBytes,
@@ -203,8 +210,10 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                 case 200:
                     return result
                 case 410:
+                    try RelayRemotePlaybackSource.throwIfStreamEnded(result.0)
                     throw RelayTransportError.sessionExpired
                 case 503:
+                    try RelayRemotePlaybackSource.throwIfStreamEnded(result.0)
                     throw RelayTransportError.unpaired
                 default:
                     throw RelayTransportError.unexpectedStatusCode(result.1.statusCode)

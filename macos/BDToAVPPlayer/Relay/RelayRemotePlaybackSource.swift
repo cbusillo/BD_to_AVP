@@ -108,10 +108,69 @@ struct RelayRemotePlaybackSource {
         switch response.statusCode {
         case 200:
             try updateRetainedWindow(with: data)
-        case 410:
-            throw RelayTransportError.sessionExpired
-        case 503:
-            throw RelayTransportError.unpaired
+        case 410, 503:
+            try Self.throwIfStreamEnded(data)
+            throw response.statusCode == 410 ? RelayTransportError.sessionExpired : RelayTransportError.unpaired
+        default:
+            throw RelayTransportError.unexpectedStatusCode(response.statusCode)
+        }
+    }
+
+    /// A verified 410 or 503 whose body is `RelayLiveStreamEnded` means the live stream ended.
+    /// An empty body keeps the fixture relay's session mapping.
+    static func throwIfStreamEnded(_ data: Data) throws {
+        guard !data.isEmpty, let ended = try? JSONDecoder().decode(RelayLiveStreamEnded.self, from: data) else { return }
+        throw RelayTransportError.streamEnded(code: ended.code ?? ended.error.rawValue, message: ended.message)
+    }
+
+    /// Reports the playhead of a live stream. Signed with this source's (stream) session.
+    func reportPosition(
+        milliseconds: Int64,
+        transport: any RelayTransport,
+        clock: @escaping @Sendable () -> Date = { Date() },
+        nonce: @escaping @Sendable () -> String = { UUID().uuidString }
+    ) async throws {
+        try await Self.signedPost(
+            path: RelayWireContract.positionPath,
+            body: JSONEncoder().encode(RelayViewerPosition(positionMilliseconds: max(0, milliseconds))),
+            session: session, serverBaseURL: serverBaseURL, transport: transport, clock: clock, nonce: nonce
+        )
+    }
+
+    /// Sends a signed relay POST and maps the verified answer. 204 succeeds; a signed
+    /// `RelayLiveStreamEnded` throws `streamEnded`.
+    static func signedPost(
+        path: String,
+        body: Data,
+        session: RelayEstablishedSession,
+        serverBaseURL: URL,
+        transport: any RelayTransport,
+        clock: @escaping @Sendable () -> Date = { Date() },
+        nonce: @escaping @Sendable () -> String = { UUID().uuidString }
+    ) async throws {
+        let request = try RelayAuthenticatedRequestFactory.makeRequest(
+            baseURL: serverBaseURL,
+            path: path,
+            method: "POST",
+            body: body,
+            signer: session,
+            clock: clock,
+            nonce: nonce
+        )
+        let (data, response) = try await transport.data(for: request.request)
+        try RelayAuthenticatedResponseVerifier.verify(
+            data: data,
+            response: response,
+            request: request,
+            signer: session,
+            now: clock()
+        )
+        switch response.statusCode {
+        case 200, 204:
+            return
+        case 410, 503:
+            try throwIfStreamEnded(data)
+            throw RelayTransportError.unexpectedStatusCode(response.statusCode)
         default:
             throw RelayTransportError.unexpectedStatusCode(response.statusCode)
         }
