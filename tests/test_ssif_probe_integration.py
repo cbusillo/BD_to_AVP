@@ -122,10 +122,21 @@ class SsifProbeIntegrationTests(unittest.TestCase):
         titles = document["titles"]
         self.assertLessEqual(len(titles), TITLES_MAXIMUM_LISTED)
         self.assertTrue(all(title["duration_seconds"] >= TITLES_MINIMUM_SECONDS for title in titles))
-        durations = [title["duration_ticks"] for title in titles]
-        self.assertEqual(durations, sorted(durations, reverse=True))
+        eligibility = [title["eligible"] for title in titles]
+        self.assertEqual(eligibility, sorted(eligibility, reverse=True), "eligible titles are listed first")
+        for eligible in (True, False):
+            durations = [title["duration_ticks"] for title in titles if title["eligible"] is eligible]
+            self.assertEqual(durations, sorted(durations, reverse=True))
+        self.assertEqual(document["eligible_count"], eligibility.count(True))
+        self.assertFalse(document["truncated"])
+        playlists = [title["playlist"] for title in titles]
+        # Playlists 5 and 1005 are equally long; the main feature is listed first.
+        self.assertLess(playlists.index(int(RAINFOREST_PLAYLIST)), playlists.index(5))
         listed = next(title for title in titles if title["playlist"] == int(RAINFOREST_PLAYLIST))
         self.assertEqual(listed, json.loads(inspection.stdout)["title"])
+        rejected = [title for title in titles if not title["eligible"]]
+        self.assertTrue(rejected)
+        self.assertTrue(all("clips" not in title and title["unsupported_reason"] for title in rejected))
 
     def test_first_100_stereo_frames_match_accepted_fixture(self) -> None:
         ffmpeg_path = shutil.which("ffmpeg")

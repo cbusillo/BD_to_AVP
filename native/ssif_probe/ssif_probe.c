@@ -27,6 +27,7 @@
 #define MAX_PENDING_BYTES (256 * 1024 * 1024)
 #define TITLES_MINIMUM_SECONDS 60
 #define TITLES_MAXIMUM_LISTED 64
+#define TITLES_MAXIMUM_LISTED_BYTES (512 * 1024)
 
 typedef int64_t (*ReadFunction)(void *context, uint8_t *buffer, int64_t size);
 typedef int (*WriteFunction)(void *context, const uint8_t *buffer, size_t size);
@@ -718,33 +719,33 @@ static BLURAY *open_bluray(const char *source_path) {
     return bluray;
 }
 
-static void print_language(const uint8_t language[4]) {
+static void print_language(FILE *out, const uint8_t language[4]) {
     if (language[0] == 0) {
-        fputs("null", stdout);
+        fputs("null", out);
         return;
     }
     char value[4] = {(char)language[0], (char)language[1], (char)language[2], '\0'};
-    write_json_string(stdout, value);
+    write_json_string(out, value);
 }
 
-static void print_streams(const BLURAY_STREAM_INFO *streams, uint8_t count) {
-    fputc('[', stdout);
+static void print_streams(FILE *out, const BLURAY_STREAM_INFO *streams, uint8_t count) {
+    fputc('[', out);
     for (uint8_t index = 0; index < count; index++) {
         if (index > 0) {
-            fputc(',', stdout);
+            fputc(',', out);
         }
         fprintf(
-            stdout,
+            out,
             "{\"pid\":%u,\"coding_type\":%u,\"format\":%u,\"rate\":%u,\"language\":",
             streams[index].pid,
             streams[index].coding_type,
             streams[index].format,
             streams[index].rate
         );
-        print_language(streams[index].lang);
-        fprintf(stdout, ",\"subpath_id\":%u}", streams[index].subpath_id);
+        print_language(out, streams[index].lang);
+        fprintf(out, ",\"subpath_id\":%u}", streams[index].subpath_id);
     }
-    fputc(']', stdout);
+    fputc(']', out);
 }
 
 static int64_t ssif_size(BLURAY *bluray, const char *path) {
@@ -828,21 +829,22 @@ static void read_disc_flags(const BLURAY_DISC_INFO *disc_info, DiscFlags *flags)
     flags->bdplus_handled = disc_info->bdplus_handled;
 }
 
-static void print_disc_fields(const char *source_kind, const DiscFlags *flags) {
+static void print_disc_fields(FILE *out, const char *source_kind, uint32_t title_count, const DiscFlags *flags) {
     int libbluray_major = 0;
     int libbluray_minor = 0;
     int libbluray_micro = 0;
     bd_get_version(&libbluray_major, &libbluray_minor, &libbluray_micro);
     fprintf(
-        stdout,
-        "\"libbluray_version\":\"%d.%d.%d\",\"source_kind\":\"%s\",",
+        out,
+        "\"libbluray_version\":\"%d.%d.%d\",\"source_kind\":\"%s\",\"title_count\":%u,",
         libbluray_major,
         libbluray_minor,
         libbluray_micro,
-        source_kind
+        source_kind,
+        title_count
     );
     fprintf(
-        stdout,
+        out,
         "\"content_3d\":%s,\"aacs_detected\":%s,\"aacs_handled\":%s,\"bdplus_detected\":%s,"
         "\"bdplus_handled\":%s",
         flags->content_exists_3d ? "true" : "false",
@@ -869,6 +871,7 @@ static uint32_t main_feature_playlist(BLURAY *bluray) {
 /* Prints one title object in the shared inspect/titles shape. Returns false, having
  * printed nothing, when the clip metadata cannot be allocated. */
 static bool print_title_object(
+    FILE *out,
     BLURAY *bluray,
     const DiscFlags *flags,
     uint32_t playlist,
@@ -897,7 +900,7 @@ static bool print_title_object(
     );
 
     fprintf(
-        stdout,
+        out,
         "{\"id\":\"ssif:playlist:%05u\",\"playlist\":%u,"
         "\"duration_ticks\":%" PRIu64 ",\"duration_seconds\":%.6f,\"angle_count\":%u,"
         "\"clip_count\":%u,\"main_feature\":%s,\"mvc_base_view\":\"%s\",\"eligible\":%s,"
@@ -915,33 +918,33 @@ static bool print_title_object(
         complete_clip ? "true" : "false"
     );
     if (reason == NULL) {
-        fputs("null", stdout);
+        fputs("null", out);
     } else {
-        write_json_string(stdout, reason);
+        write_json_string(out, reason);
     }
-    fputs(",\"clips\":[", stdout);
+    fputs(",\"clips\":[", out);
 
     for (uint32_t index = 0; index < title_info->clip_count; index++) {
         BLURAY_CLIP_INFO *clip = &title_info->clips[index];
         if (index > 0) {
-            fputc(',', stdout);
+            fputc(',', out);
         }
         char ssif_path[64];
         snprintf(ssif_path, sizeof(ssif_path), "BDMV/STREAM/SSIF/%s.ssif", clip->clip_id);
         int64_t clip_ssif_size = clip_ssif_sizes[index];
         fprintf(
-            stdout,
+            out,
             "{\"id\":\"%s\",\"ssif_path\":\"%s\",\"ssif_size_bytes\":",
             clip->clip_id,
             ssif_path
         );
         if (clip_ssif_size < 0) {
-            fputs("null", stdout);
+            fputs("null", out);
         } else {
-            fprintf(stdout, "%" PRId64, clip_ssif_size);
+            fprintf(out, "%" PRId64, clip_ssif_size);
         }
         fprintf(
-            stdout,
+            out,
             ",\"packet_count\":%u,\"start_ticks\":%" PRIu64 ",\"in_ticks\":%" PRIu64
             ",\"out_ticks\":%" PRIu64 ",\"video_streams\":",
             clip->pkt_count,
@@ -949,16 +952,16 @@ static bool print_title_object(
             clip->in_time,
             clip->out_time
         );
-        print_streams(clip->video_streams, clip->video_stream_count);
-        fputs(",\"secondary_video_streams\":", stdout);
-        print_streams(clip->sec_video_streams, clip->sec_video_stream_count);
-        fputs(",\"audio_streams\":", stdout);
-        print_streams(clip->audio_streams, clip->audio_stream_count);
-        fputs(",\"pg_streams\":", stdout);
-        print_streams(clip->pg_streams, clip->pg_stream_count);
-        fputc('}', stdout);
+        print_streams(out, clip->video_streams, clip->video_stream_count);
+        fputs(",\"secondary_video_streams\":", out);
+        print_streams(out, clip->sec_video_streams, clip->sec_video_stream_count);
+        fputs(",\"audio_streams\":", out);
+        print_streams(out, clip->audio_streams, clip->audio_stream_count);
+        fputs(",\"pg_streams\":", out);
+        print_streams(out, clip->pg_streams, clip->pg_stream_count);
+        fputc('}', out);
     }
-    fputs("]}", stdout);
+    fputs("]}", out);
     free(clip_ssif_sizes);
     return true;
 }
@@ -991,9 +994,9 @@ static int inspect_source(const char *source_path, uint32_t playlist) {
     uint32_t main_playlist = main_feature_playlist(bluray);
 
     fprintf(stdout, "{\"schema_version\":%d,\"type\":\"source.inspect\",", CONTRACT_VERSION);
-    print_disc_fields(source_kind, &flags);
-    fprintf(stdout, ",\"title_count\":%u,\"title\":", title_count);
-    bool printed = print_title_object(bluray, &flags, playlist, main_playlist, title_info);
+    print_disc_fields(stdout, source_kind, title_count, &flags);
+    fputs(",\"title\":", stdout);
+    bool printed = print_title_object(stdout, bluray, &flags, playlist, main_playlist, title_info);
     bd_free_title_info(title_info);
     bd_close(bluray);
     if (!printed) {
@@ -1007,18 +1010,107 @@ static int inspect_source(const char *source_path, uint32_t playlist) {
 typedef struct {
     uint32_t playlist;
     uint64_t duration;
+    uint32_t angle_count;
+    uint32_t clip_count;
+    bool main_feature;
+    const char *reason;
 } TitleCandidate;
 
+/* The helper's own eligibility for one playlist. The SSIF and complete-clip checks
+ * run only for a title that passes the cheap disc and playlist structure checks. */
+static const char *title_reason(BLURAY *bluray, const DiscFlags *flags, uint32_t playlist, BLURAY_TITLE_INFO *title) {
+    int64_t selected_ssif_size = -1;
+    bool complete_clip = false;
+    bool structurally_plausible = !flags->aacs_detected && !flags->bdplus_detected && flags->content_exists_3d &&
+                                  title->angle_count == 1 && title->clip_count == 1;
+    if (structurally_plausible) {
+        char ssif_path[64];
+        snprintf(ssif_path, sizeof(ssif_path), "BDMV/STREAM/SSIF/%s.ssif", title->clips[0].clip_id);
+        selected_ssif_size = ssif_size(bluray, ssif_path);
+        complete_clip = playlist_covers_complete_clip(bluray, playlist, &title->clips[0]);
+    }
+    return unsupported_reason(
+        flags->aacs_detected,
+        flags->bdplus_detected,
+        flags->content_exists_3d,
+        title,
+        selected_ssif_size,
+        complete_clip
+    );
+}
+
+/* Eligible titles first, then longest, then the main feature, then the lower playlist. */
 static int compare_title_candidates(const void *left, const void *right) {
     const TitleCandidate *first = left;
     const TitleCandidate *second = right;
+    bool first_eligible = first->reason == NULL;
+    bool second_eligible = second->reason == NULL;
+    if (first_eligible != second_eligible) {
+        return first_eligible ? -1 : 1;
+    }
     if (first->duration != second->duration) {
         return first->duration > second->duration ? -1 : 1;
+    }
+    if (first->main_feature != second->main_feature) {
+        return first->main_feature ? -1 : 1;
     }
     if (first->playlist != second->playlist) {
         return first->playlist < second->playlist ? -1 : 1;
     }
     return 0;
+}
+
+/* A rejected title carries its reason and shape counts but no clip or stream detail. */
+static void print_rejected_title(FILE *out, const TitleCandidate *candidate) {
+    fprintf(
+        out,
+        "{\"id\":\"ssif:playlist:%05u\",\"playlist\":%u,\"duration_ticks\":%" PRIu64
+        ",\"duration_seconds\":%.6f,\"angle_count\":%u,\"clip_count\":%u,\"main_feature\":%s,"
+        "\"eligible\":false,\"unsupported_reason\":",
+        candidate->playlist,
+        candidate->playlist,
+        candidate->duration,
+        (double)candidate->duration / 90000.0,
+        candidate->angle_count,
+        candidate->clip_count,
+        candidate->main_feature ? "true" : "false"
+    );
+    write_json_string(out, candidate->reason);
+    fputc('}', out);
+}
+
+/* Renders one listed title into memory so the listing can enforce its byte bound. */
+static bool render_listed_title(
+    BLURAY *bluray,
+    const DiscFlags *flags,
+    uint32_t main_playlist,
+    const TitleCandidate *candidate,
+    char **buffer,
+    size_t *length
+) {
+    *buffer = NULL;
+    *length = 0;
+    FILE *out = open_memstream(buffer, length);
+    if (out == NULL) {
+        return false;
+    }
+    bool rendered = true;
+    if (candidate->reason != NULL) {
+        print_rejected_title(out, candidate);
+    } else {
+        BLURAY_TITLE_INFO *title_info = bd_get_playlist_info(bluray, candidate->playlist, 0);
+        rendered = title_info != NULL &&
+                   print_title_object(out, bluray, flags, candidate->playlist, main_playlist, title_info);
+        if (title_info != NULL) {
+            bd_free_title_info(title_info);
+        }
+    }
+    if (fclose(out) != 0 || !rendered) {
+        free(*buffer);
+        *buffer = NULL;
+        return false;
+    }
+    return true;
 }
 
 static int list_titles(const char *source_path) {
@@ -1053,48 +1145,70 @@ static int list_titles(const char *source_path) {
             continue;
         }
         candidates[candidate_count].playlist = title->playlist;
-        candidates[candidate_count].duration = title->duration;
         candidate_count++;
         bd_free_title_info(title);
     }
     uint32_t main_playlist = main_feature_playlist(bluray);
-    if (candidate_count > 1) {
-        qsort(candidates, candidate_count, sizeof(*candidates), compare_title_candidates);
-    }
-    uint32_t listed_count = candidate_count < TITLES_MAXIMUM_LISTED ? candidate_count : TITLES_MAXIMUM_LISTED;
-
-    fputs("{\"schema_version\":1,\"type\":\"source.titles\",", stdout);
-    print_disc_fields(source_kind, &flags);
-    fprintf(stdout, ",\"title_count\":%u,\"titles\":[", candidate_count);
-    bool first = true;
-    bool out_of_memory = false;
-    for (uint32_t index = 0; index < listed_count; index++) {
-        BLURAY_TITLE_INFO *title_info = bd_get_playlist_info(bluray, candidates[index].playlist, 0);
-        if (title_info == NULL) {
+    /* Every title's eligibility is decided before the listing is bounded, so the
+     * bound never hides an eligible title behind longer rejected ones. */
+    uint32_t assessed_count = 0;
+    uint32_t eligible_count = 0;
+    for (uint32_t index = 0; index < candidate_count; index++) {
+        uint32_t playlist = candidates[index].playlist;
+        BLURAY_TITLE_INFO *title = bd_get_playlist_info(bluray, playlist, 0);
+        if (title == NULL) {
             continue;
         }
-        if (!first) {
-            fputc(',', stdout);
-        }
-        bool printed = print_title_object(
-            bluray,
-            &flags,
-            candidates[index].playlist,
-            main_playlist,
-            title_info
-        );
-        bd_free_title_info(title_info);
-        if (!printed) {
+        TitleCandidate *candidate = &candidates[assessed_count];
+        candidate->playlist = playlist;
+        candidate->duration = title->duration;
+        candidate->angle_count = title->angle_count;
+        candidate->clip_count = title->clip_count;
+        candidate->main_feature = playlist == main_playlist;
+        candidate->reason = title_reason(bluray, &flags, playlist, title);
+        eligible_count += candidate->reason == NULL ? 1 : 0;
+        assessed_count++;
+        bd_free_title_info(title);
+    }
+    if (assessed_count > 1) {
+        qsort(candidates, assessed_count, sizeof(*candidates), compare_title_candidates);
+    }
+
+    fputs("{\"schema_version\":1,\"type\":\"source.titles\",", stdout);
+    print_disc_fields(stdout, source_kind, assessed_count, &flags);
+    fputs(",\"titles\":[", stdout);
+    size_t listed_bytes = 0;
+    uint32_t listed_count = 0;
+    bool out_of_memory = false;
+    for (uint32_t index = 0; index < assessed_count && listed_count < TITLES_MAXIMUM_LISTED; index++) {
+        char *buffer = NULL;
+        size_t length = 0;
+        if (!render_listed_title(bluray, &flags, main_playlist, &candidates[index], &buffer, &length)) {
             out_of_memory = true;
             break;
         }
-        first = false;
+        if (listed_bytes + length + 1 > TITLES_MAXIMUM_LISTED_BYTES) {
+            free(buffer);
+            break;
+        }
+        if (listed_count > 0) {
+            fputc(',', stdout);
+        }
+        fwrite(buffer, 1, length, stdout);
+        free(buffer);
+        listed_bytes += length + 1;
+        listed_count++;
     }
-    fputs("]}\n", stdout);
+    fprintf(
+        stdout,
+        "],\"eligible_count\":%u,\"truncated\":%s}\n",
+        eligible_count,
+        listed_count < assessed_count ? "true" : "false"
+    );
     free(candidates);
     bd_close(bluray);
     if (out_of_memory) {
-        return print_error("out_of_memory", "The title listing could not allocate clip metadata.");
+        return print_error("out_of_memory", "The title listing could not allocate title metadata.");
     }
     return 0;
 }

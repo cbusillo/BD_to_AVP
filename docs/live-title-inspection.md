@@ -26,9 +26,11 @@ from its backing ISO, as for the other operations.
 ## Selection
 
 The worker checks `ssif_probe contract 2`, then runs `ssif_probe titles` (see
-[direct-ssif-prototype.md](direct-ssif-prototype.md#commands)), which lists up to
-64 playlists of at least 60 seconds. For each listed playlist it applies the
-admission rules `start_live_hls` applies to the playlist it streams:
+[direct-ssif-prototype.md](direct-ssif-prototype.md#commands)). The helper
+decides each playlist's own eligibility before it bounds the listing, so
+longer rejected playlists cannot push an eligible one out. For each listed
+eligible playlist the worker applies the rules `start_live_hls` applies to the
+playlist it streams:
 
 - the helper's own eligibility: unencrypted, 3D, one angle, one complete
   SSIF-backed clip;
@@ -53,6 +55,12 @@ playlist and the helper's reason, such as `encrypted_source_unsupported`,
 `ssif_unavailable`. A source with no playlist of at least 60 seconds reports
 `no_live_titles`.
 
+The helper lists eligible playlists longest first, so any eligible playlist the
+listing bound left out is shorter than every listed one. When no listed playlist
+passes and `eligible_count` shows an eligible playlist was left out, the result
+is `live_title_search_incomplete` with a null playlist: the search did not
+finish, so the source is not reported as unsupported.
+
 ## Result
 
 The terminal `job.completed` payload is `live_title_result`:
@@ -73,7 +81,7 @@ The terminal `job.completed` payload is `live_title_result`:
 `audio_streams` lists only the supported streams of the chosen playlist, in
 clip order, and is empty when the title is ineligible. `language` is the
 three-letter code from the clip, or null. `playlist` and `duration_seconds` are
-null only with `no_live_titles`. The fields `pid`, `coding_type`, `format`, and
+null only with `no_live_titles` and `live_title_search_incomplete`. The fields `pid`, `coding_type`, `format`, and
 `rate` are the Blu-ray stream values `ssif_probe` reports.
 
 ## Failures

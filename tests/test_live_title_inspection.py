@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import plistlib
 import shutil
 import stat
 import subprocess
@@ -117,6 +118,7 @@ class LiveTitleInspectorTests(unittest.TestCase):
             "multiangle.iso": "multiple_angles_unsupported",
             "multiclip.iso": "multiple_clips_unsupported",
             "notitles.iso": "no_live_titles",
+            "truncated.iso": "live_title_search_incomplete",
         }
         for source_name, reason in cases.items():
             with self.subTest(source_name):
@@ -126,11 +128,18 @@ class LiveTitleInspectorTests(unittest.TestCase):
                 self.assertEqual(result["unsupported_reason"], reason)
                 self.assertEqual(result["audio_streams"], [])
 
+    def test_truncated_listing_still_reports_a_listed_admitted_title(self) -> None:
+        result = self.inspect("truncated-found.iso")
+
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["playlist"], 810)
+
     def test_helper_failures_are_reported(self) -> None:
         cases = {
             "oldhelper.iso": "ssif_probe_incompatible",
             "malformed.iso": "invalid_source_inspection",
             "brokenjson.iso": "invalid_source_inspection",
+            "nocompleteness.iso": "invalid_source_inspection",
             "unreadable.iso": "source_open_failed",
         }
         for source_name, code in cases.items():
@@ -173,12 +182,64 @@ class LiveTitleInspectorTests(unittest.TestCase):
         self.assertEqual(failed["payload"]["error"]["code"], "ssif_probe_incompatible")
 
 
+def mount_read_only(image: Path, parent: Path) -> Path:
+    result = subprocess.run(
+        [
+            "hdiutil",
+            "attach",
+            "-readonly",
+            "-nobrowse",
+            "-noverify",
+            "-noautofsck",
+            "-mountrandom",
+            str(parent),
+            "-plist",
+            str(image),
+        ],
+        input=b"y\n",
+        capture_output=True,
+        check=True,
+        timeout=120,
+    )
+    plist = result.stdout[result.stdout.index(b"<?xml") :]
+    entities = plistlib.loads(plist)["system-entities"]
+    return Path(next(entity["mount-point"] for entity in entities if "mount-point" in entity))
+
+
+def many_long_rejected_playlists(mounted: Path, root: Path, copies: int) -> Path:
+    """A BDMV folder of links into the mounted disc, without its 3,240-second feature
+    playlists and with more than 64 longer copies of the feature that point at a missing
+    clip. The only eligible titles left are the shorter extras."""
+    source = mounted / "BDMV"
+    folder = root / "many-long-rejected"
+    target = folder / "BDMV"
+    for directory in ("PLAYLIST", "CLIPINF", "STREAM/SSIF"):
+        (target / directory).mkdir(parents=True)
+    for name in ("index.bdmv", "MovieObject.bdmv"):
+        (target / name).symlink_to(source / name)
+    for directory, pattern in (("CLIPINF", "*.clpi"), ("STREAM", "*.m2ts"), ("STREAM/SSIF", "*.ssif")):
+        for path in (source / directory).glob(pattern):
+            (target / directory / path.name).symlink_to(path)
+    for path in (source / "PLAYLIST").glob("*.mpls"):
+        if path.name not in {"00005.mpls", "01005.mpls"}:
+            (target / "PLAYLIST" / path.name).symlink_to(path)
+    feature = (source / "PLAYLIST/01005.mpls").read_bytes()
+    missing_clip = feature.replace(b"00007M2TS", b"00099M2TS")
+    (target / "CLIPINF/00099.clpi").symlink_to(source / "CLIPINF/00007.clpi")
+    for playlist in range(100, 100 + copies):
+        (target / "PLAYLIST" / f"{playlist:05d}.mpls").write_bytes(missing_clip)
+    return folder
+
+
 @unittest.skipUnless(os.environ.get(RAINFOREST_ISO_ENV), f"Set {RAINFOREST_ISO_ENV} to run real-media tests")
 class RainforestLiveTitleInspectionTests(unittest.TestCase):
-    def test_rainforest_is_eligible_without_makemkv(self) -> None:
-        source = Path(os.environ[RAINFOREST_ISO_ENV])
-        if not source.is_file():
-            raise unittest.SkipTest(f"Rainforest ISO is unavailable: {source}")
+    source: Path
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = Path(os.environ[RAINFOREST_ISO_ENV])
+        if not cls.source.is_file():
+            raise unittest.SkipTest(f"Rainforest ISO is unavailable: {cls.source}")
         subprocess.run(
             ["uv", "run", "python", "scripts/build_ssif_probe_macos.py", "--verify-only"],
             cwd=REPOSITORY_ROOT,
@@ -186,6 +247,8 @@ class RainforestLiveTitleInspectionTests(unittest.TestCase):
             capture_output=True,
             timeout=120,
         )
+
+    def inspect(self, source: Path, kind: str = "disc_image") -> tuple[dict[str, object], float]:
         output = io.StringIO()
         environment = {"BD_TO_AVP_SSIF_PROBE_PATH": str(REPOSITORY_ROOT / "bd_to_avp/bin/ssif_probe")}
         started = time.monotonic()
@@ -197,14 +260,17 @@ class RainforestLiveTitleInspectionTests(unittest.TestCase):
             ),
         ):
             exit_code = run_worker(
-                io.StringIO(json.dumps(inspect_live_title_request(source)) + "\n"),
+                io.StringIO(json.dumps(inspect_live_title_request(source, kind)) + "\n"),
                 output,
                 io.StringIO(),
             )
         elapsed_seconds = time.monotonic() - started
-
         self.assertEqual(exit_code, 0, output.getvalue())
-        result = completed_result(output.getvalue())
+        return completed_result(output.getvalue()), elapsed_seconds
+
+    def test_rainforest_is_eligible_without_makemkv(self) -> None:
+        result, elapsed_seconds = self.inspect(self.source)
+
         self.assertTrue(result["eligible"])
         self.assertEqual(result["playlist"], 1005)
         audio_streams = result["audio_streams"]
@@ -217,6 +283,22 @@ class RainforestLiveTitleInspectionTests(unittest.TestCase):
                 json.dumps({"elapsed_seconds": round(elapsed_seconds, 3), "result": result}, indent=2) + "\n",
                 encoding="utf-8",
             )
+
+    def test_shorter_eligible_title_behind_more_than_64_longer_rejected_ones_is_found(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mount_parent = root / "mount"
+            mount_parent.mkdir()
+            mounted = mount_read_only(self.source, mount_parent)
+            try:
+                folder = many_long_rejected_playlists(mounted, root, copies=70)
+                result, _ = self.inspect(folder, kind="blu_ray_folder")
+            finally:
+                subprocess.run(["hdiutil", "detach", str(mounted)], check=True, capture_output=True, timeout=120)
+
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["playlist"], 10)
+        self.assertEqual(result["duration_seconds"], 135.135)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,13 @@ from bd_to_avp.worker.source_service import SourceServiceError, SSIFProbeRunner
 TITLES_SCHEMA_VERSION = 1
 HELPER_USAGE_EXIT_CODE = 2
 NO_TITLES_REASON = "no_live_titles"
+SEARCH_INCOMPLETE_REASON = "live_title_search_incomplete"
+
+
+@dataclass(frozen=True)
+class TitleListing:
+    titles: list[Mapping[str, object]]
+    eligible_count: int
 
 
 @dataclass(frozen=True)
@@ -42,11 +49,17 @@ class LiveTitleInspector(SSIFProbeRunner):
     def run(self) -> dict[str, object]:
         self._validate_tool()
         self.activity.stage_started("inspect_live_title", "Checking live playback eligibility")
-        titles = self._titles()
-        assessments = [self._assess(title) for title in titles]
+        listing = self._titles()
+        assessments = [self._assess(title) for title in listing.titles]
         admitted = [assessment for assessment in assessments if assessment.reason is None]
         if admitted:
             return self._result(max(admitted, key=lambda assessment: assessment.rank))
+        # The helper lists eligible titles first and longest first, so an omitted eligible
+        # title is shorter than every listed one. If one was omitted, it could still pass
+        # the live rules: the search is incomplete, not a rejection.
+        listed_eligible = sum(1 for title in listing.titles if title["eligible"] is True)
+        if listing.eligible_count > listed_eligible:
+            return self._incomplete_result()
         # Report why the most promising title failed: one the helper accepted (so the
         # reason is a live HLS rule) before one it rejected, longest first.
         reported = max(
@@ -56,7 +69,7 @@ class LiveTitleInspector(SSIFProbeRunner):
         )
         return self._result(reported)
 
-    def _titles(self) -> list[Mapping[str, object]]:
+    def _titles(self) -> TitleListing:
         result = self._communicate([str(self.probe_path), "titles", str(self.job.source.path)])
         if result.returncode == HELPER_USAGE_EXIT_CODE:
             raise SourceServiceError(
@@ -79,15 +92,17 @@ class LiveTitleInspector(SSIFProbeRunner):
         titles = document.get("titles")
         if not isinstance(titles, list):
             raise _invalid_titles("The title listing has no titles.")
+        eligible_count = document.get("eligible_count")
+        if not _is_integer(eligible_count) or not isinstance(document.get("truncated"), bool):
+            raise _invalid_titles("The title listing has no completeness record.")
         for title in titles:
             _validate_title(title)
-        return titles
+        return TitleListing(titles, cast(int, eligible_count))
 
     @staticmethod
     def _assess(title: Mapping[str, object]) -> TitleAssessment:
         if not title["eligible"]:
-            reason = title.get("unsupported_reason")
-            return TitleAssessment(title, reason if isinstance(reason, str) else "unsupported_source", ())
+            return TitleAssessment(title, cast(str, title["unsupported_reason"]), ())
         clips = cast(list[Mapping[str, object]], title["clips"])
         try:
             live_video_shape(title)
@@ -103,6 +118,16 @@ class LiveTitleInspector(SSIFProbeRunner):
         if not audio_streams:
             return TitleAssessment(title, "unsupported_live_audio", ())
         return TitleAssessment(title, None, tuple(audio_streams))
+
+    @staticmethod
+    def _incomplete_result() -> dict[str, object]:
+        return {
+            "eligible": False,
+            "unsupported_reason": SEARCH_INCOMPLETE_REASON,
+            "playlist": None,
+            "duration_seconds": None,
+            "audio_streams": [],
+        }
 
     @staticmethod
     def _result(assessment: TitleAssessment | None) -> dict[str, object]:
@@ -166,10 +191,13 @@ def _validate_title(title: object) -> None:
     reason = title.get("unsupported_reason")
     if reason is not None and not isinstance(reason, str):
         raise _invalid_titles("A listed title has a malformed unsupported reason.")
+    if title["eligible"] is not True:
+        # Rejected titles are compact: their reason, without clip or stream detail.
+        if not isinstance(reason, str):
+            raise _invalid_titles("A rejected title has no unsupported reason.")
+        return
     clips = title.get("clips")
-    if not isinstance(clips, list):
-        raise _invalid_titles("A listed title has no clips.")
-    if title["eligible"] is True and len(clips) != 1:
+    if not isinstance(clips, list) or len(clips) != 1:
         raise _invalid_titles("An eligible title must have exactly one clip.")
     for clip in clips:
         if not isinstance(clip, Mapping):

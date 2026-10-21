@@ -39,7 +39,7 @@ def title(
             for pid, coding_type in audio
         ],
     }
-    return {
+    listed = {
         "id": f"ssif:playlist:{playlist:05d}",
         "playlist": playlist,
         "duration_ticks": seconds * 90_000,
@@ -49,12 +49,16 @@ def title(
         "main_feature": main,
         "eligible": reason is None,
         "unsupported_reason": reason,
-        "clips": [clip] * clips,
     }
+    if reason is None:
+        # Like the helper, only eligible titles carry clip and stream detail.
+        listed["clips"] = [clip] * clips
+    return listed
 
 
 def titles_document(source_path):
     """Titles chosen by source file name; the default is a 3D disc with 2D and 3D feature playlists."""
+    omitted_eligible = 0
     if "notitles" in source_path:
         titles = []
     elif "encrypted" in source_path:
@@ -67,6 +71,12 @@ def titles_document(source_path):
         titles = [title(800, 5400, main=True, video_format=4)]
     elif "lpcm" in source_path:
         titles = [title(800, 5400, main=True, audio=((0x1100, 0x80), (0x1101, 0x83)))]
+    elif "truncated" in source_path:
+        # The listing bound cut a shorter eligible title after a listed one the live rules reject.
+        titles = [title(800, 5400, main=True, audio=((0x1100, 0x80),)), title(900, 7200, reason="ssif_unavailable")]
+        omitted_eligible = 1
+        if "found" in source_path:
+            titles.append(title(810, 600))
     else:
         titles = [
             title(900, 7200, reason="multiple_clips_unsupported", clips=2),
@@ -74,7 +84,15 @@ def titles_document(source_path):
             title(1005, 5400, main=True, audio=((0x1100, 0x86), (0x1101, 0x83), (0x1102, 0x81))),
             title(1010, 135),
         ]
-    return {"schema_version": 1, "type": "source.titles", "title_count": len(titles), "titles": titles}
+    eligible_count = sum(1 for listed in titles if listed["eligible"]) + omitted_eligible
+    return {
+        "schema_version": 1,
+        "type": "source.titles",
+        "title_count": len(titles) + omitted_eligible,
+        "titles": titles,
+        "eligible_count": eligible_count,
+        "truncated": omitted_eligible > 0,
+    }
 
 
 arguments = sys.argv[1:]
@@ -83,7 +101,12 @@ if arguments == ["--version"]:
 elif arguments and arguments[0] == "titles" and "oldhelper" not in arguments[1]:
     source = arguments[1]
     if "malformed" in source:
-        sys.stdout.write('{"schema_version": 1, "type": "source.titles", "titles": [{"playlist": "1005"}]}')
+        sys.stdout.write(
+            '{"schema_version": 1, "type": "source.titles", "eligible_count": 1, "truncated": false,'
+            ' "titles": [{"playlist": "1005"}]}'
+        )
+    elif "nocompleteness" in source:
+        sys.stdout.write('{"schema_version": 1, "type": "source.titles", "titles": []}')
     elif "brokenjson" in source:
         sys.stdout.write("not json")
     elif "unreadable" in source:
