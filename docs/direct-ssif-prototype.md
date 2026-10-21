@@ -174,9 +174,9 @@ Ordinary CI uses synthetic M2TS packets and does not require copyrighted media.
   `0x1011`/`0x1012`; runtime PMT discovery remains a promotion gate. A source
   without that pair fails with `mvc_pids_unavailable` rather than producing an
   empty stream.
-- No crop detection, subtitle OCR, final muxing, or end-to-end HLS production.
-  The worker replay store is keyframe-led and bounded, but #713 still owns its
-  integration with decode, encode, audio delivery, and relay playback.
+- No crop detection, subtitle OCR, or final MKV/MOV muxing. Bounded live HLS
+  production with selected audio is described in `docs/live-hls-service.md`;
+  relay playback of it belongs to #713.
 - No claim that MakeMKV can be removed from supported encrypted-disc workflows.
 
 ## Packaging And Licensing
@@ -208,5 +208,5 @@ Remaining product and packaging gates:
 
 - deterministic multi-clip playlist timing and seek/replay behavior;
 - PGS fan-out with language/default/forced semantics;
-- end-to-end decode, MV-HEVC segmentation, audio muxing, and relay playback; and
+- relay playback of the live HLS workspace; and
 - unchanged MakeMKV fallback for encrypted and unsupported sources.

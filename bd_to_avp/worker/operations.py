@@ -50,6 +50,7 @@ from bd_to_avp.worker.protocol import (
     WorkerOperation,
     WorkerSourceKind,
 )
+from bd_to_avp.worker.live_hls_service import SSIFLiveHLSService
 from bd_to_avp.worker.source_service import SSIFLiveSourceService, SourceServiceError
 
 DIRECT_VIDEO_EXTENSIONS = frozenset({".mkv", ".mts", ".m2ts"})
@@ -129,7 +130,46 @@ def run_operation(
         if activity is None:
             raise WorkerOperationError("internal_error", "Live source startup requires an activity reporter.")
         return start_live_source(job, owner, activity)
+    if job.operation is WorkerOperation.START_LIVE_HLS:
+        if activity is None:
+            raise WorkerOperationError("internal_error", "Live HLS startup requires an activity reporter.")
+        return start_live_hls(job, owner, activity)
     raise WorkerOperationError("unsupported_operation", f"Unsupported worker operation: {job.operation.value}.")
+
+
+def _live_job_with_external_workspace(job: JobSpec, error_code: str) -> JobSpec:
+    job_source = resolve_job_source(job.source)
+    source_path = job_source.path
+    if job.destination is None:
+        raise WorkerOperationError(error_code, "The live job has no workspace.")
+    resolved_source = source_path.resolve()
+    resolved_destination = job.destination.path.resolve(strict=False)
+    if resolved_destination == resolved_source or path_is_relative_to(resolved_destination, resolved_source):
+        raise WorkerOperationError(
+            "invalid_destination",
+            "The live workspace must be outside the selected source.",
+        )
+    return replace(job, source=job_source)
+
+
+def start_live_hls(
+    job: JobSpec,
+    owner: WorkerProcessOwner,
+    activity: WorkerActivityReporter,
+) -> dict[str, object]:
+    normalized_job = _live_job_with_external_workspace(job, "invalid_live_hls")
+    try:
+        return SSIFLiveHLSService(normalized_job, owner, activity).run()
+    except WorkerCancelled:
+        raise
+    except SourceServiceError as error:
+        raise WorkerOperationError(error.code, error.message, error.details) from error
+    except Exception as error:
+        raise WorkerOperationError(
+            "live_hls_failed",
+            "The live HLS service failed unexpectedly.",
+            str(error),
+        ) from error
 
 
 def start_live_source(
@@ -137,18 +177,7 @@ def start_live_source(
     owner: WorkerProcessOwner,
     activity: WorkerActivityReporter,
 ) -> dict[str, object]:
-    job_source = resolve_job_source(job.source)
-    source_path = job_source.path
-    if job.destination is None:
-        raise WorkerOperationError("invalid_live_source", "The live source job has no workspace.")
-    resolved_source = source_path.resolve()
-    resolved_destination = job.destination.path.resolve(strict=False)
-    if resolved_destination == resolved_source or path_is_relative_to(resolved_destination, resolved_source):
-        raise WorkerOperationError(
-            "invalid_destination",
-            "The live source workspace must be outside the selected source.",
-        )
-    normalized_job = replace(job, source=job_source)
+    normalized_job = _live_job_with_external_workspace(job, "invalid_live_source")
     try:
         return SSIFLiveSourceService(normalized_job, owner, activity).run()
     except WorkerCancelled:

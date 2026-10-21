@@ -97,8 +97,10 @@ atomically finalizes the last GOP and marks the manifest complete.
 
 ## Remaining Boundaries
 
-- #713 joins this source manifest to decode, MV-HEVC segmented encoding, selected
-  audio delivery, and the authenticated relay.
+- `start_live_hls` reads the same `stream-service` contract and produces bounded
+  MV-HEVC HLS with the selected audio; see [live-hls-service.md](live-hls-service.md).
+  It does not use this replay store. Serving either workspace through the
+  authenticated relay belongs to #713.
 - #718 implements the hermetic libbluray/libudfread builds, LGPL relinking
   materials, bundle-relative install names, signed-probe smoke, and package
   checks. It does not change MakeMKV conversion or this worker protocol.

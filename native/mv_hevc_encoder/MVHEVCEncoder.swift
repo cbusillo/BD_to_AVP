@@ -40,6 +40,8 @@ private struct EncoderOptions {
     let upscaleMode: FrameUpscaleMode?
     let swapEyes: Bool
     let overwrite: Bool
+    var audioPCMPath: String? = nil
+    var audioStartTicks: Int64 = 0
 
     var isHLSOutput: Bool { hlsDirectoryURL != nil }
 
@@ -58,6 +60,8 @@ private struct EncoderOptions {
         var upscaleMode: FrameUpscaleMode?
         var swapEyes = false
         var overwrite = false
+        var audioPCMPath: String?
+        var audioStartTicks: Int64?
 
         var index = 0
         while index < arguments.count {
@@ -95,6 +99,14 @@ private struct EncoderOptions {
                 swapEyes = true
             case "--overwrite":
                 overwrite = true
+            case "--audio-pcm":
+                audioPCMPath = try value(after: argument, arguments: arguments, index: &index)
+            case "--audio-start-ticks":
+                let rawValue = try value(after: argument, arguments: arguments, index: &index)
+                guard let parsed = Int64(rawValue) else {
+                    throw EncoderFailure.invalidArguments("--audio-start-ticks requires an integer.")
+                }
+                audioStartTicks = parsed
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -142,6 +154,20 @@ private struct EncoderOptions {
         if let expectedFrameCount, expectedFrameCount <= 0 {
             throw EncoderFailure.invalidArguments("--expected-frames must be greater than 0.")
         }
+        if let audioPCMPath {
+            guard !audioPCMPath.isEmpty else {
+                throw EncoderFailure.invalidArguments("--audio-pcm requires a non-empty path.")
+            }
+            guard hlsDirectoryPath != nil else {
+                throw EncoderFailure.invalidArguments("--audio-pcm requires --hls-directory.")
+            }
+        }
+        if audioStartTicks != nil, audioPCMPath == nil {
+            throw EncoderFailure.invalidArguments("--audio-start-ticks requires --audio-pcm.")
+        }
+        if let audioStartTicks, abs(audioStartTicks) > PCMAudioContract.maximumStartOffsetTicks {
+            throw EncoderFailure.invalidArguments("--audio-start-ticks must be within one hour of video start.")
+        }
 
         return EncoderOptions(
             outputURL: outputPath.map { URL(fileURLWithPath: $0).standardizedFileURL },
@@ -155,7 +181,9 @@ private struct EncoderOptions {
             expectedFrameCount: expectedFrameCount,
             upscaleMode: upscaleMode,
             swapEyes: swapEyes,
-            overwrite: overwrite
+            overwrite: overwrite,
+            audioPCMPath: audioPCMPath,
+            audioStartTicks: audioStartTicks ?? 0
         )
     }
 
@@ -214,6 +242,8 @@ private struct EncoderOptions {
               --upscale-mode MODE             Prototype 2x scaler: metalfx or pixel-transfer.
               --swap-eyes                     Treat the right half as the left eye.
               --overwrite                     Replace an existing output file.
+              --audio-pcm PATH                Mux AAC encoded from s16le stereo 48 kHz PCM read from PATH (HLS only).
+              --audio-start-ticks TICKS       90 kHz time of the first PCM sample relative to the first frame.
               --capability-probe              Report stereo MV-HEVC encode support and exit.
             """
         )
@@ -851,6 +881,286 @@ private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @uncheck
     }
 }
 
+private struct AudioSummary {
+    let appendedFrames: Int64
+    let firstPresentationFrame: Int64?
+}
+
+private enum PCMAudioContract {
+    static let sampleRate: Int64 = 48_000
+    static let channelCount = 2
+    static let bytesPerFrame = 4
+    static let aacBitRate = 192_000
+    static let maximumStartOffsetTicks: Int64 = 3_600 * 90_000
+    static let maximumBufferedBytes = 64 * 1_024 * 1_024
+    static let maximumFramesPerSampleBuffer: Int64 = 4_096
+}
+
+/// Reads interleaved s16le stereo PCM on a dedicated thread so the producer never
+/// blocks while the writer is waiting for video. The buffer is bounded; once video
+/// has ended the reader discards the remaining input instead of blocking its writer.
+private final class PCMAudioSource: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var buffer = Data()
+    private var offset = 0
+    private var reachedEOF = false
+    private var discarding = false
+    private var failure: EncoderFailure?
+
+    init(path: String) {
+        let thread = Thread { [self] in
+            readAll(path: path)
+        }
+        thread.name = "mv-hevc-encoder-pcm"
+        thread.start()
+    }
+
+    private func readAll(path: String) {
+        let descriptor = path.withCString { Darwin.open($0, O_RDONLY) }
+        guard descriptor >= 0 else {
+            finish(failure: .invalidInput("Failed to open the PCM audio input."))
+            return
+        }
+        defer { Darwin.close(descriptor) }
+        var chunk = Data(count: 65_536)
+        while true {
+            let bytesRead = chunk.withUnsafeMutableBytes { bytes in
+                Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+            }
+            if bytesRead == 0 {
+                finish(failure: nil)
+                return
+            }
+            if bytesRead < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                finish(failure: .invalidInput("Failed to read the PCM audio input."))
+                return
+            }
+            condition.lock()
+            while !discarding, buffer.count - offset >= PCMAudioContract.maximumBufferedBytes {
+                condition.wait()
+            }
+            if !discarding {
+                buffer.append(chunk.prefix(bytesRead))
+            }
+            condition.unlock()
+        }
+    }
+
+    private func finish(failure: EncoderFailure?) {
+        condition.lock()
+        reachedEOF = true
+        self.failure = failure
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    /// Returns up to `maximumFrames` complete PCM frames without blocking.
+    func take(maximumFrames: Int64) throws -> (data: Data, ended: Bool) {
+        condition.lock()
+        defer { condition.unlock() }
+        if let failure {
+            throw failure
+        }
+        let availableFrames = Int64((buffer.count - offset) / PCMAudioContract.bytesPerFrame)
+        let frames = min(availableFrames, maximumFrames)
+        let byteCount = Int(frames) * PCMAudioContract.bytesPerFrame
+        let data = Data(buffer[offset ..< offset + byteCount])
+        offset += byteCount
+        if offset > 1_048_576 || offset == buffer.count {
+            buffer.removeSubrange(0 ..< offset)
+            offset = 0
+        }
+        condition.broadcast()
+        let ended = reachedEOF && buffer.count - offset < PCMAudioContract.bytesPerFrame
+        if ended, buffer.count - offset != 0 {
+            throw EncoderFailure.invalidInput("PCM audio input ended inside a sample frame.")
+        }
+        return (data, ended)
+    }
+
+    func discardRemaining() {
+        condition.lock()
+        discarding = true
+        buffer.removeAll()
+        offset = 0
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
+/// Appends PCM to an AAC writer input on the video frame timeline. Sample `k` of the
+/// input is presented at `startOffsetFrames + k` 48 kHz ticks; samples before zero are
+/// dropped so audio never precedes the first video frame.
+private final class PCMAudioAppender {
+    let input: AVAssetWriterInput
+    private let source: PCMAudioSource
+    private let formatDescription: CMAudioFormatDescription
+    private var position: Int64
+    private var framesToDrop: Int64
+    private(set) var isFinished = false
+    private(set) var appendedFrames: Int64 = 0
+    private(set) var firstPresentationFrame: Int64?
+
+    init(path: String, startTicks: Int64) throws {
+        let startFrames = (startTicks * PCMAudioContract.sampleRate) / 90_000
+        position = max(0, startFrames)
+        framesToDrop = max(0, -startFrames)
+        var description = AudioStreamBasicDescription(
+            mSampleRate: Float64(PCMAudioContract.sampleRate),
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
+            mBytesPerPacket: UInt32(PCMAudioContract.bytesPerFrame),
+            mFramesPerPacket: 1,
+            mBytesPerFrame: UInt32(PCMAudioContract.bytesPerFrame),
+            mChannelsPerFrame: UInt32(PCMAudioContract.channelCount),
+            mBitsPerChannel: 16,
+            mReserved: 0
+        )
+        var layout = AudioChannelLayout()
+        layout.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo
+        var formatDescription: CMAudioFormatDescription?
+        let status = CMAudioFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            asbd: &description,
+            layoutSize: MemoryLayout<AudioChannelLayout>.size,
+            layout: &layout,
+            magicCookieSize: 0,
+            magicCookie: nil,
+            extensions: nil,
+            formatDescriptionOut: &formatDescription
+        )
+        guard status == noErr, let formatDescription else {
+            throw EncoderFailure.writer("Failed to describe the PCM audio input.")
+        }
+        self.formatDescription = formatDescription
+        let layoutData = withUnsafeBytes(of: &layout) { Data($0) }
+        input = AVAssetWriterInput(
+            mediaType: .audio,
+            outputSettings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: Double(PCMAudioContract.sampleRate),
+                AVNumberOfChannelsKey: PCMAudioContract.channelCount,
+                AVEncoderBitRateKey: PCMAudioContract.aacBitRate,
+                AVChannelLayoutKey: layoutData,
+            ]
+        )
+        input.expectsMediaDataInRealTime = false
+        source = PCMAudioSource(path: path)
+    }
+
+    /// Appends available audio presented before `limit` while the writer accepts it.
+    func pump(upTo limit: CMTime) throws {
+        guard !isFinished else {
+            return
+        }
+        let limitFrame = CMTimeConvertScale(limit, timescale: CMTimeScale(PCMAudioContract.sampleRate), method: .roundTowardNegativeInfinity).value
+        while framesToDrop > 0 {
+            let (data, ended) = try source.take(maximumFrames: min(framesToDrop, 65_536))
+            framesToDrop -= Int64(data.count / PCMAudioContract.bytesPerFrame)
+            if ended {
+                finish()
+                return
+            }
+            if data.isEmpty {
+                return
+            }
+        }
+        while position < limitFrame, input.isReadyForMoreMediaData {
+            let wanted = min(limitFrame - position, PCMAudioContract.maximumFramesPerSampleBuffer)
+            let (data, ended) = try source.take(maximumFrames: wanted)
+            if !data.isEmpty {
+                try append(data)
+            }
+            if ended {
+                finish()
+                return
+            }
+            if data.isEmpty {
+                return
+            }
+        }
+    }
+
+    /// Waits for audio through the end of video, then closes the input. Audio that
+    /// extends beyond the final video frame is discarded.
+    func finish(at end: CMTime, cancellationFlag: CancellationFlag) async throws {
+        let endFrame = CMTimeConvertScale(end, timescale: CMTimeScale(PCMAudioContract.sampleRate), method: .roundTowardNegativeInfinity).value
+        while !isFinished, position < endFrame {
+            if cancellationFlag.isRequested || Task.isCancelled {
+                throw EncoderFailure.cancelled
+            }
+            try pump(upTo: end)
+            if !isFinished, position < endFrame {
+                try await Task.sleep(for: .milliseconds(2))
+            }
+        }
+        finish()
+        source.discardRemaining()
+    }
+
+    private func finish() {
+        guard !isFinished else {
+            return
+        }
+        isFinished = true
+        input.markAsFinished()
+    }
+
+    private func append(_ data: Data) throws {
+        let frameCount = data.count / PCMAudioContract.bytesPerFrame
+        var blockBuffer: CMBlockBuffer?
+        var status = CMBlockBufferCreateWithMemoryBlock(
+            allocator: kCFAllocatorDefault,
+            memoryBlock: nil,
+            blockLength: data.count,
+            blockAllocator: kCFAllocatorDefault,
+            customBlockSource: nil,
+            offsetToData: 0,
+            dataLength: data.count,
+            flags: kCMBlockBufferAssureMemoryNowFlag,
+            blockBufferOut: &blockBuffer
+        )
+        guard status == kCMBlockBufferNoErr, let blockBuffer else {
+            throw EncoderFailure.writer("Failed to allocate a PCM audio buffer.")
+        }
+        status = data.withUnsafeBytes { bytes in
+            CMBlockBufferReplaceDataBytes(
+                with: bytes.baseAddress!,
+                blockBuffer: blockBuffer,
+                offsetIntoDestination: 0,
+                dataLength: data.count
+            )
+        }
+        guard status == kCMBlockBufferNoErr else {
+            throw EncoderFailure.writer("Failed to copy PCM audio samples.")
+        }
+        var sampleBuffer: CMSampleBuffer?
+        status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: blockBuffer,
+            formatDescription: formatDescription,
+            sampleCount: frameCount,
+            presentationTimeStamp: CMTime(value: position, timescale: CMTimeScale(PCMAudioContract.sampleRate)),
+            packetDescriptions: nil,
+            sampleBufferOut: &sampleBuffer
+        )
+        guard status == noErr, let sampleBuffer else {
+            throw EncoderFailure.writer("Failed to create a PCM audio sample buffer.")
+        }
+        guard input.append(sampleBuffer) else {
+            throw EncoderFailure.writer("The writer rejected PCM audio samples.")
+        }
+        if firstPresentationFrame == nil {
+            firstPresentationFrame = position
+        }
+        position += Int64(frameCount)
+        appendedFrames += Int64(frameCount)
+    }
+}
+
 private func makeHLSAssetWriter(
     segmentDurationSeconds: Double,
     delegate: AVAssetWriterDelegate
@@ -866,7 +1176,7 @@ private func makeHLSAssetWriter(
 private func encode(
     options: EncoderOptions,
     cancellationFlag: CancellationFlag
-) async throws -> (Y4MHeader, Int, FrameUpscaleMetrics?, Int?) {
+) async throws -> (Y4MHeader, Int, FrameUpscaleMetrics?, Int?, AudioSummary?) {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         throw EncoderFailure.unsupported("This Mac does not report stereo MV-HEVC encode support.")
     }
@@ -938,6 +1248,15 @@ private func encode(
     let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: outputSettings)
     writerInput.expectsMediaDataInRealTime = false
     let receiver = writer.inputTaggedPixelBufferGroupReceiver(for: writerInput, pixelBufferAttributes: nil)
+    let audioAppender = try options.audioPCMPath.map {
+        try PCMAudioAppender(path: $0, startTicks: options.audioStartTicks)
+    }
+    if let audioAppender {
+        guard writer.canAdd(audioAppender.input) else {
+            throw EncoderFailure.unsupported("The AAC audio output settings are not supported on this Mac.")
+        }
+        writer.add(audioAppender.input)
+    }
 
     do {
         try writer.start()
@@ -969,11 +1288,17 @@ private func encode(
                 value: CMTimeValue(frameCount) * CMTimeValue(header.frameRateDenominator),
                 timescale: CMTimeScale(header.frameRateNumerator)
             )
+            let audioLimit = CMTime(
+                value: CMTimeValue(frameCount + 1) * CMTimeValue(header.frameRateDenominator),
+                timescale: CMTimeScale(header.frameRateNumerator)
+            )
+            try audioAppender?.pump(upTo: audioLimit)
 
             while try !receiver.appendImmediately(taggedBuffers, with: presentationTime) {
                 if cancellationFlag.isRequested || Task.isCancelled {
                     throw EncoderFailure.cancelled
                 }
+                try audioAppender?.pump(upTo: audioLimit)
                 if let hlsOutputDelegate {
                     try hlsOutputDelegate.throwIfFailed()
                 }
@@ -1002,6 +1327,18 @@ private func encode(
         }
 
         receiver.finish()
+        var audioSummary: AudioSummary?
+        if let audioAppender {
+            let videoEnd = CMTime(
+                value: CMTimeValue(frameCount) * CMTimeValue(header.frameRateDenominator),
+                timescale: CMTimeScale(header.frameRateNumerator)
+            )
+            try await audioAppender.finish(at: videoEnd, cancellationFlag: cancellationFlag)
+            audioSummary = AudioSummary(
+                appendedFrames: audioAppender.appendedFrames,
+                firstPresentationFrame: audioAppender.firstPresentationFrame
+            )
+        }
         await writer.finishWriting()
         guard writer.status == .completed else {
             throw writerFailure(writer, fallback: "MV-HEVC writer did not complete successfully.")
@@ -1011,7 +1348,7 @@ private func encode(
             let hlsSegmentCount = try hlsOutputDelegate.finalizePlaylist()
             completed = true
             hlsOutputDirectory.complete()
-            return (header, frameCount, upscaler?.metrics, hlsSegmentCount)
+            return (header, frameCount, upscaler?.metrics, hlsSegmentCount, audioSummary)
         }
         guard let partialURL, let outputURL = options.outputURL else {
             throw EncoderFailure.writer("MOV output writer was not configured.")
@@ -1021,7 +1358,7 @@ private func encode(
         }
         try atomicallyRename(partialURL, to: outputURL)
         completed = true
-        return (header, frameCount, upscaler?.metrics, nil)
+        return (header, frameCount, upscaler?.metrics, nil, nil)
     } catch {
         writer.cancelWriting()
         throw error
@@ -1065,7 +1402,7 @@ private struct MVHEVCEncoder {
                 return
             }
             let options = try EncoderOptions.parse(arguments: arguments)
-            let (header, frameCount, upscaleMetrics, hlsSegmentCount) = try await encode(
+            let (header, frameCount, upscaleMetrics, hlsSegmentCount, audioSummary) = try await encode(
                 options: options,
                 cancellationFlag: cancellationFlag
             )
@@ -1105,6 +1442,16 @@ private struct MVHEVCEncoder {
             } else {
                 summary["bitrate_mbps"] = options.bitrateMbps
                 summary["rate_control"] = "average_bitrate"
+            }
+            if let audioSummary {
+                summary["audio_codec"] = "aac"
+                summary["audio_bitrate"] = PCMAudioContract.aacBitRate
+                summary["audio_channel_count"] = PCMAudioContract.channelCount
+                summary["audio_sample_rate"] = PCMAudioContract.sampleRate
+                summary["audio_frame_count"] = audioSummary.appendedFrames
+                if let firstPresentationFrame = audioSummary.firstPresentationFrame {
+                    summary["audio_first_presentation_frame"] = firstPresentationFrame
+                }
             }
             if let hlsSegmentCount, let hlsSegmentDurationSeconds = options.hlsSegmentDurationSeconds {
                 summary["hls_segment_count"] = hlsSegmentCount

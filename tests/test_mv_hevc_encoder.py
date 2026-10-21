@@ -431,6 +431,64 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
             self.assertIn(segment_name, playlist)
             self.assertGreater((hls_directory / segment_name).stat().st_size, 0)
 
+    def test_hls_output_muxes_aac_on_the_video_timeline(self) -> None:
+        if not self.segmented_hls_supported:
+            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
+        if FFPROBE is None:
+            self.skipTest("FFprobe is required to inspect muxed audio")
+        hls_directory = self.hls_directory("segmented-hls-audio")
+        frame_count, frame_rate, sample_rate = 48, 24, 48_000
+        pcm_path = Path(self.temporary_directory.name) / "audio.pcm"
+        pcm_path.write_bytes(b"\x00\x01\x00\x01" * (3 * sample_rate))
+        lead_ticks = 9_000
+        command = [
+            str(self.encoder),
+            "--hls-directory",
+            str(hls_directory),
+            "--segment-duration",
+            "0.5",
+            "--audio-pcm",
+            str(pcm_path),
+            "--audio-start-ticks",
+            str(-lead_ticks),
+        ]
+        completed = subprocess.run(
+            command,
+            input=y4m_header(frame_rate=frame_rate) + b"".join(y4m_frame(index) for index in range(frame_count)),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=60,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        summary = json.loads(completed.stdout)
+        self.assertEqual(summary["audio_frame_count"], frame_count * sample_rate // frame_rate)
+        self.assertEqual(summary["audio_first_presentation_frame"], 0)
+        probe = subprocess.run(
+            [FFPROBE, "-v", "error", "-show_streams", "-of", "json", str(hls_directory / "media.m3u8")],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        audio = [stream for stream in json.loads(probe.stdout)["streams"] if stream["codec_type"] == "audio"]
+        self.assertEqual([(stream["codec_name"], stream["channels"]) for stream in audio], [("aac", 2)])
+
+    def test_rejects_audio_without_hls_output(self) -> None:
+        output_path = self.output_path("audio-without-hls.mov")
+
+        completed = subprocess.run(
+            [str(self.encoder), "--output", str(output_path), "--audio-pcm", "/dev/null"],
+            input=y4m_header() + y4m_frame(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertFalse(output_path.exists())
+
     def test_hls_target_duration_is_stable_from_event_to_vod(self) -> None:
         if not self.segmented_hls_supported:
             self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
