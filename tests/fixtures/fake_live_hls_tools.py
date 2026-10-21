@@ -23,7 +23,7 @@ from pathlib import Path
 def record(name: str, data: bytes) -> None:
     directory = os.environ.get("FAKE_LIVE_HLS_RECORD_DIR")
     if directory:
-        (Path(directory) / name).write_bytes(data)
+        atomic_write(Path(directory) / name, data)
 
 
 def atomic_write(path: Path, data: bytes) -> None:
