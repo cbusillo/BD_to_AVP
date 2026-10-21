@@ -4,7 +4,16 @@ import XCTest
 
 /// The PR 1 live contracts, exercised through the shared fakes that later host and player tests
 /// build on: the starter's cancellation contract, the slot's drain, and cancel admission.
-final class LiveRelayAdmissionContractTests: XCTestCase {
+class LiveRelayAdmissionContractTests: XCTestCase {
+    /// The admission under test. The reference model here; the production admission in
+    /// `LiveStartAdmissionProductionTests`, which inherits every test.
+    func makeAdmission(
+        starter: any LiveRelayStreamStarting,
+        liveParentSessionIDs: Set<RelaySessionIdentifier>
+    ) -> any LiveStartAdmissionUnderTest {
+        FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: liveParentSessionIDs)
+    }
+
     private let sessionA = try! RelaySessionIdentifier(rawValue: "11111111-1111-4111-8111-111111111111")
     private let sessionB = try! RelaySessionIdentifier(rawValue: "22222222-2222-4222-8222-222222222222")
     /// Every test key is issued at the fake admission's starting time.
@@ -76,7 +85,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testReplacingASuspendedStartWaitsForItsCleanupBeforeTheNextStart() async throws {
         let starter = FakeLiveRelayStreamStarter()
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let first = key(sessionA)
         guard case .started = await admission.start(first, request: makeFakeLiveStreamRequest()) else {
             return XCTFail("Expected the first start")
@@ -99,7 +108,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testOtherSessionWaitsForADrainThenGetsTheSlot() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA, sessionB])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA, sessionB])
         _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
         await starter.waitForCalls(1)
         try await waitUntil {
@@ -123,7 +132,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
     }
 
     func testStartIsIdempotentPerKeyAndConflictsOnChangedParameters() async throws {
-        let admission = FakeLiveStartAdmission(starter: FakeLiveRelayStreamStarter(), liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: FakeLiveRelayStreamStarter(), liveParentSessionIDs: [sessionA])
         let original = key(sessionA)
         let changed = LiveStartKey(
             parentSessionID: original.parentSessionID,
@@ -144,7 +153,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testRetryAfterCancellingAnAdmittedStartIsRefused() async throws {
         let starter = FakeLiveRelayStreamStarter()
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         _ = await admission.start(start, request: makeFakeLiveStreamRequest())
         await starter.waitForCalls(1)
@@ -160,7 +169,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testRetryOfAReplacedStartReturnsItsStreamWithoutDisturbingTheCurrentOne() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let first = key(sessionA)
         let original = await admission.start(first, request: makeFakeLiveStreamRequest())
         _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
@@ -182,7 +191,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testRetryWithChangedParametersAfterReleaseIsAConflict() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let original = key(sessionA)
         _ = await admission.start(original, request: makeFakeLiveStreamRequest())
         await admission.release(reason: .sessionEnded)
@@ -204,7 +213,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testRetryDuringACancelDrainIsRefusedWithoutWaiting() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         _ = await admission.start(start, request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
@@ -223,7 +232,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testRetrySignedInsideTheWindowIsRefusedAfterTheSlotIsGone() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         _ = await admission.start(start, request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
@@ -242,7 +251,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testRequestsSignedOutsideTheWindowAreExpiredAndRecordNothing() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         let early = await admission.start(start, signedAt: issuedAt.addingTimeInterval(-6), request: makeFakeLiveStreamRequest())
         XCTAssertEqual(early, .expired)
@@ -266,7 +275,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testAfterLongSlotOwnershipEveryRetryIsRefused() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         _ = await admission.start(start, request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
@@ -284,7 +293,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testRecordIsKeptWhileItsDrainLasts() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         _ = await admission.start(start, request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
@@ -308,7 +317,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testEndedSessionsAndIdleSessionsLeaveNoState() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA, sessionB])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA, sessionB])
         _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
         _ = await admission.cancel(parentSessionID: sessionA, startID: UUID(), issuedAtUnixMilliseconds: issuedAtMs)
@@ -331,7 +340,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testStartAndCancelRacingSessionEndAdmitNothingAndLeaveNoState() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
         let running = await starter.launched[0]
@@ -358,7 +367,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
         struct StartFailed: Error {}
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
         await starter.failNextStart(with: StartFailed())
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         let original = await admission.start(start, request: makeFakeLiveStreamRequest())
         try await waitUntil {
@@ -377,7 +386,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testStartWaitingOnADrainPastItsWindowIsRefused() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
         let running = await starter.launched[0]
@@ -399,7 +408,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testStartWaitingOnAnotherSessionsDrainPastItsWindowIsRefused() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA, sessionB])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA, sessionB])
         _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
         let running = await starter.launched[0]
@@ -423,7 +432,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testTombstoneExpiryUsesTheVerificationMillisecondClock() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         _ = await admission.cancel(parentSessionID: sessionA, startID: start.startID, issuedAtUnixMilliseconds: issuedAtMs)
 
@@ -442,7 +451,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testRecordExpiryUsesTheVerificationMillisecondClock() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
         let original = await admission.start(start, request: makeFakeLiveStreamRequest())
         try await waitForRunning(admission)
@@ -462,7 +471,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     func testCancelBeforeStartLeavesATombstoneUntilNoRequestCanVerify() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
-        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: starter, liveParentSessionIDs: [sessionA])
         let start = key(sessionA)
 
         let cancel = await admission.cancel(parentSessionID: sessionA, startID: start.startID, issuedAtUnixMilliseconds: issuedAtMs)
@@ -485,7 +494,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
     }
 
     func testNewTombstoneCancelsBeyondTheWindowRetryLaterAndRecordNothing() async throws {
-        let admission = FakeLiveStartAdmission(starter: FakeLiveRelayStreamStarter(), liveParentSessionIDs: [sessionA])
+        let admission = makeAdmission(starter: FakeLiveRelayStreamStarter(), liveParentSessionIDs: [sessionA])
         var tombstoned: [UUID] = []
         for _ in 0 ..< LiveStartLimits.tombstonesPerSession {
             let startID = UUID()
@@ -518,7 +527,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
         let sessions = try (0 ..< 6).map {
             try RelaySessionIdentifier(rawValue: String(format: "00000000-0000-4000-8000-%012d", $0 + 10))
         }
-        let admission = FakeLiveStartAdmission(starter: FakeLiveRelayStreamStarter(), liveParentSessionIDs: Set(sessions))
+        let admission = makeAdmission(starter: FakeLiveRelayStreamStarter(), liveParentSessionIDs: Set(sessions))
         var outcomes: [LiveCancelOutcome?] = []
         for session in sessions {
             for _ in 0 ..< LiveStartLimits.tombstonesPerSession {
@@ -542,7 +551,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
         )
     }
 
-    private func waitForRunning(_ admission: FakeLiveStartAdmission) async throws {
+    private func waitForRunning(_ admission: any LiveStartAdmissionUnderTest) async throws {
         try await waitUntil {
             if case .running = await admission.slot { return true }
             return false
@@ -551,7 +560,7 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
 
     /// The start's outcome, or a thrown timeout if `start` is still waiting, for example on a
     /// drain, after five seconds.
-    private func outcome(of admission: FakeLiveStartAdmission, _ key: LiveStartKey) async throws -> LiveStartOutcome? {
+    private func outcome(of admission: any LiveStartAdmissionUnderTest, _ key: LiveStartKey) async throws -> LiveStartOutcome? {
         let box = OutcomeBox()
         Task { await box.set(await admission.start(key, request: makeFakeLiveStreamRequest())) }
         try await waitUntil { await box.isSet }
@@ -600,4 +609,14 @@ private func XCTAssertThrowsAsync<T>(
         _ = try await expression()
         XCTFail("Expected an error", file: file, line: line)
     } catch {}
+}
+
+/// Every PR 1 admission contract test, run against the production `LiveStartAdmission`.
+final class LiveStartAdmissionProductionTests: LiveRelayAdmissionContractTests {
+    override func makeAdmission(
+        starter: any LiveRelayStreamStarting,
+        liveParentSessionIDs: Set<RelaySessionIdentifier>
+    ) -> any LiveStartAdmissionUnderTest {
+        ProductionLiveStartAdmission(starter: starter, liveParentSessionIDs: liveParentSessionIDs)
+    }
 }

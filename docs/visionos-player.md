@@ -49,7 +49,8 @@ For installation and a first playback check, use the
 The folder is configuration, not the playback selection: no movie needs to be
 opened or selected on the Mac. Only MV-HEVC and supported full SBS/OU HEVC stereo
 formats play; other completed movie files show the existing unsupported-format
-message. ISO/BDMV conversion and live decrypted-source streaming are separate work.
+message. Blu-ray 3D ISOs in a shared folder appear separately as live titles; see
+[Live Blu-ray 3D titles](#live-blu-ray-3d-titles).
 
 Movie sharing advertises `_bdtoavp-movies._tcp` independently of playback. Approved
 folders use security-scoped bookmarks. Scans skip symlinks, hidden files, and package
@@ -79,6 +80,73 @@ does not apply to these completed files. Loading cancels with playback and bound
 concurrency and buffered data. HTTP provides authenticated integrity, not media
 confidentiality. This initial private beta is for a trusted LAN; it does not wake
 the Mac or run a background sharing daemon.
+
+### Live Blu-ray 3D titles
+
+A shared folder's `.iso` files are listed under **Blu-ray 3D Discs (Live)**. They come
+from the catalog's additive `liveTitles` list, which older players ignore, and never
+appear among completed movies. A row shows **Checking on the Mac…** while the Mac
+inspects the disc in the background; the player refreshes the catalog every 3 seconds
+for up to 2 minutes while any title is checking, and stops on disconnect, rediscovery,
+or leaving the library. An ineligible title shows the Mac's reason and cannot start.
+
+Choosing an eligible title starts it with the title's default audio:
+
+1. The player creates a start ID and sends `POST /movies/v1/live/start`, signed with
+   the movie session at `issuedAt`, the signed time of that first request. A retry
+   after a lost answer repeats the same body with a fresh signature; the Mac answers a
+   repeated start ID with its recorded outcome.
+2. The signed 202 carries the stream ID. The player polls the parent-signed live
+   status once a second until the stream is `live`, showing **The Mac is busy
+   converting; playback may pause.** while a conversion runs. A Mac failure such as
+   its 45-second ready deadline shows the Mac's reason. The player gives up 120 seconds
+   after sending the start.
+3. The player derives the stream session with `liveStreamSession(streamID:)` and plays
+   the stream's relay routes at the Mac's address. Every playlist, snapshot, segment,
+   position, and cancel request is signed with that stream session and carries its
+   media capability; the parent session signs only `/movies/v1/...` routes. The
+   one-second snapshot refresh also reports the playhead to
+   `POST /relay/v1/control/position`, and a pause or seek reports it at once. Live
+   items use a 20-second forward buffer. There is no resume position for live titles.
+
+Cleanup is owned by the start until the player installs the stream, then by the
+playback. It runs detached, with a fresh signature on every attempt and retries after
+0.5, 1, 2, and 4 seconds, then every 4 seconds. The route depends on what the player
+knows:
+
+- With the stream ID: the stream's own `POST /relay/v1/control/cancel`. It works after
+  any length of playback; a signed 204 or a signed `stream_ended` both mean done. Done,
+  teardown, a failed or superseded preparation, a stream failure, and the client
+  timeout after a status all use it.
+- Without the stream ID, within 40 seconds of `issuedAt`: `POST /movies/v1/live/cancel`
+  by start ID. An acknowledged cancel means that start is never admitted.
+- Without the stream ID after that, or when the start-ID cancel answers `expired`:
+  `POST /movies/v1/live/release`, repeated until `issuedAt + 75 s` or until the Mac says
+  it drained that exact start. No start for the identity can be admitted after 70 s.
+
+The Mac's idle lease, 120 seconds before the first relay request and 60 seconds after,
+stops anything every cleanup attempt missed.
+
+A signed 410 or 503 carrying `RelayLiveStreamEnded` ends playback with "Live playback
+stopped on the Mac: <reason>", using the reason from the Mac's live status when it has
+one; it never asks to pair again. Only an unsigned, empty 401, meaning the Mac no longer
+knows the session, shows the pair-again message. The loopback bridge turns every
+upstream failure into a bare 503, so termination is decided by the verified snapshot
+refresh, not by AVPlayer's media errors.
+
+#### Live qualification on device
+
+A `BD_TO_AVP_QUALIFICATION` build runs a scripted live session when launched with
+`BD_TO_AVP_LIVE_QUALIFICATION_MAC` (the Mac's Bonjour name) and
+`BD_TO_AVP_LIVE_QUALIFICATION_TITLE` (the ISO file name or title). It connects with the
+remembered pairing, waits for the title to become eligible, plays it with its default
+audio for 600 seconds (override with `BD_TO_AVP_LIVE_QUALIFICATION_PLAY_SECONDS`), then
+pauses and resumes, seeks back to a retained position, seeks to an evicted position, and
+finishes with Done. It writes `RELAY_QUALIFICATION LIVE t=<seconds>` lines with a
+monotonic clock: `live_start_sent`, `status_live`, `first_frame`, `rebuffer_start`,
+`rebuffer_end`, periodic `sample` lines with the playhead and live edge,
+`seek_backward_result`, `seek_evicted_result`, and `cancel_acknowledged`. Release builds
+do not compile the driver.
 
 ### Local development folder
 

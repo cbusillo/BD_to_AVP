@@ -149,6 +149,8 @@ class ProcessSpec:
     termination_grace_seconds: float = DEFAULT_TERMINATION_GRACE_SECONDS
     kill_wait_seconds: float = DEFAULT_KILL_WAIT_SECONDS
     pipe_drain_timeout_seconds: float = DEFAULT_PIPE_DRAIN_TIMEOUT_SECONDS
+    # Descriptors the child inherits at their own numbers. Everything else stays closed.
+    pass_fds: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.argv:
@@ -781,6 +783,7 @@ class ChildProcessRunner:
                 bufsize=0,
                 start_new_session=True,
                 close_fds=True,
+                pass_fds=spec.pass_fds,
             )
         except OSError:
             emitter.emit(

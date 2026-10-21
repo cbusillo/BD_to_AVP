@@ -48,6 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             window.orderFrontRegardless()
             return
         }
+        if !Self.isUnitTestHost(environment: ProcessInfo.processInfo.environment) {
+            // No live stream survives a relaunch: start removing what a crash left. Sharing awaits
+            // this before it enables live services.
+            _ = LiveRelayStreamStarter.leftoverSweep
+        }
         startQueueAutomationIfNeeded(arguments: arguments, environment: ProcessInfo.processInfo.environment)
         guard Self.isStartupSmoke(arguments: arguments) else {
             return

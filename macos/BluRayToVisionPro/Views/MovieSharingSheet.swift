@@ -15,6 +15,13 @@ struct MovieSharingSheet: View {
             Toggle("Share movies on this Mac", isOn: Binding(get: { controller.isSharing }, set: { value in Task { await controller.setSharing(value) } }))
                 .disabled(controller.sources.isEmpty || controller.isBusy)
             Text(controller.status).font(.callout).foregroundStyle(.secondary)
+            if let activity = controller.liveActivity {
+                HStack {
+                    Label("Live playback to \(activity.peerName)", systemImage: "dot.radiowaves.left.and.right")
+                    Spacer()
+                    Button("Stop") { Task { await controller.stopLivePlayback() } }
+                }
+            }
             if let candidate = controller.pairingCandidate {
                 GroupBox("Confirm Vision Pro") {
                     VStack(spacing: 10) {
@@ -58,7 +65,7 @@ struct MovieSharingSheet: View {
                 }
             }
             if let error = controller.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-            Text("Keep this app open and the Mac awake on the same trusted network. Shared MP4, MOV, and M4V files appear on Vision Pro; the player supports MV-HEVC and full SBS/OU HEVC stereo movies.")
+            Text("Keep this app open and the Mac awake on the same trusted network. Shared MP4, MOV, and M4V files appear on Vision Pro; the player supports MV-HEVC and full SBS/OU HEVC stereo movies. Blu-ray 3D ISOs in shared folders can play live while this Mac converts them on the fly.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .padding(24).frame(width: 560)

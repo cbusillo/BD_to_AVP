@@ -294,6 +294,48 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
             XCTAssertEqual(error as? RelaySessionError, .invalidResponse)
         }
     }
+
+    // MARK: Live stream end and session revocation
+
+    private func loadError(status: Int, body: Data, signed: Bool) async throws -> Error? {
+        let fixedNow = now
+        let sessions = try await makePairedSessions(now: fixedNow)
+        let transport = FakeRelayTransport()
+        await transport.setHandler { request in
+            guard signed else {
+                return (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])!)
+            }
+            return (body, try makeAuthenticatedHTTPResponse(request, body: body, serverSession: sessions.server, statusCode: status))
+        }
+        let client = RelayAuthenticatedResourceClient(
+            signer: sessions.client, transport: transport, serverBaseURL: baseURL,
+            clock: { fixedNow }, maximumTransientRetries: 0
+        )
+        do {
+            _ = try await client.load(URL(string: "bdtoavprelay://relay.local:7431/relay/v1/media/segment-000000001.m4s")!)
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    func testUnsignedEmpty401ThrowsSessionRevoked() async throws {
+        let error = try await loadError(status: 401, body: Data(), signed: false)
+        XCTAssertEqual(error as? RelayTransportError, .sessionRevoked)
+    }
+
+    func testUnsigned200And503StayInvalid() async throws {
+        for status in [200, 503] {
+            let error = try await loadError(status: status, body: Data(), signed: false)
+            XCTAssertEqual(error as? RelaySessionError, .invalidResponse, "unsigned \(status)")
+        }
+    }
+
+    func testSignedStreamEndedThrowsStreamEnded() async throws {
+        let body = try JSONEncoder().encode(RelayLiveStreamEnded(error: .streamEnded, code: "viewerStopped", message: nil))
+        let error = try await loadError(status: 410, body: body, signed: true)
+        XCTAssertEqual(error as? RelayTransportError, .streamEnded(code: "viewerStopped", message: nil))
+    }
 }
 
 private final class TestNonceSequence: @unchecked Sendable {
@@ -401,5 +443,19 @@ final class RelayLoopbackHTTPServerTests: XCTestCase {
             _ = try await URLSession.shared.data(from: url)
             XCTFail("A cancelled listener must not serve requests")
         } catch { }
+    }
+
+    /// The bridge flattens a live stream end to a bare 503, which is why the refresh loop, not
+    /// AVPlayer's media errors, decides how live playback ends.
+    func testBridgeFlattensUpstreamStreamEndToBare503() async throws {
+        let (server, assetURL) = try await RelayLoopbackHTTPServer.start(
+            serverBaseURL: URL(string: "http://relay.local:7431")!
+        ) { _ in throw RelayTransportError.streamEnded(code: "idle", message: "gone") }
+        defer { server.cancelAllRequests() }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(from: assetURL)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 503)
+        XCTAssertTrue(data.isEmpty)
     }
 }

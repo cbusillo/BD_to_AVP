@@ -299,3 +299,727 @@ private actor MovieTestTransport: MovieHTTPTransport {
         return Data(text.utf8) + body
     }
 }
+
+// MARK: - Live ISO titles
+
+private actor FakeLiveTitleInspector: LiveTitleInspecting {
+    private(set) var calls = 0
+    private(set) var inspectedPaths: [String] = []
+
+    func inspect(_ lease: LiveSourceLease) async throws -> LiveTitleInspection {
+        calls += 1
+        inspectedPaths.append(lease.canonicalPath)
+        let json = """
+        {"eligible":true,"unsupported_reason":null,"playlist":1005,"duration_seconds":5400.0,
+         "audio_streams":[{"pid":4352,"coding_type":134,"format":6,"rate":12,"language":"eng"},
+                          {"pid":4353,"coding_type":129,"format":6,"rate":12,"language":"fra"}]}
+        """
+        return try JSONDecoder().decode(LiveTitleInspection.self, from: Data(json.utf8))
+    }
+}
+
+/// The shipped v0.3.3 catalog types, copied as they were, to prove an old player still reads a
+/// catalog with live titles.
+private struct ShippedMovieCatalog: Decodable {
+    struct Movie: Decodable { let id: String; let rootID: String; let fileName: String; let byteCount: Int64; let revision: String }
+    struct Root: Decodable { let id: String; let name: String; let isAvailable: Bool }
+    let version: Int
+    let roots: [Root]
+    let movies: [Movie]
+    let truncated: Bool
+
+    func validate() throws {
+        guard version == 1 else { throw MovieLibraryError.incompatible }
+        for movie in movies where !["mov", "mp4", "m4v"].contains((movie.fileName as NSString).pathExtension.lowercased()) {
+            throw MovieLibraryError.invalidResponse
+        }
+    }
+}
+
+private final class LiveHostHarness: @unchecked Sendable {
+    let fixture: MovieTestFixture
+    let clock = LiveTestClock(Date())
+    let starter: FakeLiveRelayStreamStarter
+    let inspector = FakeLiveTitleInspector()
+    let index: LiveTitleIndex
+    let admission: LiveStartAdmission
+    let host: MovieLibraryHost
+    let transport: MovieTestTransport
+    let client: MovieLibraryClient
+    let hostTrust = MovieTestKeychain()
+
+    init(
+        streamStates: [LiveRelayStreamState] = [.live(earliestMs: 0, latestMs: 6_000)],
+        open: LiveSourceAuthorizer.Opener? = nil,
+        busy: Bool = false
+    ) throws {
+        fixture = try MovieTestFixture()
+        try Data(repeating: 3, count: 4_096).write(to: fixture.root.appendingPathComponent("Rainforest.iso"))
+        try Data(repeating: 4, count: 64).write(to: fixture.root.appendingPathComponent("Shared.mov"))
+        let clock = clock
+        starter = FakeLiveRelayStreamStarter(holdsStarts: false, streamStates: streamStates)
+        var authorizer = LiveSourceAuthorizer()
+        if let open { authorizer.open = open }
+        index = LiveTitleIndex(storeURL: nil, authorizer: authorizer, inspector: inspector, now: { clock.now })
+        admission = LiveStartAdmission(
+            starter: starter, policy: try RelayRequestValidationPolicy(), now: { clock.now }, watchInterval: .milliseconds(20)
+        )
+        let services = MovieLibraryLiveServices(admission: admission, index: index, authorizer: authorizer, isBusyConverting: { busy })
+        host = try MovieLibraryHost(catalog: fixture.catalog(), trust: hostTrust.store, now: { clock.now }, live: services)
+        transport = MovieTestTransport(host: host)
+        client = MovieLibraryClient(
+            baseURL: MovieTestTransport.url, name: "Test Mac", transport: transport, trust: MovieTestKeychain().store,
+            clock: { clock.now }
+        )
+    }
+
+    func pair() async throws {
+        _ = try await client.beginPairing()
+        let pending = try await host.pendingCandidate()
+        try await host.approve(XCTUnwrap(pending).candidateID)
+        let paired = try await client.confirm(matches: true)
+        XCTAssertTrue(paired)
+    }
+
+    /// Lists the catalog until the ISO's inspection has finished.
+    func eligibleTitle() async throws -> SharedLiveTitle {
+        _ = try await client.catalog()
+        await index.waitUntilIdle()
+        let catalog = try await client.catalog()
+        let title = try XCTUnwrap(catalog.liveTitles.first)
+        XCTAssertEqual(title.state, .eligible)
+        return title
+    }
+
+    func start(_ title: SharedLiveTitle, startID: UUID = UUID(), audioPID: Int = 4352) async throws -> (LiveStartResult, LiveStartReference) {
+        let issuedAt = try XCTUnwrap(RelayTime.unixMilliseconds(for: clock.now))
+        let request = LiveStartRequest(startID: startID, issuedAt: issuedAt, titleID: title.id, revision: title.revision, audioPID: audioPID)
+        let result = try await client.startLive(request, signedAt: Date(timeIntervalSince1970: TimeInterval(issuedAt) / 1_000))
+        return (result, LiveStartReference(startID: startID, issuedAt: issuedAt))
+    }
+
+    func started(_ title: SharedLiveTitle) async throws -> (UUID, LiveStartReference) {
+        let (result, reference) = try await start(title)
+        guard case let .started(response) = result else {
+            XCTFail("Expected an admitted start, got \(result)")
+            throw MovieLibraryError.unavailable
+        }
+        return (response.streamID, reference)
+    }
+
+    struct RelayAnswer {
+        let status: Int
+        let body: Data
+        /// Whether the response verified under the derived stream session.
+        let isSigned: Bool
+        var ended: RelayLiveStreamEnded? { try? JSONDecoder().decode(RelayLiveStreamEnded.self, from: body) }
+    }
+
+    enum Capability { case derived, missing, wrong }
+
+    /// A relay request signed with the stream session derived from the client's parent session.
+    func relay(
+        _ path: String,
+        streamID: UUID,
+        method: String = "GET",
+        body: Data = Data(),
+        capability: Capability = .derived,
+        session: RelayEstablishedSession? = nil
+    ) async throws -> RelayAnswer {
+        let derived: RelayEstablishedSession
+        if let session { derived = session } else { derived = try await client.liveStreamSession(streamID: streamID).session }
+        let nonce = UUID().uuidString.lowercased()
+        let proof = try derived.signRequest(method: method, requestTarget: path, timestamp: clock.now, nonce: nonce, body: body)
+        var headers = [RelayWireContract.authenticationHeader: try JSONEncoder().encode(proof).base64EncodedString()]
+        switch capability {
+        case .derived: headers[RelayWireContract.mediaCapabilityHeader] = derived.mediaCapability.value
+        case .missing: break
+        case .wrong: headers[RelayWireContract.mediaCapabilityHeader] = String(repeating: "A", count: 43)
+        }
+        let response = await host.handle(
+            MovieTestTransport.rawRequest(path: path, method: method, body: body, headers: headers), peer: .localNetwork
+        )
+        var isSigned = false
+        if let header = response.headers[RelayWireContract.responseAuthenticationHeader],
+           let data = Data(base64Encoded: header),
+           let responseProof = try? JSONDecoder().decode(RelayAuthenticatedResponse.self, from: data) {
+            try derived.verifyResponse(responseProof, requestNonce: nonce, actualStatusCode: response.statusCode, body: response.body, now: clock.now)
+            isSigned = true
+        }
+        return RelayAnswer(status: response.statusCode, body: response.body, isSigned: isSigned)
+    }
+
+    func waitUntilSlotIsEmpty() async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while await !admission.isEmpty {
+            guard Date() < deadline else { throw MovieLibraryError.unavailable }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    func stream(_ index: Int = 0) async throws -> FakeLiveRelayStream {
+        let launched = await starter.launched
+        guard launched.indices.contains(index) else { throw MovieLibraryError.unavailable }
+        return launched[index]
+    }
+
+    func lastStream() async throws -> FakeLiveRelayStream {
+        let launched = await starter.launched
+        return try XCTUnwrap(launched.last)
+    }
+
+    func remove() { fixture.remove() }
+}
+
+final class MovieLibraryLiveTests: XCTestCase {
+    func testCatalogWithLiveTitlesStillDecodesForShippedPlayersAndSkipsUnknownVersions() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        XCTAssertEqual(title.fileName, "Rainforest.iso")
+        XCTAssertEqual(title.audio.map(\.pid), [4352, 4353])
+        XCTAssertEqual(title.audio.first?.label, "English DTS-HD Master Audio")
+        XCTAssertEqual(title.defaultAudio?.pid, 4352)
+
+        // The host encodes this same type; re-encoding the verified catalog gives its wire shape.
+        let encoded = try JSONEncoder().encode(try await harness.client.catalog())
+        let shipped = try JSONDecoder().decode(ShippedMovieCatalog.self, from: encoded)
+        XCTAssertNoThrow(try shipped.validate())
+        XCTAssertEqual(shipped.movies.map(\.fileName), ["Shared.mov"], "ISOs never enter movies")
+
+        let withoutLive = SharedMovieCatalog(roots: [], movies: [])
+        let plain = try JSONEncoder().encode(withoutLive)
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("liveTitles"))
+        XCTAssertEqual(try JSONDecoder().decode(SharedMovieCatalog.self, from: plain).liveTitles, [])
+
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var titles = try XCTUnwrap(object["liveTitles"] as? [[String: Any]])
+        titles.append(["liveVersion": 2, "someFutureShape": true])
+        object["liveTitles"] = titles
+        let future = try JSONDecoder().decode(SharedMovieCatalog.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(future.liveTitles.map(\.id), [title.id])
+        XCTAssertNoThrow(try future.validate())
+        await harness.host.stop()
+    }
+
+    func testIndexInspectsOncePerRevisionAndAgainAfterTheFileChanges() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let first = try await harness.client.catalog()
+        XCTAssertEqual(first.liveTitles.first?.state, .checking)
+        _ = try await harness.eligibleTitle()
+        _ = try await harness.client.catalog()
+        await harness.index.waitUntilIdle()
+        var calls = await harness.inspector.calls
+        XCTAssertEqual(calls, 1)
+        let paths = await harness.inspector.inspectedPaths
+        XCTAssertEqual(paths.first?.hasSuffix("/Approved/Rainforest.iso"), true)
+
+        let handle = try FileHandle(forWritingTo: harness.fixture.root.appendingPathComponent("Rainforest.iso"))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data([9]))
+        try handle.close()
+        let changed = try await harness.client.catalog()
+        XCTAssertEqual(changed.liveTitles.first?.state, .checking)
+        await harness.index.waitUntilIdle()
+        calls = await harness.inspector.calls
+        XCTAssertEqual(calls, 2)
+        await harness.host.stop()
+    }
+
+    func testAuthorizerRefusesASymlinkANewInodeAndAMovedRoot() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let iso = fixture.root.appendingPathComponent("Disc.iso")
+        try Data(repeating: 1, count: 128).write(to: iso)
+        let catalog = try fixture.catalog()
+        let authorizer = LiveSourceAuthorizer()
+        let listed = try await catalog.listing().liveCandidates
+        let candidate = try XCTUnwrap(listed.first)
+        let lease = try await authorizer.authorize(candidate, revision: candidate.revision)
+        XCTAssertTrue(lease.canonicalPath.hasSuffix("/Approved/Disc.iso"))
+        XCTAssertNotNil(lease.retainer as? LiveSourceDescriptorHolding)
+
+        let outside = fixture.directory.appendingPathComponent("Outside.iso")
+        try Data(repeating: 2, count: 128).write(to: outside)
+        try FileManager.default.removeItem(at: iso)
+        try FileManager.default.createSymbolicLink(at: iso, withDestinationURL: outside)
+        await assertAuthorization(authorizer, candidate, fails: .changed)
+
+        try FileManager.default.removeItem(at: iso)
+        try Data(repeating: 1, count: 128).write(to: iso)
+        await assertAuthorization(authorizer, candidate, fails: .changed)
+
+        let relisted = try await catalog.listing().liveCandidates
+        let fresh = try XCTUnwrap(relisted.first)
+        try FileManager.default.moveItem(at: fixture.root, to: fixture.directory.appendingPathComponent("Moved", isDirectory: true))
+        try FileManager.default.createDirectory(at: fixture.root, withIntermediateDirectories: true)
+        await assertAuthorization(authorizer, fresh, fails: .changed)
+        await catalog.stop()
+    }
+
+    func testRefusedOpenListsTheTitleIneligibleWithThePermissionMessage() async throws {
+        let harness = try LiveHostHarness(open: { _, _ in .failure(MovieFileAccessError(code: EACCES)) })
+        defer { harness.remove() }
+        try await harness.pair()
+        _ = try await harness.client.catalog()
+        await harness.index.waitUntilIdle()
+        let catalog = try await harness.client.catalog()
+        let title = try XCTUnwrap(catalog.liveTitles.first)
+        XCTAssertEqual(title.state, .ineligible)
+        XCTAssertEqual(title.reason, LiveSourceAuthorizationError.permissionMessage)
+        let inspections = await harness.inspector.calls
+        XCTAssertEqual(inspections, 0, "the worker is never asked to open what the app could not")
+
+        let (result, _) = try await harness.start(title)
+        XCTAssertEqual(result, .refused(LiveStartRefusal(outcome: .sourceChanged, message: LiveSourceAuthorizationError.permissionMessage)))
+        await harness.host.stop()
+    }
+
+    func testStartStatusRelayAndCancelThroughTheHost() async throws {
+        let harness = try LiveHostHarness(busy: true)
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        let (streamID, reference) = try await harness.started(title)
+
+        let calls = await harness.starter.calls
+        let call = try XCTUnwrap(calls.first)
+        XCTAssertEqual(call.id, streamID)
+        XCTAssertEqual(call.request.playlist, 1005, "the playlist comes from the index")
+        XCTAssertEqual(call.request.audioPID, 4352)
+        XCTAssertNotNil(call.request.source.retainer as? LiveSourceDescriptorHolding)
+
+        let status = try await harness.client.liveStatus(streamID: streamID)
+        XCTAssertTrue(status.state == .starting || status.state == .live)
+        XCTAssertTrue(status.macBusyConverting)
+
+        let playlist = try await harness.relay(RelayWireContract.playlistPath, streamID: streamID)
+        XCTAssertEqual(playlist.status, 200)
+        XCTAssertTrue(playlist.isSigned)
+        let stream = try await harness.stream()
+        let renewals = await stream.leaseRenewals
+        XCTAssertGreaterThanOrEqual(renewals, 2, "status and relay requests both renew the lease")
+
+        let parentSignedRelay = await harness.host.handle(
+            MovieTestTransport.rawRequest(path: RelayWireContract.playlistPath), peer: .localNetwork
+        )
+        XCTAssertEqual(parentSignedRelay.statusCode, 401)
+
+        let cancel = try await harness.client.cancelLive(reference)
+        XCTAssertEqual(cancel, .acknowledged)
+        let stops = await stream.stopCalls
+        XCTAssertEqual(stops, [.cancelled])
+        let after = try await harness.client.liveStatus(streamID: streamID)
+        XCTAssertEqual(after.state, .stopped)
+        XCTAssertEqual(after.stopReason, LiveRelayStopReason.cancelled.rawValue)
+        let unknown = try await harness.client.liveStatus(streamID: UUID())
+        XCTAssertEqual(unknown.state, .unknown)
+        await harness.host.stop()
+    }
+
+    func testConcurrentRetriesOfOneStartLaunchExactlyOneWorker() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        let startID = UUID()
+        async let first = harness.start(title, startID: startID)
+        async let second = harness.start(title, startID: startID)
+        let outcomes = try await [first.0, second.0]
+        guard case let .started(a) = outcomes[0], case let .started(b) = outcomes[1] else {
+            return XCTFail("Expected both retries to report the start: \(outcomes)")
+        }
+        XCTAssertEqual(a.streamID, b.streamID)
+        let calls = await harness.starter.calls.count
+        XCTAssertEqual(calls, 1)
+        await harness.host.stop()
+    }
+
+    func testEveryLiveRelayRouteRefusesAMissingOrWrongCapabilityWithASignedForbidden() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        let (streamID, _) = try await harness.started(title)
+        let routes: [(String, String, Data)] = [
+            (RelayWireContract.playlistPath, "GET", Data()),
+            (RelayWireContract.playlistSnapshotPath, "GET", Data()),
+            (RelayWireContract.mediaPathPrefix + "init.mp4", "GET", Data()),
+            (RelayWireContract.positionPath, "POST", try JSONEncoder().encode(RelayViewerPosition(positionMilliseconds: 1_000))),
+            (RelayWireContract.cancelPath, "POST", Data()),
+        ]
+        for (path, method, body) in routes {
+            for capability in [LiveHostHarness.Capability.missing, .wrong] {
+                let answer = try await harness.relay(path, streamID: streamID, method: method, body: body, capability: capability)
+                XCTAssertEqual(answer.status, 403, "\(path) \(capability)")
+                XCTAssertTrue(answer.isSigned, "\(path) \(capability)")
+            }
+        }
+        let stream = try await harness.stream()
+        let reached = await stream.requests.count
+        XCTAssertEqual(reached, 0, "no refused request reaches the stream")
+        await harness.host.stop()
+    }
+
+    func testStaleAndNeverIssuedStreamsGetSignedEndsWhileARevokedParentGetsAnUnsigned401() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        let (firstID, _) = try await harness.started(title)
+        let (secondID, _) = try await harness.started(title)
+        XCTAssertNotEqual(firstID, secondID)
+
+        let replaced = try await harness.relay(RelayWireContract.playlistSnapshotPath, streamID: firstID)
+        XCTAssertEqual(replaced.status, 410)
+        XCTAssertTrue(replaced.isSigned)
+        XCTAssertEqual(replaced.ended, RelayLiveStreamEnded(error: .streamEnded, code: LiveRelayStopReason.replaced.rawValue, message: nil))
+
+        let neverIssued = try await harness.relay(RelayWireContract.playlistSnapshotPath, streamID: UUID())
+        XCTAssertEqual(neverIssued.status, 410)
+        XCTAssertTrue(neverIssued.isSigned)
+        XCTAssertEqual(neverIssued.ended?.code, RelayLiveStreamEnded.notCurrentCode)
+
+        let derived = try await harness.client.liveStreamSession(streamID: secondID).session
+        try await harness.client.forget()
+        let revoked = try await harness.relay(RelayWireContract.playlistSnapshotPath, streamID: secondID, session: derived)
+        XCTAssertEqual(revoked.status, 401)
+        XCTAssertFalse(revoked.isSigned)
+        XCTAssertTrue(revoked.body.isEmpty)
+        let stream = try await harness.lastStream()
+        let stops = await stream.stopCalls
+        XCTAssertEqual(stops, [.sessionEnded], "forgetting the device drains its stream")
+        await harness.host.stop()
+    }
+
+    func testAStreamThatEndedLongAgoStillGetsASignedEndAfterManyStreams() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        let (firstID, _) = try await harness.started(title)
+        for _ in 0..<17 {
+            harness.clock.advance(by: 11)
+            _ = try await harness.started(title)
+        }
+        let answer = try await harness.relay(RelayWireContract.playlistPath, streamID: firstID)
+        XCTAssertEqual(answer.status, 410)
+        XCTAssertTrue(answer.isSigned)
+        XCTAssertEqual(answer.ended?.code, RelayLiveStreamEnded.notCurrentCode)
+        await harness.host.stop()
+    }
+
+    func testReleaseDrainsOnlyItsOwnStartAndStillWorksAfterTheSigningWindow() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        let (_, reference) = try await harness.started(title)
+        let other = try await harness.client.releaseLive(LiveStartReference(startID: UUID(), issuedAt: reference.issuedAt))
+        XCTAssertFalse(other)
+        let stream = try await harness.stream()
+        var stops = await stream.stopCalls
+        XCTAssertEqual(stops, [])
+
+        harness.clock.advance(by: 80)
+        let expiredCancel = try await harness.client.cancelLive(reference)
+        XCTAssertEqual(expiredCancel, .expired)
+        let drained = try await harness.client.releaseLive(reference)
+        XCTAssertTrue(drained)
+        stops = await stream.stopCalls
+        XCTAssertEqual(stops, [.cancelled])
+        let again = try await harness.client.releaseLive(reference)
+        XCTAssertFalse(again)
+        await harness.host.stop()
+    }
+
+    func testAStreamThatStopsByItselfReleasesTheSlotAndReportsWhy() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        let (streamID, _) = try await harness.started(title)
+        let stream = try await harness.stream()
+        await stream.stop(.idle)
+        try await harness.waitUntilSlotIsEmpty()
+        let status = try await harness.client.liveStatus(streamID: streamID)
+        XCTAssertEqual(status.state, .stopped)
+        XCTAssertEqual(status.stopReason, LiveRelayStopReason.idle.rawValue)
+        let answer = try await harness.relay(RelayWireContract.playlistPath, streamID: streamID)
+        XCTAssertEqual(answer.ended, RelayLiveStreamEnded(error: .streamEnded, code: "idle", message: nil))
+        await harness.host.stop()
+    }
+
+    func testAFailedStreamReleasesTheSlotAndKeepsItsReason() async throws {
+        let harness = try LiveHostHarness(streamStates: [.starting, .failed(code: "live_start_timeout", message: "Too slow.")])
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        let (streamID, _) = try await harness.started(title)
+        let stream = try await harness.stream()
+        await stream.advance()
+        try await harness.waitUntilSlotIsEmpty()
+        let status = try await harness.client.liveStatus(streamID: streamID)
+        XCTAssertEqual(status.state, .failed)
+        XCTAssertEqual(status.failure, .init(code: "live_start_timeout", message: "Too slow."))
+        await harness.host.stop()
+    }
+
+    func testQuitAndParentExpiryDrainAndAwaitTheWorker() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.pair()
+        let title = try await harness.eligibleTitle()
+        _ = try await harness.started(title)
+        let stream = try await harness.stream()
+        await stream.holdStop()
+        let quit = Task { await harness.host.stopForAppQuit() }
+        let deadline = Date().addingTimeInterval(5)
+        while await stream.stopCalls.isEmpty, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        try await Task.sleep(for: .milliseconds(50))
+        let finishedEarly = await stream.isStopFinished
+        XCTAssertFalse(finishedEarly)
+        await stream.releaseStop()
+        await quit.value
+        let finished = await stream.isStopFinished
+        XCTAssertTrue(finished, "quit returns only after the stream's cleanup")
+        let stops = await stream.stopCalls
+        XCTAssertEqual(stops.first, .appQuit)
+
+        let expiring = try LiveHostHarness()
+        defer { expiring.remove() }
+        try await expiring.pair()
+        let expiringTitle = try await expiring.eligibleTitle()
+        _ = try await expiring.started(expiringTitle)
+        let expiringStream = try await expiring.stream()
+        expiring.clock.advance(by: 25 * 60 * 60)
+        _ = await expiring.host.handle(MovieTestTransport.rawRequest(path: MovieLibraryContract.catalogPath), peer: .localNetwork)
+        let expiryStops = await expiringStream.stopCalls
+        XCTAssertEqual(expiryStops, [.sessionEnded])
+        let empty = await expiring.admission.isEmpty
+        XCTAssertTrue(empty)
+        await expiring.host.stop()
+    }
+
+    private func assertAuthorization(
+        _ authorizer: LiveSourceAuthorizer,
+        _ candidate: LiveCatalogCandidate,
+        fails expected: LiveSourceAuthorizationError,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            _ = try await authorizer.authorize(candidate, revision: candidate.revision)
+            XCTFail("Expected authorization to fail", file: file, line: line)
+        } catch {
+            XCTAssertEqual(error as? LiveSourceAuthorizationError, expected, file: file, line: line)
+        }
+    }
+}
+
+// MARK: - Source I/O never blocks the app
+
+@MainActor
+private final class MainActorTicker {
+    private(set) var ticks = 0
+    private var task: Task<Void, Never>?
+
+    func start() {
+        task = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.ticks += 1
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+    }
+
+    func stop() { task?.cancel() }
+}
+
+/// Stands in for an `open` or bookmark resolution on a network share that waits on macOS consent.
+private let blockingFileCall: TimeInterval = 2
+
+@MainActor
+final class MovieLibrarySourceAccessTests: XCTestCase {
+    func testABlockedRootOpenListsTheFolderUnavailableAfterTheLimitWithoutFreezingTheApp() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let ticker = MainActorTicker()
+        ticker.start()
+        defer { ticker.stop() }
+        let root = fixture.root
+        let started = Date()
+
+        let catalog = try await MovieCatalog.open(
+            sources: [MovieSourceBookmark(id: fixture.rootID, name: "Share", bookmark: Data())],
+            deadline: 0.3
+        ) { _ in
+            Thread.sleep(forTimeInterval: blockingFileCall)
+            return root
+        }
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 1.5, "the open gives up at its limit")
+        XCTAssertGreaterThanOrEqual(ticker.ticks, 10, "the main actor kept running while the open was blocked")
+        let snapshot = try await catalog.snapshot()
+        XCTAssertEqual(snapshot.roots.map(\.isAvailable), [false])
+        await catalog.stop()
+    }
+
+    func testABlockedSourceOpenFailsTheTitleAfterTheLimitWhileTheIndexStaysResponsive() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        try Data(repeating: 1, count: 256).write(to: fixture.root.appendingPathComponent("Share.iso"))
+        let catalog = try fixture.catalog()
+        let candidates = try await catalog.listing().liveCandidates
+        var authorizer = LiveSourceAuthorizer(deadline: 0.3)
+        authorizer.open = { root, components in
+            Thread.sleep(forTimeInterval: blockingFileCall)
+            return root.openFileReportingErrno(components)
+        }
+        let inspector = FakeLiveTitleInspector()
+        let index = LiveTitleIndex(storeURL: nil, authorizer: authorizer, inspector: inspector)
+        let ticker = MainActorTicker()
+        ticker.start()
+        defer { ticker.stop() }
+        let started = Date()
+
+        let first = await index.titles(for: candidates)
+        XCTAssertEqual(first.map(\.state), [.checking])
+        let whileChecking = Date()
+        let second = await index.titles(for: candidates)
+        XCTAssertEqual(second.map(\.state), [.checking])
+        XCTAssertLessThan(Date().timeIntervalSince(whileChecking), 0.2, "the index answers while the open is blocked")
+        await index.waitUntilIdle()
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 1.5, "the title fails at the limit, not when the open returns")
+        XCTAssertGreaterThanOrEqual(ticker.ticks, 10)
+        let after = await index.titles(for: candidates)
+        let title = try XCTUnwrap(after.first)
+        XCTAssertEqual(title.state, .ineligible)
+        XCTAssertEqual(title.reason, LiveSourceAuthorizationError.unavailable.message)
+        let inspections = await inspector.calls
+        XCTAssertEqual(inspections, 0)
+        await catalog.stop()
+    }
+}
+
+/// An inspection whose worker keeps running after a cancel until the test lets it exit.
+private actor GatedLiveTitleInspector: LiveTitleInspecting {
+    private(set) var started = 0
+    private(set) var exited = false
+    private(set) var sawCancel = false
+    private var exitGate: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func inspect(_ lease: LiveSourceLease) async throws -> LiveTitleInspection {
+        started += 1
+        await withTaskCancellationHandler {
+            await waitForExit()
+        } onCancel: {
+            Task { await self.noteCancel() }
+        }
+        exited = true
+        throw CancellationError()
+    }
+
+    func releaseExit() {
+        released = true
+        exitGate?.resume()
+        exitGate = nil
+    }
+
+    private func noteCancel() { sawCancel = true }
+
+    private func waitForExit() async {
+        guard !released else { return }
+        await withCheckedContinuation { exitGate = $0 }
+    }
+}
+
+final class LiveTitleIndexLifecycleTests: XCTestCase {
+    private func candidates(in fixture: MovieTestFixture) async throws -> (MovieCatalog, [LiveCatalogCandidate]) {
+        try Data(repeating: 1, count: 256).write(to: fixture.root.appendingPathComponent("Disc.iso"))
+        let catalog = try fixture.catalog()
+        return (catalog, try await catalog.listing().liveCandidates)
+    }
+
+    func testStopWaitsForARunningInspectionsWorkerToExit() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let (catalog, listed) = try await candidates(in: fixture)
+        let inspector = GatedLiveTitleInspector()
+        let index = LiveTitleIndex(storeURL: nil, inspector: inspector)
+        _ = await index.titles(for: listed)
+        let deadline = Date().addingTimeInterval(5)
+        while await inspector.started == 0, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+
+        let stopped = LockedBox()
+        let stopping = Task {
+            await index.stop()
+            stopped.set()
+        }
+        while await !inspector.sawCancel, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(stopped.value, "stop returns only after the worker exits")
+        await inspector.releaseExit()
+        await stopping.value
+        let exited = await inspector.exited
+        XCTAssertTrue(exited)
+        await catalog.stop()
+    }
+
+    func testStopDuringAuthorizationNeverStartsTheWorker() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let (catalog, listed) = try await candidates(in: fixture)
+        var authorizer = LiveSourceAuthorizer(deadline: 5)
+        authorizer.open = { root, components in
+            Thread.sleep(forTimeInterval: 0.3)
+            return root.openFileReportingErrno(components)
+        }
+        let inspector = FakeLiveTitleInspector()
+        let index = LiveTitleIndex(storeURL: nil, authorizer: authorizer, inspector: inspector)
+        _ = await index.titles(for: listed)
+        try await Task.sleep(for: .milliseconds(50))
+        await index.stop()
+        let calls = await inspector.calls
+        XCTAssertEqual(calls, 0)
+        await catalog.stop()
+    }
+
+    func testTheCacheIsWrittenAndReadInTheBackgroundAndAnOversizedFileIsIgnored() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let (catalog, listed) = try await candidates(in: fixture)
+        let store = fixture.directory.appendingPathComponent("support/live-titles.v1.json")
+
+        let first = LiveTitleIndex(storeURL: store, inspector: FakeLiveTitleInspector())
+        _ = await first.titles(for: listed)
+        await first.waitUntilIdle()
+        await first.stop()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.path), "stop waits for the cache write")
+
+        let secondInspector = FakeLiveTitleInspector()
+        let second = LiveTitleIndex(storeURL: store, inspector: secondInspector)
+        let cached = await second.titles(for: listed)
+        XCTAssertEqual(cached.map(\.state), [.eligible])
+        let calls = await secondInspector.calls
+        XCTAssertEqual(calls, 0)
+        await second.stop()
+
+        // The same valid cache, padded past the limit: only the size bound refuses it.
+        var padded = try Data(contentsOf: store)
+        padded.append(Data(repeating: 0x20, count: LiveTitleIndex.maximumStoreBytes))
+        try padded.write(to: store)
+        let oversized = LiveTitleIndex(storeURL: store, inspector: FakeLiveTitleInspector())
+        let fresh = await oversized.titles(for: listed)
+        XCTAssertEqual(fresh.map(\.state), [.checking])
+        await oversized.stop()
+        await catalog.stop()
+    }
+}

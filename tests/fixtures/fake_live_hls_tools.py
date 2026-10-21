@@ -23,7 +23,7 @@ from pathlib import Path
 def record(name: str, data: bytes) -> None:
     directory = os.environ.get("FAKE_LIVE_HLS_RECORD_DIR")
     if directory:
-        (Path(directory) / name).write_bytes(data)
+        atomic_write(Path(directory) / name, data)
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -126,8 +126,25 @@ def ffmpeg(arguments: list[str]) -> int:
     return 0
 
 
+def note_descriptors(name: str) -> None:
+    """Records, under FAKE_TOOLS_FD_LOG, the descriptors above stdio this process inherited."""
+    log = os.environ.get("FAKE_TOOLS_FD_LOG")
+    if not log:
+        return
+    inherited = []
+    for descriptor in range(3, 256):
+        try:
+            os.fstat(descriptor)
+        except OSError:
+            continue
+        inherited.append(str(descriptor))
+    with open(log, "a", encoding="utf-8") as handle:
+        handle.write(f"{name} - -" + " " + (",".join(inherited) or "none") + "\n")
+
+
 def main() -> int:
     name = Path(sys.argv[0]).name
+    note_descriptors(name)
     if name == "mv-hevc-encoder":
         return encoder(sys.argv[1:])
     if name == "ffmpeg":

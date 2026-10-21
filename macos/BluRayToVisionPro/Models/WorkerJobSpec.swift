@@ -11,9 +11,49 @@ struct WorkerJobSpec: Encodable, Equatable {
             case physicalDisc = "physical_disc"
         }
 
+        /// What the Mac observed when it authorized a live source: `fstat` of the descriptor it
+        /// opened under the approved folder.
+        struct Identity: Encodable, Equatable {
+            let device: UInt64
+            let inode: UInt64
+            let sizeBytes: Int64
+            let modificationSeconds: Int64
+            let modificationNanoseconds: Int64
+
+            init(_ identity: LiveSourceIdentity) {
+                device = identity.device
+                inode = identity.inode
+                sizeBytes = identity.sizeBytes
+                modificationSeconds = identity.modificationSeconds
+                modificationNanoseconds = identity.modificationNanoseconds
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case device
+                case inode
+                case sizeBytes = "size_bytes"
+                case modificationSeconds = "modification_seconds"
+                case modificationNanoseconds = "modification_nanoseconds"
+            }
+        }
+
+        /// Where the engine collects the Mac's open descriptor for the source. With a handoff,
+        /// the engine never opens `path`; it is only the canonical name, for diagnostics.
+        struct DescriptorHandoff: Encodable, Equatable {
+            let socketPath: String
+            let token: String
+
+            enum CodingKeys: String, CodingKey {
+                case socketPath = "socket_path"
+                case token
+            }
+        }
+
         let kind: Kind
         let path: String
         let titleID: String?
+        let identity: Identity?
+        let descriptorHandoff: DescriptorHandoff?
 
         init(source: ConversionSource, titleID: String? = nil) {
             switch source.kind {
@@ -30,12 +70,16 @@ struct WorkerJobSpec: Encodable, Equatable {
             }
             path = source.workerSourcePath
             self.titleID = titleID
+            identity = nil
+            descriptorHandoff = nil
         }
 
-        init(kind: Kind, path: String) {
+        init(kind: Kind, path: String, identity: Identity? = nil, descriptorHandoff: DescriptorHandoff? = nil) {
             self.kind = kind
             self.path = path
             titleID = nil
+            self.identity = identity
+            self.descriptorHandoff = descriptorHandoff
         }
 
         init(fileURL: URL) {
@@ -46,12 +90,16 @@ struct WorkerJobSpec: Encodable, Equatable {
             }
             path = fileURL.path
             titleID = nil
+            identity = nil
+            descriptorHandoff = nil
         }
 
         enum CodingKeys: String, CodingKey {
             case kind
             case path
             case titleID = "title_id"
+            case identity
+            case descriptorHandoff = "descriptor_handoff"
         }
     }
 
@@ -514,28 +562,11 @@ struct WorkerJobSpec: Encodable, Equatable {
     }
 
     struct LiveHLS: Encodable, Equatable {
-        struct SourceIdentity: Encodable, Equatable {
-            let device: UInt64
-            let inode: UInt64
-            let sizeBytes: Int64
-            let modificationSeconds: Int64
-            let modificationNanoseconds: Int64
-
-            enum CodingKeys: String, CodingKey {
-                case device
-                case inode
-                case sizeBytes = "size_bytes"
-                case modificationSeconds = "modification_seconds"
-                case modificationNanoseconds = "modification_nanoseconds"
-            }
-        }
-
         let playlist: Int
         let audioPID: Int
         let retentionSeconds: Int
         let retentionMaxBytes: Int
         let viewerLeadSeconds: Int?
-        let sourceIdentity: SourceIdentity?
         let maximumPairs: Int?
 
         enum CodingKeys: String, CodingKey {
@@ -544,7 +575,6 @@ struct WorkerJobSpec: Encodable, Equatable {
             case retentionSeconds = "retention_seconds"
             case retentionMaxBytes = "retention_max_bytes"
             case viewerLeadSeconds = "viewer_lead_seconds"
-            case sourceIdentity = "source_identity"
             case maximumPairs = "maximum_pairs"
         }
     }
@@ -676,11 +706,13 @@ struct WorkerJobSpec: Encodable, Equatable {
     }
 
     /// A live HLS stream of an authorized disc image or Blu-ray folder, named by its canonical
-    /// path. The engine rechecks `identity` before it reads the source.
+    /// path. With `descriptorHandoff`, the engine reads the descriptor the Mac opened and checks
+    /// it against `identity`; without one, it reopens the path and checks that.
     init(
         liveHLSSourcePath canonicalPath: String,
         isBluRayFolder: Bool,
         identity: LiveSourceIdentity,
+        descriptorHandoff: Source.DescriptorHandoff? = nil,
         workspaceURL: URL,
         playlist: Int,
         audioPID: Int,
@@ -694,7 +726,12 @@ struct WorkerJobSpec: Encodable, Equatable {
         type = "job.start"
         self.jobID = jobID
         operation = "start_live_hls"
-        source = Source(kind: isBluRayFolder ? .bluRayFolder : .discImage, path: canonicalPath)
+        source = Source(
+            kind: isBluRayFolder ? .bluRayFolder : .discImage,
+            path: canonicalPath,
+            identity: Source.Identity(identity),
+            descriptorHandoff: descriptorHandoff
+        )
         destination = Destination(path: workspaceURL.path)
         encoding = nil
         job = nil
@@ -706,24 +743,27 @@ struct WorkerJobSpec: Encodable, Equatable {
             retentionSeconds: retentionSeconds,
             retentionMaxBytes: retentionMaxBytes,
             viewerLeadSeconds: viewerLeadSeconds,
-            sourceIdentity: LiveHLS.SourceIdentity(
-                device: identity.device,
-                inode: identity.inode,
-                sizeBytes: identity.sizeBytes,
-                modificationSeconds: identity.modificationSeconds,
-                modificationNanoseconds: identity.modificationNanoseconds
-            ),
             maximumPairs: maximumPairs
         )
     }
 
-    init(liveTitleInspection source: ConversionSource, jobID: UUID = UUID()) {
-        precondition(source.kind == .discImage || source.kind == .bluRayFolder)
+    /// Live eligibility of an authorized disc image, read through the Mac's descriptor.
+    init(
+        liveTitleInspectionSourcePath canonicalPath: String,
+        identity: LiveSourceIdentity,
+        descriptorHandoff: Source.DescriptorHandoff,
+        jobID: UUID = UUID()
+    ) {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
         operation = "inspect_live_title"
-        self.source = Source(source: source)
+        source = Source(
+            kind: .discImage,
+            path: canonicalPath,
+            identity: Source.Identity(identity),
+            descriptorHandoff: descriptorHandoff
+        )
         destination = nil
         encoding = nil
         job = nil

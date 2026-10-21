@@ -15,7 +15,6 @@ import os
 import queue
 import re
 import shutil
-import stat
 import subprocess
 import threading
 import time
@@ -23,7 +22,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Callable, Mapping, cast
+from typing import TYPE_CHECKING, BinaryIO, Callable, Mapping, cast
 
 from bd_to_avp.modules.config import resolve_tool_path
 from bd_to_avp.process_runner import (
@@ -48,6 +47,9 @@ from bd_to_avp.worker.source_service import (
     SourceServiceError,
     SSIFSourceHelper,
 )
+
+if TYPE_CHECKING:
+    from bd_to_avp.worker.source_handoff import HeldSource
 
 
 MANIFEST_FILENAME = "live-hls.json"
@@ -607,10 +609,19 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         ffmpeg_path: Path | None = None,
         encoder_path: Path | None = None,
         clock: Callable[[], float] = time.time,
+        held_source: HeldSource | None = None,
     ) -> None:
         if job.live_hls is None or job.destination is None:
             raise SourceServiceError("invalid_live_hls", "The live HLS job is incomplete.")
-        super().__init__(job, job.live_hls, job.destination.path, owner, activity, probe_path=probe_path)
+        super().__init__(
+            job,
+            job.live_hls,
+            job.destination.path,
+            owner,
+            activity,
+            probe_path=probe_path,
+            held_source=held_source,
+        )
         self.options: LiveHLSOptions = job.live_hls
         self.no_progress_seconds: float = NO_PROGRESS_TIMEOUT_SECONDS
         self.edge264_path = edge264_path or resolve_tool_path("edge264_test")
@@ -694,45 +705,6 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             self._remove_workspace()
             raise
 
-    def _verify_source_identity(self) -> None:
-        """Confirms the source path still names the file the host authorized.
-
-        The host passes what ``lstat`` saw when it authorized the start. The path must
-        not be a symbolic link, and the file opened without following links must match
-        that device, inode, size, and modification time.
-        """
-        identity = self.options.source_identity
-        if identity is None:
-            return
-        path = self.job.source.path
-        try:
-            linked = os.lstat(path)
-            if stat.S_ISLNK(linked.st_mode):
-                raise OSError("The live source is a symbolic link.")
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-            try:
-                opened = os.fstat(descriptor)
-            finally:
-                os.close(descriptor)
-        except OSError as error:
-            raise SourceServiceError(
-                "live_source_changed", "The live source is no longer the file that was approved.", str(error)
-            ) from error
-        observed = (
-            opened.st_dev & 0xFFFF_FFFF,
-            opened.st_ino,
-            opened.st_size,
-            opened.st_mtime_ns,
-        )
-        expected = (
-            identity.device,
-            identity.inode,
-            identity.size_bytes,
-            identity.modification_seconds * 1_000_000_000 + identity.modification_nanoseconds,
-        )
-        if observed != expected or (linked.st_dev, linked.st_ino) != (opened.st_dev, opened.st_ino):
-            raise SourceServiceError("live_source_changed", "The live source is no longer the file that was approved.")
-
     def producer_stats(self) -> dict[str, object]:
         """Producer capacity separate from pacing: unheld throughput is
         ``produced_microseconds / ((wall_seconds - held_seconds) * 1e6)``."""
@@ -786,7 +758,13 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         self.frame_microseconds = 1_000_000 * denominator / numerator
         source_read, source_write = self._pipe()
         source = self._child(
-            self._spec(tuple(self._source_command()), "ssif_probe", "Direct SSIF live source", stdout=source_write),
+            self._spec(
+                tuple(self._source_command()),
+                "ssif_probe",
+                "Direct SSIF live source",
+                stdout=source_write,
+                pass_fds=self._source_pass_fds(),
+            ),
             "source_stream_failed",
         )
         primary_error: BaseException | None = None
@@ -839,7 +817,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         command = [
             str(self.probe_path),
             "stream-service",
-            str(self.job.source.path),
+            self._source_argument(),
             str(self.options.playlist),
             str(self.options.audio_pid),
         ]
@@ -1171,9 +1149,11 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         *,
         stdin: BinaryIO | None = None,
         stdout: int | BinaryIO = subprocess.PIPE,
+        pass_fds: tuple[int, ...] = (),
     ) -> ProcessSpec:
         return ProcessSpec(
             argv=argv,
+            pass_fds=pass_fds,
             tool_id=tool_id,
             display_name=display_name,
             stdin=stdin,

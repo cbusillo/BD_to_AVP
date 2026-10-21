@@ -16,7 +16,18 @@ Request:
   "type": "job.start",
   "job_id": "…",
   "operation": "start_live_hls",
-  "source": {"kind": "disc_image", "path": "/absolute/source.iso"},
+  "source": {
+    "kind": "disc_image",
+    "path": "/absolute/source.iso",
+    "identity": {
+      "device": 16777234,
+      "inode": 123456789,
+      "size_bytes": 41234567168,
+      "modification_seconds": 1760000000,
+      "modification_nanoseconds": 123456789
+    },
+    "descriptor_handoff": {"socket_path": "/var/folders/…/T/bdtoavp-Ab12Cd/s", "token": "…"}
+  },
   "destination": {"path": "/absolute/empty/workspace"},
   "live_hls": {
     "playlist": 1005,
@@ -24,14 +35,7 @@ Request:
     "retention_seconds": 120,
     "retention_max_bytes": 268435456,
     "maximum_pairs": 14434,
-    "viewer_lead_seconds": 30,
-    "source_identity": {
-      "device": 16777234,
-      "inode": 123456789,
-      "size_bytes": 41234567168,
-      "modification_seconds": 1760000000,
-      "modification_nanoseconds": 123456789
-    }
+    "viewer_lead_seconds": 30
   }
 }
 ```
@@ -43,13 +47,17 @@ the source.
 
 `viewer_lead_seconds` is optional, from 10 through half of
 `retention_seconds`; it turns on viewer pacing (see Backpressure).
-`source_identity` is optional and is what the host saw when it authorized the
-file. When present, the worker checks it before inspection and again before the
-source read: the path must not be a symbolic link, and the file opened without
-following links must have that device (low 32 bits), inode, size, and
-modification time. A mismatch fails with `live_source_changed`. The Mac relay
-sends both; the request shape is in
-`tests/fixtures/native_worker_start_live_hls_v13.json`.
+`source.identity` is optional and is what the host saw when it authorized the
+file. `source.descriptor_handoff` is how the Mac hands the worker the ISO it
+opened under the approved folder's security scope, so the worker needs no
+consent of its own to read a network share or a protected folder; see
+[the v13 protocol](native-worker-protocol-v13.md#live-source-identity-and-descriptor-handoff).
+The worker checks the identity before inspection and again before the source
+read. With a handoff, both checks are `fstat` on the received descriptor, and
+`ssif_probe` reads it as `/dev/fd/N`; the worker never opens the path. Without
+one, the path must not be a symbolic link, and the file opened without
+following links must match. A mismatch fails with `live_source_changed`. The
+request shape is in `tests/fixtures/native_worker_start_live_hls_v13.json`.
 
 The worker emits `artifact.ready` with a `live_hls` payload naming the manifest
 and playlist once the first segment, playlist, and manifest are durable. The
@@ -231,7 +239,7 @@ own code, `live_video_decode_failed`, `live_video_normalize_failed`,
 The Mac serves a live stream through the authenticated relay
 (`macos/BluRayToVisionPro/Relay/Live/`). Each stream runs its own worker on a
 fresh `~/Library/Caches/<bundle>/LiveHLS/<stream-id>` workspace with 120-second
-and 256 MiB retention and a 30-second viewer lead, and sends `source_identity`
+and 256 MiB retention and a 30-second viewer lead, and sends `source.identity`
 from the source lease.
 
 - **Following.** The relay polls `live-hls.json` every 250 ms and rereads it only
@@ -288,6 +296,78 @@ The workspace peaked at 547 MB. Stopping took 0.13 seconds and left no workspace
 and no pipeline process. In that run the worker was started from a shell and
 connected to the relay over FIFOs, because the test app had not been granted
 access to the network volume holding the ISO; see the task evidence.
+
+## Mac Movies live titles
+
+Movie Sharing lists Blu-ray 3D ISOs from the approved folders as live titles and
+serves them through the same movie session, with no second pairing
+(`macos/BluRayToVisionPro/MovieSharing/`).
+
+- **Catalog.** The catalog stays version 1. `liveTitles` is added, and is
+  encoded only when it is non-empty; ISOs never appear in `movies`, so a
+  shipped player (0.1.0 (3)) and Mac (0.3.3) keep working. Each title carries
+  `liveVersion`, its digest `id` and `revision`, `state` (`checking`,
+  `eligible`, or `ineligible`), a `reason`, the duration, and up to 32 audio
+  tracks with a label and a default. A client skips a title whose `liveVersion`
+  it does not know.
+- **Eligibility.** The listing stats each ISO without opening it.
+  `LiveTitleIndex` caches each `(id, revision)` result from `inspect_live_title`
+  in `Application Support/<bundle>/live-titles.v1.json` (256 entries). An
+  uncached title shows `checking` while one serial background inspection runs.
+  A failed check shows its reason and retries after 10 minutes.
+- **Authorization.** A cached entry authorizes nothing. `LiveSourceAuthorizer`
+  runs before every inspection and every start. It reopens the ISO under the
+  approved root with the `O_NOFOLLOW` walk, confirms the root is still the
+  approved one, compares the revision, takes the canonical path with
+  `F_GETPATH`, and keeps the descriptor and the root's scoped access in the
+  lease for the whole job. The open runs off the host with a 10-second deadline.
+  `EPERM` or `EACCES` lists the title as ineligible with a permission message,
+  and a start for it is refused with that message. A timeout is
+  `source_unavailable`.
+- **Descriptor handoff.** The Mac app holds the folder's consent, and its
+  worker does not. `LiveSourceHandoff` binds a one-shot Unix socket in a fresh
+  0700 `$TMPDIR/bdtoavp-XXXXXX` directory, accepts only the worker's pid (or a
+  process in its group), checks the 64-character token from the job spec, and
+  sends the descriptor with `SCM_RIGHTS` within 10 seconds. It then closes the
+  listener and removes the directory. The worker reads the source only through
+  that descriptor (see `source.descriptor_handoff` in the v13 protocol).
+- **Ready deadline.** A stream still `starting` 45 seconds after launch fails
+  with `live_start_timeout`, so the player sees the Mac's reason well before its
+  own 120-second limit.
+
+Routes on the parent movie session:
+
+| Route | Answer |
+|---|---|
+| `POST /movies/v1/live/start` | Signed 202 `LiveStartResponse {liveVersion, streamID, state}`; 409 or 429 `LiveStartRefusal {outcome, message}` (`busy`, `cancelled`, `conflict`, `sourceChanged`, `rateLimited`); 422 `{"retryable":false}` when signed outside the window. |
+| `POST /movies/v1/live/cancel` | 204; signed 429 `{"retryable":true}`; signed 422 `{"retryable":false}`. |
+| `POST /movies/v1/live/release` | Signed 200 `{"drained":Bool}`. It has no signing window, records nothing, and drains only when exactly that start identity holds the slot. |
+| `GET /movies/v1/live/status/<streamID>` | Signed 200 with the state, the window, a failure or stop reason, and `macBusyConverting`; `unknown` for a stream that is not current. It renews the stream's lease. |
+
+`LiveStartAdmission` implements the slot contract in `LiveRelayStreaming.swift`
+and `LiveStartContract.swift`; the PR 1 contract tests run against it as well as
+against the reference model. The playlist always comes from the index. A stream
+that stops or fails by itself releases the slot, and the host remembers why for
+that session's most recent stream. Live playback may run while a conversion is
+active. The status then reports `macBusyConverting`, and the queue is not
+paused.
+
+Relay routes use the stream session. A request whose session ID names no
+parent session is treated as a stream ID. The host re-derives
+`liveStreamSession(streamID:)` under each live parent session (at most four),
+and the first that verifies decides the request. On all five live routes the
+`x-bdtoavp-relay-media-capability` header must match the derived capability, or
+the answer is a signed 403. The current stream answers through `relayResponse`.
+Any other stream ID, ended or never issued, gets a signed 410
+`RelayLiveStreamEnded` with the remembered reason or `not_current`. When no
+derivation verifies, the parent session is gone, and the answer is an unsigned
+401.
+
+On the Mac, Movie Sharing shows **Live playback to <device>** with a Stop
+button while a stream runs. Stopping sharing, forgetting the device, parent
+session expiry, and quitting all drain the slot and wait for the worker to
+exit. At launch the app removes any leftover `LiveHLS/<id>` workspace and
+handoff directory.
 
 ## Tools
 

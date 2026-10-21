@@ -9,7 +9,14 @@ final class MovieSharingController: ObservableObject {
     @Published private(set) var isSharing = false
     @Published private(set) var isBusy = false
     @Published private(set) var status = "Add a folder of completed movies to share with Vision Pro."
+    @Published private(set) var liveActivity: MovieLiveActivity?
     @Published var errorMessage: String?
+    /// True while the conversion queue has an active worker. Live playback still runs, and the
+    /// Vision Pro shows that the Mac is busy converting.
+    var isConversionActive: @MainActor () -> Bool = { false }
+
+    typealias LiveServicesFactory = @MainActor (_ isBusyConverting: @escaping @Sendable () async -> Bool) throws -> MovieLibraryLiveServices?
+    private let makeLiveServices: LiveServicesFactory
 
     private let defaults: UserDefaults
     private let trust: MovieLibraryTrustStore
@@ -21,9 +28,16 @@ final class MovieSharingController: ObservableObject {
     private static let foldersKey = "movieSharing.approvedFolders.v1"
     private static let enabledKey = "movieSharing.enabled.v1"
 
-    init(defaults: UserDefaults = AppPreferences.current, trust: MovieLibraryTrustStore? = nil) {
+    init(
+        defaults: UserDefaults = AppPreferences.current,
+        trust: MovieLibraryTrustStore? = nil,
+        makeLiveServices: LiveServicesFactory? = nil
+    ) {
         self.defaults = defaults
         self.trust = trust ?? Self.trustStoreForRunningProcess()
+        self.makeLiveServices = makeLiveServices ?? { isBusyConverting in
+            try MovieLibraryLiveServices.automatic(isBusyConverting: isBusyConverting, policy: RelayRequestValidationPolicy())
+        }
         do {
             if let data = defaults.data(forKey: Self.foldersKey) {
                 guard data.count <= 1_048_576 else { throw MovieLibraryError.invalidResponse }
@@ -112,8 +126,21 @@ final class MovieSharingController: ObservableObject {
         let attempt = epoch
         status = "Starting movie sharing…"
         do {
-            let catalog = try MovieCatalog(sources: sources)
-            let host = try MovieLibraryHost(catalog: catalog, trust: trust)
+            // Resolving and opening the roots may wait on a network share; never on the main actor.
+            let catalog = try await MovieCatalog.open(sources: sources)
+            guard epoch == attempt else { await catalog.stop(); return }
+            let isBusyConverting: @Sendable () async -> Bool = { @MainActor [weak self] in
+                self?.isConversionActive() ?? false
+            }
+            // The launch sweep finishes before any live workspace or handoff socket of this run
+            // can exist. Unit-test hosts never sweep the real caches.
+            if !AppDelegate.isUnitTestHost(environment: ProcessInfo.processInfo.environment) {
+                await LiveRelayStreamStarter.leftoverSweep.value
+            }
+            guard epoch == attempt else { await catalog.stop(); return }
+            // Live ISO playback is optional: without a worker, sharing still serves movies.
+            let live = try? makeLiveServices(isBusyConverting)
+            let host = try MovieLibraryHost(catalog: catalog, trust: trust, live: live)
             let server = try await RelayNetworkServer.start(host: host)
             guard epoch == attempt else { await server.stop(); return }
             self.host = host
@@ -125,9 +152,11 @@ final class MovieSharingController: ObservableObject {
                 while !Task.isCancelled {
                     let candidate = try? await host.pendingCandidate()
                     let lifecycle = await host.currentLifecycle()
+                    let activity = await host.liveActivity()
                     guard let self, self.host === host, !Task.isCancelled else { return }
                     if self.pairingCandidate?.candidateID != candidate?.candidateID { self.refreshPeers() }
                     self.pairingCandidate = candidate
+                    if self.liveActivity != activity { self.liveActivity = activity }
                     if lifecycle == .stopped {
                         await self.stopForAppQuit()
                         self.errorMessage = "Movie sharing lost its network connection. Turn sharing on again."
@@ -157,9 +186,17 @@ final class MovieSharingController: ObservableObject {
         self.server = nil
         host = nil
         pairingCandidate = nil
+        liveActivity = nil
         isSharing = false
         status = "Movie sharing is off."
         await server?.stopForAppQuit()
+    }
+
+    /// Stops live playback and waits for its worker to exit. Sharing stays on.
+    func stopLivePlayback() async {
+        guard let host else { return }
+        await host.stopLivePlayback()
+        liveActivity = await host.liveActivity()
     }
 
     func approve() async {
