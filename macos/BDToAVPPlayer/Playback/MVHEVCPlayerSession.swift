@@ -129,6 +129,23 @@ enum RelayPlaybackTerminationReason: Equatable {
     case sessionEnded
     case serverUnreachable
     case rejected
+    /// The live stream stopped or failed on the Mac. The session stays valid.
+    case streamEnded
+}
+
+/// What `prepareRelayPlayback` did. Only `installed` hands the playback to the caller.
+enum RelayPlaybackPreparationOutcome: Equatable {
+    case installed
+    case failed(PlaybackFailurePresentation)
+    case superseded
+}
+
+/// The parts of a live ISO stream the player session needs beyond the relay configuration.
+struct RelayLivePlaybackContext: Sendable {
+    let title: String
+    let streamID: UUID
+    /// The Mac's parent-signed live status, for the busy notice and why a stream ended.
+    let status: @Sendable () async -> LiveStreamStatus?
 }
 
 struct RelayPlaybackTerminationEvent: Equatable {
@@ -164,6 +181,11 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var isEyeSwapped = false
     @Published private(set) var isChangingEyeOrder = false
     @Published private(set) var relayTerminationEvent: RelayPlaybackTerminationEvent?
+    /// For live ISO playback, a notice such as the Mac being busy converting.
+    @Published private(set) var liveNotice: String?
+
+    static let liveBusyNotice = "The Mac is busy converting; playback may pause."
+    static let liveForwardBufferDuration: TimeInterval = 20
 
     private(set) var playerItem: AVPlayerItem?
 
@@ -172,6 +194,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var relayTransport: (any RelayTransport)?
     private var relayWindowRefreshTask: Task<Void, Never>?
     private var consecutiveRelayRefreshFailures = 0
+    private var liveContext: RelayLivePlaybackContext?
+    private var liveStatusRefreshCount = 0
     private var resumeStore: ResumeStore?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlStatusObservation: NSKeyValueObservation?
@@ -282,6 +306,9 @@ final class MVHEVCPlayerSession: ObservableObject {
         mediaItem?.id.hasPrefix("relay:") == true
     }
 
+    /// The live stream being played, if this relay playback is a live ISO title.
+    var liveStreamID: UUID? { liveContext?.streamID }
+
     func prepare(
         mediaItem: MediaItem,
         bookmarkStore: BookmarkStore,
@@ -291,6 +318,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         preparationGeneration += 1
         let generation = preparationGeneration
         finishCurrentSession(persistResume: true)
+        liveContext = nil
 
         self.mediaItem = mediaItem
         if mediaItem.format != .mvHEVC {
@@ -449,17 +477,23 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
     }
 
-    func prepareRelayPlayback(_ configuration: RelayRemotePlaybackConfiguration) async {
+    @discardableResult
+    func prepareRelayPlayback(
+        _ configuration: RelayRemotePlaybackConfiguration,
+        live: RelayLivePlaybackContext? = nil
+    ) async -> RelayPlaybackPreparationOutcome {
         preparationGeneration += 1
         let generation = preparationGeneration
         finishCurrentSession(persistResume: true)
 
+        // A live stream's session ID is its stream ID, so the item identity names the stream.
         let relayItem = MediaItem(
             id: "relay:\(configuration.session.sessionID.rawValue)",
-            title: "\(configuration.serverName) Live Relay",
+            title: live?.title ?? "\(configuration.serverName) Live Relay",
             fileName: "live.m3u8",
             format: .mvHEVC
         )
+        liveContext = live
         mediaItem = relayItem
         resumeStore = nil
         state = .loading
@@ -488,10 +522,15 @@ final class MVHEVCPlayerSession: ObservableObject {
             try await source.refreshRetainedWindow(transport: configuration.transport)
             let (asset, _) = try await source.makeAssetAndLoader(transport: configuration.transport)
             let item = AVPlayerItem(asset: asset)
+            if live != nil {
+                // The Mac paces production to the reported playhead; a modest forward buffer
+                // keeps AVPlayer from racing to the live edge.
+                item.preferredForwardBufferDuration = Self.liveForwardBufferDuration
+            }
             let preparedSelections = try await prepareMediaSelections(for: asset, item: item)
             guard generation == preparationGeneration, !Task.isCancelled else {
                 source.cancelLoader()
-                return
+                return .superseded
             }
 
             sourceInstalled = true
@@ -503,19 +542,61 @@ final class MVHEVCPlayerSession: ObservableObject {
                 item: item,
                 mediaItem: relayItem
             )
+            return .installed
         } catch is CancellationError {
             if generation == preparationGeneration {
                 pendingResume.clear()
             }
+            return .superseded
         } catch {
             guard generation == preparationGeneration else {
-                return
+                return .superseded
+            }
+            let presentation = PlaybackFailurePresentation.relayPreparationFailed(
+                await relayFailureMessage(for: error, generation: generation)
+            )
+            guard generation == preparationGeneration else {
+                return .superseded
             }
             terminateRelayPlayback(
-                presentation: .relayPreparationFailed(Self.playbackFailureMessage(for: error)),
+                presentation: presentation,
                 reason: Self.relayTerminationReason(for: error),
                 emitEvent: true
             )
+            return .failed(presentation)
+        }
+    }
+
+    /// The message for a relay failure. A live stream that ended shows the Mac's reason, never
+    /// a request to pair again; only a revoked session asks for that.
+    private func relayFailureMessage(for error: Error, generation: Int) async -> String {
+        switch error {
+        case RelayTransportError.sessionRevoked, RelayTransportError.sessionExpired, RelayTransportError.unpaired:
+            return Self.sessionEndedMessage
+        case let RelayTransportError.streamEnded(code, message):
+            let status = await liveContext?.status()
+            let reason = status?.failure?.message ?? message ?? Self.liveStopDescription(status?.stopReason ?? code)
+            return "Live playback stopped on the Mac: \(reason)"
+        default:
+            return Self.playbackFailureMessage(for: error)
+        }
+    }
+
+    static let sessionEndedMessage = "The relay session ended. Pair with the Mac again to continue."
+
+    static func liveStopDescription(_ code: String) -> String {
+        switch code {
+        case "viewerStopped": "playback was stopped."
+        case "replaced": "another live title started."
+        case "cancelled": "the start was cancelled."
+        case "sessionEnded": "this Vision Pro's access ended."
+        case "idle": "the stream was idle too long."
+        case "sharingStopped": "Movie Sharing was turned off."
+        case "appQuit": "the Mac app quit."
+        case "sourceChanged": "the disc image changed or is no longer available."
+        case RelayLiveStreamEnded.notCurrentCode: "this stream is no longer current."
+        case "live_start_timeout": "the stream did not start in time."
+        default: code
         }
     }
 
@@ -525,9 +606,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         item: AVPlayerItem,
         mediaItem: MediaItem,
         observeItemStatus: Bool = true,
-        startRefreshLoop: Bool = true
+        startRefreshLoop: Bool = true,
+        live: RelayLivePlaybackContext? = nil
     ) {
         self.mediaItem = mediaItem
+        if let live { liveContext = live }
         remotePlaybackSource = source
         relayTransport = transport
         playerItem = item
@@ -583,6 +666,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             player.pause()
         }
         persistResume()
+        reportLivePositionNow()
     }
 
     func togglePlayback() {
@@ -656,6 +740,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                 }
                 if completed {
                     self.currentTime = targetTime
+                    self.reportLivePositionNow()
                 }
 #if BD_TO_AVP_QUALIFICATION
                 if completed {
@@ -823,6 +908,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     func finish() {
         preparationGeneration += 1
         finishCurrentSession(persistResume: true)
+        liveContext = nil
         mediaItem = nil
         resumeStore = nil
         state = .idle
@@ -966,7 +1052,20 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
         case .failed:
             let message = Self.playbackFailureMessage(for: item.error)
-            if isRelayPlayback {
+            if isRelayPlayback, liveContext != nil {
+                // AVPlayer only sees the loopback bridge's flattened 503. Ask the Mac, through
+                // the verified snapshot route, whether the stream ended before reporting it.
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.refreshRelayWindow(generation: generation)
+                    guard generation == self.preparationGeneration, self.state != .failed else { return }
+                    self.terminateRelayPlayback(
+                        presentation: .relayPreparationFailed(message),
+                        reason: item.error.map(Self.relayTerminationReason(for:)) ?? .serverUnreachable,
+                        emitEvent: true
+                    )
+                }
+            } else if isRelayPlayback {
                 terminateRelayPlayback(
                     presentation: .relayPreparationFailed(message),
                     reason: item.error.map(Self.relayTerminationReason(for:)) ?? .serverUnreachable,
@@ -1274,6 +1373,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         relayWindowRefreshTask = nil
         consecutiveRelayRefreshFailures = 0
         relaySeekNotice = nil
+        liveNotice = nil
+        liveStatusRefreshCount = 0
         audioGroup = nil
         subtitleGroup = nil
         audioSelectionByID = [:]
@@ -1517,13 +1618,28 @@ final class MVHEVCPlayerSession: ObservableObject {
             remotePlaybackSource = source
             consecutiveRelayRefreshFailures = 0
             duration = max(duration, source.retainedSeekPolicy.latestAvailableTime)
-        } catch RelayTransportError.sessionExpired, RelayTransportError.unpaired {
+            if liveContext != nil {
+                reportLivePositionNow()
+                refreshLiveNoticeIfDue(generation: generation)
+            }
+        } catch RelayTransportError.sessionExpired, RelayTransportError.unpaired, RelayTransportError.sessionRevoked {
             guard generation == preparationGeneration else {
                 return
             }
             terminateRelayPlayback(
-                presentation: .relayPreparationFailed("The relay session ended. Pair with the Mac again to continue."),
+                presentation: .relayPreparationFailed(Self.sessionEndedMessage),
                 reason: .sessionEnded,
+                emitEvent: true
+            )
+        } catch let error as RelayTransportError where Self.isStreamEnd(error) {
+            // Termination is decided here, by the verified snapshot request. The loopback
+            // bridge flattens AVPlayer's media failures to 503, so they never decide it.
+            guard generation == preparationGeneration else { return }
+            let message = await relayFailureMessage(for: error, generation: generation)
+            guard generation == preparationGeneration else { return }
+            terminateRelayPlayback(
+                presentation: .relayPreparationFailed(message),
+                reason: .streamEnded,
                 emitEvent: true
             )
         } catch is CancellationError {
@@ -1552,7 +1668,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func handleRelayCoordinatorState(_ coordinatorState: RelayCoordinatorState) {
-        guard isRelayPlayback else { return }
+        // A live ISO title belongs to the movie session, not the developer relay coordinator.
+        guard isRelayPlayback, liveContext == nil else { return }
         switch coordinatorState {
         case .idle:
             finish()
@@ -1602,13 +1719,40 @@ final class MVHEVCPlayerSession: ObservableObject {
     private static func relayTerminationReason(for error: Error) -> RelayPlaybackTerminationReason {
         if let relayError = error as? RelayTransportError {
             switch relayError {
-            case .sessionExpired, .unpaired: return .sessionEnded
+            case .sessionExpired, .unpaired, .sessionRevoked: return .sessionEnded
+            case .streamEnded: return .streamEnded
             case let .unexpectedStatusCode(status) where (400 ..< 500).contains(status): return .rejected
             default: break
             }
         }
         if isTerminalRelayRejection(error) { return .rejected }
         return .serverUnreachable
+    }
+
+    private static func isStreamEnd(_ error: RelayTransportError) -> Bool {
+        if case .streamEnded = error { return true }
+        return false
+    }
+
+    /// Sends the playhead of a live stream, signed with the stream session. A lost report
+    /// only delays pacing; the snapshot refresh decides whether the stream ended.
+    private func reportLivePositionNow() {
+        guard liveContext != nil, let source = remotePlaybackSource, let relayTransport else { return }
+        let seconds = player.currentTime().seconds
+        let milliseconds = Int64(max(0, seconds.isFinite ? seconds : currentTime) * 1_000)
+        Task { try? await source.reportPosition(milliseconds: milliseconds, transport: relayTransport) }
+    }
+
+    /// Every fifth refresh, reads the Mac's live status for the busy notice.
+    private func refreshLiveNoticeIfDue(generation: Int) {
+        guard let liveContext else { return }
+        liveStatusRefreshCount += 1
+        guard liveStatusRefreshCount % 5 == 1 else { return }
+        Task { @MainActor [weak self] in
+            let status = await liveContext.status()
+            guard let self, generation == self.preparationGeneration, let status else { return }
+            self.liveNotice = status.macBusyConverting ? Self.liveBusyNotice : nil
+        }
     }
 
     private static func isTerminalRelayRejection(_ error: Error) -> Bool {

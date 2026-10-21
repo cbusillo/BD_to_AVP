@@ -185,6 +185,9 @@ final class RelaySessionCoordinator: ObservableObject {
             // reconnect probe. AVP path availability does not detect a Mac quit.
             guard state != .networkUnavailable, !isReconnecting else { return }
             startReconnect(attempt: 0)
+        case .streamEnded:
+            // A live stream ended; the pairing itself is still valid.
+            break
         }
     }
 
