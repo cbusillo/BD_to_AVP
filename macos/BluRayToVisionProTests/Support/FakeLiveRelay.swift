@@ -216,28 +216,43 @@ func makeFakeLiveStreamRequest(playlist: Int = 800, audioPID: Int = 4352) -> Liv
 
 /// A reference model of the Mac host's live admission contract (`LiveStartAdmissionSlot`,
 /// `LiveStartLimits`), driven by a fake clock. Host and player fakes use it as the Mac side.
+///
+/// `start` and `cancel` return nil where the real host answers an unsigned 401: the request
+/// would not verify under the default policy, or its parent session has ended.
 actor FakeLiveStartAdmission {
     private struct StartIdentity: Hashable {
         let parentSessionID: RelaySessionIdentifier
         let startID: UUID
+        let issuedAtUnixMilliseconds: Int64
+
+        init(_ key: LiveStartKey) {
+            self.init(parentSessionID: key.parentSessionID, startID: key.startID, issuedAt: key.issuedAtUnixMilliseconds)
+        }
+
+        init(parentSessionID: RelaySessionIdentifier, startID: UUID, issuedAt: Int64) {
+            self.parentSessionID = parentSessionID
+            self.startID = startID
+            issuedAtUnixMilliseconds = issuedAt
+        }
     }
 
     /// The remembered outcome of an admitted start, consulted before the slot.
     private struct StartRecord {
         let key: LiveStartKey
         var outcome: LiveStartOutcome
-        /// The latest of admission, first cancellation, and the end of slot ownership.
-        var retainedFrom: Date
+        var exitedSlotAt: Date?
     }
 
     private let starter: any LiveRelayStreamStarting
     private let liveParentSessionIDs: Set<RelaySessionIdentifier>
+    private let policy = try! RelayRequestValidationPolicy()
     private(set) var now: Date
     private(set) var slot: LiveStartAdmissionSlot = .empty
     private var drainingKey: LiveStartKey?
     private var records: [StartIdentity: StartRecord] = [:]
-    private var tombstones: [StartIdentity: Date] = [:]
+    private var tombstones: Set<StartIdentity> = []
     private var admittedStarts: [RelaySessionIdentifier: [Date]] = [:]
+    private var endedSessions: Set<RelaySessionIdentifier> = []
 
     init(
         starter: any LiveRelayStreamStarting,
@@ -263,22 +278,38 @@ actor FakeLiveStartAdmission {
         return records.count
     }
 
+    func isEnded(_ parentSessionID: RelaySessionIdentifier) -> Bool {
+        endedSessions.contains(parentSessionID)
+    }
+
     /// Sessions with any retained per-session state.
     var sessionsWithState: Set<RelaySessionIdentifier> {
         expire()
         return Set(records.keys.map(\.parentSessionID))
-            .union(tombstones.keys.map(\.parentSessionID))
+            .union(tombstones.map(\.parentSessionID))
             .union(admittedStarts.keys)
     }
 
-    func start(_ key: LiveStartKey, request: LiveStreamRequest) async -> LiveStartOutcome {
-        let identity = StartIdentity(parentSessionID: key.parentSessionID, startID: key.startID)
+    /// `signedAt` defaults to the current time.
+    func start(_ key: LiveStartKey, signedAt: Date? = nil, request: LiveStreamRequest) async -> LiveStartOutcome? {
+        guard let signed = verifiedTimestamp(signedAt), !endedSessions.contains(key.parentSessionID) else {
+            return nil
+        }
+        guard LiveStartLimits.acceptsRequest(
+            signedAtUnixMilliseconds: signed,
+            issuedAtUnixMilliseconds: key.issuedAtUnixMilliseconds,
+            policy: policy
+        ) else {
+            return .expired
+        }
+        let identity = StartIdentity(key)
         while true {
+            guard !endedSessions.contains(key.parentSessionID) else { return nil }
             expire()
             if let record = records[identity] {
                 return record.key == key ? record.outcome : .conflict
             }
-            if tombstones[identity] != nil {
+            if tombstones.contains(identity) {
                 return .cancelled
             }
             switch slot {
@@ -302,7 +333,7 @@ actor FakeLiveStartAdmission {
                 let streamID = LiveStreamIdentifier.make(excluding: liveParentSessionIDs)
                 let starter = starter
                 let startTask = Task { try await starter.start(request, id: streamID) }
-                records[identity] = StartRecord(key: key, outcome: .started(streamID: streamID), retainedFrom: now)
+                records[identity] = StartRecord(key: key, outcome: .started(streamID: streamID), exitedSlotAt: nil)
                 slot = .reserved(key, startTask: startTask)
                 Task { await self.install(key, from: startTask) }
                 return .started(streamID: streamID)
@@ -310,32 +341,44 @@ actor FakeLiveStartAdmission {
         }
     }
 
-    func cancel(parentSessionID: RelaySessionIdentifier, startID: UUID) async -> LiveCancelOutcome {
+    /// `signedAt` defaults to the current time.
+    func cancel(
+        parentSessionID: RelaySessionIdentifier,
+        startID: UUID,
+        issuedAtUnixMilliseconds issuedAt: Int64,
+        signedAt: Date? = nil
+    ) async -> LiveCancelOutcome? {
+        guard let signed = verifiedTimestamp(signedAt), !endedSessions.contains(parentSessionID) else {
+            return nil
+        }
+        guard LiveStartLimits.acceptsRequest(
+            signedAtUnixMilliseconds: signed,
+            issuedAtUnixMilliseconds: issuedAt,
+            policy: policy
+        ) else {
+            return .expired
+        }
         expire()
-        let identity = StartIdentity(parentSessionID: parentSessionID, startID: startID)
+        let identity = StartIdentity(parentSessionID: parentSessionID, startID: startID, issuedAt: issuedAt)
         if var record = records[identity] {
-            // Recorded before the drain, so a retry arriving meanwhile is refused. Never limited,
-            // and a repeated cancel does not extend the record.
-            if record.outcome != .cancelled {
-                record.outcome = .cancelled
-                record.retainedFrom = max(record.retainedFrom, now)
-                records[identity] = record
-            }
-            if let held = slot.key, held.parentSessionID == parentSessionID, held.startID == startID {
+            // Recorded before the drain, so a retry arriving meanwhile is refused. Never limited.
+            record.outcome = .cancelled
+            records[identity] = record
+            if let held = slot.key, StartIdentity(held) == identity {
                 await drain(reason: .cancelled)
             }
             return .acknowledged
         }
-        if tombstones[identity] != nil {
+        if tombstones.contains(identity) {
             return .acknowledged
         }
-        let sessionTombstones = tombstones.keys.filter { $0.parentSessionID == parentSessionID }.count
-        guard sessionTombstones < LiveStartLimits.tombstoneCancelsPerSessionPerMinute,
+        let sessionTombstones = tombstones.filter { $0.parentSessionID == parentSessionID }.count
+        guard sessionTombstones < LiveStartLimits.tombstonesPerSession,
               tombstones.count < LiveStartLimits.tombstoneCapacity
         else {
             return .retryLater
         }
-        tombstones[identity] = now.addingTimeInterval(LiveStartLimits.tombstoneLifetime)
+        tombstones.insert(identity)
         return .acknowledged
     }
 
@@ -344,9 +387,11 @@ actor FakeLiveStartAdmission {
         await drain(reason: reason)
     }
 
-    /// Forget and parent expiry: drain that session's start, then drop its state, since none of
-    /// its requests can verify any more.
+    /// Forget and parent expiry. The session is marked ended before any cleanup is awaited, so a
+    /// start or cancel that already passed verification admits and records nothing. Then its
+    /// start is drained and its state dropped.
     func endSession(_ parentSessionID: RelaySessionIdentifier, reason: LiveRelayStopReason) async {
+        endedSessions.insert(parentSessionID)
         while true {
             if case let .draining(task) = slot, drainingKey?.parentSessionID == parentSessionID {
                 await settle(task)
@@ -359,8 +404,20 @@ actor FakeLiveStartAdmission {
             break
         }
         records = records.filter { $0.key.parentSessionID != parentSessionID }
-        tombstones = tombstones.filter { $0.key.parentSessionID != parentSessionID }
+        tombstones = tombstones.filter { $0.parentSessionID != parentSessionID }
         admittedStarts[parentSessionID] = nil
+    }
+
+    /// The request's signed timestamp, or nil when it would fail the default freshness check.
+    private func verifiedTimestamp(_ signedAt: Date?) -> Int64? {
+        guard let signed = RelayTime.unixMilliseconds(for: signedAt ?? now),
+              let current = RelayTime.unixMilliseconds(for: now),
+              signed <= current + policy.allowedFutureSkewMilliseconds,
+              signed >= current - policy.maximumAgeMilliseconds
+        else {
+            return nil
+        }
+        return signed
     }
 
     private func drain(reason: LiveRelayStopReason) async {
@@ -387,9 +444,9 @@ actor FakeLiveStartAdmission {
     }
 
     private func leftSlot(_ key: LiveStartKey) {
-        let identity = StartIdentity(parentSessionID: key.parentSessionID, startID: key.startID)
+        let identity = StartIdentity(key)
         guard var record = records[identity] else { return }
-        record.retainedFrom = max(record.retainedFrom, now)
+        record.exitedSlotAt = now
         records[identity] = record
     }
 
@@ -408,13 +465,21 @@ actor FakeLiveStartAdmission {
         }
     }
 
+    private func lastVerifiable(_ identity: StartIdentity) -> Date {
+        let milliseconds = LiveStartLimits.lastVerifiableUnixMilliseconds(
+            issuedAtUnixMilliseconds: identity.issuedAtUnixMilliseconds,
+            policy: policy
+        ) ?? 0
+        return RelayTime.date(fromUnixMilliseconds: milliseconds)
+    }
+
     private func expire() {
-        let protected = [slot.key, drainingKey].compactMap { $0 }
-        records = records.filter { _, record in
-            protected.contains(record.key)
-                || record.retainedFrom.addingTimeInterval(LiveStartLimits.clientCancelDeadlineAfterStart) > now
+        // A record without an exit time still holds the slot or is draining, so it is kept.
+        records = records.filter { identity, record in
+            guard let exited = record.exitedSlotAt else { return true }
+            return max(lastVerifiable(identity), exited) >= now
         }
-        tombstones = tombstones.filter { $0.value > now }
+        tombstones = tombstones.filter { lastVerifiable($0) >= now }
         let windowStart = now.addingTimeInterval(-60)
         admittedStarts = admittedStarts.compactMapValues { times in
             let recent = times.filter { $0 > windowStart }
