@@ -172,12 +172,13 @@ def _run_worker(
 
         if owner.transport_failure_event.is_set():
             raise WorkerEventTransportError("Worker event transport failed")
-        if job.operation is not WorkerOperation.START_LIVE_SOURCE:
+        if job.operation not in {WorkerOperation.START_LIVE_SOURCE, WorkerOperation.START_LIVE_HLS}:
             owner.check_cancelled()
         result_key = {
             "convert_source": "conversion_result",
             "preview_source": "preview_result",
             "start_live_source": "live_source_result",
+            "start_live_hls": "live_hls_result",
         }.get(job.operation.value, "result")
         emitter.emit(WorkerEventType.JOB_COMPLETED, {result_key: result})
         return 0
