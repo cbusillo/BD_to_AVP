@@ -361,9 +361,14 @@ final class LiveRelayStreamTests: XCTestCase {
         XCTAssertEqual(sleep.activeCount, 0)
         let response = await stream.relayResponse(for: get(RelayWireContract.playlistSnapshotPath))
         XCTAssertEqual(response.statusCode, 410)
-        XCTAssertEqual(
-            try JSONDecoder().decode(RelayLiveStreamEnded.self, from: response.body),
-            RelayLiveStreamEnded(error: .streamEnded, code: LiveRelayStopReason.appQuit.rawValue, message: nil)
+        // The two stops run concurrently, so either may record the reason; the body must
+        // still be a signed stream end carrying one of them.
+        let ended = try JSONDecoder().decode(RelayLiveStreamEnded.self, from: response.body)
+        XCTAssertEqual(ended.error, .streamEnded)
+        XCTAssertNil(ended.message)
+        XCTAssertTrue(
+            [LiveRelayStopReason.appQuit.rawValue, LiveRelayStopReason.sessionEnded.rawValue].contains(ended.code),
+            "unexpected stop reason \(String(describing: ended.code))"
         )
     }
 
