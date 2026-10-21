@@ -36,6 +36,22 @@ struct LiveRelayStreamStarter: LiveRelayStreamStarting {
             .appendingPathComponent("LiveHLS", isDirectory: true)
     }
 
+    /// Removes every leftover live workspace and handoff socket directory. Only files: it runs at
+    /// launch, before any stream can exist.
+    static func sweepLeftovers(
+        workspaceRoot: URL? = try? defaultWorkspaceRoot(),
+        temporaryDirectory: URL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
+        fileManager: FileManager = .default
+    ) {
+        if let workspaceRoot, let children = try? fileManager.contentsOfDirectory(at: workspaceRoot, includingPropertiesForKeys: nil) {
+            for child in children { try? fileManager.removeItem(at: child) }
+        }
+        let handoffs = (try? fileManager.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil)) ?? []
+        for child in handoffs where child.lastPathComponent.hasPrefix("bdtoavp-") && child.lastPathComponent.count == 14 {
+            try? fileManager.removeItem(at: child)
+        }
+    }
+
     /// The production starter: the app's own worker, killed `workerExitGrace` after a cancel.
     static func automatic(configuration: LiveRelayStreamConfiguration = LiveRelayStreamConfiguration()) throws
         -> LiveRelayStreamStarter {
@@ -48,11 +64,15 @@ struct LiveRelayStreamStarter: LiveRelayStreamStarting {
     func start(_ request: LiveStreamRequest, id: UUID) async throws -> any LiveRelayStreaming {
         try Task.checkCancellation()
         let workspaceURL = try makeWorkspaceURL(for: id)
+        // A lease that holds an open descriptor hands it to the worker, so the worker never
+        // opens the source path itself (the app holds the folder's consent, the worker does not).
+        let handoff = request.source.retainer is LiveSourceDescriptorHolding ? try LiveSourceHandoff() : nil
         let stream = LiveRelayStream(
             id: id,
             request: request,
             workspaceURL: workspaceURL,
             runner: try makeRunner(configuration),
+            handoff: handoff,
             configuration: configuration,
             sleepAssertion: sleepAssertion
         )

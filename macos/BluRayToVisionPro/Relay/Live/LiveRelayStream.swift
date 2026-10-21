@@ -13,6 +13,11 @@ struct LiveRelayStreamConfiguration: Sendable {
     var pollInterval: TimeInterval = 0.25
     var idleTimeout: TimeInterval = 60
     var initialLeaseTimeout: TimeInterval = 120
+    /// A stream still `starting` this long after launch fails with `live_start_timeout`, so the
+    /// viewer sees the Mac's reason well before its own 120 s limit.
+    var readyTimeout: TimeInterval = 45
+    /// How long the worker has to collect the source descriptor after launch.
+    var handoffDeadline: TimeInterval = 10
     var sourceRecheckInterval: TimeInterval = 5
     /// How long a stop waits for the worker after cancelling it before killing its process group.
     var workerExitGrace: TimeInterval = 10
@@ -117,6 +122,8 @@ actor LiveRelayStream: LiveRelayStreaming {
     private let sourcePath: String
     private let sourceIdentity: LiveSourceIdentity
     private var lease: LiveSourceLease?
+    private let handoff: LiveSourceHandoff?
+    private var handoffTask: Task<Void, Never>?
     private var workspace: LiveHLSWorkspace
     private var pacer: LiveViewerPositionPacer
     private var currentState: LiveRelayStreamState = .starting
@@ -140,11 +147,13 @@ actor LiveRelayStream: LiveRelayStreaming {
         request: LiveStreamRequest,
         workspaceURL: URL,
         runner: any WorkerProcessRunning & Sendable,
+        handoff: LiveSourceHandoff? = nil,
         configuration: LiveRelayStreamConfiguration = LiveRelayStreamConfiguration(),
         now: @escaping @Sendable () -> Date = { Date() },
         sleepAssertion: LiveRelaySleepAssertion = .system
     ) {
         self.id = id
+        self.handoff = handoff
         self.workspaceURL = workspaceURL.standardizedFileURL
         self.runner = runner
         self.configuration = configuration
@@ -167,6 +176,7 @@ actor LiveRelayStream: LiveRelayStreaming {
             liveHLSSourcePath: request.source.canonicalPath,
             isBluRayFolder: isDirectory,
             identity: request.source.identity,
+            descriptorHandoff: handoff?.jobField,
             workspaceURL: workspaceURL,
             playlist: request.playlist,
             audioPID: request.audioPID,
@@ -187,6 +197,17 @@ actor LiveRelayStream: LiveRelayStreaming {
         sleepToken = sleepAssertion.begin("Serving a live Blu-ray stream to Vision Pro")
         let job = job
         let runner = runner
+        if let handoff, let holder = lease?.retainer as? LiveSourceDescriptorHolding {
+            let deadline = configuration.handoffDeadline
+            handoffTask = Task.detached {
+                // A failed handoff surfaces as the worker's own live_source_handoff_failed.
+                try? await handoff.serve(
+                    descriptor: holder.descriptor,
+                    expectedPeer: { runner.currentProcessIdentifier() },
+                    deadline: deadline
+                )
+            }
+        }
         runTask = Task { [weak self] in
             let outcome: Result<WorkerRunResult, any Error>
             do {
@@ -394,6 +415,10 @@ actor LiveRelayStream: LiveRelayStreaming {
             beginStop(.idle)
             return false
         }
+        if case .starting = currentState, date.timeIntervalSince(startedAt) >= configuration.readyTimeout {
+            fail(code: "live_start_timeout", message: "The Mac could not start the live stream in time.")
+            return false
+        }
         if date.timeIntervalSince(lastSourceCheck) >= configuration.sourceRecheckInterval {
             lastSourceCheck = date
             if !sourceStillLeased() {
@@ -466,6 +491,8 @@ actor LiveRelayStream: LiveRelayStreaming {
     private func startCleanup() {
         guard cleanupTask == nil else { return }
         monitorTask?.cancel()
+        handoff?.close()
+        let handoffTask = handoffTask
         let runTask = runTask
         let runner = runner
         let overdueAfter = configuration.workerExitGrace + configuration.workerExitOverdueAfter
@@ -481,6 +508,7 @@ actor LiveRelayStream: LiveRelayStreaming {
                 await runTask.value
                 watchdog.cancel()
             }
+            await handoffTask?.value
             try? FileManager.default.removeItem(at: workspaceURL)
             await self?.finishCleanup()
         }

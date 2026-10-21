@@ -14,6 +14,8 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
         case fail(code: String, message: String)
         /// Publishes, then writes a manifest that violates the contract, then runs until cancelled.
         case invalidManifest
+        /// Never publishes, like a worker stuck opening its source, until cancelled.
+        case silent
     }
 
     private let lock = NSLock()
@@ -61,6 +63,10 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
         ))
         _ = try await emit(.workerReady)
         switch script {
+        case .silent:
+            await waitUntilCancelled()
+            let cancelledEvent = try await emit(.jobCancelled)
+            return WorkerRunResult(terminalEvent: cancelledEvent, exitStatus: 0, diagnostics: "")
         case let .fail(code, message):
             try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
             try Data("partial".utf8).write(to: workspace.appendingPathComponent("init.mp4"))
@@ -247,7 +253,7 @@ final class LiveRelayStreamTests: XCTestCase {
         XCTAssertEqual(job.operation, "start_live_hls")
         XCTAssertEqual(job.source.path, sourceURL.path)
         XCTAssertEqual(job.liveHLS?.viewerLeadSeconds, LiveRelayStreamConfiguration().viewerLeadSeconds)
-        XCTAssertEqual(job.liveHLS?.sourceIdentity?.inode, try sourceRequest().source.identity.inode)
+        XCTAssertEqual(job.source.identity?.inode, try sourceRequest().source.identity.inode)
         await stream.stop(.viewerStopped)
     }
 
@@ -385,6 +391,24 @@ final class LiveRelayStreamTests: XCTestCase {
         await stream.stop(.viewerStopped)
     }
 
+    func testAStreamThatNeverGetsReadyFailsWithTheMacsReasonAndStopsItsWorker() async throws {
+        var configuration = fastConfiguration()
+        configuration.readyTimeout = 0.3
+        let worker = FakeLiveHLSWorker(script: .silent)
+        let stream = try await makeStream(worker, configuration: configuration)
+        let early = await stream.state()
+        XCTAssertEqual(early, .starting)
+
+        let state = await waitForState(stream) { if case .failed = $0 { return true }; return false }
+        XCTAssertEqual(state, .failed(code: "live_start_timeout", message: "The Mac could not start the live stream in time."))
+        let response = await stream.relayResponse(for: get(RelayWireContract.playlistPath))
+        XCTAssertEqual(response.statusCode, 503)
+        XCTAssertEqual(try JSONDecoder().decode(RelayLiveStreamEnded.self, from: response.body).code, "live_start_timeout")
+        await stream.stop(.cancelled)
+        XCTAssertTrue(worker.isCancelled)
+        XCTAssertTrue(worker.hasExited)
+    }
+
     func testUnrenewedLeaseStopsAsIdle() async throws {
         var configuration = fastConfiguration()
         configuration.initialLeaseTimeout = 0.4
@@ -514,6 +538,10 @@ final class LiveRelayStreamTests: XCTestCase {
                 sizeBytes: 41_234_567_168,
                 modificationSeconds: 1_760_000_000,
                 modificationNanoseconds: 123_456_789
+            ),
+            descriptorHandoff: .init(
+                socketPath: "/tmp/bdtoavp-Ab12Cd/s",
+                token: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
             ),
             workspaceURL: URL(fileURLWithPath: "/tmp/LiveHLS/66666666-6666-4666-8666-666666666666", isDirectory: true),
             playlist: 1_005,

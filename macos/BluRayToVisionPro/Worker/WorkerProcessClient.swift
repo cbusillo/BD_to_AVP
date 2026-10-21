@@ -116,10 +116,14 @@ protocol WorkerProcessRunning: AnyObject {
     /// advertised `viewer_position_v1`.
     func sendViewerPosition(_ command: WorkerViewerPositionCommand) async throws
     func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot
+    /// The running worker's process ID, once launched. A live source handoff accepts only this
+    /// peer.
+    func currentProcessIdentifier() -> pid_t?
 }
 
 extension WorkerProcessRunning {
     func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot { .empty }
+    func currentProcessIdentifier() -> pid_t? { nil }
     func sendControl(_ command: WorkerWaitCommand) async throws { throw WorkerControlError.unavailable }
     func sendViewerPosition(_ command: WorkerViewerPositionCommand) async throws {
         throw WorkerControlError.unavailable
@@ -182,6 +186,13 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         self.configuration = configuration
         self.cancellationEscalationDelay = cancellationEscalationDelay
         self.activityAssertion = activityAssertion
+    }
+
+    func currentProcessIdentifier() -> pid_t? {
+        stateLock.withLock {
+            guard let pid = activeProcess?.processIdentifier, pid > 0 else { return nil }
+            return pid
+        }
     }
 
     func run(job: WorkerJobSpec, onEvent: @escaping EventHandler) async throws -> WorkerRunResult {
