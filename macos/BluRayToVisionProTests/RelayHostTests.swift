@@ -817,7 +817,8 @@ extension RelayHostTests {
             if let stream = await fixture.host.currentLiveStream() as? FakeLiveRelayStream { return stream }
             try await Task.sleep(for: .milliseconds(5))
         }
-        throw XCTSkip("The live stream was never installed")
+        XCTFail("The live stream was never installed")
+        throw CancellationError()
     }
 
     private func liveExchange(
@@ -882,6 +883,47 @@ extension RelayHostTests {
         let forwarded = await stream.requests.map(\.requestTarget)
         XCTAssertEqual(forwarded, [RelayWireContract.playlistPath, mediaTarget])
 
+        await fixture.host.stop()
+    }
+
+    func testFailedLiveStartIsASignedStreamFailedOnEveryRoute() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
+        await starter.failNextStart(with: LiveRelayStreamStartError.workspaceUnavailable)
+        let fixture = try await makeLiveFixture(starter: starter)
+        let parent = try await pair(fixture)
+        await starter.waitForCalls(1)
+        let currentStreamID = await fixture.host.currentLiveStreamID()
+        let derived = try parent.liveStreamSession(streamID: try XCTUnwrap(currentStreamID))
+
+        let routes: [(method: String, target: String, capability: Bool)] = [
+            ("GET", RelayWireContract.playlistPath, false),
+            ("GET", RelayWireContract.playlistSnapshotPath, false),
+            ("GET", RelayWireContract.mediaPathPrefix + "segment-000000000.m4s", true),
+            ("POST", RelayWireContract.positionPath, false),
+            ("POST", RelayWireContract.cancelPath, false),
+        ]
+        for (index, route) in routes.enumerated() {
+            var response = try await liveExchange(
+                fixture, session: derived, method: route.method, target: route.target,
+                nonce: "live-failed-start-\(index)", mediaCapability: route.capability ? derived.mediaCapability.value : nil
+            )
+            // The start's failure is recorded asynchronously right after it throws.
+            for retry in 0 ..< 50 where response.statusCode != 503 || response.body.isEmpty {
+                try await Task.sleep(for: .milliseconds(10))
+                response = try await liveExchange(
+                    fixture, session: derived, method: route.method, target: route.target,
+                    nonce: "live-failed-retry-\(index)-\(retry)",
+                    mediaCapability: route.capability ? derived.mediaCapability.value : nil
+                )
+            }
+            XCTAssertEqual(response.statusCode, 503, route.target)
+            XCTAssertEqual(
+                try JSONDecoder().decode(RelayLiveStreamEnded.self, from: response.body),
+                RelayLiveStreamEnded(error: .streamFailed, code: "live_workspace_unavailable",
+                                     message: "The live stream could not start on the Mac."),
+                route.target
+            )
+        }
         await fixture.host.stop()
     }
 

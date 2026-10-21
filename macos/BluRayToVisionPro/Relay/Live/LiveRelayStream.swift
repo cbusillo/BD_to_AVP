@@ -16,6 +16,8 @@ struct LiveRelayStreamConfiguration: Sendable {
     var sourceRecheckInterval: TimeInterval = 5
     /// How long a stop waits for the worker after cancelling it before killing its process group.
     var workerExitGrace: TimeInterval = 10
+    /// After the grace, how long an unconfirmed exit may take before the drain reports it is stuck.
+    var workerExitOverdueAfter: TimeInterval = 5
     var pacing = LiveViewerPositionPacer.Settings()
 }
 
@@ -98,10 +100,11 @@ struct LiveRelaySleepAssertion: Sendable {
 /// follows and serves through the relay.
 ///
 /// Lifecycle: `starting` until the first valid manifest, then `live`, then `complete` when the
-/// worker finishes. A worker failure, a manifest violation, or a changed source makes it `failed`
-/// with the reason, served as a 503 `stream_failed`. `stop` makes it `stopped`, served as a 410
-/// `stream_ended`; one tracked cleanup cancels the worker, waits for it to exit, removes the
-/// workspace, and releases the source lease, and every caller awaits that same cleanup.
+/// worker finishes. A worker failure or a manifest violation makes it `failed` with the reason,
+/// served as a 503 `stream_failed`, and starts cleanup at once. `stop` (including idle expiry and a
+/// changed source) makes it `stopped`, served as a 410 `stream_ended`. One tracked cleanup cancels
+/// the worker, waits for its confirmed exit, removes the workspace, and releases the source lease,
+/// and every caller awaits that same cleanup.
 actor LiveRelayStream: LiveRelayStreaming {
     nonisolated let id: UUID
     let workspaceURL: URL
@@ -125,8 +128,12 @@ actor LiveRelayStream: LiveRelayStreaming {
     private var sleepToken: NSObjectProtocol?
     private var runTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
-    private var stopTask: Task<Void, Never>?
+    private var cleanupTask: Task<Void, Never>?
     private(set) var sentPositions: [Int64] = []
+    /// The worker has not exited although its process group was killed; the stream still drains.
+    private(set) var isWorkerExitOverdue = false
+    /// The worker has exited, the workspace is gone, and the source lease is released.
+    private(set) var isCleanupFinished = false
 
     init(
         id: UUID,
@@ -174,7 +181,7 @@ actor LiveRelayStream: LiveRelayStreaming {
 
     /// Starts the worker and the follower. Called once by the starter.
     func launch() {
-        guard runTask == nil, stopTask == nil else { return }
+        guard runTask == nil, cleanupTask == nil else { return }
         startedAt = now()
         lastSourceCheck = startedAt
         sleepToken = sleepAssertion.begin("Serving a live Blu-ray stream to Vision Pro")
@@ -254,7 +261,7 @@ actor LiveRelayStream: LiveRelayStreaming {
 
     func stop(_ reason: LiveRelayStopReason) async {
         beginStop(reason)
-        await stopTask?.value
+        await cleanupTask?.value
     }
 
     // MARK: - Serving
@@ -288,7 +295,7 @@ actor LiveRelayStream: LiveRelayStreaming {
     // MARK: - Worker
 
     private func receive(_ event: WorkerEvent) {
-        guard stopTask == nil else { return }
+        guard cleanupTask == nil else { return }
         switch event.type {
         case .artifactReady:
             guard let artifact = event.payload.liveHLS else { return }
@@ -312,7 +319,7 @@ actor LiveRelayStream: LiveRelayStreaming {
     }
 
     private func workerExited(_ outcome: Result<WorkerRunResult, any Error>) {
-        guard stopTask == nil else { return }
+        guard cleanupTask == nil else { return }
         switch outcome {
         case let .success(result):
             switch result.terminalEvent.type {
@@ -336,7 +343,7 @@ actor LiveRelayStream: LiveRelayStreaming {
     }
 
     private func follow() {
-        guard stopTask == nil else { return }
+        guard cleanupTask == nil else { return }
         switch currentState {
         case .failed, .stopped:
             return
@@ -361,8 +368,10 @@ actor LiveRelayStream: LiveRelayStreaming {
             : .live(earliestMs: earliestMilliseconds, latestMs: latestMilliseconds)
     }
 
+    /// Fails the stream and starts the tracked cleanup at once. The failed state and its signed
+    /// 503 body remain until a stop replaces them with `stopped`.
     private func fail(code: String, message: String) {
-        guard stopTask == nil else { return }
+        guard cleanupTask == nil else { return }
         switch currentState {
         case .failed, .stopped:
             return
@@ -370,16 +379,14 @@ actor LiveRelayStream: LiveRelayStreaming {
             break
         }
         currentState = .failed(code: code, message: message)
-        if !workerFinished {
-            runner.cancel()
-        }
         endSleepAssertion()
+        startCleanup()
     }
 
     /// One monitor step: follow the workspace, forward the position, and enforce the idle lease
     /// and the source recheck. Returns false once the stream has stopped.
     private func tick() async -> Bool {
-        guard stopTask == nil else { return false }
+        guard cleanupTask == nil else { return false }
         let date = now()
         let leaseDeadline = lastRenewal.map { $0.addingTimeInterval(configuration.idleTimeout) }
             ?? startedAt.addingTimeInterval(configuration.initialLeaseTimeout)
@@ -398,7 +405,7 @@ actor LiveRelayStream: LiveRelayStreaming {
             follow()
         }
         await forwardPositionIfDue()
-        return stopTask == nil
+        return cleanupTask == nil
     }
 
     private func sourceStillLeased() -> Bool {
@@ -409,7 +416,7 @@ actor LiveRelayStream: LiveRelayStreaming {
     }
 
     private func forwardPositionIfDue() async {
-        guard !sendingPosition, !workerFinished, stopTask == nil else { return }
+        guard !sendingPosition, !workerFinished, cleanupTask == nil else { return }
         switch currentState {
         case .live, .complete:
             break
@@ -438,30 +445,56 @@ actor LiveRelayStream: LiveRelayStreaming {
 
     // MARK: - Stop
 
-    /// Invalidates synchronously, then starts the one tracked cleanup.
+    /// Invalidates synchronously, then joins the one tracked cleanup. A failed stream becomes
+    /// stopped with this reason; its cleanup may already be running.
     private func beginStop(_ reason: LiveRelayStopReason) {
-        guard stopTask == nil else { return }
         if case .stopped = currentState {} else {
             currentState = .stopped(reason)
         }
+        startCleanup()
+    }
+
+    /// The one cleanup every stop and failure shares: cancel the worker, wait for its run to
+    /// return, then remove the workspace and release the source lease.
+    ///
+    /// The run returns only once the worker process has exited; its client escalates to killing
+    /// the process group `workerExitGrace` after the cancel. There is no timeout: until the exit
+    /// is confirmed nothing is released, so an owner draining this stream never admits a
+    /// replacement while the old worker may still read the source or write the workspace. If the
+    /// exit is still unconfirmed `workerExitOverdueAfter` past the grace, `isWorkerExitOverdue`
+    /// reports the stuck drain.
+    private func startCleanup() {
+        guard cleanupTask == nil else { return }
         monitorTask?.cancel()
         let runTask = runTask
         let runner = runner
-        let grace = configuration.workerExitGrace
+        let overdueAfter = configuration.workerExitGrace + configuration.workerExitOverdueAfter
         let workspaceURL = workspaceURL
-        stopTask = Task { [weak self] in
+        cleanupTask = Task { [weak self] in
             if let runTask {
                 runner.cancel()
-                await Self.wait(for: runTask, upTo: grace + 5)
+                let watchdog = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(overdueAfter))
+                    guard !Task.isCancelled else { return }
+                    await self?.markWorkerExitOverdue()
+                }
+                await runTask.value
+                watchdog.cancel()
             }
             try? FileManager.default.removeItem(at: workspaceURL)
-            await self?.finishStop()
+            await self?.finishCleanup()
         }
     }
 
-    private func finishStop() {
+    private func markWorkerExitOverdue() {
+        isWorkerExitOverdue = true
+    }
+
+    private func finishCleanup() {
         endSleepAssertion()
         lease = nil
+        isWorkerExitOverdue = false
+        isCleanupFinished = true
     }
 
     private func endSleepAssertion() {
@@ -471,48 +504,5 @@ actor LiveRelayStream: LiveRelayStreaming {
         }
     }
 
-    /// Waits for the worker run to return. The client kills the process group after its own
-    /// escalation delay; the extra bound keeps a wedged exit from holding app quit forever.
-    private static func wait(for task: Task<Void, Never>, upTo seconds: TimeInterval) async {
-        let gate = OnceGate()
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            gate.install(continuation)
-            Task {
-                await task.value
-                gate.open()
-            }
-            Task {
-                try? await Task.sleep(for: .seconds(seconds))
-                gate.open()
-            }
-        }
-    }
-
     var isLeaseReleased: Bool { lease == nil }
-}
-
-/// Resumes one continuation exactly once, whichever caller opens it first.
-private final class OnceGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var isOpen = false
-
-    func install(_ continuation: CheckedContinuation<Void, Never>) {
-        let resumeNow = lock.withLock {
-            if isOpen { return true }
-            self.continuation = continuation
-            return false
-        }
-        if resumeNow { continuation.resume() }
-    }
-
-    func open() {
-        let pending = lock.withLock {
-            isOpen = true
-            let pending = continuation
-            continuation = nil
-            return pending
-        }
-        pending?.resume()
-    }
 }

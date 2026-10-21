@@ -254,21 +254,26 @@ from the source lease.
   The stream clamps it to the window and forwards it as `job.viewer_position`
   when it moved at least 500 ms, at most once a second. With no report for
   10 seconds it uses the start of the most recently requested segment.
-- **Lifecycle.** A worker failure, a manifest violation, or a changed source is
-  a signed 503 `stream_failed` carrying the worker's code and message; a stopped
-  stream is a signed 410 `stream_ended` with the stop reason. A stream stops as
-  `idle` 60 seconds after its last verified request (120 seconds before the
-  first) and as `sourceChanged` when its path no longer names the leased file
-  (checked every 5 seconds). Stopping invalidates at once; one cleanup cancels
-  the worker, kills its process group 10 seconds later if needed, removes the
-  workspace, and releases the lease, and every caller awaits it. The Mac holds
-  an idle-sleep assertion while the stream can serve.
+- **Lifecycle.** A worker failure or a manifest violation is a signed 503
+  `stream_failed` carrying the worker's code and message, and starts cleanup at
+  once; the failure stays visible until the stream is stopped. A stopped stream
+  is a signed 410 `stream_ended` with the stop reason. A stream stops as `idle`
+  60 seconds after its last verified request (120 seconds before the first) and
+  as `sourceChanged` when its path no longer names the leased file (checked
+  every 5 seconds). Stopping invalidates at once; one cleanup cancels the
+  worker, kills its process group 10 seconds later if needed, and waits for the
+  worker's confirmed exit with no timeout before it removes the workspace and
+  releases the lease. Every caller awaits that cleanup, so a replacement never
+  starts beside a worker that is still running. An exit still unconfirmed 5
+  seconds after the kill is reported as an overdue drain. The Mac holds an
+  idle-sleep assertion while the stream can serve.
 
 The developer-probe `RelayHost` live mode starts one stream once a headset
 pairs. Its live routes verify only under the session derived for that stream
 (`RelayEstablishedSession.liveStreamSession(streamID:)`), media also needs the
 derived media capability, any other stream ID gets a signed 410
-`not_current`, and `stop`, `cancel`, and app quit wait for the stream's cleanup.
+`not_current`, a start that throws is a signed 503 `stream_failed` on every
+live route, and `stop`, `cancel`, and app quit wait for the stream's cleanup.
 
 On October 21, 2026, the relay at commit `93b16d75` served the Rainforest ISO
 (playlist 1005, PID 4353) for 330 seconds to a simulated viewer that signed every

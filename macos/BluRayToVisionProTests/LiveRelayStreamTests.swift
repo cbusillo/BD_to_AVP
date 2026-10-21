@@ -62,6 +62,8 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
         _ = try await emit(.workerReady)
         switch script {
         case let .fail(code, message):
+            try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+            try Data("partial".utf8).write(to: workspace.appendingPathComponent("init.mp4"))
             let failed = try await emit(.jobFailed, WorkerEventPayload(
                 error: WorkerFailure(code: code, message: message, details: nil, retryable: false)
             ))
@@ -82,7 +84,8 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
             }
             await waitUntilCancelled()
             if exitDelay > 0 {
-                Thread.sleep(forTimeInterval: exitDelay)
+                // Like a worker blocked in source I/O: it ignores the cancel until the delay ends.
+                try? await Task.sleep(for: .seconds(exitDelay))
             }
             try? FileManager.default.removeItem(at: workspace)
             let cancelledEvent = try await emit(.jobCancelled)
@@ -118,6 +121,13 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
             if resumeNow { continuation.resume() }
         }
     }
+}
+
+final class LockedBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isSet = false
+    var value: Bool { lock.withLock { isSet } }
+    func set() { lock.withLock { isSet = true } }
 }
 
 final class SleepAssertionCounter: @unchecked Sendable {
@@ -255,7 +265,28 @@ final class LiveRelayStreamTests: XCTestCase {
             RelayLiveStreamEnded(error: .streamFailed, code: "unsupported_live_audio", message: "LPCM is not supported.")
         )
         XCTAssertEqual(sleep.activeCount, 0, "a failed stream does not keep the Mac awake")
-        await stream.stop(.idle)
+        try await assertCleanedUpWithoutStop(stream)
+        let afterCleanup = await stream.relayResponse(for: get(RelayWireContract.playlistSnapshotPath))
+        XCTAssertEqual(afterCleanup.statusCode, 503, "the failure stays visible after cleanup")
+        XCTAssertEqual(
+            try JSONDecoder().decode(RelayLiveStreamEnded.self, from: afterCleanup.body).code,
+            "unsupported_live_audio"
+        )
+    }
+
+    private func assertCleanedUpWithoutStop(_ stream: LiveRelayStream) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while await !stream.isCleanupFinished, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let finished = await stream.isCleanupFinished
+        let leaseReleased = await stream.isLeaseReleased
+        let workspace = await stream.workspaceURL
+        XCTAssertTrue(finished, "a failure starts the tracked cleanup by itself")
+        XCTAssertTrue(leaseReleased)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.path))
+        let state = await stream.state()
+        guard case .failed = state else { return XCTFail("cleanup replaced the failure: \(state)") }
     }
 
     func testInvalidManifestFailsTheStreamAndStopsTheWorker() async throws {
@@ -265,8 +296,44 @@ final class LiveRelayStreamTests: XCTestCase {
         let state = await waitForState(stream) { if case .failed = $0 { return true }; return false }
         guard case let .failed(code, _) = state else { return XCTFail("\(state)") }
         XCTAssertEqual(code, LiveHLSManifestError.code)
+        try await assertCleanedUpWithoutStop(stream)
         XCTAssertTrue(worker.isCancelled)
-        await stream.stop(.idle)
+        XCTAssertTrue(worker.hasExited)
+    }
+
+    func testStopReleasesNothingUntilAWorkerThatIgnoresTheCancelHasExited() async throws {
+        var configuration = fastConfiguration()
+        configuration.workerExitGrace = 0.1
+        configuration.workerExitOverdueAfter = 0.5
+        // Longer than any fixed bound the cleanup could have applied after the grace.
+        let worker = FakeLiveHLSWorker(exitDelay: 6.5)
+        let stream = try await makeStream(worker, configuration: configuration)
+        _ = await waitForState(stream, isLive)
+        let workspace = await stream.workspaceURL
+
+        let stopReturned = LockedBox()
+        let stop = Task {
+            await stream.stop(.replaced)
+            stopReturned.set()
+        }
+        try await Task.sleep(for: .seconds(6))
+        XCTAssertFalse(stopReturned.value, "stop returned before the worker exited")
+        XCTAssertFalse(worker.hasExited)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: workspace.path), "workspace removed under a live worker")
+        let leaseReleased = await stream.isLeaseReleased
+        let finished = await stream.isCleanupFinished
+        let overdue = await stream.isWorkerExitOverdue
+        XCTAssertFalse(leaseReleased, "source lease released under a live worker")
+        XCTAssertFalse(finished)
+        XCTAssertTrue(overdue, "the stuck drain is reported")
+
+        await stop.value
+        XCTAssertTrue(worker.hasExited)
+        let finishedAfter = await stream.isCleanupFinished
+        let overdueAfter = await stream.isWorkerExitOverdue
+        XCTAssertTrue(finishedAfter)
+        XCTAssertFalse(overdueAfter)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.path))
     }
 
     func testStopAwaitsWorkerExitAndWorkspaceRemovalForEveryCaller() async throws {

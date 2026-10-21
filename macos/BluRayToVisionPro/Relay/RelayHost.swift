@@ -133,6 +133,9 @@ actor RelayHost: RelayNetworkHosting {
     private var liveStartTask: Task<any LiveRelayStreaming, any Error>?
     private var liveStream: (any LiveRelayStreaming)?
     private var liveStopTask: Task<Void, Never>?
+    private var liveStopReason: LiveRelayStopReason?
+    /// Set when the start threw: every request for the stream then gets this signed failure.
+    private var liveStartFailure: RelayLiveStreamEnded?
 
     init(
         pairingContext: RelayServerPairingContext,
@@ -816,14 +819,36 @@ actor RelayHost: RelayNetworkHosting {
     private func installLiveStream(from startTask: Task<any LiveRelayStreaming, any Error>) async {
         let result = await startTask.result
         // After a stop, the stop task owns whatever the start returned.
-        guard liveStopTask == nil, case let .success(stream) = result else { return }
-        liveStream = stream
+        guard liveStopTask == nil else { return }
+        switch result {
+        case let .success(stream):
+            liveStream = stream
+        case let .failure(error):
+            liveStartTask = nil
+            liveStartFailure = RelayLiveStreamEnded(
+                error: .streamFailed,
+                code: Self.liveStartFailureCode(for: error),
+                message: "The live stream could not start on the Mac."
+            )
+        }
+    }
+
+    private static func liveStartFailureCode(for error: any Error) -> String {
+        switch error {
+        case LiveRelayStreamStartError.workspaceUnavailable:
+            "live_workspace_unavailable"
+        case is WorkerLaunchConfigurationError:
+            "live_worker_unavailable"
+        default:
+            "live_start_failed"
+        }
     }
 
     /// Invalidates synchronously and records the one cleanup every stop awaits: cancel a start
     /// still in progress and stop whatever it returned, or stop the running stream.
     private func stopLiveStream(_ reason: LiveRelayStopReason) {
         guard liveSource != nil, liveStopTask == nil else { return }
+        liveStopReason = reason
         let startTask = liveStartTask
         let stream = liveStream
         liveStartTask = nil
@@ -876,6 +901,10 @@ actor RelayHost: RelayNetworkHosting {
         } else if let stream = liveStream {
             await stream.renewLease()
             response = await stream.relayResponse(for: request)
+        } else if let liveStartFailure {
+            response = .liveStreamEnded(liveStartFailure)
+        } else if let liveStopReason {
+            response = .liveStreamEnded(RelayLiveStreamEnded(error: .streamEnded, code: liveStopReason.rawValue, message: nil))
         } else {
             // Paired, but the start has not returned yet.
             response = RelayHTTPResponse(statusCode: 503, headers: ["retry-after": "1"])
