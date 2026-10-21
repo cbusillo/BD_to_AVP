@@ -126,8 +126,9 @@ def _run_worker(
                 "control_capabilities": list(CONTROL_CAPABILITIES),
             },
         )
-        controls = WorkerControls(job.job_id, emitter)
-        input_reader.set_control_handler(controls.receive_line)
+        job_controls = WorkerControls(job.job_id, emitter)
+        controls = job_controls
+        input_reader.set_control_handler(job_controls.receive_line)
         emitter.emit(WorkerEventType.JOB_STARTED, {"operation": job.operation.value})
         diagnostic_relay = WorkerDiagnosticRelay(diagnostic_stream)
         run_context = RunContext(
@@ -138,8 +139,8 @@ def _run_worker(
             ),
             cancellation=CancellationToken(owner.cancellation_event),
             diagnostic_observer=diagnostic_relay.emit,
-            process_controls=controls,
-            viewer_position=controls.viewer_position_microseconds,
+            process_controls=job_controls,
+            viewer_position=job_controls.viewer_position_microseconds,
         )
         activity = WorkerActivityReporter(emitter, run_context)
         if job.operation.value == "inspect_source":

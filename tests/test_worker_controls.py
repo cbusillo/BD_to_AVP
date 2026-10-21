@@ -345,7 +345,8 @@ class WorkerControlDecisionTests(unittest.TestCase):
 class ViewerPositionControlTests(unittest.TestCase):
     FIXTURE = Path(__file__).parent / "fixtures" / f"native_worker_viewer_position_v{PROTOCOL_VERSION}.json"
 
-    def position(self, harness: ControlHarness, **overrides: Any) -> None:
+    @staticmethod
+    def position(harness: ControlHarness, **overrides: Any) -> None:
         command: dict[str, Any] = {
             "protocol_version": PROTOCOL_VERSION,
             "type": "job.viewer_position",

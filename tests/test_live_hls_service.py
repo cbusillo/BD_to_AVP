@@ -586,13 +586,15 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         self.assertLessEqual(self.peak_staged(), live_hls_service.STAGING_SEGMENT_CAP)
         self.assertLessEqual(result["peak_retired_bytes"], manifest["retired_allowance_bytes"])
 
-    def wait_for(self, condition: Callable[[], bool], seconds: float = 15) -> bool:
+    @staticmethod
+    def wait_for(condition: Callable[[], bool], seconds: float = 15) -> bool:
         deadline = time.monotonic() + seconds
         while not condition() and time.monotonic() < deadline:
             time.sleep(0.02)
         return condition()
 
-    def viewer_held(self, service: SSIFLiveHLSService) -> bool:
+    @staticmethod
+    def viewer_held(service: SSIFLiveHLSService) -> bool:
         return service.publisher is not None and service._held_for_viewer() and service.viewer_held_seconds > 0
 
     def test_viewer_lead_holds_production_until_the_viewer_advances(self) -> None:
