@@ -32,6 +32,12 @@ struct WorkerJobSpec: Encodable, Equatable {
             self.titleID = titleID
         }
 
+        init(kind: Kind, path: String) {
+            self.kind = kind
+            self.path = path
+            titleID = nil
+        }
+
         init(fileURL: URL) {
             if fileURL.hasDirectoryPath || DiscSourceDetector.isBluRayFolder(fileURL) {
                 kind = .bluRayFolder
@@ -507,6 +513,42 @@ struct WorkerJobSpec: Encodable, Equatable {
         }
     }
 
+    struct LiveHLS: Encodable, Equatable {
+        struct SourceIdentity: Encodable, Equatable {
+            let device: UInt64
+            let inode: UInt64
+            let sizeBytes: Int64
+            let modificationSeconds: Int64
+            let modificationNanoseconds: Int64
+
+            enum CodingKeys: String, CodingKey {
+                case device
+                case inode
+                case sizeBytes = "size_bytes"
+                case modificationSeconds = "modification_seconds"
+                case modificationNanoseconds = "modification_nanoseconds"
+            }
+        }
+
+        let playlist: Int
+        let audioPID: Int
+        let retentionSeconds: Int
+        let retentionMaxBytes: Int
+        let viewerLeadSeconds: Int?
+        let sourceIdentity: SourceIdentity?
+        let maximumPairs: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case playlist
+            case audioPID = "audio_pid"
+            case retentionSeconds = "retention_seconds"
+            case retentionMaxBytes = "retention_max_bytes"
+            case viewerLeadSeconds = "viewer_lead_seconds"
+            case sourceIdentity = "source_identity"
+            case maximumPairs = "maximum_pairs"
+        }
+    }
+
     let protocolVersion: Int
     let type: String
     let jobID: UUID
@@ -517,6 +559,7 @@ struct WorkerJobSpec: Encodable, Equatable {
     let job: Job?
     let preview: Preview?
     let liveSource: LiveSource?
+    let liveHLS: LiveHLS?
 
     init(source: ConversionSource, jobID: UUID = UUID()) {
         protocolVersion = Self.protocolVersion
@@ -529,6 +572,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         job = nil
         preview = nil
         liveSource = nil
+        liveHLS = nil
     }
 
     init(sourceURL: URL, jobID: UUID = UUID()) {
@@ -542,6 +586,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         job = nil
         preview = nil
         liveSource = nil
+        liveHLS = nil
     }
 
     init(draft: ConversionDraft, jobID: UUID = UUID()) {
@@ -557,6 +602,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         self.job = job
         preview = nil
         liveSource = nil
+        liveHLS = nil
     }
 
     init(
@@ -596,6 +642,7 @@ struct WorkerJobSpec: Encodable, Equatable {
             durationSeconds: previewDraft.durationSeconds
         )
         liveSource = nil
+        liveHLS = nil
     }
 
     init(
@@ -625,6 +672,49 @@ struct WorkerJobSpec: Encodable, Equatable {
             replayMaxBytes: replayMaxBytes,
             maximumPairs: maximumPairs
         )
+        liveHLS = nil
+    }
+
+    /// A live HLS stream of an authorized disc image or Blu-ray folder, named by its canonical
+    /// path. The engine rechecks `identity` before it reads the source.
+    init(
+        liveHLSSourcePath canonicalPath: String,
+        isBluRayFolder: Bool,
+        identity: LiveSourceIdentity,
+        workspaceURL: URL,
+        playlist: Int,
+        audioPID: Int,
+        retentionSeconds: Int,
+        retentionMaxBytes: Int,
+        viewerLeadSeconds: Int?,
+        maximumPairs: Int? = nil,
+        jobID: UUID = UUID()
+    ) {
+        protocolVersion = Self.protocolVersion
+        type = "job.start"
+        self.jobID = jobID
+        operation = "start_live_hls"
+        source = Source(kind: isBluRayFolder ? .bluRayFolder : .discImage, path: canonicalPath)
+        destination = Destination(path: workspaceURL.path)
+        encoding = nil
+        job = nil
+        preview = nil
+        liveSource = nil
+        liveHLS = LiveHLS(
+            playlist: playlist,
+            audioPID: audioPID,
+            retentionSeconds: retentionSeconds,
+            retentionMaxBytes: retentionMaxBytes,
+            viewerLeadSeconds: viewerLeadSeconds,
+            sourceIdentity: LiveHLS.SourceIdentity(
+                device: identity.device,
+                inode: identity.inode,
+                sizeBytes: identity.sizeBytes,
+                modificationSeconds: identity.modificationSeconds,
+                modificationNanoseconds: identity.modificationNanoseconds
+            ),
+            maximumPairs: maximumPairs
+        )
     }
 
     init(liveTitleInspection source: ConversionSource, jobID: UUID = UUID()) {
@@ -639,6 +729,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         job = nil
         preview = nil
         liveSource = nil
+        liveHLS = nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -653,6 +744,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         try container.encodeIfPresent(job, forKey: .job)
         try container.encodeIfPresent(preview, forKey: .preview)
         try container.encodeIfPresent(liveSource, forKey: .liveSource)
+        try container.encodeIfPresent(liveHLS, forKey: .liveHLS)
     }
 
     private static func encoding(
@@ -1016,5 +1108,6 @@ struct WorkerJobSpec: Encodable, Equatable {
         case job
         case preview
         case liveSource = "live_source"
+        case liveHLS = "live_hls"
     }
 }
