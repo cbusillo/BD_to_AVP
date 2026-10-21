@@ -132,6 +132,10 @@ class WorkerEventType(StrEnum):
 DROPPABLE_EVENT_TYPES = frozenset({WorkerEventType.HEARTBEAT, WorkerEventType.OBSERVABILITY})
 
 
+# sun_path holds 104 bytes on macOS, including the terminating NUL.
+MAXIMUM_HANDOFF_SOCKET_PATH_BYTES = 103
+
+
 class WorkerProtocolError(ValueError):
     def __init__(self, code: str, message: str, *, job_id: str = ZERO_JOB_ID) -> None:
         super().__init__(message)
@@ -141,10 +145,34 @@ class WorkerProtocolError(ValueError):
 
 
 @dataclass(frozen=True)
+class LiveSourceIdentity:
+    """The source file the host authorized, as ``lstat`` saw it on the host."""
+
+    device: int
+    inode: int
+    size_bytes: int
+    modification_seconds: int
+    modification_nanoseconds: int
+
+
+@dataclass(frozen=True)
+class DescriptorHandoff:
+    """A one-shot Unix socket where the host hands the worker the source's open descriptor."""
+
+    socket_path: Path
+    token: str
+
+
+@dataclass(frozen=True)
 class JobSource:
     kind: WorkerSourceKind
     path: Path
     title_id: str | None = None
+    # What the host saw when it authorized the source. With a handoff it is compared with the
+    # received descriptor; without one, with a fresh no-follow open of the path.
+    identity: LiveSourceIdentity | None = None
+    # With a handoff the worker never opens ``path``; it only names the file for diagnostics.
+    descriptor_handoff: DescriptorHandoff | None = None
 
 
 @dataclass(frozen=True)
@@ -255,17 +283,6 @@ class LiveSourceOptions:
 
 
 @dataclass(frozen=True)
-class LiveSourceIdentity:
-    """The source file the host authorized, as ``lstat`` saw it on the host."""
-
-    device: int
-    inode: int
-    size_bytes: int
-    modification_seconds: int
-    modification_nanoseconds: int
-
-
-@dataclass(frozen=True)
 class LiveHLSOptions:
     playlist: int
     audio_pid: int
@@ -274,7 +291,6 @@ class LiveHLSOptions:
     maximum_pairs: int | None = None
     # Hold production while it is this far ahead of the reported viewer position.
     viewer_lead_seconds: int | None = None
-    source_identity: LiveSourceIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -367,7 +383,9 @@ class JobSpec:
                 f"The source object is missing required field(s): {missing}.",
                 job_id=job_id,
             )
-        cls._reject_unknown_keys(source, required_source_keys | {"title_id"}, "source", job_id)
+        cls._reject_unknown_keys(
+            source, required_source_keys | {"title_id", "identity", "descriptor_handoff"}, "source", job_id
+        )
         raw_source_kind = source.get("kind")
         if not isinstance(raw_source_kind, str):
             raise WorkerProtocolError(
@@ -427,6 +445,8 @@ class JobSpec:
                 "Disc conversion requests must select a title returned by source inspection.",
                 job_id=job_id,
             )
+
+        source_identity, descriptor_handoff = cls._parse_source_authorization(source, operation, source_kind, job_id)
 
         destination: JobDestination | None = None
         encoding: EncodingOptions | None = None
@@ -505,7 +525,13 @@ class JobSpec:
             protocol_version=protocol_version,
             job_id=job_id,
             operation=operation,
-            source=JobSource(kind=source_kind, path=source_path, title_id=title_id),
+            source=JobSource(
+                kind=source_kind,
+                path=source_path,
+                title_id=title_id,
+                identity=source_identity,
+                descriptor_handoff=descriptor_handoff,
+            ),
             destination=destination,
             encoding=encoding,
             job=job_options,
@@ -1489,7 +1515,7 @@ class JobSpec:
         required_keys = {"playlist", "audio_pid", "retention_seconds", "retention_max_bytes"}
         cls._reject_unknown_keys(
             value,
-            required_keys | {"maximum_pairs", "viewer_lead_seconds", "source_identity"},
+            required_keys | {"maximum_pairs", "viewer_lead_seconds"},
             "live_hls",
             job_id,
             error_code="invalid_live_hls",
@@ -1530,20 +1556,78 @@ class JobSpec:
                 if "viewer_lead_seconds" in value
                 else None
             ),
-            source_identity=(
-                cls._parse_live_source_identity(value["source_identity"], job_id)
-                if "source_identity" in value
-                else None
-            ),
         )
+
+    @classmethod
+    def _parse_source_authorization(
+        cls,
+        source: Mapping[str, Any],
+        operation: WorkerOperation,
+        source_kind: WorkerSourceKind,
+        job_id: str,
+    ) -> tuple[LiveSourceIdentity | None, DescriptorHandoff | None]:
+        has_identity = "identity" in source
+        has_handoff = "descriptor_handoff" in source
+        if not has_identity and not has_handoff:
+            return None, None
+        if operation not in {WorkerOperation.START_LIVE_HLS, WorkerOperation.INSPECT_LIVE_TITLE}:
+            raise WorkerProtocolError(
+                "invalid_source",
+                "Only live HLS and live title jobs accept a source identity or descriptor handoff.",
+                job_id=job_id,
+            )
+        if has_handoff and not has_identity:
+            raise WorkerProtocolError(
+                "invalid_source",
+                "A source descriptor handoff requires source.identity.",
+                job_id=job_id,
+            )
+        if has_handoff and source_kind is not WorkerSourceKind.DISC_IMAGE:
+            raise WorkerProtocolError(
+                "invalid_source",
+                "A source descriptor handoff requires a disc image.",
+                job_id=job_id,
+            )
+        identity = cls._parse_live_source_identity(source["identity"], job_id)
+        handoff = cls._parse_descriptor_handoff(source["descriptor_handoff"], job_id) if has_handoff else None
+        return identity, handoff
+
+    @classmethod
+    def _parse_descriptor_handoff(cls, value: Any, job_id: str) -> DescriptorHandoff:
+        if not isinstance(value, Mapping) or set(value) != {"socket_path", "token"}:
+            raise WorkerProtocolError(
+                "invalid_source",
+                "source.descriptor_handoff must contain exactly socket_path and token.",
+                job_id=job_id,
+            )
+        socket_path = value["socket_path"]
+        token = value["token"]
+        if (
+            not isinstance(socket_path, str)
+            or not socket_path.startswith("/")
+            or "\0" in socket_path
+            or len(socket_path.encode("utf-8")) > MAXIMUM_HANDOFF_SOCKET_PATH_BYTES
+        ):
+            raise WorkerProtocolError(
+                "invalid_source",
+                "source.descriptor_handoff.socket_path must be a short absolute path.",
+                job_id=job_id,
+            )
+        if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
+            raise WorkerProtocolError(
+                "invalid_source",
+                "source.descriptor_handoff.token must be 64 lowercase hexadecimal characters.",
+                job_id=job_id,
+            )
+        return DescriptorHandoff(socket_path=Path(socket_path), token=token)
 
     @classmethod
     def _parse_live_source_identity(cls, value: Any, job_id: str) -> LiveSourceIdentity:
         keys = {"device", "inode", "size_bytes", "modification_seconds", "modification_nanoseconds"}
         if not isinstance(value, Mapping) or set(value) != keys:
             raise WorkerProtocolError(
-                "invalid_live_hls",
-                "live_hls.source_identity must contain exactly the device, inode, size, and modification time.",
+                "invalid_source",
+                "source.identity must contain exactly the device, inode, size, and modification time.",
                 job_id=job_id,
             )
 
@@ -1551,11 +1635,11 @@ class JobSpec:
             return cls._parse_int(
                 value,
                 key,
-                "live_hls.source_identity",
+                "source.identity",
                 job_id,
                 minimum=0,
                 maximum=maximum,
-                error_code="invalid_live_hls",
+                error_code="invalid_source",
             )
 
         unsigned_64 = (1 << 64) - 1

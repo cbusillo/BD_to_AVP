@@ -4,6 +4,7 @@ import json
 import os
 import select
 import shutil
+import stat
 import struct
 import subprocess
 import threading
@@ -12,7 +13,7 @@ import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import BinaryIO, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, BinaryIO, Mapping, Protocol, cast
 
 from bd_to_avp.modules.config import resolve_tool_path
 from bd_to_avp.process_runner import (
@@ -27,6 +28,9 @@ from bd_to_avp.process_runner import (
 )
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import JobSpec, LiveSourceOptions, WorkerActivityReporter
+
+if TYPE_CHECKING:
+    from bd_to_avp.worker.source_handoff import HeldSource
 
 
 SERVICE_FRAME_MAGIC = b"SSFS"
@@ -526,13 +530,55 @@ class SSIFProbeRunner:
         activity: WorkerActivityReporter,
         *,
         probe_path: Path | None = None,
+        held_source: HeldSource | None = None,
     ) -> None:
         self.job = job
         self.owner = owner
         self.activity = activity
+        # The descriptor the host handed over. When present, the source path is never opened.
+        self.held_source = held_source
         self.process_runner = ChildProcessRunner()
         repository_probe = Path(__file__).resolve().parents[1] / "bin/ssif_probe"
         self.probe_path = probe_path or resolve_tool_path("ssif_probe", extra_paths=(repository_probe,))
+
+    def _source_argument(self) -> str:
+        """What ``ssif_probe`` opens: the handed-over descriptor, or the source path."""
+        if self.held_source is not None:
+            return self.held_source.device_path
+        return str(self.job.source.path)
+
+    def _verify_source_identity(self) -> None:
+        """Confirms the source is still the file the host authorized.
+
+        With a handoff the held descriptor is checked with ``fstat`` and the path is never
+        touched. Otherwise the path must not be a symbolic link, and the file opened without
+        following links must match the host's identity. Without an identity this is a no-op.
+        """
+        from bd_to_avp.worker.source_handoff import SOURCE_CHANGED, SOURCE_CHANGED_MESSAGE, identity_matches
+
+        if self.held_source is not None:
+            self.held_source.verify()
+            return
+        identity = self.job.source.identity
+        if identity is None:
+            return
+        path = self.job.source.path
+        try:
+            linked = os.lstat(path)
+            if stat.S_ISLNK(linked.st_mode):
+                raise OSError("The live source is a symbolic link.")
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                opened = os.fstat(descriptor)
+            finally:
+                os.close(descriptor)
+        except OSError as error:
+            raise SourceServiceError(SOURCE_CHANGED, SOURCE_CHANGED_MESSAGE, str(error)) from error
+        if not identity_matches(opened, identity) or (linked.st_dev, linked.st_ino) != (opened.st_dev, opened.st_ino):
+            raise SourceServiceError(SOURCE_CHANGED, SOURCE_CHANGED_MESSAGE)
+
+    def _source_pass_fds(self) -> tuple[int, ...]:
+        return self.held_source.pass_fds if self.held_source is not None else ()
 
     def _validate_tool(self) -> None:
         if not self.probe_path.is_file():
@@ -572,11 +618,12 @@ class SSIFProbeRunner:
         if cleanup_error is not None:
             raise cleanup_error
 
-    def _communicate(self, command: list[str]) -> subprocess.CompletedProcess[bytes]:
+    def _communicate(self, command: list[str], *, pass_fds: tuple[int, ...] = ()) -> subprocess.CompletedProcess[bytes]:
         try:
             result = self.process_runner.run(
                 ProcessSpec(
                     argv=tuple(command),
+                    pass_fds=pass_fds,
                     tool_id="ssif_probe",
                     display_name="Direct SSIF source helper",
                     merge_stderr=False,
@@ -682,14 +729,16 @@ class SSIFSourceHelper(SSIFProbeRunner):
         activity: WorkerActivityReporter,
         *,
         probe_path: Path | None = None,
+        held_source: HeldSource | None = None,
     ) -> None:
-        super().__init__(job, owner, activity, probe_path=probe_path)
+        super().__init__(job, owner, activity, probe_path=probe_path, held_source=held_source)
         self.selection = selection
         self.destination = destination
 
     def _inspect(self) -> Mapping[str, object]:
         result = self._communicate(
-            [str(self.probe_path), "inspect", str(self.job.source.path), str(self.selection.playlist)]
+            [str(self.probe_path), "inspect", self._source_argument(), str(self.selection.playlist)],
+            pass_fds=self._source_pass_fds(),
         )
         if result.returncode != 0:
             self._raise_helper_error(result.stderr, "source_inspection_failed")

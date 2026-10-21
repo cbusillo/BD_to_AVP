@@ -6,7 +6,7 @@ import subprocess
 
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Iterator
 
 import ffmpeg
@@ -52,6 +52,7 @@ from bd_to_avp.worker.protocol import (
 )
 from bd_to_avp.worker.live_hls_service import SSIFLiveHLSService
 from bd_to_avp.worker.live_title_inspection import LiveTitleInspector
+from bd_to_avp.worker.source_handoff import receive_source
 from bd_to_avp.worker.source_service import SSIFLiveSourceService, SourceServiceError
 
 DIRECT_VIDEO_EXTENSIONS = frozenset({".mkv", ".mts", ".m2ts"})
@@ -147,8 +148,17 @@ def _live_job_with_external_workspace(job: JobSpec, error_code: str) -> JobSpec:
     source_path = job_source.path
     if job.destination is None:
         raise WorkerOperationError(error_code, "The live job has no workspace.")
-    resolved_source = source_path.resolve()
     resolved_destination = job.destination.path.resolve(strict=False)
+    if job_source.descriptor_handoff is not None:
+        # The worker never touches the handed-over source's path. An ISO is a file, so a
+        # workspace cannot sit inside it; compare the strings as pure paths.
+        if PurePath(resolved_destination) == PurePath(source_path):
+            raise WorkerOperationError(
+                "invalid_destination",
+                "The live workspace must be outside the selected source.",
+            )
+        return replace(job, source=job_source)
+    resolved_source = source_path.resolve()
     if resolved_destination == resolved_source or path_is_relative_to(resolved_destination, resolved_source):
         raise WorkerOperationError(
             "invalid_destination",
@@ -164,7 +174,12 @@ def start_live_hls(
 ) -> dict[str, object]:
     normalized_job = _live_job_with_external_workspace(job, "invalid_live_hls")
     try:
-        return SSIFLiveHLSService(normalized_job, owner, activity).run()
+        held_source = receive_source(normalized_job.source)
+        try:
+            return SSIFLiveHLSService(normalized_job, owner, activity, held_source=held_source).run()
+        finally:
+            if held_source is not None:
+                held_source.close()
     except WorkerCancelled:
         raise
     except SourceServiceError as error:
@@ -184,7 +199,12 @@ def inspect_live_title(
 ) -> dict[str, object]:
     normalized_job = replace(job, source=resolve_job_source(job.source))
     try:
-        return LiveTitleInspector(normalized_job, owner, activity).run()
+        held_source = receive_source(normalized_job.source)
+        try:
+            return LiveTitleInspector(normalized_job, owner, activity, held_source=held_source).run()
+        finally:
+            if held_source is not None:
+                held_source.close()
     except WorkerCancelled:
         raise
     except SourceServiceError as error:
@@ -734,8 +754,13 @@ def route_message(video_route: ResolvedVideoRoute) -> str:
 
 
 def resolve_job_source(source: JobSource) -> JobSource:
-    """Validate a source and read a mounted disc image from its file, never through the mount."""
+    """Validate a source and read a mounted disc image from its file, never through the mount.
+
+    A handed-over source is returned unchanged: the worker reads only its descriptor.
+    """
     source_path = validate_source(source)
+    if source.descriptor_handoff is not None:
+        return source
     if source.kind is WorkerSourceKind.BLU_RAY_FOLDER:
         try:
             backing_image = backing_image_for_folder(source_path)
@@ -749,6 +774,15 @@ def resolve_job_source(source: JobSource) -> JobSource:
 
 def validate_source(source: JobSource) -> Path:
     source_path = source.path
+    if source.descriptor_handoff is not None:
+        # No filesystem call on the canonical path: the app's open holds the consent, and
+        # the received descriptor is checked against source.identity instead.
+        if source.kind is not WorkerSourceKind.DISC_IMAGE or source_path.suffix.lower() not in DISC_IMAGE_EXTENSIONS:
+            raise WorkerOperationError(
+                "source_kind_mismatch",
+                "Disc-image sources must be ISO files.",
+            )
+        return source_path
     if source.kind is WorkerSourceKind.PHYSICAL_DISC:
         if not physical_disc_device_path_is_valid(source_path):
             raise WorkerOperationError(
