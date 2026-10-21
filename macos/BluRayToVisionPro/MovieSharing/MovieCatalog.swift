@@ -114,7 +114,7 @@ struct LiveCatalogCandidate: Sendable {
 }
 
 actor MovieCatalog {
-    private struct Entry {
+    private struct Entry: Sendable {
         let movie: SharedMovie
         let root: MovieRootDirectory
         let components: [String]
@@ -125,20 +125,54 @@ actor MovieCatalog {
     private var liveEntries: [String: LiveCatalogCandidate] = [:]
     private var stopped = false
 
-    init(sources: [MovieSourceBookmark], resolve: (Data) throws -> URL = { data in
+    typealias BookmarkResolver = @Sendable (Data) throws -> URL
+
+    static let resolveSecurityScopedBookmark: BookmarkResolver = { data in
         var stale = false
         return try URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI], relativeTo: nil, bookmarkDataIsStale: &stale)
-    }) throws {
-        guard sources.count <= MovieLibraryContract.maximumRoots, Set(sources.map(\.id)).count == sources.count else {
-            throw MovieLibraryError.invalidResponse
-        }
-        self.sources = sources
+    }
+
+    /// Resolves and opens the approved roots off the caller, each within `deadline`. A root on a
+    /// share that does not answer in time (for example while macOS waits for network-volume
+    /// consent) is listed as unavailable instead of blocking the caller.
+    static func open(
+        sources: [MovieSourceBookmark],
+        deadline: TimeInterval = BoundedFileAccess.defaultDeadline,
+        resolve: @escaping BookmarkResolver = resolveSecurityScopedBookmark
+    ) async throws -> MovieCatalog {
+        try validate(sources)
+        var roots: [String: MovieRootDirectory] = [:]
         for source in sources {
-            guard UUID(uuidString: source.id) != nil, source.name.utf8.count <= 512 else { throw MovieLibraryError.invalidResponse }
+            let opened = await BoundedFileAccess.run(deadline: deadline) {
+                (try? resolve(source.bookmark)).flatMap { try? MovieRootDirectory(source: source, url: $0) }
+            }
+            if let root = opened ?? nil { roots[source.id] = root }
+        }
+        return MovieCatalog(sources: sources, roots: roots)
+    }
+
+    /// Opens the roots on the calling thread. Only for tests with local folders; the app uses
+    /// `open(sources:)`.
+    init(sources: [MovieSourceBookmark], resolve: BookmarkResolver = resolveSecurityScopedBookmark) throws {
+        try Self.validate(sources)
+        var roots: [String: MovieRootDirectory] = [:]
+        for source in sources {
             if let url = try? resolve(source.bookmark), let root = try? MovieRootDirectory(source: source, url: url) {
                 roots[source.id] = root
             }
         }
+        self.init(sources: sources, roots: roots)
+    }
+
+    private init(sources: [MovieSourceBookmark], roots: [String: MovieRootDirectory]) {
+        self.sources = sources
+        self.roots = roots
+    }
+
+    private static func validate(_ sources: [MovieSourceBookmark]) throws {
+        guard sources.count <= MovieLibraryContract.maximumRoots, Set(sources.map(\.id)).count == sources.count,
+              sources.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.name.utf8.count <= 512 })
+        else { throw MovieLibraryError.invalidResponse }
     }
 
     func stop() {
@@ -148,8 +182,8 @@ actor MovieCatalog {
         roots.removeAll()
     }
 
-    func snapshot() throws -> SharedMovieCatalog {
-        try listing().catalog
+    func snapshot() async throws -> SharedMovieCatalog {
+        try await listing().catalog
     }
 
     /// The ISO from the last listing with this ID, if any.
@@ -158,8 +192,31 @@ actor MovieCatalog {
     }
 
     /// Movies, plus the ISOs that may stream live, sorted by name. ISOs never enter `movies`.
-    func listing() throws -> (catalog: SharedMovieCatalog, liveCandidates: [LiveCatalogCandidate]) {
+    func listing() async throws -> (catalog: SharedMovieCatalog, liveCandidates: [LiveCatalogCandidate]) {
         guard !stopped else { throw MovieLibraryError.unavailable }
+        let sources = sources
+        let roots = roots
+        // The walk stats files that may be on a network share, so it runs off this actor.
+        guard let result = await BoundedFileAccess.run(deadline: BoundedFileAccess.defaultDeadline, {
+            Result { try Self.scan(sources: sources, roots: roots) }
+        }) else { throw MovieLibraryError.unavailable }
+        let scan = try result.get()
+        guard !stopped else { throw MovieLibraryError.unavailable }
+        entries = scan.entries
+        liveEntries = scan.live
+        let candidates = scan.live.values.sorted {
+            $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending
+        }
+        return (scan.catalog, candidates)
+    }
+
+    private struct Scan: Sendable {
+        let catalog: SharedMovieCatalog
+        let entries: [String: Entry]
+        let live: [String: LiveCatalogCandidate]
+    }
+
+    private static func scan(sources: [MovieSourceBookmark], roots: [String: MovieRootDirectory]) throws -> Scan {
         let deadline = Date().addingTimeInterval(5)
         var next: [String: Entry] = [:]
         var nextLive: [String: LiveCatalogCandidate] = [:]
@@ -167,7 +224,6 @@ actor MovieCatalog {
         var truncated = false
         var visits = 0
         for source in sources {
-            try Task.checkCancellation()
             guard let root = roots[source.id], root.isAtApprovedPath, let enumerator = FileManager.default.enumerator(
                 at: root.url,
                 includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey],
@@ -179,8 +235,7 @@ actor MovieCatalog {
             summaries.append(SharedMovieRoot(id: source.id, name: source.name, isAvailable: true))
             let prefix = root.url.pathComponents
             for case let url as URL in enumerator {
-                try Task.checkCancellation()
-                visits += 1
+                    visits += 1
                 if next.count >= MovieLibraryContract.maximumMovies || visits > 10_000 || Date() > deadline {
                     truncated = true
                     break
@@ -217,16 +272,11 @@ actor MovieCatalog {
                 next[id] = Entry(movie: movie, root: root, components: components)
             }
         }
-        entries = next
-        liveEntries = nextLive
         let catalog = SharedMovieCatalog(roots: summaries, movies: next.values.map(\.movie).sorted {
             $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending
         }, truncated: truncated)
         try catalog.validate()
-        let candidates = nextLive.values.sorted {
-            $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending
-        }
-        return (catalog, candidates)
+        return Scan(catalog: catalog, entries: next, live: nextLive)
     }
 
     func read(_ request: MovieByteRequest) throws -> Data {

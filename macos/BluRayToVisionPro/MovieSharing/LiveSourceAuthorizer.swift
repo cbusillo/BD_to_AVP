@@ -67,17 +67,10 @@ struct LiveSourceAuthorizer: Sendable {
 
     func authorize(_ candidate: LiveCatalogCandidate, revision: String) async throws -> LiveSourceLease {
         let open = open
-        let outcome = OpenOutcome()
-        let result: Result<LiveSourceLease, LiveSourceAuthorizationError> = await withCheckedContinuation { continuation in
-            outcome.install(continuation)
-            DispatchQueue.global(qos: .userInitiated).async {
-                outcome.finish(Self.lease(candidate, revision: revision, open: open))
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + deadline) {
-                outcome.finish(.failure(.unavailable))
-            }
+        let result = await BoundedFileAccess.run(deadline: deadline) {
+            Self.lease(candidate, revision: revision, open: open)
         }
-        return try result.get()
+        return try (result ?? .failure(.unavailable)).get()
     }
 
     private static func lease(
@@ -109,27 +102,5 @@ struct LiveSourceAuthorizer: Sendable {
         guard fcntl(descriptor, F_GETPATH, &path) == 0 else { return .failure(.changed) }
         let canonicalPath = String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         return .success(LiveSourceLease(canonicalPath: canonicalPath, identity: LiveSourceIdentity(info), retainer: retainer))
-    }
-
-    /// The first of the open and the deadline wins; a lease that arrives after the deadline is
-    /// dropped, which closes its descriptor.
-    private final class OpenOutcome: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<Result<LiveSourceLease, LiveSourceAuthorizationError>, Never>?
-        private var isFinished = false
-
-        func install(_ continuation: CheckedContinuation<Result<LiveSourceLease, LiveSourceAuthorizationError>, Never>) {
-            lock.withLock { self.continuation = continuation }
-        }
-
-        func finish(_ result: Result<LiveSourceLease, LiveSourceAuthorizationError>) {
-            let continuation: CheckedContinuation<Result<LiveSourceLease, LiveSourceAuthorizationError>, Never>? = lock.withLock {
-                guard !isFinished else { return nil }
-                isFinished = true
-                defer { self.continuation = nil }
-                return self.continuation
-            }
-            continuation?.resume(returning: result)
-        }
     }
 }

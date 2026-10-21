@@ -126,7 +126,9 @@ final class MovieSharingController: ObservableObject {
         let attempt = epoch
         status = "Starting movie sharing…"
         do {
-            let catalog = try MovieCatalog(sources: sources)
+            // Resolving and opening the roots may wait on a network share; never on the main actor.
+            let catalog = try await MovieCatalog.open(sources: sources)
+            guard epoch == attempt else { await catalog.stop(); return }
             let isBusyConverting: @Sendable () async -> Bool = { @MainActor [weak self] in
                 self?.isConversionActive() ?? false
             }

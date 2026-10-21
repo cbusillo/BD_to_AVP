@@ -819,3 +819,91 @@ final class MovieLibraryLiveTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Source I/O never blocks the app
+
+@MainActor
+private final class MainActorTicker {
+    private(set) var ticks = 0
+    private var task: Task<Void, Never>?
+
+    func start() {
+        task = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.ticks += 1
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+    }
+
+    func stop() { task?.cancel() }
+}
+
+/// Stands in for an `open` or bookmark resolution on a network share that waits on macOS consent.
+private let blockingFileCall: TimeInterval = 2
+
+@MainActor
+final class MovieLibrarySourceAccessTests: XCTestCase {
+    func testABlockedRootOpenListsTheFolderUnavailableAfterTheLimitWithoutFreezingTheApp() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let ticker = MainActorTicker()
+        ticker.start()
+        defer { ticker.stop() }
+        let root = fixture.root
+        let started = Date()
+
+        let catalog = try await MovieCatalog.open(
+            sources: [MovieSourceBookmark(id: fixture.rootID, name: "Share", bookmark: Data())],
+            deadline: 0.3
+        ) { _ in
+            Thread.sleep(forTimeInterval: blockingFileCall)
+            return root
+        }
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 1.5, "the open gives up at its limit")
+        XCTAssertGreaterThanOrEqual(ticker.ticks, 10, "the main actor kept running while the open was blocked")
+        let snapshot = try await catalog.snapshot()
+        XCTAssertEqual(snapshot.roots.map(\.isAvailable), [false])
+        await catalog.stop()
+    }
+
+    func testABlockedSourceOpenFailsTheTitleAfterTheLimitWhileTheIndexStaysResponsive() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        try Data(repeating: 1, count: 256).write(to: fixture.root.appendingPathComponent("Share.iso"))
+        let catalog = try fixture.catalog()
+        let candidates = try await catalog.listing().liveCandidates
+        var authorizer = LiveSourceAuthorizer(deadline: 0.3)
+        authorizer.open = { root, components in
+            Thread.sleep(forTimeInterval: blockingFileCall)
+            return root.openFileReportingErrno(components)
+        }
+        let inspector = FakeLiveTitleInspector()
+        let index = LiveTitleIndex(storeURL: nil, authorizer: authorizer, inspector: inspector)
+        let ticker = MainActorTicker()
+        ticker.start()
+        defer { ticker.stop() }
+        let started = Date()
+
+        let first = await index.titles(for: candidates)
+        XCTAssertEqual(first.map(\.state), [.checking])
+        let whileChecking = Date()
+        let second = await index.titles(for: candidates)
+        XCTAssertEqual(second.map(\.state), [.checking])
+        XCTAssertLessThan(Date().timeIntervalSince(whileChecking), 0.2, "the index answers while the open is blocked")
+        await index.waitUntilIdle()
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 1.5, "the title fails at the limit, not when the open returns")
+        XCTAssertGreaterThanOrEqual(ticker.ticks, 10)
+        let after = await index.titles(for: candidates)
+        let title = try XCTUnwrap(after.first)
+        XCTAssertEqual(title.state, .ineligible)
+        XCTAssertEqual(title.reason, LiveSourceAuthorizationError.unavailable.message)
+        let inspections = await inspector.calls
+        XCTAssertEqual(inspections, 0)
+        await catalog.stop()
+    }
+}

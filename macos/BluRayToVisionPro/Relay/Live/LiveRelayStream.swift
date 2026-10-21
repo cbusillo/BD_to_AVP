@@ -132,6 +132,7 @@ actor LiveRelayStream: LiveRelayStreaming {
     private var lastSourceCheck: Date
     private var workerFinished = false
     private var sendingPosition = false
+    private var isRecheckingSource = false
     private var sleepToken: NSObjectProtocol?
     private var runTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
@@ -167,9 +168,11 @@ actor LiveRelayStream: LiveRelayStreaming {
         startedAt = started
         lastSourceCheck = started
         pacer = LiveViewerPositionPacer(settings: configuration.pacing, startedAt: started)
+        // An authorized lease holds an open regular file, so it is never a folder and nothing here
+        // touches the source path. Only a path-based lease (the developer probe) is checked.
         var isDirectory = false
         var info = stat()
-        if lstat(request.source.canonicalPath, &info) == 0 {
+        if !(request.source.retainer is LiveSourceDescriptorHolding), lstat(request.source.canonicalPath, &info) == 0 {
             isDirectory = info.st_mode & S_IFMT == S_IFDIR
         }
         job = WorkerJobSpec(
@@ -419,12 +422,9 @@ actor LiveRelayStream: LiveRelayStreaming {
             fail(code: "live_start_timeout", message: "The Mac could not start the live stream in time.")
             return false
         }
-        if date.timeIntervalSince(lastSourceCheck) >= configuration.sourceRecheckInterval {
+        if date.timeIntervalSince(lastSourceCheck) >= configuration.sourceRecheckInterval, !isRecheckingSource {
             lastSourceCheck = date
-            if !sourceStillLeased() {
-                beginStop(.sourceChanged)
-                return false
-            }
+            recheckSource()
         }
         if !workerFinished {
             follow()
@@ -433,11 +433,29 @@ actor LiveRelayStream: LiveRelayStreaming {
         return cleanupTask == nil
     }
 
-    private func sourceStillLeased() -> Bool {
-        var info = stat()
-        guard lstat(sourcePath, &info) == 0 else { return false }
-        let observed = LiveSourceIdentity(info)
-        return observed.device == sourceIdentity.device && observed.inode == sourceIdentity.inode
+    /// Checks off this actor that the canonical path still names the leased file, so a share that
+    /// stops answering never stalls the relay. A check that does not answer in time is skipped; a
+    /// check that answers with another file, or none, stops the stream.
+    private func recheckSource() {
+        isRecheckingSource = true
+        let path = sourcePath
+        let identity = sourceIdentity
+        Task { [weak self] in
+            let leased = await BoundedFileAccess.run {
+                var info = stat()
+                guard lstat(path, &info) == 0 else { return false }
+                let observed = LiveSourceIdentity(info)
+                return observed.device == identity.device && observed.inode == identity.inode
+            }
+            await self?.finishRecheck(leased)
+        }
+    }
+
+    private func finishRecheck(_ leased: Bool?) {
+        isRecheckingSource = false
+        if leased == false, cleanupTask == nil {
+            beginStop(.sourceChanged)
+        }
     }
 
     private func forwardPositionIfDue() async {
