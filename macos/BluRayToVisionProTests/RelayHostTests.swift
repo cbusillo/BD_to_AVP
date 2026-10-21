@@ -432,7 +432,8 @@ final class RelayHostTests: XCTestCase {
             request(method: "GET", target: "/relay/v1/playlist.m3u8", headers: signedPlaylist.headers)
         )
         let playlist = String(decoding: playlistResponse.body, as: UTF8.self)
-        XCTAssertTrue(playlist.contains("#EXT-X-PLAYLIST-TYPE:EVENT"))
+        // The retained window evicts history, so the playlist must not claim to be an EVENT playlist.
+        XCTAssertFalse(playlist.contains("#EXT-X-PLAYLIST-TYPE"))
         XCTAssertTrue(playlist.contains("#EXT-X-MEDIA-SEQUENCE:3"))
         XCTAssertTrue(playlist.contains("#EXT-X-MAP:URI=\"/relay/v1/media/init.mp4\""))
         XCTAssertFalse(playlist.contains("first.m4s"))
@@ -788,6 +789,197 @@ final class RelayHostTests: XCTestCase {
     private func removeFixture(_ fixture: Fixture) {
         try? FileManager.default.removeItem(at: fixture.root)
     }
+}
+
+extension RelayHostTests {
+    private func makeLiveFixture(starter: FakeLiveRelayStreamStarter, sessionTTL: TimeInterval = 120) async throws -> Fixture {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let clock = RelayTestClock(initialDate)
+        let context = try RelayServerPairingContext(
+            sessionID: try RelaySessionIdentifier(rawValue: "A9B8C7D6-E5F4-4321-ABCD-1234567890AB"),
+            now: initialDate,
+            challengeTTL: 30,
+            candidateTTL: 60,
+            sessionTTL: sessionTTL,
+            maximumCandidates: 3
+        )
+        let host = try RelayHost(
+            pairingContext: context,
+            configuration: try RelayHostConfiguration(fixtureDirectory: root),
+            liveSource: RelayHostLiveSource(starter: starter, request: makeFakeLiveStreamRequest()),
+            now: { clock.now() }
+        )
+        return Fixture(host: host, connection: RelayInMemoryConnection(host: host), root: root, clock: clock)
+    }
+
+    private func installedLiveStream(_ fixture: Fixture) async throws -> FakeLiveRelayStream {
+        for _ in 0 ..< 200 {
+            if let stream = await fixture.host.currentLiveStream() as? FakeLiveRelayStream { return stream }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTFail("The live stream was never installed")
+        throw CancellationError()
+    }
+
+    private func liveExchange(
+        _ fixture: Fixture,
+        session: RelayEstablishedSession,
+        method: String = "GET",
+        target: String,
+        nonce: String,
+        mediaCapability: String? = nil
+    ) async throws -> RelayHTTPResponse {
+        let signed = try authenticatedRequest(
+            session: session,
+            method: method,
+            target: target,
+            nonce: nonce,
+            mediaCapability: mediaCapability
+        )
+        let response = await fixture.connection.exchange(request(method: method, target: target, headers: signed.headers))
+        try verifyResponse(response, for: signed, using: session)
+        return response
+    }
+
+    func testLiveProbeServesItsStreamOnlyUnderTheDerivedStreamSession() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false, streamStates: [.live(earliestMs: 0, latestMs: 4_000)])
+        let fixture = try await makeLiveFixture(starter: starter)
+        let parent = try await pair(fixture)
+        let currentStreamID = await fixture.host.currentLiveStreamID()
+        let streamID = try XCTUnwrap(currentStreamID)
+        let stream = try await installedLiveStream(fixture)
+        let derived = try parent.liveStreamSession(streamID: streamID)
+
+        let served = try await liveExchange(fixture, session: derived, target: RelayWireContract.playlistPath, nonce: "live-playlist-0001")
+        XCTAssertEqual(served.statusCode, 200)
+        let renewals = await stream.leaseRenewals
+        XCTAssertEqual(renewals, 1)
+
+        let parentSigned = try await liveExchange(fixture, session: parent, target: RelayWireContract.playlistPath, nonce: "live-parent-000001")
+        XCTAssertEqual(parentSigned.statusCode, 404)
+
+        let other = try parent.liveStreamSession(streamID: UUID())
+        let stale = try await liveExchange(fixture, session: other, target: RelayWireContract.playlistSnapshotPath, nonce: "live-stale-0000001")
+        XCTAssertEqual(stale.statusCode, 410)
+        XCTAssertEqual(
+            try JSONDecoder().decode(RelayLiveStreamEnded.self, from: stale.body),
+            RelayLiveStreamEnded(error: .streamEnded, code: RelayLiveStreamEnded.notCurrentCode, message: nil)
+        )
+
+        let mediaTarget = RelayWireContract.mediaPathPrefix + "segment-000000001.m4s"
+        let parentCapability = try await liveExchange(
+            fixture, session: derived, target: mediaTarget, nonce: "live-media-parent1",
+            mediaCapability: parent.mediaCapability.value
+        )
+        XCTAssertEqual(parentCapability.statusCode, 403)
+        let media = try await liveExchange(
+            fixture, session: derived, target: mediaTarget, nonce: "live-media-derived",
+            mediaCapability: derived.mediaCapability.value
+        )
+        XCTAssertEqual(media.statusCode, 200)
+
+        let finish = try await liveExchange(fixture, session: derived, method: "POST", target: RelayWireContract.finishPath, nonce: "live-finish-000001")
+        XCTAssertEqual(finish.statusCode, 405)
+        let forwarded = await stream.requests.map(\.requestTarget)
+        XCTAssertEqual(forwarded, [RelayWireContract.playlistPath, mediaTarget])
+
+        await fixture.host.stop()
+    }
+
+    func testFailedLiveStartIsASignedStreamFailedOnEveryRoute() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
+        await starter.failNextStart(with: LiveRelayStreamStartError.workspaceUnavailable)
+        let fixture = try await makeLiveFixture(starter: starter)
+        let parent = try await pair(fixture)
+        await starter.waitForCalls(1)
+        let currentStreamID = await fixture.host.currentLiveStreamID()
+        let derived = try parent.liveStreamSession(streamID: try XCTUnwrap(currentStreamID))
+
+        let routes: [(method: String, target: String, capability: Bool)] = [
+            ("GET", RelayWireContract.playlistPath, false),
+            ("GET", RelayWireContract.playlistSnapshotPath, false),
+            ("GET", RelayWireContract.mediaPathPrefix + "segment-000000000.m4s", true),
+            ("POST", RelayWireContract.positionPath, false),
+            ("POST", RelayWireContract.cancelPath, false),
+        ]
+        for (index, route) in routes.enumerated() {
+            var response = try await liveExchange(
+                fixture, session: derived, method: route.method, target: route.target,
+                nonce: "live-failed-start-\(index)", mediaCapability: route.capability ? derived.mediaCapability.value : nil
+            )
+            // The start's failure is recorded asynchronously right after it throws.
+            for retry in 0 ..< 50 where response.statusCode != 503 || response.body.isEmpty {
+                try await Task.sleep(for: .milliseconds(10))
+                response = try await liveExchange(
+                    fixture, session: derived, method: route.method, target: route.target,
+                    nonce: "live-failed-retry-\(index)-\(retry)",
+                    mediaCapability: route.capability ? derived.mediaCapability.value : nil
+                )
+            }
+            XCTAssertEqual(response.statusCode, 503, route.target)
+            XCTAssertEqual(
+                try JSONDecoder().decode(RelayLiveStreamEnded.self, from: response.body),
+                RelayLiveStreamEnded(error: .streamFailed, code: "live_workspace_unavailable",
+                                     message: "The live stream could not start on the Mac."),
+                route.target
+            )
+        }
+        await fixture.host.stop()
+    }
+
+    func testQuitAndExpiryAwaitTheLiveStreamsStop() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false, streamStates: [.live(earliestMs: 0, latestMs: 4_000)])
+        let fixture = try await makeLiveFixture(starter: starter)
+        _ = try await pair(fixture)
+        let stream = try await installedLiveStream(fixture)
+        await stream.holdStop()
+
+        let quitReturned = LockedFlag()
+        let quit = Task {
+            await fixture.host.stopForAppQuit()
+            quitReturned.set()
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(quitReturned.value, "quit returned before the live stream's cleanup finished")
+        await stream.releaseStop()
+        await quit.value
+        let stopCalls = await stream.stopCalls
+        let finished = await stream.isStopFinished
+        XCTAssertEqual(stopCalls, [.appQuit])
+        XCTAssertTrue(finished)
+
+        let expiring = try await makeLiveFixture(starter: starter, sessionTTL: 60)
+        _ = try await pair(expiring)
+        let expiringStream = try await installedLiveStream(expiring)
+        expiring.clock.set(initialDate.addingTimeInterval(120))
+        _ = await expiring.host.currentLifecycle()
+        await expiring.host.stop()
+        let expiredCalls = await expiringStream.stopCalls
+        XCTAssertEqual(expiredCalls.first, .sessionEnded)
+    }
+
+    func testStopDuringASuspendedLiveStartStopsWhatItLaunched() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: true)
+        let fixture = try await makeLiveFixture(starter: starter)
+        _ = try await pair(fixture)
+        await starter.waitForCalls(1)
+
+        await fixture.host.cancel()
+
+        let launched = await starter.launched
+        XCTAssertEqual(launched.count, 1)
+        let finished = await launched[0].isStopFinished
+        XCTAssertTrue(finished)
+        let installed = await fixture.host.currentLiveStream()
+        XCTAssertNil(installed)
+    }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isSet = false
+    var value: Bool { lock.withLock { isSet } }
+    func set() { lock.withLock { isSet = true } }
 }
 
 private struct ChallengeEnvelope: Decodable {

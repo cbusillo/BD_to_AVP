@@ -74,6 +74,13 @@ struct RelayHostConfiguration: Sendable, Equatable {
     }
 }
 
+/// What a developer-probe host serves live instead of a fixture: one stream, started once the
+/// headset pairs.
+struct RelayHostLiveSource: Sendable {
+    let starter: any LiveRelayStreamStarting
+    let request: LiveStreamRequest
+}
+
 struct RelayBonjourAdvertisement: Sendable, Equatable {
     let serviceType: String
     let txtRecord: Data
@@ -118,6 +125,17 @@ actor RelayHost: RelayNetworkHosting {
     private var establishedSession: RelayEstablishedSession?
     private var playlist: RelayEventPlaylist
     private var lifecycle: RelayHostLifecycle = .pairing
+
+    // Live mode. The stream is reachable only under the session derived from the established
+    // session for `liveStreamID`; see `liveResponse(for:)`.
+    private let liveSource: RelayHostLiveSource?
+    private var liveStreamID: UUID?
+    private var liveStartTask: Task<any LiveRelayStreaming, any Error>?
+    private var liveStream: (any LiveRelayStreaming)?
+    private var liveStopTask: Task<Void, Never>?
+    private var liveStopReason: LiveRelayStopReason?
+    /// Set when the start threw: every request for the stream then gets this signed failure.
+    private var liveStartFailure: RelayLiveStreamEnded?
 
     init(
         pairingContext: RelayServerPairingContext,
@@ -166,6 +184,74 @@ actor RelayHost: RelayNetworkHosting {
         }
         if fixture.isFinalized { ingestedPlaylist.finalize() }
         playlist = ingestedPlaylist
+        liveSource = nil
+    }
+
+    /// A developer-probe host that serves one live stream. `configuration` supplies the request
+    /// limits and validation policy; its fixture settings are unused.
+    init(
+        pairingContext: RelayServerPairingContext,
+        configuration: RelayHostConfiguration,
+        liveSource: RelayHostLiveSource,
+        replayStore: RelayReplayNonceStore? = nil,
+        pairingSessionTTL: TimeInterval = 600,
+        now: @escaping @Sendable () -> Date = { Date() },
+        pairingSuspensionHook: (@Sendable (RelayHostPairingSuspensionPoint) async -> Void)? = nil
+    ) throws {
+        fixtureRoot = configuration.fixtureDirectory.standardizedFileURL
+        self.configuration = configuration
+        self.replayStore = try replayStore ?? RelayReplayNonceStore()
+        self.now = now
+        self.pairingSuspensionHook = pairingSuspensionHook
+        guard let pairingStart = RelayTime.unixMilliseconds(for: now()),
+              let pairingSessionTTLMilliseconds = RelayTime.milliseconds(
+                  from: pairingSessionTTL,
+                  maximum: 60 * 60 * 1_000
+              ), pairingSessionTTLMilliseconds > 0,
+              let pairingExpiration = RelayTime.adding(pairingSessionTTLMilliseconds, to: pairingStart)
+        else {
+            throw RelaySessionError.invalidValidationPolicy
+        }
+        pairingExpiresAt = RelayTime.date(fromUnixMilliseconds: pairingExpiration)
+        self.pairingContext = pairingContext
+        initializationResourceIdentifier = configuration.initializationResourceIdentifier
+        allowedMediaResourceIdentifiers = []
+        playlist = try RelayEventPlaylist(targetDuration: 2, retainedSegmentLimit: 1)
+        self.liveSource = liveSource
+    }
+
+    static func startLive(
+        configuration: RelayHostConfiguration,
+        liveSource: RelayHostLiveSource,
+        now: @escaping @Sendable () -> Date = { Date() },
+        challengeTTL: TimeInterval = 120,
+        candidateTTL: TimeInterval = 300,
+        pairingSessionTTL: TimeInterval = 600,
+        sessionTTL: TimeInterval = 7_200
+    ) throws -> RelayHost {
+        try RelayHost(
+            pairingContext: RelayServerPairingContext(
+                now: now(),
+                challengeTTL: challengeTTL,
+                candidateTTL: candidateTTL,
+                sessionTTL: sessionTTL
+            ),
+            configuration: configuration,
+            liveSource: liveSource,
+            pairingSessionTTL: pairingSessionTTL,
+            now: now
+        )
+    }
+
+    /// The live stream's ID once the headset has paired. A probe client derives its stream session
+    /// from it.
+    func currentLiveStreamID() -> UUID? {
+        liveStreamID
+    }
+
+    /// The live stream once its start has returned.
+    func currentLiveStream() -> (any LiveRelayStreaming)? {
+        liveStream
     }
 
     static func start(
@@ -326,24 +412,33 @@ actor RelayHost: RelayNetworkHosting {
         lifecycle = .finished
     }
 
-    func cancel() {
+    /// Each of these invalidates synchronously, then returns once a live stream's worker has
+    /// exited and its workspace is gone.
+    func cancel() async {
         cleanUp(reason: .cancelled)
+        await liveStopTask?.value
     }
 
-    func networkLost() {
+    func networkLost() async {
         cleanUp(reason: .networkLoss)
+        await liveStopTask?.value
     }
 
-    func stopForAppQuit() {
+    func stopForAppQuit() async {
         cleanUp(reason: .appQuit)
+        await liveStopTask?.value
     }
 
-    func stop() {
+    func stop() async {
         cleanUp(reason: .stopped)
+        await liveStopTask?.value
     }
 
     private func route(_ request: RelayHTTPRequest) async throws -> RelayHTTPResponse {
         try expireIfNeeded()
+        if liveSource != nil, Self.isLiveRelayRoute(request.requestTarget) {
+            return try await liveResponse(for: request)
+        }
         switch request.requestTarget {
         case Self.challengePath:
             return try await challengeResponse(for: request)
@@ -487,7 +582,8 @@ actor RelayHost: RelayNetworkHosting {
             establishedSession = session
             provisionalSession = nil
             self.pairingContext = nil
-            lifecycle = playlist.isFinalized ? .finished : .paired
+            lifecycle = playlist.isFinalized && liveSource == nil ? .finished : .paired
+            startLiveStreamIfNeeded(for: session)
         }
         let statusCode = result.response.state == .waitingForMac ? 202 : 200
         return try authenticate(
@@ -533,10 +629,7 @@ actor RelayHost: RelayNetworkHosting {
         cleanUpAsExpired()
     }
 
-    private func authenticate(
-        _ request: RelayHTTPRequest,
-        with session: RelayEstablishedSession?
-    ) async throws -> AuthenticatedExchange {
+    private func decodeAuthentication(_ request: RelayHTTPRequest) throws -> RelayAuthenticatedRequest {
         guard let encodedAuthentication = request.header(named: Self.authenticationHeader),
               encodedAuthentication.utf8.count <= RelayWireContract.maximumAuthenticationHeaderBytes,
               let authenticationData = Data(base64Encoded: encodedAuthentication),
@@ -544,12 +637,18 @@ actor RelayHost: RelayNetworkHosting {
         else {
             throw RelaySessionError.invalidRequest
         }
-        let authentication: RelayAuthenticatedRequest
         do {
-            authentication = try JSONDecoder().decode(RelayAuthenticatedRequest.self, from: authenticationData)
+            return try JSONDecoder().decode(RelayAuthenticatedRequest.self, from: authenticationData)
         } catch {
             throw RelaySessionError.invalidRequest
         }
+    }
+
+    private func authenticate(
+        _ request: RelayHTTPRequest,
+        with session: RelayEstablishedSession?
+    ) async throws -> AuthenticatedExchange {
+        let authentication = try decodeAuthentication(request)
         guard let session else {
             throw RelayHostError.notPaired
         }
@@ -677,6 +776,7 @@ actor RelayHost: RelayNetworkHosting {
         establishedSession = nil
         playlist.finalize()
         lifecycle = .expired
+        stopLiveStream(.sessionEnded)
     }
 
     private func cleanUp(reason: RelayHostStopReason) {
@@ -690,20 +790,136 @@ actor RelayHost: RelayNetworkHosting {
         switch reason {
         case .cancelled:
             lifecycle = .cancelled
-        case .networkLoss:
+            stopLiveStream(.cancelled)
+        case .networkLoss, .stopped:
             lifecycle = .stopped
-        case .appQuit, .stopped:
+            stopLiveStream(.sharingStopped)
+        case .appQuit:
             lifecycle = .stopped
+            stopLiveStream(.appQuit)
         }
+    }
+
+    // MARK: - Live mode
+
+    private static func isLiveRelayRoute(_ target: String) -> Bool {
+        target == playlistPath || target == playlistSnapshotPath || target == finishPath
+            || target == cancelPath || target == RelayWireContract.positionPath || target.hasPrefix(mediaPathPrefix)
+    }
+
+    private func startLiveStreamIfNeeded(for session: RelayEstablishedSession) {
+        guard let liveSource, liveStreamID == nil, liveStopTask == nil else { return }
+        let streamID = LiveStreamIdentifier.make(excluding: [session.sessionID])
+        liveStreamID = streamID
+        let startTask = Task { try await liveSource.starter.start(liveSource.request, id: streamID) }
+        liveStartTask = startTask
+        Task { await self.installLiveStream(from: startTask) }
+    }
+
+    private func installLiveStream(from startTask: Task<any LiveRelayStreaming, any Error>) async {
+        let result = await startTask.result
+        // After a stop, the stop task owns whatever the start returned.
+        guard liveStopTask == nil else { return }
+        switch result {
+        case let .success(stream):
+            liveStream = stream
+        case let .failure(error):
+            liveStartTask = nil
+            liveStartFailure = RelayLiveStreamEnded(
+                error: .streamFailed,
+                code: Self.liveStartFailureCode(for: error),
+                message: "The live stream could not start on the Mac."
+            )
+        }
+    }
+
+    private static func liveStartFailureCode(for error: any Error) -> String {
+        switch error {
+        case LiveRelayStreamStartError.workspaceUnavailable:
+            "live_workspace_unavailable"
+        case is WorkerLaunchConfigurationError:
+            "live_worker_unavailable"
+        default:
+            "live_start_failed"
+        }
+    }
+
+    /// Invalidates synchronously and records the one cleanup every stop awaits: cancel a start
+    /// still in progress and stop whatever it returned, or stop the running stream.
+    private func stopLiveStream(_ reason: LiveRelayStopReason) {
+        guard liveSource != nil, liveStopTask == nil else { return }
+        liveStopReason = reason
+        let startTask = liveStartTask
+        let stream = liveStream
+        liveStartTask = nil
+        liveStopTask = Task {
+            if let stream {
+                await stream.stop(reason)
+            } else if let startTask {
+                startTask.cancel()
+                if let started = try? await startTask.value {
+                    await started.stop(reason)
+                }
+            }
+        }
+    }
+
+    /// Live routes are signed under the session derived for the stream named by the request's
+    /// session ID. The current stream answers through `relayResponse`; any other stream ID gets a
+    /// signed 410 `not_current`. Requests signed by the parent session itself get a signed 404,
+    /// because the probe serves no fixture. A request that verifies under neither is unsigned.
+    private func liveResponse(for request: RelayHTTPRequest) async throws -> RelayHTTPResponse {
+        try ensurePairedSession()
+        guard let parent = establishedSession else { throw RelayHostError.notPaired }
+        let authentication = try decodeAuthentication(request)
+        let session: RelayEstablishedSession
+        var streamID: UUID?
+        if authentication.sessionID == parent.sessionID {
+            session = parent
+        } else {
+            guard let candidate = UUID(uuidString: authentication.sessionID.rawValue) else {
+                throw RelaySessionError.invalidRequest
+            }
+            session = try parent.liveStreamSession(streamID: candidate)
+            streamID = candidate
+        }
+        let exchange = try await authenticate(request, with: session)
+        let response: RelayHTTPResponse
+        if request.requestTarget == Self.finishPath {
+            response = .empty(statusCode: 405)
+        } else if streamID == nil {
+            response = .empty(statusCode: 404)
+        } else if streamID != liveStreamID {
+            response = .liveStreamEnded(RelayLiveStreamEnded(
+                error: .streamEnded,
+                code: RelayLiveStreamEnded.notCurrentCode,
+                message: nil
+            ))
+        } else if request.requestTarget.hasPrefix(Self.mediaPathPrefix),
+                  !(request.header(named: Self.mediaCapabilityHeader).map(session.mediaCapability.matches) ?? false) {
+            response = .empty(statusCode: 403)
+        } else if let stream = liveStream {
+            await stream.renewLease()
+            response = await stream.relayResponse(for: request)
+        } else if let liveStartFailure {
+            response = .liveStreamEnded(liveStartFailure)
+        } else if let liveStopReason {
+            response = .liveStreamEnded(RelayLiveStreamEnded(error: .streamEnded, code: liveStopReason.rawValue, message: nil))
+        } else {
+            // Paired, but the start has not returned yet.
+            response = RelayHTTPResponse(statusCode: 503, headers: ["retry-after": "1"])
+        }
+        return try authenticate(response, for: exchange)
     }
 
     private func renderPlaylist() -> String {
         let targetDurationSeconds = Int(ceil(playlist.targetDuration))
         let mediaSequence = playlist.segments.first?.sequenceNumber ?? playlist.nextSequenceNumber
+        // No EXT-X-PLAYLIST-TYPE: the retained window evicts history, which an EVENT playlist
+        // must never do.
         var lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:7",
-            "#EXT-X-PLAYLIST-TYPE:EVENT",
             "#EXT-X-TARGETDURATION:\(targetDurationSeconds)",
             "#EXT-X-MEDIA-SEQUENCE:\(mediaSequence)",
             "#EXT-X-MAP:URI=\"\(RelayWireContract.mediaPathPrefix)\(initializationResourceIdentifier)\"",

@@ -42,6 +42,7 @@ EVENT_WRITE_CHUNK_BYTES = 512
 ZERO_JOB_ID = str(UUID(int=0))
 LIVE_HLS_MINIMUM_RETENTION_SECONDS = 30
 LIVE_HLS_MINIMUM_RETENTION_BYTES = 64 * 1_024 * 1_024
+LIVE_HLS_MINIMUM_VIEWER_LEAD_SECONDS = 10
 
 
 def bounded_detail(value: str) -> str:
@@ -254,12 +255,26 @@ class LiveSourceOptions:
 
 
 @dataclass(frozen=True)
+class LiveSourceIdentity:
+    """The source file the host authorized, as ``lstat`` saw it on the host."""
+
+    device: int
+    inode: int
+    size_bytes: int
+    modification_seconds: int
+    modification_nanoseconds: int
+
+
+@dataclass(frozen=True)
 class LiveHLSOptions:
     playlist: int
     audio_pid: int
     retention_seconds: int
     retention_max_bytes: int
     maximum_pairs: int | None = None
+    # Hold production while it is this far ahead of the reported viewer position.
+    viewer_lead_seconds: int | None = None
+    source_identity: LiveSourceIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -1474,7 +1489,7 @@ class JobSpec:
         required_keys = {"playlist", "audio_pid", "retention_seconds", "retention_max_bytes"}
         cls._reject_unknown_keys(
             value,
-            required_keys | {"maximum_pairs"},
+            required_keys | {"maximum_pairs", "viewer_lead_seconds", "source_identity"},
             "live_hls",
             job_id,
             error_code="invalid_live_hls",
@@ -1499,16 +1514,58 @@ class JobSpec:
                 error_code="invalid_live_hls",
             )
 
+        retention_seconds = parse("retention_seconds", LIVE_HLS_MINIMUM_RETENTION_SECONDS, 24 * 3_600)
         return LiveHLSOptions(
             playlist=parse("playlist", 0, 99_999),
             audio_pid=parse("audio_pid", 1, 8_191),
-            retention_seconds=parse("retention_seconds", LIVE_HLS_MINIMUM_RETENTION_SECONDS, 24 * 3_600),
+            retention_seconds=retention_seconds,
             retention_max_bytes=parse(
                 "retention_max_bytes",
                 LIVE_HLS_MINIMUM_RETENTION_BYTES,
                 1_024 * 1_024 * 1_024 * 1_024,
             ),
             maximum_pairs=parse("maximum_pairs", 1, (1 << 63) - 1) if "maximum_pairs" in value else None,
+            viewer_lead_seconds=(
+                parse("viewer_lead_seconds", LIVE_HLS_MINIMUM_VIEWER_LEAD_SECONDS, retention_seconds // 2)
+                if "viewer_lead_seconds" in value
+                else None
+            ),
+            source_identity=(
+                cls._parse_live_source_identity(value["source_identity"], job_id)
+                if "source_identity" in value
+                else None
+            ),
+        )
+
+    @classmethod
+    def _parse_live_source_identity(cls, value: Any, job_id: str) -> LiveSourceIdentity:
+        keys = {"device", "inode", "size_bytes", "modification_seconds", "modification_nanoseconds"}
+        if not isinstance(value, Mapping) or set(value) != keys:
+            raise WorkerProtocolError(
+                "invalid_live_hls",
+                "live_hls.source_identity must contain exactly the device, inode, size, and modification time.",
+                job_id=job_id,
+            )
+
+        def parse(key: str, maximum: int) -> int:
+            return cls._parse_int(
+                value,
+                key,
+                "live_hls.source_identity",
+                job_id,
+                minimum=0,
+                maximum=maximum,
+                error_code="invalid_live_hls",
+            )
+
+        unsigned_64 = (1 << 64) - 1
+        signed_64 = (1 << 63) - 1
+        return LiveSourceIdentity(
+            device=parse("device", unsigned_64),
+            inode=parse("inode", unsigned_64),
+            size_bytes=parse("size_bytes", signed_64),
+            modification_seconds=parse("modification_seconds", signed_64),
+            modification_nanoseconds=parse("modification_nanoseconds", 999_999_999),
         )
 
     @classmethod

@@ -307,6 +307,9 @@ transport without weakening the existing request authentication.
 
 The fixture host preserves `#EXT-X-ENDLIST`, so a completed fixture stays
 completed when relayed instead of waiting indefinitely for more live segments.
+The served playlist has no `EXT-X-PLAYLIST-TYPE` tag even though the fixture
+file is an EVENT playlist, because the relay's retained window evicts older
+segments and an EVENT playlist must never remove any.
 The Mac retains a ten-second request deadline, then sends responses in 64 KiB
 chunks with a ten-second progress timeout and a sixty-second total response cap.
 This lets active segment transfers outlive the request deadline while still

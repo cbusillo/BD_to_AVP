@@ -23,7 +23,15 @@ Request:
     "audio_pid": 4353,
     "retention_seconds": 120,
     "retention_max_bytes": 268435456,
-    "maximum_pairs": 14434
+    "maximum_pairs": 14434,
+    "viewer_lead_seconds": 30,
+    "source_identity": {
+      "device": 16777234,
+      "inode": 123456789,
+      "size_bytes": 41234567168,
+      "modification_seconds": 1760000000,
+      "modification_nanoseconds": 123456789
+    }
   }
 }
 ```
@@ -32,6 +40,16 @@ Request:
 64 MiB. `maximum_pairs` is optional and bounds qualification runs. The source
 must be an ISO or Blu-ray folder, and the workspace must be empty and outside
 the source.
+
+`viewer_lead_seconds` is optional, from 10 through half of
+`retention_seconds`; it turns on viewer pacing (see Backpressure).
+`source_identity` is optional and is what the host saw when it authorized the
+file. When present, the worker checks it before inspection and again before the
+source read: the path must not be a symbolic link, and the file opened without
+following links must have that device (low 32 bits), inode, size, and
+modification time. A mismatch fails with `live_source_changed`. The Mac relay
+sends both; the request shape is in
+`tests/fixtures/native_worker_start_live_hls_v13.json`.
 
 The worker emits `artifact.ready` with a `live_hls` payload naming the manifest
 and playlist once the first segment, playlist, and manifest are durable. The
@@ -158,8 +176,29 @@ the manifest; whoever owns the workspace afterward removes them, or removes
 the workspace.
 
 `SSIFLiveHLSService.hold_conditions` is a list of callables. Any condition that
-returns true is a deliberate hold, like the grace hold. Viewer-position pacing
-in the relay can add its own condition there.
+returns true is a deliberate hold, like the grace hold.
+
+With `viewer_lead_seconds`, viewer pacing adds a third deliberate hold. The
+host sends the viewer's playhead with `job.viewer_position`
+([native-worker-protocol-v13.md](native-worker-protocol-v13.md)); the worker
+holds while the published edge is at least the lead past the latest position,
+or past zero before the first report. An advancing position releases it on the
+next poll. This hold only stops the source read, like the others, so it cannot
+block publication or grace expiry: the grace hold still releases on wall-clock
+time and staging still drains, and a held viewer always has the lead's worth of
+published media ahead of it. A paused viewer holds production indefinitely
+without tripping any no-progress deadline, and cancellation still reaches the
+children promptly. The Mac relay uses a 30-second lead with 120-second and
+256 MiB retention, which leaves about 75 seconds behind the viewer for rewind
+at 20 Mbps.
+
+The manifest carries a `producer` object so producer capacity can be measured
+apart from pacing: `produced_microseconds` (the published edge),
+`wall_seconds` since production started, `held_seconds` (all deliberate
+holds), and `viewer_held_seconds` (the viewer hold's share). Unheld throughput
+is `produced_microseconds / ((wall_seconds - held_seconds) * 1e6)`. The values
+are as of the manifest's last publication. The terminal result also reports
+`viewer_held_seconds`.
 
 The service fails instead of publishing when one segment cannot fit the byte
 limit (`live_hls_segment_too_large`) or when the byte limit cannot hold three
@@ -186,6 +225,69 @@ Failures report the stage that failed: `source_stream_failed` or the helper's
 own code, `live_video_decode_failed`, `live_video_normalize_failed`,
 `live_video_encode_failed`, `live_audio_decode_failed`, and
 `live_hls_pipeline_stalled`.
+
+## Relay
+
+The Mac serves a live stream through the authenticated relay
+(`macos/BluRayToVisionPro/Relay/Live/`). Each stream runs its own worker on a
+fresh `~/Library/Caches/<bundle>/LiveHLS/<stream-id>` workspace with 120-second
+and 256 MiB retention and a 30-second viewer lead, and sends `source_identity`
+from the source lease.
+
+- **Following.** The relay polls `live-hls.json` every 250 ms and rereads it only
+  when its inode, size, or modification time changed. It decodes the manifest
+  strictly (at most 4 MiB, schema 1, `init.mp4`, public segment names,
+  consecutive sequences, a contiguous timeline, durations within the target
+  plus 0.5 s) and refuses a manifest whose media sequence or latest position
+  goes back, whose completion reverts, or that retimes a known URI. Any
+  violation fails the stream with `live_hls_manifest_invalid`.
+- **Serving.** Only `init.mp4`, the retained segments, and segments the
+  manifest still lists as retired are served; a retired segment the worker has
+  unlinked is a 404. Files are opened without following links.
+- **Playlist.** `LiveHLSPlaylistRenderer` renders the playlist and the
+  `playlist.json` snapshot from the same window. URIs are root-relative under
+  `/relay/v1/media/`, there is no `EXT-X-PLAYLIST-TYPE`, `EXT-X-START:TIME-OFFSET=0`
+  starts at the earliest retained segment, and `EXT-X-ENDLIST` follows
+  completion. Snapshot times convert segment boundaries, not durations, to
+  milliseconds, so segments stay contiguous at 23.976 fps.
+- **Pacing.** The player posts its playhead to `/relay/v1/control/position`.
+  The stream clamps it to the window and forwards it as `job.viewer_position`
+  when it moved at least 500 ms, at most once a second. With no report for
+  10 seconds it uses the start of the most recently requested segment.
+- **Lifecycle.** A worker failure or a manifest violation is a signed 503
+  `stream_failed` carrying the worker's code and message, and starts cleanup at
+  once; the failure stays visible until the stream is stopped. A stopped stream
+  is a signed 410 `stream_ended` with the stop reason. A stream stops as `idle`
+  60 seconds after its last verified request (120 seconds before the first) and
+  as `sourceChanged` when its path no longer names the leased file (checked
+  every 5 seconds). Stopping invalidates at once; one cleanup cancels the
+  worker, kills its process group 10 seconds later if needed, and waits for the
+  worker's confirmed exit with no timeout before it removes the workspace and
+  releases the lease. Every caller awaits that cleanup, so a replacement never
+  starts beside a worker that is still running. An exit still unconfirmed 5
+  seconds after the kill is reported as an overdue drain. The Mac holds an
+  idle-sleep assertion while the stream can serve.
+
+The developer-probe `RelayHost` live mode starts one stream once a headset
+pairs. Its live routes verify only under the session derived for that stream
+(`RelayEstablishedSession.liveStreamSession(streamID:)`), media also needs the
+derived media capability, any other stream ID gets a signed 410
+`not_current`, a start that throws is a signed 503 `stream_failed` on every
+live route, and `stop`, `cancel`, and app quit wait for the stream's cleanup.
+
+On October 21, 2026, the relay at commit `93b16d75` served the Rainforest ISO
+(playlist 1005, PID 4353) for 330 seconds to a simulated viewer that signed every
+request under the derived session, kept a 20-second forward buffer, reported its
+playhead each second, and paused for 45 seconds. The first segment was available
+1.3 seconds after the stream started. The viewer fetched 151 segments (764 MB)
+with no rebuffer and no listed segment missing. After the first 30 seconds the
+published edge stayed 27.7 to 33.4 seconds ahead of the playhead, including
+during the pause. The worker held for 253.9 of 329.2 seconds, 253.0 of them for
+the viewer, and produced 313.9 seconds of media, an unheld throughput of 4.17x.
+The workspace peaked at 547 MB. Stopping took 0.13 seconds and left no workspace
+and no pipeline process. In that run the worker was started from a shell and
+connected to the relay over FIFOs, because the test app had not been granted
+access to the network volume holding the ISO; see the task evidence.
 
 ## Tools
 
