@@ -585,6 +585,8 @@ final class MovieLibraryLiveTests: XCTestCase {
         let title = try await harness.eligibleTitle()
         let (streamID, reference) = try await harness.started(title)
 
+        // The host answers 202 once admission is reserved and launches the starter in a task.
+        await harness.starter.waitForCalls(1)
         let calls = await harness.starter.calls
         let call = try XCTUnwrap(calls.first)
         XCTAssertEqual(call.id, streamID)
@@ -633,6 +635,7 @@ final class MovieLibraryLiveTests: XCTestCase {
             return XCTFail("Expected both retries to report the start: \(outcomes)")
         }
         XCTAssertEqual(a.streamID, b.streamID)
+        await harness.starter.waitForCalls(1)
         let calls = await harness.starter.calls.count
         XCTAssertEqual(calls, 1)
         await harness.host.stop()
