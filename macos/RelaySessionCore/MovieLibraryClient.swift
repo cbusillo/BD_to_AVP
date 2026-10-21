@@ -6,6 +6,14 @@ struct MoviePairingPrompt: Sendable {
     let isRemembered: Bool
 }
 
+/// What the Mac answered to a live start.
+enum LiveStartResult: Equatable, Sendable {
+    case started(LiveStartResponse)
+    case refused(LiveStartRefusal)
+    /// Signed 422: the request was signed outside its start identity's window. Not retryable.
+    case expired
+}
+
 actor MovieLibraryClient {
     private struct Pending {
         let provisional: RelayProvisionalSession
@@ -16,16 +24,29 @@ actor MovieLibraryClient {
     private let name: String
     private let transport: any MovieHTTPTransport
     private let trust: MovieLibraryTrustStore
+    private let clock: @Sendable () -> Date
     private var pending: Pending?
     private var session: RelayEstablishedSession?
     private var serverPublicKey: Data?
     private var epoch = UUID()
 
-    init(baseURL: URL, name: String, transport: any MovieHTTPTransport = BoundedMovieHTTPTransport(), trust: MovieLibraryTrustStore = MovieLibraryTrustStore()) {
+    init(
+        baseURL: URL, name: String, transport: any MovieHTTPTransport = BoundedMovieHTTPTransport(),
+        trust: MovieLibraryTrustStore = MovieLibraryTrustStore(), clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
         self.baseURL = baseURL
         self.name = name
         self.transport = transport
         self.trust = trust
+        self.clock = clock
+    }
+
+    /// The Mac's base URL, which also serves a live stream's relay routes.
+    nonisolated var serverBaseURL: URL { baseURL }
+
+    /// For tests: install an established session without pairing.
+    func installSession(_ established: RelayEstablishedSession) {
+        session = established
     }
 
     func disconnect() {
@@ -104,12 +125,104 @@ actor MovieLibraryClient {
         }
     }
 
+    // MARK: - Live playback
+
+    /// Sends a live start signed at `signedAt`. The first request for a start ID is signed at
+    /// `request.issuedAt`; a retry repeats the same body with a fresh signature.
+    func startLive(_ request: LiveStartRequest, signedAt: Date) async throws -> LiveStartResult {
+        guard let session else { throw MovieLibraryError.needsPairing }
+        let attemptEpoch = epoch
+        let (data, status) = try await verifiedExchange(
+            path: MovieLibraryContract.liveStartPath, method: "POST", body: JSONEncoder().encode(request),
+            authentication: session, timestamp: signedAt
+        )
+        try ensureCurrent(attemptEpoch)
+        switch status {
+        case 202:
+            let response = try JSONDecoder().decode(LiveStartResponse.self, from: data)
+            guard response.liveVersion == MovieLibraryContract.liveVersion else { throw MovieLibraryError.incompatible }
+            return .started(response)
+        case 409, 429:
+            return .refused(try JSONDecoder().decode(LiveStartRefusal.self, from: data))
+        case 422:
+            return .expired
+        default:
+            throw Self.error(forStatus: status)
+        }
+    }
+
+    func cancelLive(_ reference: LiveStartReference) async throws -> LiveCancelOutcome {
+        guard let session else { throw MovieLibraryError.needsPairing }
+        let (data, status) = try await verifiedExchange(
+            path: MovieLibraryContract.liveCancelPath, method: "POST", body: JSONEncoder().encode(reference),
+            authentication: session
+        )
+        switch status {
+        case 204:
+            return .acknowledged
+        case 422, 429:
+            let refusal = try JSONDecoder().decode(LiveRequestRefusal.self, from: data)
+            return refusal.retryable ? .retryLater : .expired
+        default:
+            throw Self.error(forStatus: status)
+        }
+    }
+
+    /// True when the Mac released a slot held by exactly this start identity.
+    func releaseLive(_ reference: LiveStartReference) async throws -> Bool {
+        guard let session else { throw MovieLibraryError.needsPairing }
+        let (data, status) = try await verifiedExchange(
+            path: MovieLibraryContract.liveReleasePath, method: "POST", body: JSONEncoder().encode(reference),
+            authentication: session
+        )
+        guard status == 200 else { throw Self.error(forStatus: status) }
+        return try JSONDecoder().decode(LiveReleaseResponse.self, from: data).drained
+    }
+
+    func liveStatus(streamID: UUID) async throws -> LiveStreamStatus {
+        guard let session else { throw MovieLibraryError.needsPairing }
+        let (data, status) = try await verifiedExchange(
+            path: MovieLibraryContract.liveStatusPrefix + streamID.uuidString.lowercased(), authentication: session
+        )
+        guard status == 200 else { throw Self.error(forStatus: status) }
+        return try JSONDecoder().decode(LiveStreamStatus.self, from: data)
+    }
+
+    /// The session that signs every relay request for one live stream, and the URL that serves
+    /// them. The parent session signs only the `/movies/v1/...` routes.
+    func liveStreamSession(streamID: UUID) throws -> (session: RelayEstablishedSession, baseURL: URL) {
+        guard let session else { throw MovieLibraryError.needsPairing }
+        return (try session.liveStreamSession(streamID: streamID), baseURL)
+    }
+
+    private static func error(forStatus status: Int) -> MovieLibraryError {
+        switch status {
+        case 401: .needsPairing
+        case 409: .sourceChanged
+        case 416: .invalidRange
+        default: .unavailable
+        }
+    }
+
     private func ensureCurrent(_ value: UUID) throws {
         try Task.checkCancellation()
         guard epoch == value else { throw CancellationError() }
     }
 
     private func exchange(path: String, method: String = "GET", body: Data = Data(), authentication: RelayEstablishedSession? = nil) async throws -> (Data, Int) {
+        let (data, status) = try await verifiedExchange(path: path, method: method, body: body, authentication: authentication)
+        switch status {
+        case 200, 202, 204, 206: return (data, status)
+        default: throw Self.error(forStatus: status)
+        }
+    }
+
+    /// Sends a request and verifies a signed response, returning any status. An unsigned 401
+    /// means the session ended (`needsPairing`); any other unsigned answer is invalid.
+    private func verifiedExchange(
+        path: String, method: String = "GET", body: Data = Data(),
+        authentication: RelayEstablishedSession? = nil, timestamp: Date? = nil
+    ) async throws -> (Data, Int) {
         guard baseURL.scheme == "http", baseURL.user == nil, baseURL.password == nil,
               baseURL.query == nil, baseURL.fragment == nil,
               let url = URL(string: path, relativeTo: baseURL)?.absoluteURL,
@@ -122,7 +235,7 @@ actor MovieLibraryClient {
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         let nonce = UUID().uuidString.lowercased()
         if let authentication {
-            let proof = try authentication.signRequest(method: method, requestTarget: path, timestamp: Date(), nonce: nonce, body: body)
+            let proof = try authentication.signRequest(method: method, requestTarget: path, timestamp: timestamp ?? clock(), nonce: nonce, body: body)
             request.setValue(try JSONEncoder().encode(proof).base64EncodedString(), forHTTPHeaderField: RelayWireContract.authenticationHeader)
         }
         let (data, response) = try await transport.data(for: request, maximumBytes: MovieLibraryContract.maximumChunkBytes)
@@ -135,14 +248,8 @@ actor MovieLibraryClient {
                 throw MovieLibraryError.invalidResponse
             }
             let proof = try JSONDecoder().decode(RelayAuthenticatedResponse.self, from: proofData)
-            try authentication.verifyResponse(proof, requestNonce: nonce, actualStatusCode: response.statusCode, body: data, now: Date())
+            try authentication.verifyResponse(proof, requestNonce: nonce, actualStatusCode: response.statusCode, body: data, now: clock())
         }
-        switch response.statusCode {
-        case 200, 202, 204, 206: return (data, response.statusCode)
-        case 401: throw MovieLibraryError.needsPairing
-        case 409: throw MovieLibraryError.sourceChanged
-        case 416: throw MovieLibraryError.invalidRange
-        default: throw MovieLibraryError.unavailable
-        }
+        return (data, response.statusCode)
     }
 }
