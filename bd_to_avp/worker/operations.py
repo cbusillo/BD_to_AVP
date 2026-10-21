@@ -51,6 +51,7 @@ from bd_to_avp.worker.protocol import (
     WorkerSourceKind,
 )
 from bd_to_avp.worker.live_hls_service import SSIFLiveHLSService
+from bd_to_avp.worker.live_title_inspection import LiveTitleInspector
 from bd_to_avp.worker.source_service import SSIFLiveSourceService, SourceServiceError
 
 DIRECT_VIDEO_EXTENSIONS = frozenset({".mkv", ".mts", ".m2ts"})
@@ -134,6 +135,10 @@ def run_operation(
         if activity is None:
             raise WorkerOperationError("internal_error", "Live HLS startup requires an activity reporter.")
         return start_live_hls(job, owner, activity)
+    if job.operation is WorkerOperation.INSPECT_LIVE_TITLE:
+        if activity is None:
+            raise WorkerOperationError("internal_error", "Live title inspection requires an activity reporter.")
+        return inspect_live_title(job, owner, activity)
     raise WorkerOperationError("unsupported_operation", f"Unsupported worker operation: {job.operation.value}.")
 
 
@@ -168,6 +173,26 @@ def start_live_hls(
         raise WorkerOperationError(
             "live_hls_failed",
             "The live HLS service failed unexpectedly.",
+            str(error),
+        ) from error
+
+
+def inspect_live_title(
+    job: JobSpec,
+    owner: WorkerProcessOwner,
+    activity: WorkerActivityReporter,
+) -> dict[str, object]:
+    normalized_job = replace(job, source=resolve_job_source(job.source))
+    try:
+        return LiveTitleInspector(normalized_job, owner, activity).run()
+    except WorkerCancelled:
+        raise
+    except SourceServiceError as error:
+        raise WorkerOperationError(error.code, error.message, error.details) from error
+    except Exception as error:
+        raise WorkerOperationError(
+            "live_title_inspection_failed",
+            "The live title inspection failed unexpectedly.",
             str(error),
         ) from error
 

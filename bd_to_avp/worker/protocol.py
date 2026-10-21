@@ -59,6 +59,7 @@ class WorkerOperation(StrEnum):
     PREVIEW_SOURCE = "preview_source"
     START_LIVE_SOURCE = "start_live_source"
     START_LIVE_HLS = "start_live_hls"
+    INSPECT_LIVE_TITLE = "inspect_live_title"
 
 
 class WorkerSourceKind(StrEnum):
@@ -331,6 +332,7 @@ class JobSpec:
             WorkerOperation.PREVIEW_SOURCE: base_keys | {"destination", "encoding", "job", "preview"},
             WorkerOperation.START_LIVE_SOURCE: base_keys | {"destination", "live_source"},
             WorkerOperation.START_LIVE_HLS: base_keys | {"destination", "live_hls"},
+            WorkerOperation.INSPECT_LIVE_TITLE: base_keys,
         }[operation]
         cls._reject_unknown_keys(raw, operation_keys, "request", job_id)
 
@@ -378,7 +380,12 @@ class JobSpec:
         title_id = cls._parse_optional_title_id(source.get("title_id"), job_id)
         if (
             operation
-            in {WorkerOperation.INSPECT_SOURCE, WorkerOperation.START_LIVE_SOURCE, WorkerOperation.START_LIVE_HLS}
+            in {
+                WorkerOperation.INSPECT_SOURCE,
+                WorkerOperation.START_LIVE_SOURCE,
+                WorkerOperation.START_LIVE_HLS,
+                WorkerOperation.INSPECT_LIVE_TITLE,
+            }
             and has_title_id
         ):
             raise WorkerProtocolError(
@@ -471,6 +478,13 @@ class JobSpec:
                 )
             destination = JobDestination(path=cls._parse_destination(raw.get("destination"), job_id))
             live_hls_options = cls._parse_live_hls_options(raw.get("live_hls"), job_id)
+        elif operation is WorkerOperation.INSPECT_LIVE_TITLE:
+            if source_kind not in {WorkerSourceKind.DISC_IMAGE, WorkerSourceKind.BLU_RAY_FOLDER}:
+                raise WorkerProtocolError(
+                    "invalid_live_title",
+                    "Live title inspection requires an ISO image or Blu-ray folder.",
+                    job_id=job_id,
+                )
 
         return cls(
             protocol_version=protocol_version,

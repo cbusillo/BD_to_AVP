@@ -2028,6 +2028,19 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(liveSource["playlist"] as? Int, 0)
     }
 
+    func testLiveTitleInspectionJobSpecMatchesSharedWorkerFixture() throws {
+        let spec = WorkerJobSpec(
+            liveTitleInspection: ConversionSource(kind: .discImage, url: URL(fileURLWithPath: "/tmp/movie.iso")),
+            jobID: UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
+        )
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
+        let fixture = try JSONSerialization.jsonObject(
+            with: currentProtocolFixtureData("native_worker_inspect_live_title")
+        ) as? NSDictionary
+
+        XCTAssertEqual(encoded, fixture)
+    }
+
     func testPhysicalDiscJobSpecMatchesSharedWorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic

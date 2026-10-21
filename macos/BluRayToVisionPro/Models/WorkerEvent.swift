@@ -459,6 +459,38 @@ struct LiveSourceResult: Decodable, Equatable {
     }
 }
 
+struct LiveTitleInspection: Decodable, Equatable {
+    struct AudioStream: Decodable, Equatable {
+        let pid: Int
+        let codingType: Int
+        let format: Int?
+        let rate: Int?
+        let language: String?
+
+        enum CodingKeys: String, CodingKey {
+            case pid
+            case codingType = "coding_type"
+            case format
+            case rate
+            case language
+        }
+    }
+
+    let eligible: Bool
+    let unsupportedReason: String?
+    let playlist: Int?
+    let durationSeconds: Double?
+    let audioStreams: [AudioStream]
+
+    enum CodingKeys: String, CodingKey {
+        case eligible
+        case unsupportedReason = "unsupported_reason"
+        case playlist
+        case durationSeconds = "duration_seconds"
+        case audioStreams = "audio_streams"
+    }
+}
+
 struct WorkerEventPayload: Decodable, Equatable {
     let workerVersion: String?
     let processGroupID: Int32?
@@ -475,6 +507,7 @@ struct WorkerEventPayload: Decodable, Equatable {
     let liveSource: LiveSourceArtifact?
     let previewResult: PreviewArtifact?
     let liveSourceResult: LiveSourceResult?
+    let liveTitleResult: LiveTitleInspection?
     let error: WorkerFailure?
     let decision: WorkerDecision?
     let observabilityEvent: ObservabilityEvent?
@@ -499,6 +532,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         liveSource: LiveSourceArtifact? = nil,
         previewResult: PreviewArtifact? = nil,
         liveSourceResult: LiveSourceResult? = nil,
+        liveTitleResult: LiveTitleInspection? = nil,
         error: WorkerFailure? = nil,
         decision: WorkerDecision? = nil,
         observabilityEvent: ObservabilityEvent? = nil,
@@ -522,6 +556,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.liveSource = liveSource
         self.previewResult = previewResult
         self.liveSourceResult = liveSourceResult
+        self.liveTitleResult = liveTitleResult
         self.error = error
         self.decision = decision
         self.observabilityEvent = observabilityEvent
@@ -553,6 +588,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         liveSource = try container.decodeIfPresent(LiveSourceArtifact.self, forKey: .liveSource)
         previewResult = try container.decodeIfPresent(PreviewArtifact.self, forKey: .previewResult)
         liveSourceResult = try container.decodeIfPresent(LiveSourceResult.self, forKey: .liveSourceResult)
+        liveTitleResult = try container.decodeIfPresent(LiveTitleInspection.self, forKey: .liveTitleResult)
         error = try container.decodeIfPresent(WorkerFailure.self, forKey: .error)
         decision = try container.decodeIfPresent(WorkerDecision.self, forKey: .decision)
         observabilityEvent = try container.decodeIfPresent(ObservabilityEvent.self, forKey: .observabilityEvent)
@@ -587,6 +623,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         case liveSource = "live_source"
         case previewResult = "preview_result"
         case liveSourceResult = "live_source_result"
+        case liveTitleResult = "live_title_result"
         case error
         case decision
         case observabilityEvent = "event"

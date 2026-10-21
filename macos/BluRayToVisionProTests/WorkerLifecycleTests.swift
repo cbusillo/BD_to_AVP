@@ -403,6 +403,40 @@ final class WorkerLifecycleTests: XCTestCase {
         }
     }
 
+    func testDecodesSharedLiveTitleCompletionFixture() throws {
+        let completed = try JSONDecoder().decode(
+            WorkerEvent.self,
+            from: currentProtocolFixtureData("native_worker_live_title_completed")
+        )
+
+        let result = try XCTUnwrap(completed.payload.liveTitleResult)
+        XCTAssertTrue(result.eligible)
+        XCTAssertNil(result.unsupportedReason)
+        XCTAssertEqual(result.playlist, 1_005)
+        XCTAssertEqual(result.durationSeconds, 5_400)
+        XCTAssertEqual(result.audioStreams.map(\.pid), [4_352, 4_354])
+        XCTAssertEqual(result.audioStreams.first?.codingType, 134)
+        XCTAssertEqual(result.audioStreams.first?.language, "eng")
+        XCTAssertNil(completed.payload.result)
+    }
+
+    func testDecodesIneligibleLiveTitleWithoutPlaylist() throws {
+        let data = Data(
+            """
+            {"eligible":false,"unsupported_reason":"no_live_titles","playlist":null,\
+            "duration_seconds":null,"audio_streams":[]}
+            """.utf8
+        )
+
+        let result = try JSONDecoder().decode(LiveTitleInspection.self, from: data)
+
+        XCTAssertFalse(result.eligible)
+        XCTAssertEqual(result.unsupportedReason, "no_live_titles")
+        XCTAssertNil(result.playlist)
+        XCTAssertNil(result.durationSeconds)
+        XCTAssertEqual(result.audioStreams, [])
+    }
+
     func testDecodesAndAppliesSharedConversionCompletionFixture() throws {
         let completed = try JSONDecoder().decode(
             WorkerEvent.self,

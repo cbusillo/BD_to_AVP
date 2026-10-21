@@ -53,6 +53,10 @@ inspection's unsupported reason. The service also requires:
   Dolby Digital Plus, or DTS including DTS-HD (`unsupported_live_audio`
   otherwise). LPCM and TrueHD are not supported.
 
+To learn whether a source can play live before starting it, the worker
+operation `inspect_live_title` applies these same rules to every listed
+playlist; see [live-title-inspection.md](live-title-inspection.md).
+
 ## Pipeline
 
 One `ssif_probe stream-service` read supplies both media types. An MVC record's
