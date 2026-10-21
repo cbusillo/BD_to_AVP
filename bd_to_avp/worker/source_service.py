@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import BinaryIO, Mapping, cast
+from typing import BinaryIO, Mapping, Protocol, cast
 
 from bd_to_avp.modules.config import resolve_tool_path
 from bd_to_avp.process_runner import (
@@ -502,46 +502,38 @@ class ReplayStore:
         return (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-class SSIFLiveSourceService:
+class SourceSelection(Protocol):
+    @property
+    def playlist(self) -> int: ...
+
+    @property
+    def audio_pid(self) -> int: ...
+
+    @property
+    def maximum_pairs(self) -> int | None: ...
+
+
+class SSIFSourceHelper:
+    """Shared ssif_probe contract, inspection, and process ownership for live services."""
+
     def __init__(
         self,
         job: JobSpec,
+        selection: SourceSelection,
+        destination: Path,
         owner: WorkerProcessOwner,
         activity: WorkerActivityReporter,
         *,
         probe_path: Path | None = None,
     ) -> None:
-        if job.live_source is None or job.destination is None:
-            raise SourceServiceError("invalid_live_source", "The live source job is incomplete.")
         self.job = job
-        self.options = job.live_source
-        self.destination = job.destination.path
+        self.selection = selection
+        self.destination = destination
         self.owner = owner
         self.activity = activity
         self.process_runner = ChildProcessRunner()
         repository_probe = Path(__file__).resolve().parents[1] / "bin/ssif_probe"
         self.probe_path = probe_path or resolve_tool_path("ssif_probe", extra_paths=(repository_probe,))
-
-    def run(self) -> dict[str, object]:
-        self._validate_tool()
-        self.activity.set_stage_plan(("inspect_live_source", "stream_live_source"))
-        self.activity.stage_started("inspect_live_source", "Inspecting the live source")
-        inspection = self._inspect()
-        video_stream, audio_stream = self._stream_descriptors(inspection)
-        self.activity.stage_started("stream_live_source", "Producing replayable MVC and selected audio")
-        store = ReplayStore(self.destination, self.options, video_stream, audio_stream)
-        try:
-            return self._stream(store)
-        except (Exception, KeyboardInterrupt, SystemExit):
-            try:
-                store.cleanup()
-            except SourceServiceError as cleanup_error:
-                self.activity.warning(
-                    cleanup_error.message,
-                    code=cleanup_error.code,
-                    details=cleanup_error.details,
-                )
-            raise
 
     def _validate_tool(self) -> None:
         if not self.probe_path.is_file():
@@ -556,7 +548,7 @@ class SSIFLiveSourceService:
 
     def _inspect(self) -> Mapping[str, object]:
         result = self._communicate(
-            [str(self.probe_path), "inspect", str(self.job.source.path), str(self.options.playlist)]
+            [str(self.probe_path), "inspect", str(self.job.source.path), str(self.selection.playlist)]
         )
         if result.returncode != 0:
             self._raise_helper_error(result.stderr, "source_inspection_failed")
@@ -606,7 +598,7 @@ class SSIFLiveSourceService:
             (
                 stream
                 for stream in audio_streams
-                if isinstance(stream, Mapping) and stream.get("pid") == self.options.audio_pid
+                if isinstance(stream, Mapping) and stream.get("pid") == self.selection.audio_pid
             ),
             None,
         )
@@ -623,8 +615,8 @@ class SSIFLiveSourceService:
             "timebase": 90_000,
         }
         audio_stream = {
-            "id": f"audio:{self.options.audio_pid}",
-            "pid": self.options.audio_pid,
+            "id": f"audio:{self.selection.audio_pid}",
+            "pid": self.selection.audio_pid,
             "coding_type": selected_audio.get("coding_type"),
             "format": selected_audio.get("format"),
             "rate": selected_audio.get("rate"),
@@ -632,99 +624,6 @@ class SSIFLiveSourceService:
             "timebase": 90_000,
         }
         return video_stream, audio_stream
-
-    def _stream(self, store: ReplayStore) -> dict[str, object]:
-        command = [
-            str(self.probe_path),
-            "stream-service",
-            str(self.job.source.path),
-            str(self.options.playlist),
-            str(self.options.audio_pid),
-        ]
-        if self.options.maximum_pairs is not None:
-            command.append(str(self.options.maximum_pairs))
-        read_descriptor, write_descriptor = os.pipe()
-        read_stream = os.fdopen(read_descriptor, "rb", buffering=0)
-        write_stream = os.fdopen(write_descriptor, "wb", buffering=0)
-        internal_cancellation = threading.Event()
-        combined_cancellation = CombinedCancellation(internal_cancellation, self.owner.cancellation_event)
-        started = threading.Event()
-        state = ProcessRunState()
-        spec = ProcessSpec(
-            argv=tuple(command),
-            tool_id="ssif_probe",
-            display_name="Direct SSIF live source",
-            stdout=write_stream,
-            merge_stderr=False,
-            capture_limit_bytes=MAXIMUM_DIAGNOSTIC_BYTES,
-            capture_overflow=CaptureOverflowPolicy.TRUNCATE,
-            timeout_seconds=None,
-            termination_grace_seconds=2,
-            kill_wait_seconds=2,
-            pipe_drain_timeout_seconds=2,
-        )
-        process_thread = threading.Thread(
-            target=self._run_process,
-            args=(spec, combined_cancellation, started, state),
-            name="ssif-source-process",
-            daemon=False,
-        )
-        process_thread.start()
-        if not started.wait(10):
-            start_error = SourceServiceError("source_start_timeout", "The live source helper did not start in time.")
-            internal_cancellation.set()
-            cleanup_error = self._wait_for_process_thread(process_thread, internal_cancellation, initial_timeout=10)
-            read_stream.close()
-            write_stream.close()
-            self._raise_primary_or_cleanup(start_error, cleanup_error)
-            raise start_error
-        write_stream.close()
-        completed = False
-        ready_sent = False
-        primary_error: BaseException | None = None
-        try:
-            reader = ServiceFrameReader(
-                cast(BinaryIO, read_stream),
-                cancellation_event=combined_cancellation,
-                read_timeout_seconds=SOURCE_FRAME_TIMEOUT_SECONDS,
-            )
-            while True:
-                self.owner.check_cancelled()
-                record = reader.read()
-                if record is None:
-                    break
-                if record.kind is ServiceRecordKind.COMPLETE:
-                    completed = True
-                    if reader.read() is not None:
-                        raise SourceServiceError(
-                            "invalid_source_stream",
-                            "The source helper returned media after its completion record.",
-                        )
-                    break
-                store.consume(record)
-                if store.ready_emitted and not ready_sent:
-                    self.activity.live_source_ready(store.artifact())
-                    ready_sent = True
-        except (Exception, KeyboardInterrupt, SystemExit) as error:
-            primary_error = error
-            internal_cancellation.set()
-        finally:
-            read_stream.close()
-        cleanup_error = self._wait_for_process_thread(process_thread, internal_cancellation, initial_timeout=15)
-        self._raise_primary_or_cleanup(primary_error, cleanup_error)
-        if self.owner.cancellation_event.is_set():
-            raise WorkerCancelled("The live source job was cancelled.")
-        self._raise_process_error(state.error, "source_stream_failed")
-        if state.result is None:
-            raise SourceServiceError("source_stream_failed", "The live source helper returned no process result.")
-        if not completed:
-            raise SourceServiceError(
-                "truncated_source_stream", "The source helper ended without completing the stream."
-            )
-        store.finish()
-        if not ready_sent:
-            self.activity.live_source_ready(store.artifact())
-        return store.result()
 
     @staticmethod
     def _wait_for_process_thread(
@@ -849,3 +748,132 @@ class SSIFLiveSourceService:
                     details,
                 )
         raise SourceServiceError(fallback_code, "The live source helper failed.", details or None)
+
+
+class SSIFLiveSourceService(SSIFSourceHelper):
+    def __init__(
+        self,
+        job: JobSpec,
+        owner: WorkerProcessOwner,
+        activity: WorkerActivityReporter,
+        *,
+        probe_path: Path | None = None,
+    ) -> None:
+        if job.live_source is None or job.destination is None:
+            raise SourceServiceError("invalid_live_source", "The live source job is incomplete.")
+        super().__init__(job, job.live_source, job.destination.path, owner, activity, probe_path=probe_path)
+        self.options = job.live_source
+
+    def run(self) -> dict[str, object]:
+        self._validate_tool()
+        self.activity.set_stage_plan(("inspect_live_source", "stream_live_source"))
+        self.activity.stage_started("inspect_live_source", "Inspecting the live source")
+        inspection = self._inspect()
+        video_stream, audio_stream = self._stream_descriptors(inspection)
+        self.activity.stage_started("stream_live_source", "Producing replayable MVC and selected audio")
+        store = ReplayStore(self.destination, self.options, video_stream, audio_stream)
+        try:
+            return self._stream(store)
+        except (Exception, KeyboardInterrupt, SystemExit):
+            try:
+                store.cleanup()
+            except SourceServiceError as cleanup_error:
+                self.activity.warning(
+                    cleanup_error.message,
+                    code=cleanup_error.code,
+                    details=cleanup_error.details,
+                )
+            raise
+
+    def _stream(self, store: ReplayStore) -> dict[str, object]:
+        command = [
+            str(self.probe_path),
+            "stream-service",
+            str(self.job.source.path),
+            str(self.options.playlist),
+            str(self.options.audio_pid),
+        ]
+        if self.selection.maximum_pairs is not None:
+            command.append(str(self.selection.maximum_pairs))
+        read_descriptor, write_descriptor = os.pipe()
+        read_stream = os.fdopen(read_descriptor, "rb", buffering=0)
+        write_stream = os.fdopen(write_descriptor, "wb", buffering=0)
+        internal_cancellation = threading.Event()
+        combined_cancellation = CombinedCancellation(internal_cancellation, self.owner.cancellation_event)
+        started = threading.Event()
+        state = ProcessRunState()
+        spec = ProcessSpec(
+            argv=tuple(command),
+            tool_id="ssif_probe",
+            display_name="Direct SSIF live source",
+            stdout=write_stream,
+            merge_stderr=False,
+            capture_limit_bytes=MAXIMUM_DIAGNOSTIC_BYTES,
+            capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+            timeout_seconds=None,
+            termination_grace_seconds=2,
+            kill_wait_seconds=2,
+            pipe_drain_timeout_seconds=2,
+        )
+        process_thread = threading.Thread(
+            target=self._run_process,
+            args=(spec, combined_cancellation, started, state),
+            name="ssif-source-process",
+            daemon=False,
+        )
+        process_thread.start()
+        if not started.wait(10):
+            start_error = SourceServiceError("source_start_timeout", "The live source helper did not start in time.")
+            internal_cancellation.set()
+            cleanup_error = self._wait_for_process_thread(process_thread, internal_cancellation, initial_timeout=10)
+            read_stream.close()
+            write_stream.close()
+            self._raise_primary_or_cleanup(start_error, cleanup_error)
+            raise start_error
+        write_stream.close()
+        completed = False
+        ready_sent = False
+        primary_error: BaseException | None = None
+        try:
+            reader = ServiceFrameReader(
+                cast(BinaryIO, read_stream),
+                cancellation_event=combined_cancellation,
+                read_timeout_seconds=SOURCE_FRAME_TIMEOUT_SECONDS,
+            )
+            while True:
+                self.owner.check_cancelled()
+                record = reader.read()
+                if record is None:
+                    break
+                if record.kind is ServiceRecordKind.COMPLETE:
+                    completed = True
+                    if reader.read() is not None:
+                        raise SourceServiceError(
+                            "invalid_source_stream",
+                            "The source helper returned media after its completion record.",
+                        )
+                    break
+                store.consume(record)
+                if store.ready_emitted and not ready_sent:
+                    self.activity.live_source_ready(store.artifact())
+                    ready_sent = True
+        except (Exception, KeyboardInterrupt, SystemExit) as error:
+            primary_error = error
+            internal_cancellation.set()
+        finally:
+            read_stream.close()
+        cleanup_error = self._wait_for_process_thread(process_thread, internal_cancellation, initial_timeout=15)
+        self._raise_primary_or_cleanup(primary_error, cleanup_error)
+        if self.owner.cancellation_event.is_set():
+            raise WorkerCancelled("The live source job was cancelled.")
+        self._raise_process_error(state.error, "source_stream_failed")
+        if state.result is None:
+            raise SourceServiceError("source_stream_failed", "The live source helper returned no process result.")
+        if not completed:
+            raise SourceServiceError(
+                "truncated_source_stream", "The source helper ended without completing the stream."
+            )
+        store.finish()
+        if not ready_sent:
+            self.activity.live_source_ready(store.artifact())
+        return store.result()

@@ -5,7 +5,11 @@
 Issue #716 adds a development-only segmented output mode to the existing native
 MV-HEVC encoder:
 
-- Input remains progressive 8-bit 4:2:0 side-by-side Y4M and remains video-only.
+- Video input remains progressive 8-bit 4:2:0 side-by-side Y4M on standard
+  input. HLS output can also mux AAC encoded from stereo 48 kHz s16le PCM read
+  from `--audio-pcm PATH`, placed on the video timeline by
+  `--audio-start-ticks` and trimmed at the last frame. The live HLS service
+  uses this; see [live-hls-service.md](live-hls-service.md).
 - `--hls-directory DIR` is exclusive with the existing `--output FILE` MOV mode.
 - The writer is constructed with `AVAssetWriter(contentType: .mpeg4Movie)`,
   `AVFileTypeProfileMPEG4AppleHLS`, a positive preferred segment interval, and
@@ -37,7 +41,7 @@ shape, not a network relay implementation.
 The encoder deletes a failed new HLS directory. With `--overwrite`, it
 atomically moves an existing directory aside, restores it if encoding fails,
 and removes the previous directory only after successful finalization. There
-is intentionally no resumption protocol, network upload, audio muxing, UI, or
+is intentionally no resumption protocol, network upload, UI, or
 source-specific behavior in this capability.
 
 ## Commands
