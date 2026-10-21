@@ -1,0 +1,10 @@
+{
+  "protocol_version": 13,
+  "type": "job.start",
+  "job_id": "44444444-4444-4444-8444-444444444444",
+  "operation": "inspect_live_title",
+  "source": {
+    "kind": "disc_image",
+    "path": "/tmp/movie.iso"
+  }
+}

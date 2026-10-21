@@ -84,6 +84,34 @@ VIDEO_FORMAT_DIMENSIONS = {5: (1280, 720), 6: (1920, 1080)}
 VIDEO_FRAME_RATES = {1: "24000/1001", 2: "24/1", 3: "25/1", 4: "30000/1001", 6: "50/1", 7: "60000/1001"}
 
 
+def live_video_shape(title: Mapping[str, object]) -> tuple[int, int, str]:
+    """Return the eye size and frame rate live HLS produces for an eligible single-clip title."""
+    clip = cast(Mapping[str, object], cast(list[object], title["clips"])[0])
+    video_streams = clip.get("video_streams")
+    if not isinstance(video_streams, list) or not video_streams or not isinstance(video_streams[0], Mapping):
+        raise SourceServiceError("unsupported_live_video", "The live source has no described base video.")
+    video = video_streams[0]
+    dimensions = VIDEO_FORMAT_DIMENSIONS.get(cast(int, video.get("format")))
+    frame_rate = VIDEO_FRAME_RATES.get(cast(int, video.get("rate")))
+    if dimensions is None or frame_rate is None:
+        raise SourceServiceError(
+            "unsupported_live_video",
+            "Live HLS requires progressive 720p or 1080p MVC video at a standard frame rate.",
+        )
+    return dimensions[0], dimensions[1], frame_rate
+
+
+def live_audio_input_format(audio_stream: Mapping[str, object]) -> str:
+    """Return the raw elementary-stream format FFmpeg reads for a supported live audio stream."""
+    audio_format = AUDIO_INPUT_FORMATS.get(cast(int, audio_stream.get("coding_type")))
+    if audio_format is None:
+        raise SourceServiceError(
+            "unsupported_live_audio",
+            "Live HLS supports Dolby Digital, Dolby Digital Plus, and DTS selected audio.",
+        )
+    return audio_format
+
+
 @dataclass(frozen=True)
 class PublishedSegment:
     sequence: int
@@ -618,8 +646,8 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         self.activity.stage_started("inspect_live_source", "Inspecting the live source")
         inspection = self._inspect()
         video_stream, audio_stream = self._stream_descriptors(inspection)
-        eye_width, eye_height, frame_rate = self._video_shape(inspection)
-        audio_format = self._audio_input_format(audio_stream)
+        eye_width, eye_height, frame_rate = live_video_shape(cast(Mapping[str, object], inspection["title"]))
+        audio_format = live_audio_input_format(audio_stream)
         if self.destination.exists() and any(self.destination.iterdir()):
             raise SourceServiceError("destination_not_empty", "The live HLS workspace must be empty.")
         self.destination.mkdir(parents=True, exist_ok=True)
@@ -650,33 +678,6 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         except (Exception, KeyboardInterrupt, SystemExit):
             self._remove_workspace()
             raise
-
-    @staticmethod
-    def _video_shape(inspection: Mapping[str, object]) -> tuple[int, int, str]:
-        title = cast(Mapping[str, object], inspection["title"])
-        clip = cast(Mapping[str, object], cast(list[object], title["clips"])[0])
-        video_streams = clip.get("video_streams")
-        if not isinstance(video_streams, list) or not video_streams or not isinstance(video_streams[0], Mapping):
-            raise SourceServiceError("unsupported_live_video", "The live source has no described base video.")
-        video = video_streams[0]
-        dimensions = VIDEO_FORMAT_DIMENSIONS.get(cast(int, video.get("format")))
-        frame_rate = VIDEO_FRAME_RATES.get(cast(int, video.get("rate")))
-        if dimensions is None or frame_rate is None:
-            raise SourceServiceError(
-                "unsupported_live_video",
-                "Live HLS requires progressive 720p or 1080p MVC video at a standard frame rate.",
-            )
-        return dimensions[0], dimensions[1], frame_rate
-
-    @staticmethod
-    def _audio_input_format(audio_stream: Mapping[str, object]) -> str:
-        audio_format = AUDIO_INPUT_FORMATS.get(cast(int, audio_stream.get("coding_type")))
-        if audio_format is None:
-            raise SourceServiceError(
-                "unsupported_live_audio",
-                "Live HLS supports Dolby Digital, Dolby Digital Plus, and DTS selected audio.",
-            )
-        return audio_format
 
     def _remove_workspace(self) -> None:
         try:

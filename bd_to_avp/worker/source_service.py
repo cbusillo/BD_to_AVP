@@ -516,22 +516,18 @@ class SourceSelection(Protocol):
         """Optional bound on stereo pairs, for qualification runs."""
 
 
-class SSIFSourceHelper:
-    """Shared ssif_probe contract, inspection, and process ownership for live services."""
+class SSIFProbeRunner:
+    """Shared ssif_probe resolution, contract check, and process ownership."""
 
     def __init__(
         self,
         job: JobSpec,
-        selection: SourceSelection,
-        destination: Path,
         owner: WorkerProcessOwner,
         activity: WorkerActivityReporter,
         *,
         probe_path: Path | None = None,
     ) -> None:
         self.job = job
-        self.selection = selection
-        self.destination = destination
         self.owner = owner
         self.activity = activity
         self.process_runner = ChildProcessRunner()
@@ -548,85 +544,6 @@ class SSIFSourceHelper:
                 "The direct SSIF source helper has an incompatible contract.",
                 result.stderr.decode("utf-8", errors="replace"),
             )
-
-    def _inspect(self) -> Mapping[str, object]:
-        result = self._communicate(
-            [str(self.probe_path), "inspect", str(self.job.source.path), str(self.selection.playlist)]
-        )
-        if result.returncode != 0:
-            self._raise_helper_error(result.stderr, "source_inspection_failed")
-        try:
-            inspection = json.loads(result.stdout)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise SourceServiceError(
-                "invalid_source_inspection",
-                "The source helper returned invalid inspection metadata.",
-            ) from error
-        if (
-            not isinstance(inspection, Mapping)
-            or inspection.get("schema_version") != 2
-            or inspection.get("type") != "source.inspect"
-        ):
-            raise SourceServiceError("invalid_source_inspection", "The source helper returned unexpected metadata.")
-        title = inspection.get("title")
-        if not isinstance(title, Mapping) or title.get("eligible") is not True:
-            reason = title.get("unsupported_reason") if isinstance(title, Mapping) else None
-            raise SourceServiceError(
-                str(reason or "unsupported_source"),
-                "The selected source is outside the supported live-source boundary.",
-            )
-        return inspection
-
-    def _stream_descriptors(
-        self,
-        inspection: Mapping[str, object],
-    ) -> tuple[dict[str, object], dict[str, object]]:
-        title = inspection.get("title")
-        if not isinstance(title, Mapping):
-            raise SourceServiceError("invalid_source_inspection", "The source returned no title metadata.")
-        mvc_pids = title.get("mvc_pids")
-        if not isinstance(mvc_pids, Mapping):
-            raise SourceServiceError("invalid_source_inspection", "The source has no stable MVC stream identities.")
-        base_pid = mvc_pids.get("base")
-        dependent_pid = mvc_pids.get("dependent")
-        if not isinstance(base_pid, int) or not isinstance(dependent_pid, int):
-            raise SourceServiceError("invalid_source_inspection", "The source returned invalid MVC stream identities.")
-        clips = title.get("clips")
-        if not isinstance(clips, list) or len(clips) != 1 or not isinstance(clips[0], Mapping):
-            raise SourceServiceError("unsupported_source", "The live source requires exactly one clip.")
-        audio_streams = clips[0].get("audio_streams")
-        if not isinstance(audio_streams, list):
-            raise SourceServiceError("selected_audio_unavailable", "The source has no selectable audio streams.")
-        selected_audio = next(
-            (
-                stream
-                for stream in audio_streams
-                if isinstance(stream, Mapping) and stream.get("pid") == self.selection.audio_pid
-            ),
-            None,
-        )
-        if selected_audio is None:
-            raise SourceServiceError(
-                "selected_audio_unavailable",
-                "The selected audio stream is not present in the live source.",
-            )
-        video_stream = {
-            "id": "mvc",
-            "format": "annex_b",
-            "base_pid": base_pid,
-            "dependent_pid": dependent_pid,
-            "timebase": 90_000,
-        }
-        audio_stream = {
-            "id": f"audio:{self.selection.audio_pid}",
-            "pid": self.selection.audio_pid,
-            "coding_type": selected_audio.get("coding_type"),
-            "format": selected_audio.get("format"),
-            "rate": selected_audio.get("rate"),
-            "language": selected_audio.get("language"),
-            "timebase": 90_000,
-        }
-        return video_stream, audio_stream
 
     @staticmethod
     def _wait_for_process_thread(
@@ -751,6 +668,103 @@ class SSIFSourceHelper:
                     details,
                 )
         raise SourceServiceError(fallback_code, "The live source helper failed.", details or None)
+
+
+class SSIFSourceHelper(SSIFProbeRunner):
+    """Strict inspection of one playlist, shared by the live services."""
+
+    def __init__(
+        self,
+        job: JobSpec,
+        selection: SourceSelection,
+        destination: Path,
+        owner: WorkerProcessOwner,
+        activity: WorkerActivityReporter,
+        *,
+        probe_path: Path | None = None,
+    ) -> None:
+        super().__init__(job, owner, activity, probe_path=probe_path)
+        self.selection = selection
+        self.destination = destination
+
+    def _inspect(self) -> Mapping[str, object]:
+        result = self._communicate(
+            [str(self.probe_path), "inspect", str(self.job.source.path), str(self.selection.playlist)]
+        )
+        if result.returncode != 0:
+            self._raise_helper_error(result.stderr, "source_inspection_failed")
+        try:
+            inspection = json.loads(result.stdout)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SourceServiceError(
+                "invalid_source_inspection",
+                "The source helper returned invalid inspection metadata.",
+            ) from error
+        if (
+            not isinstance(inspection, Mapping)
+            or inspection.get("schema_version") != 2
+            or inspection.get("type") != "source.inspect"
+        ):
+            raise SourceServiceError("invalid_source_inspection", "The source helper returned unexpected metadata.")
+        title = inspection.get("title")
+        if not isinstance(title, Mapping) or title.get("eligible") is not True:
+            reason = title.get("unsupported_reason") if isinstance(title, Mapping) else None
+            raise SourceServiceError(
+                str(reason or "unsupported_source"),
+                "The selected source is outside the supported live-source boundary.",
+            )
+        return inspection
+
+    def _stream_descriptors(
+        self,
+        inspection: Mapping[str, object],
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        title = inspection.get("title")
+        if not isinstance(title, Mapping):
+            raise SourceServiceError("invalid_source_inspection", "The source returned no title metadata.")
+        mvc_pids = title.get("mvc_pids")
+        if not isinstance(mvc_pids, Mapping):
+            raise SourceServiceError("invalid_source_inspection", "The source has no stable MVC stream identities.")
+        base_pid = mvc_pids.get("base")
+        dependent_pid = mvc_pids.get("dependent")
+        if not isinstance(base_pid, int) or not isinstance(dependent_pid, int):
+            raise SourceServiceError("invalid_source_inspection", "The source returned invalid MVC stream identities.")
+        clips = title.get("clips")
+        if not isinstance(clips, list) or len(clips) != 1 or not isinstance(clips[0], Mapping):
+            raise SourceServiceError("unsupported_source", "The live source requires exactly one clip.")
+        audio_streams = clips[0].get("audio_streams")
+        if not isinstance(audio_streams, list):
+            raise SourceServiceError("selected_audio_unavailable", "The source has no selectable audio streams.")
+        selected_audio = next(
+            (
+                stream
+                for stream in audio_streams
+                if isinstance(stream, Mapping) and stream.get("pid") == self.selection.audio_pid
+            ),
+            None,
+        )
+        if selected_audio is None:
+            raise SourceServiceError(
+                "selected_audio_unavailable",
+                "The selected audio stream is not present in the live source.",
+            )
+        video_stream = {
+            "id": "mvc",
+            "format": "annex_b",
+            "base_pid": base_pid,
+            "dependent_pid": dependent_pid,
+            "timebase": 90_000,
+        }
+        audio_stream = {
+            "id": f"audio:{self.selection.audio_pid}",
+            "pid": self.selection.audio_pid,
+            "coding_type": selected_audio.get("coding_type"),
+            "format": selected_audio.get("format"),
+            "rate": selected_audio.get("rate"),
+            "language": selected_audio.get("language"),
+            "timebase": 90_000,
+        }
+        return video_stream, audio_stream
 
 
 class SSIFLiveSourceService(SSIFSourceHelper):

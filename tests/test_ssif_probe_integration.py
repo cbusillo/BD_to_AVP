@@ -18,6 +18,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"
 RAINFOREST_PLAYLIST = "1005"
 RAINFOREST_CLIP = "00007"
+# Issue #1041: `titles` lists at most 64 playlists, each at least 60 seconds long.
+TITLES_MINIMUM_SECONDS = 60
+TITLES_MAXIMUM_LISTED = 64
 RAINFOREST_FIRST_100_FRAME_LINES_SHA256 = "186a33d0a66c39619b94d354f77fbe364ee24c2e441ee25d90a8902b75199166"
 SERVICE_FRAME_HEADER = struct.Struct(">4sBBHQQQII")
 
@@ -95,6 +98,45 @@ class SsifProbeIntegrationTests(unittest.TestCase):
             ["deu", "eng"],
         )
         self.assertEqual(inspection["title"]["clips"][0]["pg_streams"], [])
+
+    def test_rainforest_titles_list_inspect_shaped_titles(self) -> None:
+        listing = subprocess.run(
+            [str(self.helper_path), "titles", str(self.source_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        inspection = subprocess.run(
+            [str(self.helper_path), "inspect", str(self.source_path), RAINFOREST_PLAYLIST],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(listing.stderr, "")
+        document = json.loads(listing.stdout)
+        self.assertEqual(document["schema_version"], 1)
+        self.assertEqual(document["type"], "source.titles")
+        titles = document["titles"]
+        self.assertLessEqual(len(titles), TITLES_MAXIMUM_LISTED)
+        self.assertTrue(all(title["duration_seconds"] >= TITLES_MINIMUM_SECONDS for title in titles))
+        eligibility = [title["eligible"] for title in titles]
+        self.assertEqual(eligibility, sorted(eligibility, reverse=True), "eligible titles are listed first")
+        for eligible in (True, False):
+            durations = [title["duration_ticks"] for title in titles if title["eligible"] is eligible]
+            self.assertEqual(durations, sorted(durations, reverse=True))
+        self.assertEqual(document["eligible_count"], eligibility.count(True))
+        self.assertFalse(document["truncated"])
+        playlists = [title["playlist"] for title in titles]
+        # Playlists 5 and 1005 are equally long; the main feature is listed first.
+        self.assertLess(playlists.index(int(RAINFOREST_PLAYLIST)), playlists.index(5))
+        listed = next(title for title in titles if title["playlist"] == int(RAINFOREST_PLAYLIST))
+        self.assertEqual(listed, json.loads(inspection.stdout)["title"])
+        rejected = [title for title in titles if not title["eligible"]]
+        self.assertTrue(rejected)
+        self.assertTrue(all("clips" not in title and title["unsupported_reason"] for title in rejected))
 
     def test_first_100_stereo_frames_match_accepted_fixture(self) -> None:
         ffmpeg_path = shutil.which("ffmpeg")
