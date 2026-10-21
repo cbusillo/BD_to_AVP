@@ -27,6 +27,7 @@ final class RelayHostSessionController: ObservableObject {
 
     typealias FixtureLoader = @MainActor (URL) throws -> RelayEventHLSFixture
     typealias SessionStarter = @MainActor (URL, RelayEventHLSFixture) async throws -> any RelayHostSessionControlling
+    typealias LiveSessionStarter = @MainActor (RelayHostLiveSource) async throws -> any RelayHostSessionControlling
 
     @Published private(set) var lifecycle: Lifecycle = .idle
     @Published private(set) var fixtureDirectory: URL?
@@ -35,15 +36,18 @@ final class RelayHostSessionController: ObservableObject {
 
     private let loadFixture: FixtureLoader
     private let startSession: SessionStarter
+    private let startLiveSession: LiveSessionStarter
     private var session: (any RelayHostSessionControlling)?
     private var lifecycleMonitoringTask: Task<Void, Never>?
 
     init(
         loadFixture: @escaping FixtureLoader = { try RelayEventHLSFixture.load(directory: $0) },
-        startSession: @escaping SessionStarter = RelayHostSession.start
+        startSession: @escaping SessionStarter = RelayHostSession.start,
+        startLiveSession: @escaping LiveSessionStarter = RelayHostSession.startLive
     ) {
         self.loadFixture = loadFixture
         self.startSession = startSession
+        self.startLiveSession = startLiveSession
     }
 
     var isSessionActive: Bool { session != nil }
@@ -94,6 +98,23 @@ final class RelayHostSessionController: ObservableObject {
             self.session = session
             fixtureDirectory = directory
             segmentCount = fixture.segments.count
+            lifecycle = .advertising
+            monitorLifecycle()
+        } catch {
+            lifecycle = .failed(Self.message(for: error))
+        }
+    }
+
+    /// Developer probe: relay one live disc stream instead of a fixture. The stream starts when
+    /// Vision Pro pairs, and every stop below waits until its conversion process has exited and
+    /// its temporary files are gone.
+    func startLive(_ source: RelayHostLiveSource) async {
+        guard session == nil else { return }
+        lifecycle = .starting
+        do {
+            session = try await startLiveSession(source)
+            fixtureDirectory = nil
+            segmentCount = 0
             lifecycle = .advertising
             monitorLifecycle()
         } catch {
@@ -233,6 +254,15 @@ private final class RelayHostSession: RelayHostSessionControlling {
         let host = try RelayHost.start(
             configuration: try RelayHostConfiguration(fixtureDirectory: directory),
             fixture: fixture
+        )
+        let server = try await RelayNetworkServer.start(host: host)
+        return RelayHostSession(host: host, server: server)
+    }
+
+    static func startLive(source: RelayHostLiveSource) async throws -> any RelayHostSessionControlling {
+        let host = try RelayHost.startLive(
+            configuration: try RelayHostConfiguration(fixtureDirectory: FileManager.default.temporaryDirectory),
+            liveSource: source
         )
         let server = try await RelayNetworkServer.start(host: host)
         return RelayHostSession(host: host, server: server)

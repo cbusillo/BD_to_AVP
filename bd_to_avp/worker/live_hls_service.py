@@ -15,6 +15,7 @@ import os
 import queue
 import re
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -230,8 +231,10 @@ class HLSPublisher:
         retention_max_bytes: int,
         streams: Mapping[str, object],
         clock: Callable[[], float] = time.time,
+        producer_stats: Callable[[], Mapping[str, object]] | None = None,
     ) -> None:
         self.root = root
+        self.producer_stats = producer_stats
         self.clock = clock
         self.staging = staging
         self.retention_microseconds = retention_seconds * 1_000_000
@@ -471,6 +474,7 @@ class HLSPublisher:
             "retired_segments": [segment.__dict__ for segment in self.retired],
             "retired_bytes": self.retired_bytes,
             "retired_allowance_bytes": self.retired_allowance_bytes,
+            **({"producer": dict(self.producer_stats())} if self.producer_stats is not None else {}),
             **self.streams,
         }
 
@@ -629,7 +633,17 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         # and the no-progress deadlines treat the wait as progress. Retired-segment
         # grace is built in; viewer-position pacing can append its own condition.
         self.hold_conditions: list[Callable[[], bool]] = [self._held_for_grace]
+        self.viewer_lead_microseconds: int | None = None
+        run_context = activity.run_context
+        self.viewer_position: Callable[[], int | None] | None = (
+            run_context.viewer_position if run_context is not None else None
+        )
+        if self.options.viewer_lead_seconds is not None:
+            self.viewer_lead_microseconds = self.options.viewer_lead_seconds * 1_000_000
+            self.hold_conditions.append(self._held_for_viewer)
         self.held_seconds = 0.0
+        self.viewer_held_seconds = 0.0
+        self.production_started: float | None = None
         self.forwarded_microseconds = 0.0
         self.frame_microseconds = 0.0
 
@@ -644,6 +658,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         self._validate_tool()
         self.activity.set_stage_plan(("inspect_live_source", "produce_live_hls"))
         self.activity.stage_started("inspect_live_source", "Inspecting the live source")
+        self._verify_source_identity()
         inspection = self._inspect()
         video_stream, audio_stream = self._stream_descriptors(inspection)
         eye_width, eye_height, frame_rate = live_video_shape(cast(Mapping[str, object], inspection["title"]))
@@ -679,6 +694,57 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             self._remove_workspace()
             raise
 
+    def _verify_source_identity(self) -> None:
+        """Confirms the source path still names the file the host authorized.
+
+        The host passes what ``lstat`` saw when it authorized the start. The path must
+        not be a symbolic link, and the file opened without following links must match
+        that device, inode, size, and modification time.
+        """
+        identity = self.options.source_identity
+        if identity is None:
+            return
+        path = self.job.source.path
+        try:
+            linked = os.lstat(path)
+            if stat.S_ISLNK(linked.st_mode):
+                raise OSError("The live source is a symbolic link.")
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                opened = os.fstat(descriptor)
+            finally:
+                os.close(descriptor)
+        except OSError as error:
+            raise SourceServiceError(
+                "live_source_changed", "The live source is no longer the file that was approved.", str(error)
+            ) from error
+        observed = (
+            opened.st_dev & 0xFFFF_FFFF,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+        )
+        expected = (
+            identity.device,
+            identity.inode,
+            identity.size_bytes,
+            identity.modification_seconds * 1_000_000_000 + identity.modification_nanoseconds,
+        )
+        if observed != expected or (linked.st_dev, linked.st_ino) != (opened.st_dev, opened.st_ino):
+            raise SourceServiceError("live_source_changed", "The live source is no longer the file that was approved.")
+
+    def producer_stats(self) -> dict[str, object]:
+        """Producer capacity separate from pacing: unheld throughput is
+        ``produced_microseconds / ((wall_seconds - held_seconds) * 1e6)``."""
+        assert self.publisher is not None
+        started = self.production_started
+        return {
+            "produced_microseconds": self.publisher.next_start_microseconds,
+            "wall_seconds": round(0.0 if started is None else time.monotonic() - started, 3),
+            "held_seconds": round(self.held_seconds, 3),
+            "viewer_held_seconds": round(self.viewer_held_seconds, 3),
+        }
+
     def _remove_workspace(self) -> None:
         try:
             shutil.rmtree(self.destination)
@@ -713,7 +779,9 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             retention_max_bytes=self.options.retention_max_bytes,
             streams=streams,
             clock=self.clock,
+            producer_stats=self.producer_stats,
         )
+        self.production_started = time.monotonic()
         numerator, denominator = (int(value) for value in frame_rate.split("/"))
         self.frame_microseconds = 1_000_000 * denominator / numerator
         source_read, source_write = self._pipe()
@@ -724,6 +792,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         primary_error: BaseException | None = None
         publisher_thread: threading.Thread | None = None
         try:
+            self._verify_source_identity()
             self._start(source, close_after_start=(source_write,))
             reader = ServiceFrameReader(
                 source_read,
@@ -758,6 +827,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             self.activity.live_hls_ready(self.publisher.artifact())
         result = self.publisher.result()
         result["held_seconds"] = round(self.held_seconds, 3)
+        result["viewer_held_seconds"] = round(self.viewer_held_seconds, 3)
         encoder_run = self.children[-1] if self.children else None
         if encoder_run is not None and encoder_run.result is not None:
             # The summary is diagnostic only; an unreadable one leaves the result without it.
@@ -868,6 +938,18 @@ class SSIFLiveHLSService(SSIFSourceHelper):
     def _held_for_grace(self) -> bool:
         return self.publisher is not None and self.publisher.held_for_grace
 
+    def _held_for_viewer(self) -> bool:
+        """Holds while the published edge is at least the configured lead past the viewer.
+
+        Before the first report the viewer counts as being at the start, so production
+        runs one lead ahead and then waits. Every value is read fresh, so a viewer that
+        advances releases the hold on the next poll.
+        """
+        if self.publisher is None or self.viewer_lead_microseconds is None:
+            return False
+        position = self.viewer_position() if self.viewer_position is not None else None
+        return self.publisher.next_start_microseconds - (position or 0) >= self.viewer_lead_microseconds
+
     def _deliberately_held(self) -> bool:
         return any(condition() for condition in self.hold_conditions)
 
@@ -885,6 +967,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             segment_microseconds = self.publisher.max_segment_microseconds or SEGMENT_DURATION_SECONDS * 1_000_000
             budget = STAGING_SEGMENT_CAP * segment_microseconds
             held = self._deliberately_held()
+            viewer_held = held and self._held_for_viewer()
             ahead = self.forwarded_microseconds - self.publisher.next_start_microseconds
             if not held and ahead < budget and self.publisher.staged_backlog < STAGING_SEGMENT_CAP:
                 return
@@ -895,7 +978,10 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             started = time.monotonic()
             time.sleep(HOLD_POLL_SECONDS)
             if held:
-                self.held_seconds += time.monotonic() - started
+                waited = time.monotonic() - started
+                self.held_seconds += waited
+                if viewer_held:
+                    self.viewer_held_seconds += waited
 
     def _start_media_pipeline(
         self,

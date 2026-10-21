@@ -107,9 +107,12 @@ These are the only allowed fields. `position_microseconds` is an integer from
 0 through 2^53 giving a live viewer's playhead. The latest position wins and an
 accepted position has no acknowledgement; a rejection uses the `control.result`
 codes below. The worker capability is `viewer_position_v1`, and a host sends
-this command only to a worker whose `worker.ready` lists it. The current worker
-lists only `keep_waiting_v1`. The shape is in
-`tests/fixtures/native_worker_viewer_position_v13.json`.
+this command only to a worker whose `worker.ready` lists it. The worker lists
+`keep_waiting_v1` and `viewer_position_v1`. A wrong `job_id` is rejected with
+`wrong_job`, and any other malformed frame with `invalid_control`; the last
+accepted position stays in effect. The `start_live_hls` operation uses the
+position for viewer pacing (see [live-hls-service.md](live-hls-service.md)).
+The shape is in `tests/fixtures/native_worker_viewer_position_v13.json`.
 
 ## Reliable result event
 

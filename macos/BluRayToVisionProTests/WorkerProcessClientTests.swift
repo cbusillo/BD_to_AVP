@@ -524,6 +524,39 @@ final class WorkerProcessClientTests: XCTestCase {
         XCTAssertEqual(receivedResult?.accepted, true)
     }
 
+    func testViewerPositionReachesOnlyAWorkerThatAdvertisesIt() async throws {
+        for capabilities in [["keep_waiting_v1"], ["keep_waiting_v1", WorkerViewerPositionCommand.capability]] {
+            let supported = capabilities.contains(WorkerViewerPositionCommand.capability)
+            let capabilityList = capabilities.map { "\"\($0)\"" }.joined(separator: ", ")
+            let client = fixtureClient(body: """
+            print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"process_group_id": os.getpid(), "control_capabilities": [\(capabilityList)]}}), flush=True)
+            if \(supported ? "True" : "False"):
+                command = json.loads(sys.stdin.readline())
+                assert command == {"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.viewer_position", "job_id": job_id, "position_microseconds": 42000000}, command
+            print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.cancelled", "job_id": job_id, "sequence": 1, "payload": {}}), flush=True)
+            """)
+            var sendError: (any Error)?
+            let result = try await client.run(job: WorkerJobSpec(
+                sourceURL: URL(fileURLWithPath: "/tmp/movie.mkv"), jobID: jobID
+            )) { event in
+                guard event.type == .workerReady else { return }
+                do {
+                    try await client.sendViewerPosition(
+                        WorkerViewerPositionCommand(jobID: self.jobID, positionMicroseconds: 42_000_000)
+                    )
+                } catch {
+                    sendError = error
+                }
+            }
+            XCTAssertEqual(result.exitStatus, 0, result.diagnostics)
+            if supported {
+                XCTAssertNil(sendError)
+            } else {
+                XCTAssertEqual(sendError as? WorkerControlError, .unavailable)
+            }
+        }
+    }
+
     func testExplainsProtocolDeliveryFailureAndRetainsExitEvidence() async throws {
         for partialRecord in ["", "sys.stdout.write('{\"protocol_version\":'); sys.stdout.flush()"] {
             let client = fixtureClient(body: """
