@@ -101,9 +101,11 @@ extension RelayHTTPResponse {
 /// - A start that finds the slot draining awaits `drainTask` and then rechecks the slot. A start
 ///   that finds the slot held by another session gets `busy`.
 /// - A start first consults the start records (`LiveStartKey`): a known `startID` returns its
-///   recorded outcome or `conflict` without touching the slot.
+///   recorded outcome or `conflict` without touching the slot. A record stays while its start
+///   holds the slot or drains, and expires as `LiveStartLimits` describes.
 /// - Cancel by `startID` marks an admitted start's record cancelled, then drains the slot if that
-///   start holds it. For a `startID` never admitted it records a tombstone
+///   start holds it. Ending a parent session drains its start and removes its records and
+///   tombstones. For a `startID` never admitted it records a tombstone
 ///   `(parentSessionID, startID)` so a later start with that ID gets `cancelled`. A cancel that
 ///   matches a record or an existing tombstone is never limited; tombstones are never removed
 ///   before they expire (`LiveStartLimits`).

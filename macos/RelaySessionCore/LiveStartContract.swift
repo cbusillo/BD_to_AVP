@@ -2,12 +2,11 @@ import Foundation
 
 /// Identifies one live start request.
 ///
-/// The host remembers each admitted start's outcome by `(parentSessionID, startID)` for
-/// `LiveStartLimits.tombstoneLifetime` after it was admitted or cancelled, and for as long as it
-/// holds the slot. It consults that record before the slot: a retry with the same key gets the
-/// recorded outcome (the original `streamID`, or `cancelled`) even after the start was replaced,
-/// released, or failed, and a retry with different parameters gets `conflict`. Neither touches
-/// the slot.
+/// The host keeps a start record `(parentSessionID, startID) -> (key, outcome)` for every start it
+/// admits, and consults it before the slot: a retry with the same key gets the recorded outcome
+/// (the original `streamID`, or `cancelled`) even after the start was replaced, released, or
+/// failed, and a retry with different parameters gets `conflict`. Neither touches the slot.
+/// Retention is described on `LiveStartLimits`.
 struct LiveStartKey: Hashable, Sendable {
     let parentSessionID: RelaySessionIdentifier
     let startID: UUID
@@ -27,9 +26,9 @@ enum LiveStartOutcome: Equatable, Sendable {
 
 /// Result of `POST /movies/v1/live/cancel`.
 ///
-/// - `acknowledged` (204) guarantees that a start with that `startID` never runs again. For an
-///   admitted start, the host records the cancellation before it drains a reserved or running
-///   slot, so a retry within the record's lifetime gets `cancelled`.
+/// - `acknowledged` (204) guarantees that no start with that `startID` is admitted for as long
+///   as any request carrying it can still verify. For an admitted start, the host marks its
+///   record cancelled before it drains a reserved or running slot.
 /// - `retryLater` (signed 429 with a `LiveCancelRetryLater` body) gives no guarantee, and the
 ///   host records nothing. The client keeps retrying until `clientCancelDeadlineAfterStart`.
 enum LiveCancelOutcome: Equatable, Sendable {
@@ -52,13 +51,29 @@ struct LiveCancelRetryLater: Codable, Equatable, Sendable {
 
 /// Admission bounds for live starts and cancels on the Mac host.
 ///
-/// - A cancel that matches an admitted start's record (reserved, running, or already ended), or
-///   repeats an existing tombstone, is never limited. Those records are bounded by
-///   `startsPerSessionPerMinute`, not by the tombstone table.
+/// Start records:
+/// - Only an admitted start creates a record, so records are bounded by
+///   `startsPerSessionPerMinute`.
+/// - A record is never removed while its start holds the slot or drains. Otherwise it expires
+///   `clientCancelDeadlineAfterStart` after the latest of its admission, its first cancellation,
+///   and the end of its slot ownership (drain included). That outlasts a signed request's default
+///   freshness (30 s maximum age + 5 s future skew), so no request that could reach a removed
+///   record can still verify.
+/// - Cancelling an already cancelled record does not extend it. A first cancellation can only
+///   come before expiry, so a record outlives its slot ownership by at most 80 s.
+/// - Records and tombstones of a parent session that has ended are removed with it, since none
+///   of its requests can verify.
+/// - Bound: one start holds the slot, and every other live record left the slot within the last
+///   80 s, so it was admitted then. That gives at most 1 + 12 records per session and
+///   1 + 4 x 12 = 49 overall for the four parent sessions a host allows.
+///   `startRecordCapacity` is a defensive cap above that. At the cap a new start gets
+///   `rateLimited` and nothing is recorded. No record is ever removed early.
+///
+/// Cancels:
+/// - A cancel that matches a start record, or repeats an existing tombstone, is never limited.
 /// - Only a cancel for a `startID` the host has never admitted creates a tombstone, and only it
-///   counts against
-///   `tombstoneCancelsPerSessionPerMinute` and `tombstoneCapacity`; a refused one gets
-///   `retryLater`.
+///   counts against `tombstoneCancelsPerSessionPerMinute` and `tombstoneCapacity`. A refused
+///   cancel gets `retryLater`.
 /// - A tombstone lives exactly `tombstoneLifetime` and is never removed before that.
 enum LiveStartLimits {
     /// Longer than a signed request's default maximum age plus future skew (30 s + 5 s), so a
@@ -68,6 +83,7 @@ enum LiveStartLimits {
     static let tombstoneCancelsPerSessionPerMinute = 6
     static let tombstoneCapacity = 32
     static let clientCancelDeadlineAfterStart: TimeInterval = 40
+    static let startRecordCapacity = 64
 }
 
 enum LiveStreamIdentifier {
