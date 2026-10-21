@@ -504,13 +504,16 @@ class ReplayStore:
 
 class SourceSelection(Protocol):
     @property
-    def playlist(self) -> int: ...
+    def playlist(self) -> int:
+        """Blu-ray playlist number to stream."""
 
     @property
-    def audio_pid(self) -> int: ...
+    def audio_pid(self) -> int:
+        """Transport stream PID of the selected audio track."""
 
     @property
-    def maximum_pairs(self) -> int | None: ...
+    def maximum_pairs(self) -> int | None:
+        """Optional bound on stereo pairs, for qualification runs."""
 
 
 class SSIFSourceHelper:

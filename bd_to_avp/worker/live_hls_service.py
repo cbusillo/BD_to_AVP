@@ -9,6 +9,7 @@ atomically republishes ``media.m3u8`` and ``live-hls.json``.
 
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import os
 import queue
@@ -527,10 +528,9 @@ class PipeFeeder:
         return not self._thread.is_alive()
 
     def abandon(self) -> None:
-        try:
+        # Abandoning a feeder only needs the descriptor gone; a close error changes nothing.
+        with suppress(OSError):
             self._stream.close()
-        except OSError:
-            pass
 
     def _run(self) -> None:
         try:
@@ -759,10 +759,9 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         result["held_seconds"] = round(self.held_seconds, 3)
         encoder_run = self.children[-1] if self.children else None
         if encoder_run is not None and encoder_run.result is not None:
-            try:
+            # The summary is diagnostic only; an unreadable one leaves the result without it.
+            with suppress(UnicodeDecodeError, json.JSONDecodeError):
                 result["encoder_summary"] = json.loads(encoder_run.result.stdout.capture)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                pass
         return result
 
     def _source_command(self) -> list[str]:

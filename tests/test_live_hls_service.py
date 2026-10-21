@@ -414,12 +414,12 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
 
     def test_cancellation_stops_every_child_and_removes_workspace(self) -> None:
         service, owner, _, destination = self.service("delay.iso")
-        captured: list[BaseException] = []
+        captured: list[Exception] = []
 
         def run_service() -> None:
             try:
                 service.run()
-            except BaseException as error:
+            except Exception as error:
                 captured.append(error)
 
         thread = threading.Thread(target=run_service)
@@ -439,13 +439,13 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         with self.assertRaises(ProcessLookupError):
             os.kill(encoder_pid, 0)
 
-    def run_in_thread(self, service: SSIFLiveHLSService) -> tuple[threading.Thread, list[BaseException]]:
-        captured: list[BaseException] = []
+    def run_in_thread(self, service: SSIFLiveHLSService) -> tuple[threading.Thread, list[Exception]]:
+        captured: list[Exception] = []
 
         def run_service() -> None:
             try:
                 service.run()
-            except BaseException as error:
+            except Exception as error:
                 captured.append(error)
 
         thread = threading.Thread(target=run_service)
