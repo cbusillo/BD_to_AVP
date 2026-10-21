@@ -27,8 +27,24 @@ enum LiveStartOutcome: Equatable, Sendable {
     case conflict
     case sourceChanged
     case rateLimited
-    /// The request was signed outside its start identity's signing window. Not retryable.
+    /// The request was signed outside its start identity's signing window, or its identity
+    /// stopped being verifiable while the start waited. Not retryable.
     case expired
+
+    /// Every outcome is a signed response. `expired` carries `LiveRequestRefusal(retryable: false)`,
+    /// as a cancel's `expired` does; the others carry the outcome itself.
+    var statusCode: Int {
+        switch self {
+        case .started:
+            202
+        case .busy, .cancelled, .conflict, .sourceChanged:
+            409
+        case .rateLimited:
+            429
+        case .expired:
+            422
+        }
+    }
 }
 
 /// Result of `POST /movies/v1/live/cancel`.
@@ -37,9 +53,9 @@ enum LiveStartOutcome: Equatable, Sendable {
 ///   host keeps the record or tombstone until no request for the identity can verify any more,
 ///   and refuses every request for it signed outside its signing window. For an admitted start,
 ///   the record is marked cancelled before the host drains a reserved or running slot.
-/// - `retryLater` (signed 429, `LiveCancelRefusal(retryable: true)`) gives no guarantee, and the
+/// - `retryLater` (signed 429, `LiveRequestRefusal(retryable: true)`) gives no guarantee, and the
 ///   host records nothing. The client keeps retrying within the signing window.
-/// - `expired` (signed 422, `LiveCancelRefusal(retryable: false)`) means the cancel was signed
+/// - `expired` (signed 422, `LiveRequestRefusal(retryable: false)`) means the cancel was signed
 ///   outside the signing window. The host records nothing.
 enum LiveCancelOutcome: Equatable, Sendable {
     case acknowledged
@@ -58,7 +74,7 @@ enum LiveCancelOutcome: Equatable, Sendable {
     }
 }
 
-struct LiveCancelRefusal: Codable, Equatable, Sendable {
+struct LiveRequestRefusal: Codable, Equatable, Sendable {
     let retryable: Bool
 }
 
@@ -70,6 +86,12 @@ struct LiveCancelRefusal: Codable, Equatable, Sendable {
 ///   `issuedAt` minus the policy's allowed future skew (`acceptsRequest`).
 /// - So no request for an identity can verify after `issuedAt + clientCancelDeadlineAfterStart +`
 ///   the policy's maximum age (`lastVerifiableUnixMilliseconds`), 70 s with the default policy.
+/// - Time is compared as `RelayTime` integer Unix milliseconds with the same inclusive boundary
+///   verification uses (`isVerifiable`), for both refusal and expiry.
+/// - A start that suspends (awaiting a drain) rechecks, after every suspension and before any
+///   expiry or admission, that its identity is still verifiable and its session has not ended.
+///   Past the last verifiable time it gets `expired`, since the records and tombstones that
+///   protected it may already be gone.
 ///
 /// Start records:
 /// - Only an admitted start creates a record. A record is never removed while its start holds
@@ -116,6 +138,19 @@ enum LiveStartLimits {
         policy: RelayRequestValidationPolicy
     ) -> Int64? {
         RelayTime.adding(deadlineMilliseconds + policy.maximumAgeMilliseconds, to: issuedAt)
+    }
+
+    /// Whether a request for a start issued at `issuedAt` can still verify at `now`. Records and
+    /// tombstones for that identity are kept exactly while this holds.
+    static func isVerifiable(
+        issuedAtUnixMilliseconds issuedAt: Int64,
+        nowUnixMilliseconds now: Int64,
+        policy: RelayRequestValidationPolicy
+    ) -> Bool {
+        guard let last = lastVerifiableUnixMilliseconds(issuedAtUnixMilliseconds: issuedAt, policy: policy) else {
+            return false
+        }
+        return now <= last
     }
 
     private static var deadlineMilliseconds: Int64 {

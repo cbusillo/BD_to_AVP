@@ -375,6 +375,91 @@ final class LiveRelayAdmissionContractTests: XCTestCase {
         XCTAssertEqual(calls, 1)
     }
 
+    func testStartWaitingOnADrainPastItsWindowIsRefused() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
+        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
+        try await waitForRunning(admission)
+        let running = await starter.launched[0]
+        await running.holdStop()
+        let waiting = key(sessionA)
+        let replacement = Task { await admission.start(waiting, request: makeFakeLiveStreamRequest()) }
+        try await waitUntil { await !running.stopCalls.isEmpty }
+        let cancel = await admission.cancel(parentSessionID: sessionA, startID: waiting.startID, issuedAtUnixMilliseconds: issuedAtMs)
+
+        await admission.advanceClock(by: lastVerifiableOffset + 1)
+        await running.releaseStop()
+        let outcome = await replacement.value
+
+        XCTAssertEqual(cancel, .acknowledged)
+        XCTAssertEqual(outcome, .expired)
+        let calls = await starter.calls.count
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testStartWaitingOnAnotherSessionsDrainPastItsWindowIsRefused() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
+        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA, sessionB])
+        _ = await admission.start(key(sessionA), request: makeFakeLiveStreamRequest())
+        try await waitForRunning(admission)
+        let running = await starter.launched[0]
+        await running.holdStop()
+        let release = Task { await admission.release(reason: .sharingStopped) }
+        try await waitUntil { await !running.stopCalls.isEmpty }
+        let waiting = key(sessionB)
+        let other = Task { await admission.start(waiting, request: makeFakeLiveStreamRequest()) }
+        try await waitUntil { await admission.isWaitingOnDrain }
+        _ = await admission.cancel(parentSessionID: sessionB, startID: waiting.startID, issuedAtUnixMilliseconds: issuedAtMs)
+
+        await admission.advanceClock(by: lastVerifiableOffset + 1)
+        await running.releaseStop()
+        await release.value
+        let outcome = await other.value
+
+        XCTAssertEqual(outcome, .expired)
+        let calls = await starter.calls.count
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testTombstoneExpiryUsesTheVerificationMillisecondClock() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
+        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let start = key(sessionA)
+        _ = await admission.cancel(parentSessionID: sessionA, startID: start.startID, issuedAtUnixMilliseconds: issuedAtMs)
+
+        // Half a millisecond past the last verifiable time still truncates to it.
+        await admission.advanceClock(by: lastVerifiableOffset + 0.0005)
+        let lastFreshStart = await admission.start(
+            start,
+            signedAt: issuedAt.addingTimeInterval(LiveStartLimits.clientCancelDeadlineAfterStart),
+            request: makeFakeLiveStreamRequest()
+        )
+
+        XCTAssertEqual(lastFreshStart, .cancelled)
+        let calls = await starter.calls.count
+        XCTAssertEqual(calls, 0)
+    }
+
+    func testRecordExpiryUsesTheVerificationMillisecondClock() async throws {
+        let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
+        let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])
+        let start = key(sessionA)
+        let original = await admission.start(start, request: makeFakeLiveStreamRequest())
+        try await waitForRunning(admission)
+        await admission.release(reason: .sharingStopped)
+
+        await admission.advanceClock(by: lastVerifiableOffset + 0.0005)
+        let lastFreshRetry = await admission.start(
+            start,
+            signedAt: issuedAt.addingTimeInterval(LiveStartLimits.clientCancelDeadlineAfterStart),
+            request: makeFakeLiveStreamRequest()
+        )
+
+        XCTAssertEqual(lastFreshRetry, original)
+        let calls = await starter.calls.count
+        XCTAssertEqual(calls, 1)
+    }
+
     func testCancelBeforeStartLeavesATombstoneUntilNoRequestCanVerify() async throws {
         let starter = FakeLiveRelayStreamStarter(holdsStarts: false)
         let admission = FakeLiveStartAdmission(starter: starter, liveParentSessionIDs: [sessionA])

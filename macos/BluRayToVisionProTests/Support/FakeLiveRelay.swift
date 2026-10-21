@@ -253,6 +253,12 @@ actor FakeLiveStartAdmission {
     private var tombstones: Set<StartIdentity> = []
     private var admittedStarts: [RelaySessionIdentifier: [Date]] = [:]
     private var endedSessions: Set<RelaySessionIdentifier> = []
+    private var drainWaiters = 0
+
+    /// Whether a start is suspended waiting for another start's drain.
+    var isWaitingOnDrain: Bool {
+        drainWaiters > 0
+    }
 
     init(
         starter: any LiveRelayStreamStarting,
@@ -314,13 +320,17 @@ actor FakeLiveStartAdmission {
             }
             switch slot {
             case let .draining(task):
+                drainWaiters += 1
                 await settle(task)
+                drainWaiters -= 1
+                guard isStillVerifiable(key) else { return .expired }
                 continue
             case .reserved, .running:
                 if slot.key!.parentSessionID != key.parentSessionID {
                     return .busy
                 }
                 await drain(reason: .replaced)
+                guard isStillVerifiable(key) else { return .expired }
                 continue
             case .empty:
                 let recent = admittedStarts[key.parentSessionID, default: []]
@@ -465,21 +475,29 @@ actor FakeLiveStartAdmission {
         }
     }
 
-    private func lastVerifiable(_ identity: StartIdentity) -> Date {
-        let milliseconds = LiveStartLimits.lastVerifiableUnixMilliseconds(
+    private var nowMilliseconds: Int64 {
+        RelayTime.unixMilliseconds(for: now) ?? 0
+    }
+
+    private func isVerifiable(_ identity: StartIdentity) -> Bool {
+        LiveStartLimits.isVerifiable(
             issuedAtUnixMilliseconds: identity.issuedAtUnixMilliseconds,
+            nowUnixMilliseconds: nowMilliseconds,
             policy: policy
-        ) ?? 0
-        return RelayTime.date(fromUnixMilliseconds: milliseconds)
+        )
+    }
+
+    private func isStillVerifiable(_ key: LiveStartKey) -> Bool {
+        isVerifiable(StartIdentity(key))
     }
 
     private func expire() {
         // A record without an exit time still holds the slot or is draining, so it is kept.
         records = records.filter { identity, record in
             guard let exited = record.exitedSlotAt else { return true }
-            return max(lastVerifiable(identity), exited) >= now
+            return isVerifiable(identity) || (RelayTime.unixMilliseconds(for: exited) ?? 0) >= nowMilliseconds
         }
-        tombstones = tombstones.filter { lastVerifiable($0) >= now }
+        tombstones = tombstones.filter { isVerifiable($0) }
         let windowStart = now.addingTimeInterval(-60)
         admittedStarts = admittedStarts.compactMapValues { times in
             let recent = times.filter { $0 > windowStart }
