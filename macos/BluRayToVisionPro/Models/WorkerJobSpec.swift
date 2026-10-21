@@ -627,6 +627,20 @@ struct WorkerJobSpec: Encodable, Equatable {
         )
     }
 
+    init(liveTitleInspection source: ConversionSource, jobID: UUID = UUID()) {
+        precondition(source.kind == .discImage || source.kind == .bluRayFolder)
+        protocolVersion = Self.protocolVersion
+        type = "job.start"
+        self.jobID = jobID
+        operation = "inspect_live_title"
+        self.source = Source(source: source)
+        destination = nil
+        encoding = nil
+        job = nil
+        preview = nil
+        liveSource = nil
+    }
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(protocolVersion, forKey: .protocolVersion)

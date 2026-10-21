@@ -179,6 +179,7 @@ def _run_worker(
             "preview_source": "preview_result",
             "start_live_source": "live_source_result",
             "start_live_hls": "live_hls_result",
+            "inspect_live_title": "live_title_result",
         }.get(job.operation.value, "result")
         emitter.emit(WorkerEventType.JOB_COMPLETED, {result_key: result})
         return 0

@@ -28,9 +28,72 @@ def record(kind, sequence, pts=0, dts=0, primary=b"", secondary=b"", random_acce
     )
 
 
+def title(
+    playlist, seconds, *, main=False, reason=None, clips=1, video_format=6, audio=((0x1100, 0x86), (0x1101, 0x83))
+):
+    clip = {
+        "id": "00007",
+        "video_streams": [{"pid": 4113, "coding_type": 27, "format": video_format, "rate": 1, "language": None}],
+        "audio_streams": [
+            {"pid": pid, "coding_type": coding_type, "format": 6, "rate": 12, "language": "eng"}
+            for pid, coding_type in audio
+        ],
+    }
+    return {
+        "id": f"ssif:playlist:{playlist:05d}",
+        "playlist": playlist,
+        "duration_ticks": seconds * 90_000,
+        "duration_seconds": float(seconds),
+        "angle_count": 2 if reason == "multiple_angles_unsupported" else 1,
+        "clip_count": clips,
+        "main_feature": main,
+        "eligible": reason is None,
+        "unsupported_reason": reason,
+        "clips": [clip] * clips,
+    }
+
+
+def titles_document(source_path):
+    """Titles chosen by source file name; the default is a 3D disc with 2D and 3D feature playlists."""
+    if "notitles" in source_path:
+        titles = []
+    elif "encrypted" in source_path:
+        titles = [title(800, 5400, main=True, reason="encrypted_source_unsupported")]
+    elif "multiangle" in source_path:
+        titles = [title(800, 5400, main=True, reason="multiple_angles_unsupported")]
+    elif "multiclip" in source_path:
+        titles = [title(800, 5400, main=True, reason="multiple_clips_unsupported", clips=2)]
+    elif "interlaced" in source_path:
+        titles = [title(800, 5400, main=True, video_format=4)]
+    elif "lpcm" in source_path:
+        titles = [title(800, 5400, main=True, audio=((0x1100, 0x80), (0x1101, 0x83)))]
+    else:
+        titles = [
+            title(900, 7200, reason="multiple_clips_unsupported", clips=2),
+            title(5, 5400),
+            title(1005, 5400, main=True, audio=((0x1100, 0x86), (0x1101, 0x83), (0x1102, 0x81))),
+            title(1010, 135),
+        ]
+    return {"schema_version": 1, "type": "source.titles", "title_count": len(titles), "titles": titles}
+
+
 arguments = sys.argv[1:]
 if arguments == ["--version"]:
     sys.stdout.write("ssif_probe contract 2\n")
+elif arguments and arguments[0] == "titles" and "oldhelper" not in arguments[1]:
+    source = arguments[1]
+    if "malformed" in source:
+        sys.stdout.write('{"schema_version": 1, "type": "source.titles", "titles": [{"playlist": "1005"}]}')
+    elif "brokenjson" in source:
+        sys.stdout.write("not json")
+    elif "unreadable" in source:
+        sys.stderr.write(
+            json.dumps({"schema_version": 1, "type": "error", "code": "source_open_failed", "message": "Unreadable."})
+            + "\n"
+        )
+        raise SystemExit(1)
+    else:
+        sys.stdout.write(json.dumps(titles_document(source)))
 elif arguments and arguments[0] == "inspect":
     source = arguments[1]
     sys.stdout.write(
@@ -128,4 +191,5 @@ elif arguments and arguments[0] == "stream-service":
     sys.stdout.buffer.write(record(3, 4))
     sys.stdout.buffer.flush()
 else:
+    sys.stderr.write("Usage:\n  ssif_probe inspect <source> <playlist>\n")
     raise SystemExit(2)

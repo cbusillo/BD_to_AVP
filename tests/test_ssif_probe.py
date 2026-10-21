@@ -142,6 +142,44 @@ class SsifProbeTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(json.loads(result.stderr)["code"], "invalid_source")
 
+    def test_titles_rejects_missing_source(self) -> None:
+        result = subprocess.run(
+            [str(self.helper_path), "titles", "/missing/source.iso"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr)["code"], "invalid_source")
+
+    def test_titles_rejects_file_that_is_not_a_blu_ray(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "blank.iso"
+            source.write_bytes(bytes(64 * 1024))
+            result = subprocess.run(
+                [str(self.helper_path), "titles", str(source)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr)["code"], "source_open_failed")
+
+    def test_titles_without_source_is_a_usage_error(self) -> None:
+        result = subprocess.run(
+            [str(self.helper_path), "titles"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ssif_probe titles <source>", result.stderr)
+
     def test_stream_rejects_negative_pair_bound(self) -> None:
         result = subprocess.run(
             [str(self.helper_path), "stream-mvc", "/missing/source.iso", "1005", "-1"],

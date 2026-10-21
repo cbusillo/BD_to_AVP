@@ -50,6 +50,6 @@ library_filename = "libudfread.3.dylib"
 install_name = "@rpath/libudfread.3.dylib"
 
 [unsigned_checksums]
-"bd_to_avp/bin/ssif_probe" = "0c4b69688029c345a05ac0eea510049ea50739913d080684aa23dd5e05c6bf15"
+"bd_to_avp/bin/ssif_probe" = "d0431215b57cb80a4c9330ef0bba2a2da015050e47f9e7fd4b346cbc517cb618"
 "bd_to_avp/lib/libbluray.3.dylib" = "7dab117e64e637eeb95a59b540584cc3ab62eab66b7e82302bb4f507b3605075"
 "bd_to_avp/lib/libudfread.3.dylib" = "9bc270075be50fb9644d01d06a6bff501125f51343d2f434410a745a2da39150"

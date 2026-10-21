@@ -25,6 +25,8 @@
 #define READ_CHUNK_SIZE (6144 * 32)
 #define MAX_PES_BYTES (16 * 1024 * 1024)
 #define MAX_PENDING_BYTES (256 * 1024 * 1024)
+#define TITLES_MINIMUM_SECONDS 60
+#define TITLES_MAXIMUM_LISTED 64
 
 typedef int64_t (*ReadFunction)(void *context, uint8_t *buffer, int64_t size);
 typedef int (*WriteFunction)(void *context, const uint8_t *buffer, size_t size);
@@ -810,35 +812,48 @@ static const char *unsupported_reason(
     return NULL;
 }
 
-static int inspect_source(const char *source_path, uint32_t playlist) {
-    const char *source_kind = NULL;
-    if (!validate_source_path(source_path, &source_kind)) {
-        return print_error("invalid_source", "The source must be an existing ISO image or Blu-ray folder.");
-    }
+typedef struct {
+    bool content_exists_3d;
+    bool aacs_detected;
+    bool aacs_handled;
+    bool bdplus_detected;
+    bool bdplus_handled;
+} DiscFlags;
 
-    bd_set_debug_mask(0);
-    BLURAY *bluray = open_bluray(source_path);
-    if (bluray == NULL) {
-        return print_error("source_open_failed", "libbluray could not open the source.");
-    }
-    const BLURAY_DISC_INFO *disc_info = bd_get_disc_info(bluray);
-    if (disc_info == NULL) {
-        bd_close(bluray);
-        return print_error("disc_info_unavailable", "libbluray did not return disc information.");
-    }
-    bool content_exists_3d = disc_info->content_exist_3D;
-    bool aacs_detected = disc_info->aacs_detected;
-    bool aacs_handled = disc_info->aacs_handled;
-    bool bdplus_detected = disc_info->bdplus_detected;
-    bool bdplus_handled = disc_info->bdplus_handled;
+static void read_disc_flags(const BLURAY_DISC_INFO *disc_info, DiscFlags *flags) {
+    flags->content_exists_3d = disc_info->content_exist_3D;
+    flags->aacs_detected = disc_info->aacs_detected;
+    flags->aacs_handled = disc_info->aacs_handled;
+    flags->bdplus_detected = disc_info->bdplus_detected;
+    flags->bdplus_handled = disc_info->bdplus_handled;
+}
 
-    uint32_t title_count = bd_get_titles(bluray, TITLES_ALL, 0);
-    BLURAY_TITLE_INFO *title_info = bd_get_playlist_info(bluray, playlist, 0);
-    if (title_info == NULL) {
-        bd_close(bluray);
-        return print_error("title_unavailable", "The requested playlist is not available.");
-    }
+static void print_disc_fields(const char *source_kind, const DiscFlags *flags) {
+    int libbluray_major = 0;
+    int libbluray_minor = 0;
+    int libbluray_micro = 0;
+    bd_get_version(&libbluray_major, &libbluray_minor, &libbluray_micro);
+    fprintf(
+        stdout,
+        "\"libbluray_version\":\"%d.%d.%d\",\"source_kind\":\"%s\",",
+        libbluray_major,
+        libbluray_minor,
+        libbluray_micro,
+        source_kind
+    );
+    fprintf(
+        stdout,
+        "\"content_3d\":%s,\"aacs_detected\":%s,\"aacs_handled\":%s,\"bdplus_detected\":%s,"
+        "\"bdplus_handled\":%s",
+        flags->content_exists_3d ? "true" : "false",
+        flags->aacs_detected ? "true" : "false",
+        flags->aacs_handled ? "true" : "false",
+        flags->bdplus_detected ? "true" : "false",
+        flags->bdplus_handled ? "true" : "false"
+    );
+}
 
+static uint32_t main_feature_playlist(BLURAY *bluray) {
     uint32_t main_playlist = 0;
     int main_title_index = bd_get_main_title(bluray);
     if (main_title_index >= 0) {
@@ -848,12 +863,21 @@ static int inspect_source(const char *source_path, uint32_t playlist) {
             bd_free_title_info(main_title);
         }
     }
+    return main_playlist;
+}
 
+/* Prints one title object in the shared inspect/titles shape. Returns false, having
+ * printed nothing, when the clip metadata cannot be allocated. */
+static bool print_title_object(
+    BLURAY *bluray,
+    const DiscFlags *flags,
+    uint32_t playlist,
+    uint32_t main_playlist,
+    BLURAY_TITLE_INFO *title_info
+) {
     int64_t *clip_ssif_sizes = calloc(title_info->clip_count, sizeof(*clip_ssif_sizes));
     if (clip_ssif_sizes == NULL && title_info->clip_count > 0) {
-        bd_free_title_info(title_info);
-        bd_close(bluray);
-        return print_error("out_of_memory", "The SSIF inspection could not allocate clip metadata.");
+        return false;
     }
     for (uint32_t index = 0; index < title_info->clip_count; index++) {
         char ssif_path[64];
@@ -864,39 +888,21 @@ static int inspect_source(const char *source_path, uint32_t playlist) {
     bool complete_clip = title_info->clip_count == 1 &&
                          playlist_covers_complete_clip(bluray, playlist, &title_info->clips[0]);
     const char *reason = unsupported_reason(
-        aacs_detected,
-        bdplus_detected,
-        content_exists_3d,
+        flags->aacs_detected,
+        flags->bdplus_detected,
+        flags->content_exists_3d,
         title_info,
         selected_ssif_size,
         complete_clip
     );
-    int libbluray_major = 0;
-    int libbluray_minor = 0;
-    int libbluray_micro = 0;
-    bd_get_version(&libbluray_major, &libbluray_minor, &libbluray_micro);
 
     fprintf(
         stdout,
-        "{\"schema_version\":%d,\"type\":\"source.inspect\",\"libbluray_version\":\"%d.%d.%d\","
-        "\"source_kind\":\"%s\",\"title_count\":%u,\"content_3d\":%s,\"aacs_detected\":%s,"
-        "\"aacs_handled\":%s,\"bdplus_detected\":%s,\"bdplus_handled\":%s,"
-        "\"title\":{\"id\":\"ssif:playlist:%05u\",\"playlist\":%u,"
+        "{\"id\":\"ssif:playlist:%05u\",\"playlist\":%u,"
         "\"duration_ticks\":%" PRIu64 ",\"duration_seconds\":%.6f,\"angle_count\":%u,"
         "\"clip_count\":%u,\"main_feature\":%s,\"mvc_base_view\":\"%s\",\"eligible\":%s,"
         "\"complete_clip\":%s,\"mvc_pids\":{\"base\":4113,\"dependent\":4114},"
         "\"unsupported_reason\":",
-        CONTRACT_VERSION,
-        libbluray_major,
-        libbluray_minor,
-        libbluray_micro,
-        source_kind,
-        title_count,
-        content_exists_3d ? "true" : "false",
-        aacs_detected ? "true" : "false",
-        aacs_handled ? "true" : "false",
-        bdplus_detected ? "true" : "false",
-        bdplus_handled ? "true" : "false",
         playlist,
         playlist,
         title_info->duration,
@@ -952,11 +958,144 @@ static int inspect_source(const char *source_path, uint32_t playlist) {
         print_streams(clip->pg_streams, clip->pg_stream_count);
         fputc('}', stdout);
     }
-    fputs("]}}\n", stdout);
-
+    fputs("]}", stdout);
     free(clip_ssif_sizes);
+    return true;
+}
+
+static int inspect_source(const char *source_path, uint32_t playlist) {
+    const char *source_kind = NULL;
+    if (!validate_source_path(source_path, &source_kind)) {
+        return print_error("invalid_source", "The source must be an existing ISO image or Blu-ray folder.");
+    }
+
+    bd_set_debug_mask(0);
+    BLURAY *bluray = open_bluray(source_path);
+    if (bluray == NULL) {
+        return print_error("source_open_failed", "libbluray could not open the source.");
+    }
+    const BLURAY_DISC_INFO *disc_info = bd_get_disc_info(bluray);
+    if (disc_info == NULL) {
+        bd_close(bluray);
+        return print_error("disc_info_unavailable", "libbluray did not return disc information.");
+    }
+    DiscFlags flags;
+    read_disc_flags(disc_info, &flags);
+
+    uint32_t title_count = bd_get_titles(bluray, TITLES_ALL, 0);
+    BLURAY_TITLE_INFO *title_info = bd_get_playlist_info(bluray, playlist, 0);
+    if (title_info == NULL) {
+        bd_close(bluray);
+        return print_error("title_unavailable", "The requested playlist is not available.");
+    }
+    uint32_t main_playlist = main_feature_playlist(bluray);
+
+    fprintf(stdout, "{\"schema_version\":%d,\"type\":\"source.inspect\",", CONTRACT_VERSION);
+    print_disc_fields(source_kind, &flags);
+    fprintf(stdout, ",\"title_count\":%u,\"title\":", title_count);
+    bool printed = print_title_object(bluray, &flags, playlist, main_playlist, title_info);
     bd_free_title_info(title_info);
     bd_close(bluray);
+    if (!printed) {
+        fputs("null}\n", stdout);
+        return print_error("out_of_memory", "The SSIF inspection could not allocate clip metadata.");
+    }
+    fputs("}\n", stdout);
+    return 0;
+}
+
+typedef struct {
+    uint32_t playlist;
+    uint64_t duration;
+} TitleCandidate;
+
+static int compare_title_candidates(const void *left, const void *right) {
+    const TitleCandidate *first = left;
+    const TitleCandidate *second = right;
+    if (first->duration != second->duration) {
+        return first->duration > second->duration ? -1 : 1;
+    }
+    if (first->playlist != second->playlist) {
+        return first->playlist < second->playlist ? -1 : 1;
+    }
+    return 0;
+}
+
+static int list_titles(const char *source_path) {
+    const char *source_kind = NULL;
+    if (!validate_source_path(source_path, &source_kind)) {
+        return print_error("invalid_source", "The source must be an existing ISO image or Blu-ray folder.");
+    }
+
+    bd_set_debug_mask(0);
+    BLURAY *bluray = open_bluray(source_path);
+    if (bluray == NULL) {
+        return print_error("source_open_failed", "libbluray could not open the source.");
+    }
+    const BLURAY_DISC_INFO *disc_info = bd_get_disc_info(bluray);
+    if (disc_info == NULL) {
+        bd_close(bluray);
+        return print_error("disc_info_unavailable", "libbluray did not return disc information.");
+    }
+    DiscFlags flags;
+    read_disc_flags(disc_info, &flags);
+
+    uint32_t title_count = bd_get_titles(bluray, TITLES_ALL, TITLES_MINIMUM_SECONDS);
+    TitleCandidate *candidates = calloc(title_count, sizeof(*candidates));
+    if (candidates == NULL && title_count > 0) {
+        bd_close(bluray);
+        return print_error("out_of_memory", "The title listing could not allocate title metadata.");
+    }
+    uint32_t candidate_count = 0;
+    for (uint32_t index = 0; index < title_count; index++) {
+        BLURAY_TITLE_INFO *title = bd_get_title_info(bluray, index, 0);
+        if (title == NULL) {
+            continue;
+        }
+        candidates[candidate_count].playlist = title->playlist;
+        candidates[candidate_count].duration = title->duration;
+        candidate_count++;
+        bd_free_title_info(title);
+    }
+    uint32_t main_playlist = main_feature_playlist(bluray);
+    if (candidate_count > 1) {
+        qsort(candidates, candidate_count, sizeof(*candidates), compare_title_candidates);
+    }
+    uint32_t listed_count = candidate_count < TITLES_MAXIMUM_LISTED ? candidate_count : TITLES_MAXIMUM_LISTED;
+
+    fputs("{\"schema_version\":1,\"type\":\"source.titles\",", stdout);
+    print_disc_fields(source_kind, &flags);
+    fprintf(stdout, ",\"title_count\":%u,\"titles\":[", candidate_count);
+    bool first = true;
+    bool out_of_memory = false;
+    for (uint32_t index = 0; index < listed_count; index++) {
+        BLURAY_TITLE_INFO *title_info = bd_get_playlist_info(bluray, candidates[index].playlist, 0);
+        if (title_info == NULL) {
+            continue;
+        }
+        if (!first) {
+            fputc(',', stdout);
+        }
+        bool printed = print_title_object(
+            bluray,
+            &flags,
+            candidates[index].playlist,
+            main_playlist,
+            title_info
+        );
+        bd_free_title_info(title_info);
+        if (!printed) {
+            out_of_memory = true;
+            break;
+        }
+        first = false;
+    }
+    fputs("]}\n", stdout);
+    free(candidates);
+    bd_close(bluray);
+    if (out_of_memory) {
+        return print_error("out_of_memory", "The title listing could not allocate clip metadata.");
+    }
     return 0;
 }
 
@@ -1137,6 +1276,7 @@ static int print_usage(void) {
     fputs(
         "Usage:\n"
         "  ssif_probe inspect <source> <playlist>\n"
+        "  ssif_probe titles <source>\n"
         "  ssif_probe stream-mvc <source> <playlist> [maximum-pairs]\n"
         "  ssif_probe stream-service <source> <playlist> <audio-pid> [maximum-pairs]\n"
         "  ssif_probe demux-file <m2ts-file> [maximum-pairs]\n"
@@ -1159,6 +1299,9 @@ int main(int argc, char **argv) {
             return print_error("invalid_playlist", "The playlist must be an integer from 0 through 99999.");
         }
         return inspect_source(argv[2], (uint32_t)playlist);
+    }
+    if (argc == 3 && strcmp(argv[1], "titles") == 0) {
+        return list_titles(argv[2]);
     }
     if ((argc == 4 || argc == 5) && strcmp(argv[1], "stream-mvc") == 0) {
         uint64_t playlist = 0;

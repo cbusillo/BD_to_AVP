@@ -75,6 +75,20 @@ with `partial_clip_unsupported`. CLPI presentation bounds use a 45 kHz clock;
 the helper converts them to the playlist's 90 kHz clock before comparing
 `in_ticks` and `out_ticks`.
 
+List the source's feature-length playlists:
+
+```bash
+bd_to_avp/bin/ssif_probe titles /absolute/path/to/source.iso
+```
+
+`titles` prints `{"schema_version":1,"type":"source.titles",…}`: the same
+encryption and 3D flags as `inspect`, `title_count` (playlists of at least 60
+seconds), and `titles`, the longest 64 of them, longest first. Each entry is the
+title object `inspect` prints for that playlist. The document has its own
+schema version; the helper contract printed by `--version`, `inspect`, and
+`stream.complete` is unchanged, so a helper that predates `titles` still
+reports contract 2 and answers `titles` with a usage error (exit 2).
+
 Stream a bounded number of stereo frame pairs as combined MVC Annex B:
 
 ```bash

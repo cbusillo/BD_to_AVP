@@ -1,0 +1,30 @@
+{
+  "protocol_version": 13,
+  "type": "job.completed",
+  "job_id": "44444444-4444-4444-8444-444444444444",
+  "sequence": 7,
+  "payload": {
+    "live_title_result": {
+      "eligible": true,
+      "unsupported_reason": null,
+      "playlist": 1005,
+      "duration_seconds": 5400.0,
+      "audio_streams": [
+        {
+          "pid": 4352,
+          "coding_type": 134,
+          "format": 6,
+          "rate": 12,
+          "language": "eng"
+        },
+        {
+          "pid": 4354,
+          "coding_type": 129,
+          "format": 6,
+          "rate": 12,
+          "language": "eng"
+        }
+      ]
+    }
+  }
+}
