@@ -75,6 +75,18 @@ elif arguments and arguments[0] == "stream-service" and "bounded" in arguments[1
     sys.stdout.buffer.write(record(1, 4, 11351, 11351, b"base-three", b"dependent-three"))
     sys.stdout.buffer.write(record(3, 5))
     sys.stdout.buffer.flush()
+elif arguments and arguments[0] == "stream-service" and "long" in arguments[1]:
+    # 960 frames at 24000/1001 in twelve-frame GOPs, one audio record per GOP.
+    sequence = 0
+    for frame in range(960):
+        pts = 90 + frame * 3754
+        if frame % 12 == 0:
+            sys.stdout.buffer.write(record(2, sequence, pts, pts, b"audio"))
+            sequence += 1
+        sys.stdout.buffer.write(record(1, sequence, pts, pts, f"base-{frame}".encode(), b"d" * 2_000, frame % 12 == 0))
+        sequence += 1
+    sys.stdout.buffer.write(record(3, sequence))
+    sys.stdout.buffer.flush()
 elif arguments and arguments[0] == "stream-service" and "slow" in arguments[1]:
     # One complete GOP, then a source that keeps running without more media.
     sys.stdout.buffer.write(record(2, 0, 90, 90, b"audio-zero"))

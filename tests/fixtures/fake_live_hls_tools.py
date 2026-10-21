@@ -4,8 +4,11 @@
 The decoder and normalizer stream bytes through, the audio decoder copies its input to
 the PCM path, and the encoder records what it received and writes staged HLS output.
 FAKE_LIVE_HLS_MODE selects the encoder: ``batch`` (default) publishes after reading all
-input, ``streaming`` publishes a segment per input chunk, and ``stall`` publishes one
-segment and then keeps reading without publishing again.
+input, ``streaming`` publishes a segment per input chunk, ``stall`` publishes one
+segment and then keeps reading without publishing again, and ``media`` counts the
+``base-`` frame markers it receives and publishes one segment per
+FAKE_LIVE_HLS_FRAMES_PER_SEGMENT frames, recording the most completed segments it
+ever saw waiting in staging.
 """
 
 import json
@@ -43,6 +46,11 @@ class StagedOutput:
         atomic_write(self.directory / name, b"s" * size)
         self.lines.extend([f"#EXTINF:{duration:.6f},", name])
         atomic_write(self.directory / "media.m3u8", ("\n".join(self.lines) + "\n").encode())
+        waiting = len(list(self.directory.glob("segment-*.m4s")))
+        peak = int(os.environ.get("FAKE_LIVE_HLS_PEAK", "0"))
+        if waiting > peak:
+            os.environ["FAKE_LIVE_HLS_PEAK"] = str(waiting)
+            record("peak-staged", str(waiting).encode())
 
     def end(self) -> None:
         atomic_write(self.directory / "media.m3u8", ("\n".join([*self.lines, "#EXT-X-ENDLIST"]) + "\n").encode())
@@ -67,9 +75,17 @@ def encoder(arguments: list[str]) -> int:
     audio_reader.start()
     output: StagedOutput | None = None
     video = bytearray()
+    frames_per_segment = int(os.environ.get("FAKE_LIVE_HLS_FRAMES_PER_SEGMENT", "24"))
+    emitted_frames = 0
+    segment_size = segments[0][1]
     while chunk := os.read(0, 65_536):
         video.extend(chunk)
-        if mode == "streaming" and segments:
+        if mode == "media":
+            output = output or StagedOutput(Path(options["--hls-directory"]))
+            while video.count(b"base-") - emitted_frames >= frames_per_segment:
+                output.segment(frames_per_segment * 1001 / 24000, segment_size)
+                emitted_frames += frames_per_segment
+        elif mode == "streaming" and segments:
             output = output or StagedOutput(Path(options["--hls-directory"]))
             output.segment(*segments.pop(0))
         elif mode == "stall" and output is None:
@@ -84,6 +100,9 @@ def encoder(arguments: list[str]) -> int:
     if mode == "stall":
         time.sleep(60)
     output = output or StagedOutput(Path(options["--hls-directory"]))
+    if mode == "media":
+        remaining = video.count(b"base-") - emitted_frames
+        segments = [(remaining * 1001 / 24000, segment_size)] if remaining else []
     for duration, size in segments:
         output.segment(duration, size)
     output.end()

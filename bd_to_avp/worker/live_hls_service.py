@@ -57,6 +57,10 @@ VIDEO_BITRATE_MBPS = 20
 AUDIO_SAMPLE_RATE = 48_000
 AUDIO_CHANNELS = 2
 PUBLISH_POLL_SECONDS = 0.1
+HOLD_POLL_SECONDS = 0.02
+# Completed segments allowed to wait in staging, and so the media the worker lets run
+# ahead of publication (source records not yet published as segments).
+STAGING_SEGMENT_CAP = 2
 NO_PROGRESS_TIMEOUT_SECONDS = SOURCE_FRAME_TIMEOUT_SECONDS
 STARTUP_RECORD_LIMIT = 4_096
 STARTUP_BYTE_LIMIT = 64 * 1_024 * 1_024
@@ -181,10 +185,11 @@ class HLSPublisher:
 
     RFC 8216 section 6.2.2 requires a removed segment to stay available for its
     duration plus the longest playlist duration that contained it. Evicted segments
-    are therefore retired, not deleted: they stay on disk until that grace period
-    ends. Retired bytes have their own allowance equal to ``retention_max_bytes``;
-    if a producer outruns the grace period, the oldest retired segments are deleted
-    early and counted in ``grace_shortened_segments``.
+    are therefore retired, not deleted, and are never removed before that deadline.
+    Retired bytes are bounded by ``retired_allowance_bytes``. When publishing the next
+    staged segment would push retired bytes past that allowance, the publisher holds
+    the segment in staging (``held_for_grace``) until the oldest retired segment
+    expires; the service stops reading the source meanwhile.
     """
 
     def __init__(
@@ -214,8 +219,13 @@ class HLSPublisher:
         self.peak_retained_bytes = 0
         self.retired: deque[RetiredSegment] = deque()
         self.longest_playlist_microseconds = 0
-        self.grace_shortened_segments = 0
         self.peak_retired_bytes = 0
+        self.max_segment_bytes = 0
+        self.max_segment_microseconds = 0
+        self.held_for_grace = False
+        self.grace_holds = 0
+        self.staged_backlog = 0
+        self.peak_staged_backlog = 0
 
     @property
     def manifest_path(self) -> Path:
@@ -232,6 +242,16 @@ class HLSPublisher:
     @property
     def retired_bytes(self) -> int:
         return sum(segment.size_bytes for segment in self.retired)
+
+    @property
+    def retired_allowance_bytes(self) -> int:
+        """Room for one grace period of retired history at realtime production.
+
+        Each retired segment lives for its duration plus the longest playlist, so at
+        realtime the retired set approaches one published window plus one segment.
+        Two maximum-size segments of slack absorb segment-size variation.
+        """
+        return self.retention_max_bytes + 2 * self.max_segment_bytes
 
     @property
     def has_published(self) -> bool:
@@ -251,11 +271,18 @@ class HLSPublisher:
         if len(staged.segments) < self.staged_published:
             raise SourceServiceError("invalid_encoder_playlist", "The encoder playlist lost published segments.")
         published = False
+        was_held = self.held_for_grace
+        self.held_for_grace = False
         for name, duration in staged.segments[self.staged_published :]:
-            self._publish_segment(name, duration)
+            if not self._publish_segment(name, duration):
+                self.held_for_grace = True
+                self.grace_holds += 0 if was_held else 1
+                break
             self.staged_published += 1
             published = True
-        if staged.ended:
+        self.staged_backlog = len(staged.segments) - self.staged_published
+        self.peak_staged_backlog = max(self.peak_staged_backlog, self.staged_backlog)
+        if staged.ended and self.staged_backlog == 0:
             self.complete = True
             self._write_outputs()
         return published
@@ -290,7 +317,8 @@ class HLSPublisher:
         source.replace(self.root / INITIALIZATION_FILENAME)
         self.initialization_bytes = size
 
-    def _publish_segment(self, staged_name: str, duration_microseconds: int) -> None:
+    def _publish_segment(self, staged_name: str, duration_microseconds: int) -> bool:
+        """Publishes one staged segment, or returns False to hold it for retired grace."""
         source = self.staging / staged_name
         try:
             size = source.stat().st_size
@@ -305,17 +333,20 @@ class HLSPublisher:
                 "live_hls_segment_too_large",
                 "One HLS segment exceeds the configured retention byte limit.",
             )
-        uri = f"segment-{self.next_sequence:09d}.m4s"
-        source.replace(self.root / uri)
-        self.segments.append(
-            PublishedSegment(
-                sequence=self.next_sequence,
-                uri=uri,
-                start_microseconds=self.next_start_microseconds,
-                duration_microseconds=duration_microseconds,
-                size_bytes=size,
-            )
+        segment = PublishedSegment(
+            sequence=self.next_sequence,
+            uri=f"segment-{self.next_sequence:09d}.m4s",
+            start_microseconds=self.next_start_microseconds,
+            duration_microseconds=duration_microseconds,
+            size_bytes=size,
         )
+        self.max_segment_bytes = max(self.max_segment_bytes, size)
+        self.max_segment_microseconds = max(self.max_segment_microseconds, duration_microseconds)
+        evicted_bytes = sum(old.size_bytes for old in self._eviction_plan(segment))
+        if self.retired and self.retired_bytes + evicted_bytes > self.retired_allowance_bytes:
+            return False
+        source.replace(self.root / segment.uri)
+        self.segments.append(segment)
         self.next_sequence += 1
         self.next_start_microseconds += duration_microseconds
         evicted = self._evict()
@@ -328,9 +359,9 @@ class HLSPublisher:
         for segment in evicted:
             grace_seconds = (segment.duration_microseconds + self.longest_playlist_microseconds) / 1_000_000
             self.retired.append(RetiredSegment(segment.uri, segment.size_bytes, now + grace_seconds))
-        self._enforce_retired_allowance()
         self.peak_retired_bytes = max(self.peak_retired_bytes, self.retired_bytes)
         self._write_outputs()
+        return True
 
     def _delete_expired_retired(self) -> None:
         now = self.clock()
@@ -341,10 +372,18 @@ class HLSPublisher:
         if changed:
             self._write_outputs()
 
-    def _enforce_retired_allowance(self) -> None:
-        while self.retired and self.retired_bytes > self.retention_max_bytes:
-            (self.root / self.retired.popleft().uri).unlink(missing_ok=True)
-            self.grace_shortened_segments += 1
+    def _eviction_plan(self, new_segment: PublishedSegment) -> list[PublishedSegment]:
+        """Segments that publishing ``new_segment`` would evict, oldest first."""
+        window = [*self.segments, new_segment]
+        window_bytes = self.initialization_bytes + sum(segment.size_bytes for segment in window)
+        count = 0
+        while len(window) - count > 1:
+            duration = window[-1].end_microseconds - window[count].start_microseconds
+            if duration <= self.retention_microseconds and window_bytes <= self.retention_max_bytes:
+                break
+            window_bytes -= window[count].size_bytes
+            count += 1
+        return window[:count]
 
     def _evict(self) -> list[PublishedSegment]:
         evicted: list[PublishedSegment] = []
@@ -402,7 +441,7 @@ class HLSPublisher:
             "segments": [segment.__dict__ for segment in self.segments],
             "retired_segments": [segment.__dict__ for segment in self.retired],
             "retired_bytes": self.retired_bytes,
-            "grace_shortened_segments": self.grace_shortened_segments,
+            "retired_allowance_bytes": self.retired_allowance_bytes,
             **self.streams,
         }
 
@@ -425,7 +464,8 @@ class HLSPublisher:
             "published_segments": self.next_sequence,
             "peak_retained_bytes": self.peak_retained_bytes,
             "peak_retired_bytes": self.peak_retired_bytes,
-            "grace_shortened_segments": self.grace_shortened_segments,
+            "peak_staged_segments": self.peak_staged_backlog,
+            "grace_holds": self.grace_holds,
         }
 
 
@@ -534,6 +574,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         edge264_path: Path | None = None,
         ffmpeg_path: Path | None = None,
         encoder_path: Path | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         if job.live_hls is None or job.destination is None:
             raise SourceServiceError("invalid_live_hls", "The live HLS job is incomplete.")
@@ -555,6 +596,14 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         self.publisher_error: BaseException | None = None
         self.last_publication = time.monotonic()
         self.ready_sent = False
+        self.clock = clock
+        # Deliberate holds: while any returns True the worker stops reading the source
+        # and the no-progress deadlines treat the wait as progress. Retired-segment
+        # grace is built in; viewer-position pacing can append its own condition.
+        self.hold_conditions: list[Callable[[], bool]] = [self._held_for_grace]
+        self.held_seconds = 0.0
+        self.forwarded_microseconds = 0.0
+        self.frame_microseconds = 0.0
 
     def run(self) -> dict[str, object]:
         for path, code, message in (
@@ -662,7 +711,10 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             retention_seconds=self.options.retention_seconds,
             retention_max_bytes=self.options.retention_max_bytes,
             streams=streams,
+            clock=self.clock,
         )
+        numerator, denominator = (int(value) for value in frame_rate.split("/"))
+        self.frame_microseconds = 1_000_000 * denominator / numerator
         source_read, source_write = self._pipe()
         source = self._child(
             self._spec(tuple(self._source_command()), "ssif_probe", "Direct SSIF live source", stdout=source_write),
@@ -684,7 +736,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             publisher_thread = threading.Thread(target=self._publish_loop, name="live-hls-publisher", daemon=True)
             publisher_thread.start()
             self._forward(reader, startup)
-            self._await_media_pipeline()
+            self._await_media_pipeline(publisher_thread)
         except (Exception, KeyboardInterrupt, SystemExit) as error:
             primary_error = error
             self.internal_cancellation.set()
@@ -704,6 +756,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         if not self.ready_sent:
             self.activity.live_hls_ready(self.publisher.artifact())
         result = self.publisher.result()
+        result["held_seconds"] = round(self.held_seconds, 3)
         encoder_run = self.children[-1] if self.children else None
         if encoder_run is not None and encoder_run.result is not None:
             try:
@@ -780,7 +833,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
                 return
             video_records += 1
             if item.random_access and gop:
-                video_feeder.put(b"".join(gop))
+                self._forward_gop(video_feeder, gop)
                 gop = []
             gop.append(item.primary + item.secondary)
 
@@ -803,9 +856,46 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             handle(record)
         bounded_cut = self.options.maximum_pairs is not None and video_records >= self.options.maximum_pairs
         if gop and not (bounded_cut and video_records > len(gop)):
-            video_feeder.put(b"".join(gop))
+            self._forward_gop(video_feeder, gop)
         video_feeder.close()
         audio_feeder.close()
+
+    def _forward_gop(self, feeder: PipeFeeder, gop: list[bytes]) -> None:
+        self._wait_for_room()
+        feeder.put(b"".join(gop))
+        self.forwarded_microseconds += len(gop) * self.frame_microseconds
+
+    def _held_for_grace(self) -> bool:
+        return self.publisher is not None and self.publisher.held_for_grace
+
+    def _deliberately_held(self) -> bool:
+        return any(condition() for condition in self.hold_conditions)
+
+    def _wait_for_room(self) -> None:
+        """Blocks source reading while publication is held or the encoder is far enough ahead.
+
+        Not reading leaves the helper blocked on its stdout pipe, so the whole pipeline
+        drains to at most ``STAGING_SEGMENT_CAP`` completed segments in staging. A
+        deliberate hold counts as progress for the encoder-output deadline (the
+        publisher thread refreshes it); waiting for an encoder that has stopped
+        publishing does not, so a real stall still fails.
+        """
+        assert self.publisher is not None
+        while True:
+            segment_microseconds = self.publisher.max_segment_microseconds or SEGMENT_DURATION_SECONDS * 1_000_000
+            budget = STAGING_SEGMENT_CAP * segment_microseconds
+            held = self._deliberately_held()
+            ahead = self.forwarded_microseconds - self.publisher.next_start_microseconds
+            if not held and ahead < budget and self.publisher.staged_backlog < STAGING_SEGMENT_CAP:
+                return
+            if self.owner.cancellation_event.is_set():
+                raise WorkerCancelled("The live HLS job was cancelled.")
+            if self.failure_event.is_set():
+                raise SourceServiceError("live_hls_pipeline_failed", "A live HLS pipeline process failed.")
+            started = time.monotonic()
+            time.sleep(HOLD_POLL_SECONDS)
+            if held:
+                self.held_seconds += time.monotonic() - started
 
     def _start_media_pipeline(
         self,
@@ -937,9 +1027,9 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             ),
         ]
 
-    def _await_media_pipeline(self) -> None:
-        """Waits for every child to exit after the source has been forwarded."""
-        while not all(child.done.is_set() for child in self.children):
+    def _await_media_pipeline(self, publisher_thread: threading.Thread) -> None:
+        """Waits for every child to exit and for the last staged segment to publish."""
+        while not all(child.done.is_set() for child in self.children) or publisher_thread.is_alive():
             if self.owner.cancellation_event.is_set():
                 raise WorkerCancelled("The live HLS job was cancelled.")
             if self.failure_event.is_set():
@@ -965,8 +1055,12 @@ class SSIFLiveHLSService(SSIFSourceHelper):
                     if not self.ready_sent:
                         self.activity.live_hls_ready(self.publisher.artifact())
                         self.ready_sent = True
-                if encoder_done or self.publisher.complete:
+                if self.publisher.complete:
                     return
+                if encoder_done and not self.publisher.held_for_grace and self.publisher.staged_backlog == 0:
+                    return
+                if self._deliberately_held():
+                    self.last_publication = time.monotonic()
                 self._check_publication_progress()
                 time.sleep(PUBLISH_POLL_SECONDS)
         except (Exception, KeyboardInterrupt, SystemExit) as error:

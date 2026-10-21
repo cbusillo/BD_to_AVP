@@ -105,7 +105,7 @@ added when the encoder finishes. There are no discontinuities.
 and size, the earliest and latest available positions in microseconds, the
 retention limits, the retained bytes, and the video and audio stream identities.
 It also lists `retired_segments` (URI, size, and `delete_after_unix`),
-`retired_bytes`, and `grace_shortened_segments`. `complete` becomes true with
+`retired_bytes`, and `retired_allowance_bytes`. `complete` becomes true with
 `EXT-X-ENDLIST`.
 
 ## Retention
@@ -118,22 +118,48 @@ position is always a real segment start.
 RFC 8216 section 6.2.2 requires a removed segment to stay available for its
 duration plus the duration of the longest playlist that contained it. An
 evicted segment therefore stays on disk as a retired segment until that grace
-period, measured in wall-clock time, ends; the publisher deletes it on its next
-poll after that. Retired segments have their own allowance equal to
-`retention_max_bytes`. When production outruns the grace period, the oldest
-retired segments are deleted early and counted in `grace_shortened_segments`.
+period, measured in wall-clock time, ends, and is never deleted earlier. The
+publisher deletes it on its first poll after the deadline.
 
-Peak disk use is therefore at most twice `retention_max_bytes` (published plus
-retired) plus the one segment being published. Retired segments still within
-their grace period when the stream completes stay on disk and in the manifest;
-whoever owns the workspace afterward removes them, or removes the workspace.
+Retired bytes are bounded by `retired_allowance_bytes`: `retention_max_bytes`
+plus two of the largest segments seen so far. At realtime production a retired
+segment lives for about one window plus one segment, so this allowance holds
+the steady state.
+
+## Backpressure
+
+The worker stops reading the source, which leaves `ssif_probe` blocked on its
+output pipe, whenever any of these holds:
+
+- publishing the next staged segment would push retired bytes past the
+  allowance (a grace hold, released when the oldest retired segment expires);
+- the media forwarded to the decoder but not yet published reaches two
+  segment durations (the largest published segment, or 2 seconds before the
+  first); or
+- two completed segments are waiting in `.pipeline/encoder`.
+
+The last two keep staging at no more than two completed segments: the encoder
+only receives what fits that budget, plus at most the GOP that was being
+forwarded. With nothing pacing it to a viewer, production runs as fast as the
+pipeline allows until the published window and the retired allowance fill,
+then settles near real time as grace periods expire.
+
+Disk use is at most `retention_max_bytes` published, `retention_max_bytes` plus
+two segments retired, two completed segments in staging, and the one segment
+the encoder is writing, plus the small playlist and manifest temporaries:
+about twice `retention_max_bytes` plus five segments. Frames inside the
+decoder, normalizer, and encoder are in memory, not on disk. Retired segments
+still within their grace period when the stream completes stay on disk and in
+the manifest; whoever owns the workspace afterward removes them, or removes
+the workspace.
+
+`SSIFLiveHLSService.hold_conditions` is a list of callables. Any condition that
+returns true is a deliberate hold, like the grace hold. Viewer-position pacing
+in the relay can add its own condition there.
 
 The service fails instead of publishing when one segment cannot fit the byte
 limit (`live_hls_segment_too_large`) or when the byte limit cannot hold three
 target durations (`live_hls_retention_too_small`).
-
-Production is not paced to a viewer. A producer faster than real time evicts
-history at its own speed.
 
 ## Lifecycle
 
@@ -145,7 +171,11 @@ encoder output each use the 120-second no-progress deadline from the live
 source service. The encoder-output deadline runs alongside production from the
 encoder's start and each real publication, so an encoder that keeps accepting
 input but stops publishing fails the job without waiting for the end of the
-source. On success the worker removes `.pipeline` after the final
+source. During a deliberate hold the source is not read and no feeder write
+waits, and the publisher counts the hold as progress, so no deadline fires.
+Waiting for room because the encoder has not yet published does not count as
+progress, so a real encoder stall still fails. Cancellation is checked on every
+hold poll and reaches the children promptly. On success the worker removes `.pipeline` after the final
 playlist is published.
 
 Failures report the stage that failed: `source_stream_failed` or the helper's
@@ -167,23 +197,26 @@ On October 20, 2026, an Apple M4 Max (128 GB, macOS 27.2) ran this operation at
 the code in this document's commit on the Rainforest ISO: playlist 1005, English DTS-HD MA 5.1
 PID 4353, 120-second and 256 MiB retention, and `maximum_pairs` 14,434.
 
-- The first segment, playlist, and manifest were ready 1.12 seconds after the
+- The first segment, playlist, and manifest were ready 1.24 seconds after the
   worker started.
-- 14,424 frames (601.6 seconds) were produced in 224.7 seconds, a 2.68x
-  realtime ratio. The process tree peaked near 160% CPU and 1.0 GB resident.
+- Until the published window and retired allowance filled, production ran at
+  2.50x real time (212 seconds of media in the first 85 seconds). After that,
+  grace holds paced it to about real time, and all 14,424 frames (601.6
+  seconds) took 501.5 seconds. The worker held the source for 303.8 seconds in
+  73 grace holds. The process tree peaked near 160% CPU and 0.9 GB resident.
 - 301 segments were published. The byte limit bound retention: published
-  history peaked at 268,425,124 bytes, retired segments at 268,423,699 bytes,
-  and the sampled workspace at 541,931,488 bytes. At completion the window was
-  497.9 to 601.6 seconds. Because production ran 2.68x faster than real time,
-  196 of 249 evicted segments had their grace period shortened by the retired
-  allowance.
+  history peaked at 268,425,124 bytes, retired segments at 280,588,043 bytes,
+  staging at two segments (11,115,818 bytes), and the sampled workspace at
+  557,152,058 bytes. At completion the window was 497.9 to 601.6 seconds.
+- A separate monitor saw all 194 retired-segment deletions happen after their
+  grace deadlines, none early.
 - FFprobe found MV-HEVC view IDs `0,1` and stereo 48 kHz AAC with no audio gap.
   Every source audio PTS step was one 512-sample DTS frame, and the encoder
   wrote 601.601 seconds of audio against 601.6016 seconds of video.
 
 The same encoder build at commit `1cc3ef4b` also produced this
-playback evidence; the later commit changed only segment retirement and the
-publication deadline:
+playback evidence; later commits changed publication, retirement, and
+source backpressure, not the encoder:
 
 - AVFoundation read the first video and audio samples at 0.0. A synthetic
   flash and click measured -0.7 ms and +0.4 ms audio-minus-video offsets.

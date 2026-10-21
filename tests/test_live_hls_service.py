@@ -9,7 +9,9 @@ import time
 import unittest
 import unittest.mock as mock
 
+from dataclasses import replace
 from pathlib import Path
+from typing import Callable, ClassVar
 
 from bd_to_avp.worker import live_hls_service
 from bd_to_avp.worker.__main__ import run_worker
@@ -173,7 +175,7 @@ class HLSPublisherTests(unittest.TestCase):
         self.assertEqual(len(manifest["segments"]), 4)
         self.assertEqual(manifest["earliest_available_microseconds"], 6_000_000)
         self.assertEqual(manifest["latest_available_microseconds"], 10_000_000)
-        self.assertLessEqual(manifest["retired_bytes"], publisher.retention_max_bytes)
+        self.assertLessEqual(manifest["retired_bytes"], manifest["retired_allowance_bytes"])
 
     def test_segment_from_previous_playlist_stays_readable_for_its_grace_period(self) -> None:
         publisher = self.publisher()
@@ -200,21 +202,37 @@ class HLSPublisherTests(unittest.TestCase):
         self.assertFalse((self.root / evicted.uri).exists())
         manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
         self.assertNotIn(evicted.uri, [segment["uri"] for segment in manifest["retired_segments"]])
-        self.assertEqual(manifest["grace_shortened_segments"], 0)
 
-    def test_retired_allowance_shortens_grace_and_reports_it(self) -> None:
+    def test_publication_holds_instead_of_deleting_retired_media_early(self) -> None:
         self.encoder.target_duration = 1
         publisher = self.publisher(seconds=3_600, max_bytes=10 + 4 * 1_000)
-        for _ in range(12):
+        for _ in range(30):
             self.encoder.segment(1_000, duration=1.0)
             publisher.poll()
 
+        self.assertTrue(publisher.held_for_grace)
         manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
-        self.assertLessEqual(manifest["retired_bytes"], publisher.retention_max_bytes)
-        self.assertLessEqual(publisher.result()["peak_retired_bytes"], publisher.retention_max_bytes)
-        self.assertEqual(manifest["grace_shortened_segments"], 12 - 4 - len(manifest["retired_segments"]))
-        self.assertGreater(manifest["grace_shortened_segments"], 0)
-        self.assertEqual(len(self.on_disk()), 4 + len(manifest["retired_segments"]))
+        retired = list(publisher.retired)
+        self.assertLessEqual(manifest["retired_bytes"], manifest["retired_allowance_bytes"])
+        self.assertTrue(all((self.root / segment.uri).is_file() for segment in retired))
+        self.assertEqual(publisher.staged_backlog, 30 - publisher.next_sequence)
+        self.assertEqual(len(list(self.encoder.staging.glob("*.m4s"))), publisher.staged_backlog)
+        held_playlist = publisher.playlist_path.read_text(encoding="utf-8")
+        publisher.poll()
+        self.assertEqual(publisher.playlist_path.read_text(encoding="utf-8"), held_playlist)
+
+        self.now = retired[0].delete_after_unix - 0.001
+        publisher.poll()
+        self.assertTrue((self.root / retired[0].uri).is_file())
+        self.assertEqual(publisher.playlist_path.read_text(encoding="utf-8"), held_playlist)
+
+        self.now = retired[0].delete_after_unix
+        published_before = publisher.next_sequence
+        publisher.poll()
+        self.assertFalse((self.root / retired[0].uri).exists())
+        self.assertGreater(publisher.next_sequence, published_before)
+        unexpired = [segment for segment in retired if segment.delete_after_unix > self.now]
+        self.assertTrue(all((self.root / segment.uri).is_file() for segment in unexpired))
 
     def test_rejects_segment_larger_than_byte_limit(self) -> None:
         publisher = self.publisher(max_bytes=500)
@@ -336,7 +354,12 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def service(
-        self, source_name: str = "source.iso", **options: int
+        self,
+        source_name: str = "source.iso",
+        *,
+        retention_max_bytes: int | None = None,
+        clock: Callable[[], float] = time.time,
+        **options: int,
     ) -> tuple[SSIFLiveHLSService, WorkerProcessOwner, io.StringIO, Path]:
         source = self.root / source_name
         source.touch()
@@ -345,6 +368,10 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         activity = WorkerActivityReporter(WorkerEventEmitter(output, JOB_ID))
         owner = WorkerProcessOwner()
         job = JobSpec.from_json_line(json.dumps(live_hls_request(source, destination, **options)))
+        if retention_max_bytes is not None:
+            assert job.live_hls is not None
+            # Below the protocol minimum so a few small fake segments exercise eviction.
+            job = replace(job, live_hls=replace(job.live_hls, retention_max_bytes=retention_max_bytes))
         service = SSIFLiveHLSService(
             job,
             owner,
@@ -353,6 +380,7 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
             edge264_path=self.tools / "edge264_test",
             ffmpeg_path=self.tools / "ffmpeg",
             encoder_path=self.tools / "mv-hevc-encoder",
+            clock=clock,
         )
         return service, owner, output, destination
 
@@ -456,6 +484,62 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         self.assertTrue(all(child.done.is_set() for child in service.children))
         with self.assertRaises(ProcessLookupError):
             os.kill(int((self.records / "encoder.pid").read_text()), 0)
+
+    MEDIA_ENCODER: ClassVar[dict[str, str]] = {
+        "FAKE_LIVE_HLS_MODE": "media",
+        "FAKE_LIVE_HLS_FRAMES_PER_SEGMENT": "48",
+        "FAKE_LIVE_HLS_SEGMENTS": "2.0:1000",
+    }
+    # Five two-second segments of 1000 bytes plus the four-byte fake init segment.
+    WINDOW_BYTES = 5 * 1_000 + 4
+
+    def peak_staged(self) -> int:
+        return int((self.records / "peak-staged").read_text())
+
+    def test_grace_hold_caps_staging_keeps_watchdogs_quiet_and_still_cancels(self) -> None:
+        with mock.patch.dict(os.environ, self.MEDIA_ENCODER):
+            service, owner, _, destination = self.service(
+                "long.iso", retention_max_bytes=self.WINDOW_BYTES, clock=lambda: 1_000.0
+            )
+            service.no_progress_seconds = 1
+            thread, captured = self.run_in_thread(service)
+            deadline = time.monotonic() + 15
+            while not (service.publisher and service.publisher.held_for_grace) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(service.publisher and service.publisher.held_for_grace)
+            time.sleep(3 * service.no_progress_seconds)
+            still_running = thread.is_alive() and not captured
+            source_blocked = not service.children[0].done.is_set()
+            cancel_started = time.monotonic()
+            owner.cancellation_event.set()
+            thread.join(timeout=10)
+            cancel_seconds = time.monotonic() - cancel_started
+
+        self.assertTrue(still_running, captured)
+        self.assertTrue(source_blocked, "the source was read to the end instead of being held")
+        self.assertLess(cancel_seconds, 5)
+        self.assertEqual(len(captured), 1)
+        self.assertIsInstance(captured[0], WorkerCancelled)
+        self.assertFalse(destination.exists())
+        self.assertTrue(all(child.done.is_set() for child in service.children))
+        self.assertLessEqual(self.peak_staged(), live_hls_service.STAGING_SEGMENT_CAP)
+        self.assertGreater(service.held_seconds, 0)
+
+    def test_held_stream_completes_once_retired_media_expires(self) -> None:
+        with mock.patch.dict(os.environ, self.MEDIA_ENCODER):
+            # Grace periods pass ten times faster than real time; the fake encoder is faster still.
+            service, _, _, _ = self.service(
+                "long.iso", retention_max_bytes=self.WINDOW_BYTES, clock=lambda: time.monotonic() * 10
+            )
+
+            result = service.run()
+
+        manifest = json.loads(Path(str(result["manifest_path"])).read_text(encoding="utf-8"))
+        self.assertTrue(manifest["complete"])
+        self.assertEqual(result["published_segments"], 20)
+        self.assertGreater(result["grace_holds"], 0)
+        self.assertLessEqual(self.peak_staged(), live_hls_service.STAGING_SEGMENT_CAP)
+        self.assertLessEqual(result["peak_retired_bytes"], manifest["retired_allowance_bytes"])
 
     def test_failures_remove_the_workspace_with_the_failing_stage_code(self) -> None:
         cases = {
