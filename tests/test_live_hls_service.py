@@ -92,6 +92,7 @@ class HLSPublisherTests(unittest.TestCase):
         self.root = Path(self.temporary_directory.name) / "live"
         self.root.mkdir()
         self.encoder = StagingEncoder(self.root / ".pipeline/encoder")
+        self.now = 1_000_000.0
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
@@ -103,7 +104,11 @@ class HLSPublisherTests(unittest.TestCase):
             retention_seconds=seconds,
             retention_max_bytes=max_bytes,
             streams={"video_stream": {"id": "mv-hevc"}},
+            clock=lambda: self.now,
         )
+
+    def on_disk(self) -> list[str]:
+        return sorted(path.name for path in self.root.glob("segment-*.m4s"))
 
     def test_publishes_segments_before_the_playlist_that_names_them(self) -> None:
         publisher = self.publisher()
@@ -130,22 +135,12 @@ class HLSPublisherTests(unittest.TestCase):
         self.assertFalse(manifest["complete"])
         self.assertNotIn("#EXT-X-ENDLIST", publisher.playlist_path.read_text(encoding="utf-8"))
 
-    def test_time_limit_evicts_whole_segments_after_republishing(self) -> None:
+    def test_time_limit_evicts_whole_segments_and_retires_them(self) -> None:
         publisher = self.publisher()
-        original_write = live_hls_service._atomic_write
-        evicted_still_present: list[bool] = []
+        for _ in range(20):
+            self.encoder.segment(100)
+            publisher.poll()
 
-        def checking_write(path: Path, text: str) -> None:
-            if path.name == "media.m3u8" and "#EXT-X-MEDIA-SEQUENCE:0\n" not in text:
-                evicted_still_present.append((self.root / "segment-000000000.m4s").exists())
-            original_write(path, text)
-
-        with mock.patch.object(live_hls_service, "_atomic_write", side_effect=checking_write):
-            for _ in range(20):
-                self.encoder.segment(100)
-                publisher.poll()
-
-        self.assertTrue(evicted_still_present[0], "evicted media was removed before the playlist dropped it")
         manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
         retained = manifest["segments"]
         self.assertLessEqual(
@@ -156,8 +151,10 @@ class HLSPublisherTests(unittest.TestCase):
         self.assertEqual(manifest["media_sequence"], retained[0]["sequence"])
         self.assertGreater(manifest["media_sequence"], 0)
         self.assertIn(f"#EXT-X-MEDIA-SEQUENCE:{manifest['media_sequence']}\n", publisher.playlist_path.read_text())
-        on_disk = sorted(path.name for path in self.root.glob("segment-*.m4s"))
-        self.assertEqual(on_disk, [segment["uri"] for segment in retained])
+        self.assertEqual(playlist_uris(publisher.playlist_path.read_text()), [segment["uri"] for segment in retained])
+        retired = [segment["uri"] for segment in manifest["retired_segments"]]
+        self.assertEqual(len(retired), manifest["media_sequence"])
+        self.assertEqual(self.on_disk(), sorted(retired + [segment["uri"] for segment in retained]))
 
     def test_byte_limit_evicts_and_keeps_earliest_position_honest(self) -> None:
         self.encoder.target_duration = 1
@@ -169,10 +166,55 @@ class HLSPublisherTests(unittest.TestCase):
         manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
         self.assertLessEqual(manifest["retained_bytes"], publisher.retention_max_bytes)
         self.assertLessEqual(publisher.result()["peak_retained_bytes"], publisher.retention_max_bytes)
-        self.assertEqual(manifest["retained_bytes"], sum(path.stat().st_size for path in self.root.glob("*.m4s")) + 10)
+        retained_uris = [segment["uri"] for segment in manifest["segments"]]
+        self.assertEqual(
+            manifest["retained_bytes"], sum((self.root / uri).stat().st_size for uri in retained_uris) + 10
+        )
         self.assertEqual(len(manifest["segments"]), 4)
         self.assertEqual(manifest["earliest_available_microseconds"], 6_000_000)
         self.assertEqual(manifest["latest_available_microseconds"], 10_000_000)
+        self.assertLessEqual(manifest["retired_bytes"], publisher.retention_max_bytes)
+
+    def test_segment_from_previous_playlist_stays_readable_for_its_grace_period(self) -> None:
+        publisher = self.publisher()
+        previous_playlist = ""
+        for _ in range(50):
+            previous_playlist = publisher.playlist_path.read_text() if publisher.has_published else ""
+            self.encoder.segment(100)
+            publisher.poll()
+            if publisher.retired:
+                break
+        self.assertTrue(publisher.retired, "the time limit never evicted a segment")
+        evicted = publisher.retired[0]
+        self.assertIn(evicted.uri, playlist_uris(previous_playlist))
+        self.assertNotIn(evicted.uri, playlist_uris(publisher.playlist_path.read_text()))
+        grace_seconds = evicted.delete_after_unix - self.now
+        self.assertGreaterEqual(grace_seconds, publisher.retention_seconds)
+
+        self.now += grace_seconds - 0.001
+        publisher.poll()
+        self.assertEqual((self.root / evicted.uri).read_bytes(), b"s" * 100)
+
+        self.now += 0.002
+        publisher.poll()
+        self.assertFalse((self.root / evicted.uri).exists())
+        manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
+        self.assertNotIn(evicted.uri, [segment["uri"] for segment in manifest["retired_segments"]])
+        self.assertEqual(manifest["grace_shortened_segments"], 0)
+
+    def test_retired_allowance_shortens_grace_and_reports_it(self) -> None:
+        self.encoder.target_duration = 1
+        publisher = self.publisher(seconds=3_600, max_bytes=10 + 4 * 1_000)
+        for _ in range(12):
+            self.encoder.segment(1_000, duration=1.0)
+            publisher.poll()
+
+        manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
+        self.assertLessEqual(manifest["retired_bytes"], publisher.retention_max_bytes)
+        self.assertLessEqual(publisher.result()["peak_retired_bytes"], publisher.retention_max_bytes)
+        self.assertEqual(manifest["grace_shortened_segments"], 12 - 4 - len(manifest["retired_segments"]))
+        self.assertGreater(manifest["grace_shortened_segments"], 0)
+        self.assertEqual(len(self.on_disk()), 4 + len(manifest["retired_segments"]))
 
     def test_rejects_segment_larger_than_byte_limit(self) -> None:
         publisher = self.publisher(max_bytes=500)
@@ -368,6 +410,52 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         self.assertTrue(all(child.done.is_set() for child in service.children))
         with self.assertRaises(ProcessLookupError):
             os.kill(encoder_pid, 0)
+
+    def run_in_thread(self, service: SSIFLiveHLSService) -> tuple[threading.Thread, list[BaseException]]:
+        captured: list[BaseException] = []
+
+        def run_service() -> None:
+            try:
+                service.run()
+            except BaseException as error:
+                captured.append(error)
+
+        thread = threading.Thread(target=run_service)
+        thread.start()
+        return thread, captured
+
+    def test_segments_publish_while_the_source_is_still_being_read(self) -> None:
+        with mock.patch.dict(os.environ, {"FAKE_LIVE_HLS_MODE": "streaming"}):
+            service, owner, output, _ = self.service("slow.iso")
+            thread, _ = self.run_in_thread(service)
+            deadline = time.monotonic() + 10
+            while '"live_hls"' not in output.getvalue() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            source_running = not service.children[0].done.is_set()
+            owner.cancellation_event.set()
+            thread.join(timeout=20)
+
+        self.assertIn('"live_hls"', output.getvalue())
+        self.assertTrue(source_running)
+
+    def test_encoder_that_stops_publishing_fails_before_source_end(self) -> None:
+        with mock.patch.dict(os.environ, {"FAKE_LIVE_HLS_MODE": "stall"}):
+            service, _, _, destination = self.service("slow.iso")
+            service.no_progress_seconds = 1
+            started = time.monotonic()
+            thread, captured = self.run_in_thread(service)
+            thread.join(timeout=20)
+            elapsed = time.monotonic() - started
+
+        self.assertFalse(thread.is_alive())
+        self.assertLess(elapsed, 15, "the stall waited for the delayed source to end")
+        self.assertEqual(len(captured), 1)
+        self.assertIsInstance(captured[0], SourceServiceError)
+        self.assertEqual(captured[0].code, "live_hls_pipeline_stalled")
+        self.assertFalse(destination.exists())
+        self.assertTrue(all(child.done.is_set() for child in service.children))
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((self.records / "encoder.pid").read_text()), 0)
 
     def test_failures_remove_the_workspace_with_the_failing_stage_code(self) -> None:
         cases = {

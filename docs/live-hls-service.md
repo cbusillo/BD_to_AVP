@@ -84,9 +84,9 @@ Multichannel sources are downmixed to stereo by FFmpeg.
 
 The encoder writes only to `.pipeline/encoder`. The worker owns the public
 workspace and publishes in this order: rename the finished segment to its
-public name, then atomically replace `media.m3u8` and `live-hls.json`, then
-delete segments that were evicted. A client never sees a partial file or a
-playlist naming a missing one.
+public name, then atomically replace `media.m3u8` and `live-hls.json`.
+Evicted segments are retired rather than deleted (see Retention). A client never
+sees a partial file or a playlist naming a missing one.
 
 ```text
 init.mp4
@@ -104,17 +104,29 @@ added when the encoder finishes. There are no discontinuities.
 `live-hls.json` lists the retained segments with sequence, URI, start, duration,
 and size, the earliest and latest available positions in microseconds, the
 retention limits, the retained bytes, and the video and audio stream identities.
-`complete` becomes true with `EXT-X-ENDLIST`.
+It also lists `retired_segments` (URI, size, and `delete_after_unix`),
+`retired_bytes`, and `grace_shortened_segments`. `complete` becomes true with
+`EXT-X-ENDLIST`.
 
 ## Retention
 
 After each publication, `init.mp4` plus the retained segments fit within
 `retention_max_bytes`, and the retained span fits within `retention_seconds`.
 Eviction removes whole segments from the front, so the earliest available
-position is always a real segment start. Evicted files are deleted right after
-the playlist and manifest that drop them are durable. The limit covers what is
-published; on disk the workspace also holds the one segment being published
-until those deletions finish.
+position is always a real segment start.
+
+RFC 8216 section 6.2.2 requires a removed segment to stay available for its
+duration plus the duration of the longest playlist that contained it. An
+evicted segment therefore stays on disk as a retired segment until that grace
+period, measured in wall-clock time, ends; the publisher deletes it on its next
+poll after that. Retired segments have their own allowance equal to
+`retention_max_bytes`. When production outruns the grace period, the oldest
+retired segments are deleted early and counted in `grace_shortened_segments`.
+
+Peak disk use is therefore at most twice `retention_max_bytes` (published plus
+retired) plus the one segment being published. Retired segments still within
+their grace period when the stream completes stay on disk and in the manifest;
+whoever owns the workspace afterward removes them, or removes the workspace.
 
 The service fails instead of publishing when one segment cannot fit the byte
 limit (`live_hls_segment_too_large`) or when the byte limit cannot hold three
@@ -130,7 +142,10 @@ any child failure, a stalled feeder, or a malformed encoder playlist stops every
 child through the existing process-runner termination and kill path and
 removes the whole workspace. Source reads, feeder writes, and the wait for
 encoder output each use the 120-second no-progress deadline from the live
-source service. On success the worker removes `.pipeline` after the final
+source service. The encoder-output deadline runs alongside production from the
+encoder's start and each real publication, so an encoder that keeps accepting
+input but stops publishing fails the job without waiting for the end of the
+source. On success the worker removes `.pipeline` after the final
 playlist is published.
 
 Failures report the stage that failed: `source_stream_failed` or the helper's
@@ -149,22 +164,29 @@ with `scripts/build_mv_hevc_encoder_macos.py` and sets
 ## Evidence
 
 On October 20, 2026, an Apple M4 Max (128 GB, macOS 27.2) ran this operation at
-commit `1cc3ef4b` on the Rainforest ISO: playlist 1005, English DTS-HD MA 5.1
+the code in this document's commit on the Rainforest ISO: playlist 1005, English DTS-HD MA 5.1
 PID 4353, 120-second and 256 MiB retention, and `maximum_pairs` 14,434.
 
-- The first segment, playlist, and manifest were ready 1.49 seconds after the
+- The first segment, playlist, and manifest were ready 1.12 seconds after the
   worker started.
-- 14,424 frames (601.6 seconds) were produced in 226.8 seconds, a 2.65x
+- 14,424 frames (601.6 seconds) were produced in 224.7 seconds, a 2.68x
   realtime ratio. The process tree peaked near 160% CPU and 1.0 GB resident.
-- 301 segments were published. The byte limit bound retention: the published
-  history peaked at 268,425,124 bytes and the sampled workspace at 273,652,365
-  bytes. At completion the window was 497.9 to 601.6 seconds.
+- 301 segments were published. The byte limit bound retention: published
+  history peaked at 268,425,124 bytes, retired segments at 268,423,699 bytes,
+  and the sampled workspace at 541,931,488 bytes. At completion the window was
+  497.9 to 601.6 seconds. Because production ran 2.68x faster than real time,
+  196 of 249 evicted segments had their grace period shortened by the retired
+  allowance.
 - FFprobe found MV-HEVC view IDs `0,1` and stereo 48 kHz AAC with no audio gap.
   Every source audio PTS step was one 512-sample DTS frame, and the encoder
   wrote 601.601 seconds of audio against 601.6016 seconds of video.
+
+The same encoder build at commit `1cc3ef4b` also produced this
+playback evidence; the later commit changed only segment retirement and the
+publication deadline:
+
 - AVFoundation read the first video and audio samples at 0.0. A synthetic
-  flash and click encoded by the same build measured -0.7 ms and +0.4 ms
-  audio-minus-video offsets.
+  flash and click measured -0.7 ms and +0.4 ms audio-minus-video offsets.
 - The first and last 28 seconds played through the production loopback bridge
   (`RelayLoopbackHTTPServer`) with video and audio tracks and decoded frames in
   every two-second interval.

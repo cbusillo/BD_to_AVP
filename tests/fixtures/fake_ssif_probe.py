@@ -75,6 +75,13 @@ elif arguments and arguments[0] == "stream-service" and "bounded" in arguments[1
     sys.stdout.buffer.write(record(1, 4, 11351, 11351, b"base-three", b"dependent-three"))
     sys.stdout.buffer.write(record(3, 5))
     sys.stdout.buffer.flush()
+elif arguments and arguments[0] == "stream-service" and "slow" in arguments[1]:
+    # One complete GOP, then a source that keeps running without more media.
+    sys.stdout.buffer.write(record(2, 0, 90, 90, b"audio-zero"))
+    sys.stdout.buffer.write(record(1, 1, 90, 90, b"base-zero", b"dependent-zero", True))
+    sys.stdout.buffer.write(record(1, 2, 3843, 3843, b"base-one", b"dependent-one", True))
+    sys.stdout.buffer.flush()
+    time.sleep(30)
 elif arguments and arguments[0] == "stream-service" and "noaudio" in arguments[1]:
     sys.stdout.buffer.write(record(1, 0, 90, 90, b"base-zero", b"dependent-zero", True))
     sys.stdout.buffer.write(record(3, 1))
