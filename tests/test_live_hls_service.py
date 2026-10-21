@@ -13,6 +13,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, ClassVar
 
+from bd_to_avp.observability import ObservabilityEmitter
+from bd_to_avp.runtime import ObservabilityStream, RunContext
 from bd_to_avp.worker import live_hls_service
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.live_hls_service import (
@@ -24,6 +26,7 @@ from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     LIVE_HLS_MINIMUM_RETENTION_BYTES,
     LIVE_HLS_MINIMUM_RETENTION_SECONDS,
+    LIVE_HLS_MINIMUM_VIEWER_LEAD_SECONDS,
     PROTOCOL_VERSION,
     JobSpec,
     WorkerActivityReporter,
@@ -38,7 +41,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 JOB_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 
-def live_hls_request(source: Path, destination: Path, **options: int) -> dict[str, object]:
+def live_hls_request(source: Path, destination: Path, **options: object) -> dict[str, object]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": "job.start",
@@ -311,6 +314,20 @@ class LiveHLSProtocolTests(unittest.TestCase):
         self.assertEqual(job.live_hls.retention_seconds, LIVE_HLS_MINIMUM_RETENTION_SECONDS)
         self.assertIsNone(job.live_source)
 
+    def test_parses_shared_mac_start_fixture(self) -> None:
+        fixture = FIXTURES / f"native_worker_start_live_hls_v{PROTOCOL_VERSION}.json"
+        raw = json.loads(fixture.read_text(encoding="utf-8"))
+
+        job = JobSpec.from_json_line(fixture.read_text(encoding="utf-8"))
+
+        assert job.live_hls is not None and job.live_hls.source_identity is not None
+        self.assertEqual(job.live_hls.viewer_lead_seconds, raw["live_hls"]["viewer_lead_seconds"])
+        self.assertEqual(job.live_hls.source_identity.inode, raw["live_hls"]["source_identity"]["inode"])
+        self.assertEqual(
+            job.live_hls.source_identity.modification_nanoseconds,
+            raw["live_hls"]["source_identity"]["modification_nanoseconds"],
+        )
+
     def test_rejects_invalid_live_hls_requests(self) -> None:
         cases = {
             "retention below minimum": live_hls_request(
@@ -320,6 +337,29 @@ class LiveHLSProtocolTests(unittest.TestCase):
                 Path("/tmp/a.iso"), Path("/tmp/live"), retention_max_bytes=LIVE_HLS_MINIMUM_RETENTION_BYTES - 1
             ),
             "unknown option": live_hls_request(Path("/tmp/a.iso"), Path("/tmp/live"), relay_port=1),
+            "lead below minimum": live_hls_request(
+                Path("/tmp/a.iso"), Path("/tmp/live"), viewer_lead_seconds=LIVE_HLS_MINIMUM_VIEWER_LEAD_SECONDS - 1
+            ),
+            "lead above half the window": live_hls_request(
+                Path("/tmp/a.iso"),
+                Path("/tmp/live"),
+                retention_seconds=60,
+                viewer_lead_seconds=31,
+            ),
+            "identity missing a field": live_hls_request(
+                Path("/tmp/a.iso"), Path("/tmp/live"), source_identity={"device": 1, "inode": 2}
+            ),
+            "identity with a negative inode": live_hls_request(
+                Path("/tmp/a.iso"),
+                Path("/tmp/live"),
+                source_identity={
+                    "device": 1,
+                    "inode": -2,
+                    "size_bytes": 3,
+                    "modification_seconds": 4,
+                    "modification_nanoseconds": 5,
+                },
+            ),
         }
         physical = live_hls_request(Path("/tmp/a.iso"), Path("/tmp/live"))
         physical["source"] = {"kind": "physical_disc", "path": "/dev/disk9"}
@@ -359,13 +399,18 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         *,
         retention_max_bytes: int | None = None,
         clock: Callable[[], float] = time.time,
-        **options: int,
+        viewer_position: Callable[[], int | None] | None = None,
+        **options: object,
     ) -> tuple[SSIFLiveHLSService, WorkerProcessOwner, io.StringIO, Path]:
         source = self.root / source_name
-        source.touch()
+        if not source.exists(follow_symlinks=False):
+            source.touch()
         destination = self.root / "live"
         output = io.StringIO()
-        activity = WorkerActivityReporter(WorkerEventEmitter(output, JOB_ID))
+        run_context = RunContext(
+            observability=ObservabilityStream(ObservabilityEmitter.WORKER), viewer_position=viewer_position
+        )
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, JOB_ID), run_context)
         owner = WorkerProcessOwner()
         job = JobSpec.from_json_line(json.dumps(live_hls_request(source, destination, **options)))
         if retention_max_bytes is not None:
@@ -541,6 +586,130 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         self.assertLessEqual(self.peak_staged(), live_hls_service.STAGING_SEGMENT_CAP)
         self.assertLessEqual(result["peak_retired_bytes"], manifest["retired_allowance_bytes"])
 
+    def wait_for(self, condition: Callable[[], bool], seconds: float = 15) -> bool:
+        deadline = time.monotonic() + seconds
+        while not condition() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return condition()
+
+    def viewer_held(self, service: SSIFLiveHLSService) -> bool:
+        return service.publisher is not None and service._held_for_viewer() and service.viewer_held_seconds > 0
+
+    def test_viewer_lead_holds_production_until_the_viewer_advances(self) -> None:
+        position: list[int | None] = [None]
+        with mock.patch.dict(os.environ, self.MEDIA_ENCODER):
+            service, _, _, destination = self.service(
+                "long.iso", viewer_position=lambda: position[0], viewer_lead_seconds=10, clock=lambda: 1_000.0
+            )
+            service.no_progress_seconds = 1
+            started = time.monotonic()
+            thread, captured = self.run_in_thread(service)
+            self.assertTrue(self.wait_for(lambda: self.viewer_held(service)))
+            # Several no-progress deadlines pass while the viewer does not move.
+            time.sleep(3 * service.no_progress_seconds)
+            assert service.publisher is not None
+            held_edge = service.publisher.next_start_microseconds
+            held_alive = thread.is_alive() and not captured
+            source_blocked = not service.children[0].done.is_set()
+            held_manifest = json.loads((destination / "live-hls.json").read_text(encoding="utf-8"))
+            position[0] = 30_000_000
+            thread.join(timeout=20)
+            elapsed = time.monotonic() - started
+
+        self.assertTrue(held_alive, captured)
+        self.assertTrue(source_blocked, "the source was read to the end instead of being held")
+        self.assertGreaterEqual(held_edge, 10_000_000)
+        # The hold engages at the lead; at most the staged budget and one GOP publish after it.
+        self.assertLess(held_edge, 20_000_000)
+        self.assertLess(held_manifest["latest_available_microseconds"], 20_000_000)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(captured, [])
+        manifest = json.loads((destination / "live-hls.json").read_text(encoding="utf-8"))
+        self.assertTrue(manifest["complete"])
+        self.assertGreater(manifest["latest_available_microseconds"], 39_000_000)
+        producer = manifest["producer"]
+        self.assertEqual(producer["produced_microseconds"], manifest["latest_available_microseconds"])
+        self.assertGreaterEqual(producer["viewer_held_seconds"], 2 * service.no_progress_seconds)
+        self.assertGreaterEqual(producer["held_seconds"], producer["viewer_held_seconds"])
+        self.assertGreaterEqual(producer["wall_seconds"], producer["held_seconds"])
+        self.assertLessEqual(producer["wall_seconds"], elapsed)
+
+    def test_paused_viewer_hold_still_cancels_promptly(self) -> None:
+        with mock.patch.dict(os.environ, self.MEDIA_ENCODER):
+            service, owner, _, destination = self.service(
+                "long.iso", viewer_position=lambda: 0, viewer_lead_seconds=10, clock=lambda: 1_000.0
+            )
+            thread, captured = self.run_in_thread(service)
+            self.assertTrue(self.wait_for(lambda: self.viewer_held(service)))
+            cancel_started = time.monotonic()
+            owner.cancellation_event.set()
+            thread.join(timeout=10)
+            cancel_seconds = time.monotonic() - cancel_started
+
+        self.assertLess(cancel_seconds, 5)
+        self.assertEqual(len(captured), 1)
+        self.assertIsInstance(captured[0], WorkerCancelled)
+        self.assertFalse(destination.exists())
+
+    def test_viewer_hold_and_grace_hold_both_release(self) -> None:
+        position: list[int | None] = [None]
+
+        def advancing_viewer() -> int | None:
+            # A viewer that stays ten seconds behind whatever has been published.
+            assert service.publisher is not None
+            position[0] = max(0, service.publisher.next_start_microseconds - 9_000_000)
+            return position[0]
+
+        with mock.patch.dict(os.environ, self.MEDIA_ENCODER):
+            service, _, _, _ = self.service(
+                "long.iso",
+                retention_max_bytes=self.WINDOW_BYTES,
+                viewer_position=advancing_viewer,
+                viewer_lead_seconds=10,
+                clock=lambda: time.monotonic() * 10,
+            )
+
+            result = service.run()
+
+        self.assertEqual(result["published_segments"], 20)
+        self.assertGreater(result["grace_holds"], 0)
+
+    def test_source_identity_must_match_the_approved_file(self) -> None:
+        source = self.root / "source.iso"
+        source.write_bytes(b"disc")
+        info = source.stat()
+        identity = {
+            "device": info.st_dev & 0xFFFF_FFFF,
+            "inode": info.st_ino,
+            "size_bytes": info.st_size,
+            "modification_seconds": info.st_mtime_ns // 1_000_000_000,
+            "modification_nanoseconds": info.st_mtime_ns % 1_000_000_000,
+        }
+        service, _, _, approved_workspace = self.service(source_identity=identity)
+        self.assertTrue(service.run()["retained_segments"])
+        shutil.rmtree(approved_workspace)
+
+        cases = {
+            "modified": {**identity, "modification_nanoseconds": (identity["modification_nanoseconds"] + 1) % 10**9},
+            "replaced": {**identity, "inode": identity["inode"] + 1},
+            "resized": {**identity, "size_bytes": identity["size_bytes"] + 1},
+        }
+        for label, changed in cases.items():
+            with self.subTest(label):
+                service, _, _, destination = self.service(source_identity=changed)
+                with self.assertRaises(SourceServiceError) as raised:
+                    service.run()
+                self.assertEqual(raised.exception.code, "live_source_changed")
+                self.assertFalse(destination.exists())
+                self.assertEqual(service.children, [], "the source was read after the identity check failed")
+
+        link = self.root / "link.iso"
+        link.symlink_to(source)
+        service, _, _, _ = self.service("link.iso", source_identity=identity)
+        with self.assertRaises(SourceServiceError) as raised:
+            service.run()
+        self.assertEqual(raised.exception.code, "live_source_changed")
+
     def test_failures_remove_the_workspace_with_the_failing_stage_code(self) -> None:
         cases = {
             "fail.iso": ({}, "synthetic_producer_failure"),
@@ -583,6 +752,14 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         completed = events[-1]
         self.assertEqual(completed["type"], "job.completed")
         self.assertTrue(Path(completed["payload"]["live_hls_result"]["playlist_path"]).is_file())
+        # The shared fixtures the Mac decodes carry exactly the keys the worker emits.
+        ready = next(event for event in events if event["type"] == "artifact.ready")
+        for event, family in ((ready, "live_hls_ready"), (completed, "live_hls_completed")):
+            fixture = json.loads((FIXTURES / f"native_worker_{family}_v{PROTOCOL_VERSION}.json").read_text())
+            self.assertEqual(set(event), set(fixture))
+            self.assertEqual(set(event["payload"]), set(fixture["payload"]))
+            (payload_key,) = fixture["payload"]
+            self.assertEqual(set(event["payload"][payload_key]), set(fixture["payload"][payload_key]))
 
 
 if __name__ == "__main__":

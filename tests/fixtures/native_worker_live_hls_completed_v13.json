@@ -1,0 +1,26 @@
+{
+  "protocol_version": 13,
+  "type": "job.completed",
+  "job_id": "55555555-5555-4555-8555-555555555555",
+  "sequence": 9,
+  "payload": {
+    "live_hls_result": {
+      "manifest_path": "/tmp/LiveHLS/66666666-6666-4666-8666-666666666666/live-hls.json",
+      "playlist_path": "/tmp/LiveHLS/66666666-6666-4666-8666-666666666666/media.m3u8",
+      "earliest_available_microseconds": 497897400,
+      "latest_available_microseconds": 601601000,
+      "retained_segments": 50,
+      "published_segments": 301,
+      "peak_retained_bytes": 268425124,
+      "peak_retired_bytes": 280588043,
+      "peak_staged_segments": 2,
+      "grace_holds": 73,
+      "held_seconds": 303.8,
+      "viewer_held_seconds": 0.0,
+      "encoder_summary": {
+        "frame_count": 14424,
+        "output_mode": "hls"
+      }
+    }
+  }
+}

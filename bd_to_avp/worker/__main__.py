@@ -12,7 +12,7 @@ from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.runtime import CancellationToken, ObservabilityStream, RunContext
 from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, run_operation
 from bd_to_avp.worker.diagnostics import WorkerDiagnosticRelay
-from bd_to_avp.worker.controls import CONTROL_CAPABILITY, WorkerControls, WorkerInputReader
+from bd_to_avp.worker.controls import CONTROL_CAPABILITIES, WorkerControls, WorkerInputReader
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     EVENT_WRITE_TIMEOUT_SECONDS,
@@ -123,7 +123,7 @@ def _run_worker(
             {
                 "worker_version": config.app.code_version,
                 "process_group_id": process_group_id,
-                "control_capabilities": [CONTROL_CAPABILITY],
+                "control_capabilities": list(CONTROL_CAPABILITIES),
             },
         )
         controls = WorkerControls(job.job_id, emitter)
@@ -139,6 +139,7 @@ def _run_worker(
             cancellation=CancellationToken(owner.cancellation_event),
             diagnostic_observer=diagnostic_relay.emit,
             process_controls=controls,
+            viewer_position=controls.viewer_position_microseconds,
         )
         activity = WorkerActivityReporter(emitter, run_context)
         if job.operation.value == "inspect_source":

@@ -23,7 +23,15 @@ Request:
     "audio_pid": 4353,
     "retention_seconds": 120,
     "retention_max_bytes": 268435456,
-    "maximum_pairs": 14434
+    "maximum_pairs": 14434,
+    "viewer_lead_seconds": 30,
+    "source_identity": {
+      "device": 16777234,
+      "inode": 123456789,
+      "size_bytes": 41234567168,
+      "modification_seconds": 1760000000,
+      "modification_nanoseconds": 123456789
+    }
   }
 }
 ```
@@ -32,6 +40,16 @@ Request:
 64 MiB. `maximum_pairs` is optional and bounds qualification runs. The source
 must be an ISO or Blu-ray folder, and the workspace must be empty and outside
 the source.
+
+`viewer_lead_seconds` is optional, from 10 through half of
+`retention_seconds`; it turns on viewer pacing (see Backpressure).
+`source_identity` is optional and is what the host saw when it authorized the
+file. When present, the worker checks it before inspection and again before the
+source read: the path must not be a symbolic link, and the file opened without
+following links must have that device (low 32 bits), inode, size, and
+modification time. A mismatch fails with `live_source_changed`. The Mac relay
+sends both; the request shape is in
+`tests/fixtures/native_worker_start_live_hls_v13.json`.
 
 The worker emits `artifact.ready` with a `live_hls` payload naming the manifest
 and playlist once the first segment, playlist, and manifest are durable. The
@@ -158,8 +176,29 @@ the manifest; whoever owns the workspace afterward removes them, or removes
 the workspace.
 
 `SSIFLiveHLSService.hold_conditions` is a list of callables. Any condition that
-returns true is a deliberate hold, like the grace hold. Viewer-position pacing
-in the relay can add its own condition there.
+returns true is a deliberate hold, like the grace hold.
+
+With `viewer_lead_seconds`, viewer pacing adds a third deliberate hold. The
+host sends the viewer's playhead with `job.viewer_position`
+([native-worker-protocol-v13.md](native-worker-protocol-v13.md)); the worker
+holds while the published edge is at least the lead past the latest position,
+or past zero before the first report. An advancing position releases it on the
+next poll. This hold only stops the source read, like the others, so it cannot
+block publication or grace expiry: the grace hold still releases on wall-clock
+time and staging still drains, and a held viewer always has the lead's worth of
+published media ahead of it. A paused viewer holds production indefinitely
+without tripping any no-progress deadline, and cancellation still reaches the
+children promptly. The Mac relay uses a 30-second lead with 120-second and
+256 MiB retention, which leaves about 75 seconds behind the viewer for rewind
+at 20 Mbps.
+
+The manifest carries a `producer` object so producer capacity can be measured
+apart from pacing: `produced_microseconds` (the published edge),
+`wall_seconds` since production started, `held_seconds` (all deliberate
+holds), and `viewer_held_seconds` (the viewer hold's share). Unheld throughput
+is `produced_microseconds / ((wall_seconds - held_seconds) * 1e6)`. The values
+are as of the manifest's last publication. The terminal result also reports
+`viewer_held_seconds`.
 
 The service fails instead of publishing when one segment cannot fit the byte
 limit (`live_hls_segment_too_large`) or when the byte limit cannot hold three

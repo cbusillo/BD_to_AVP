@@ -27,6 +27,10 @@ MAX_CONTROL_BYTES = 4096
 MAX_PENDING_CONTROLS = 16
 MAX_CONTROL_DECISIONS = 256
 CONTROL_CAPABILITY = "keep_waiting_v1"
+VIEWER_POSITION_CAPABILITY = "viewer_position_v1"
+CONTROL_CAPABILITIES = (CONTROL_CAPABILITY, VIEWER_POSITION_CAPABILITY)
+VIEWER_POSITION_KEYS = frozenset({"protocol_version", "type", "job_id", "position_microseconds"})
+MAXIMUM_VIEWER_POSITION_MICROSECONDS = 1 << 53
 
 
 @dataclass
@@ -55,7 +59,13 @@ class WorkerControls:
         self._runs: dict[str, list[WaitCommand]] = {}
         self._decisions: dict[str, _Decision] = {}
         self._closed = False
+        self._viewer_position: int | None = None
         self._lock = threading.Lock()
+
+    def viewer_position_microseconds(self) -> int | None:
+        """The latest live viewer playhead the host reported, or None before any report."""
+        with self._lock:
+            return self._viewer_position
 
     def register_run(self, tool_run_id: str) -> None:
         with self._lock:
@@ -79,6 +89,9 @@ class WorkerControls:
         except (ValueError, UnicodeError, RecursionError):
             self._reject_invalid("invalid_control")
             return
+        if isinstance(raw, dict) and raw.get("type") == "job.viewer_position":
+            self._receive_viewer_position(raw)
+            return
         identifiers = self._identifiers(raw)
         expected_keys = {"protocol_version", "type", "command_id", "job_id", "tool_run_id", "stall_episode_id"}
         if (
@@ -96,6 +109,28 @@ class WorkerControls:
             outcome = self._submit_command_locked(command)
         if outcome is not None:
             self._emit_result(outcome)
+
+    def _receive_viewer_position(self, raw: dict[str, object]) -> None:
+        """Stores the latest position; an accepted position has no acknowledgement."""
+        position = raw.get("position_microseconds")
+        job_id = self._identifiers(raw).get("job_id")
+        if (
+            set(raw) != VIEWER_POSITION_KEYS
+            or type(raw.get("protocol_version")) is not int
+            or raw["protocol_version"] != PROTOCOL_VERSION
+            or job_id is None
+            or type(position) is not int
+            or not 0 <= position <= MAXIMUM_VIEWER_POSITION_MICROSECONDS
+        ):
+            self._reject_invalid("invalid_control")
+            return
+        if job_id != self._job_id:
+            self._reject_invalid("wrong_job")
+            return
+        with self._lock:
+            if self._closed:
+                return
+            self._viewer_position = position
 
     def _submit_command_locked(self, command: WaitCommand) -> dict[str, object] | None:
         if self._closed:

@@ -154,6 +154,8 @@ class RunContext:
     cancellation: CancellationToken = field(default_factory=CancellationToken)
     diagnostic_observer: DiagnosticObserver | None = field(default=None, compare=False, repr=False)
     process_controls: ProcessControlChannel | None = field(default=None, compare=False, repr=False)
+    # The latest live viewer playhead in microseconds from the host, or None before a report.
+    viewer_position: Callable[[], int | None] | None = field(default=None, compare=False, repr=False)
 
     def emit(self, kind: str, **kwargs: Any) -> ObservabilityEvent | None:
         return self.observability.emit(kind, **kwargs)
