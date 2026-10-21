@@ -523,9 +523,57 @@ final class LiveRelayStreamTests: XCTestCase {
         XCTAssertEqual(worker.jobs.first?.destination?.path, workspace.path)
         let permissions = try FileManager.default.attributesOfItem(atPath: workspaceRoot.path)[.posixPermissions] as? Int
         XCTAssertEqual(permissions, 0o700)
+        let marker = LiveLeftoverOwner.marker(forWorkspace: workspace)
+        XCTAssertEqual(LiveLeftoverOwner.read(marker), getpid(), "the workspace is marked as this instance's")
         await XCTAssertThrowsAsyncError(try await starter.start(try sourceRequest(), id: id))
         await stream.stop(.viewerStopped)
         XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    func testTheLaunchSweepRemovesOnlyWhatNoRunningInstanceOwns() throws {
+        let root = root.appendingPathComponent("sweep", isDirectory: true)
+        let workspaces = root.appendingPathComponent("LiveHLS", isDirectory: true)
+        let temporary = root.appendingPathComponent("tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspaces, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let running: pid_t = 4_242
+        let exited: pid_t = 4_343
+        func workspace(_ name: String, owner: pid_t?) throws -> URL {
+            let url = workspaces.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            if let owner { LiveLeftoverOwner.write(LiveLeftoverOwner.marker(forWorkspace: url), pid: owner) }
+            return url
+        }
+        func handoff(_ name: String, owner: pid_t?, age: TimeInterval) throws -> URL {
+            let url = temporary.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            if let owner { LiveLeftoverOwner.write(url.appendingPathComponent(LiveLeftoverOwner.handoffMarkerName), pid: owner) }
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: url.path)
+            return url
+        }
+        let active = try workspace("active", owner: running)
+        let crashed = try workspace("crashed", owner: exited)
+        let unmarked = try workspace("unmarked", owner: nil)
+        let activeHandoff = try handoff("bdtoavp-Active", owner: running, age: 600)
+        let crashedHandoff = try handoff("bdtoavp-Crashd", owner: exited, age: 600)
+        let newHandoff = try handoff("bdtoavp-NewOne", owner: nil, age: 1)
+        let oldHandoff = try handoff("bdtoavp-OldOne", owner: nil, age: 600)
+        let unrelated = try handoff("something-else", owner: nil, age: 600)
+
+        LiveRelayStreamStarter.sweepLeftovers(workspaceRoot: workspaces, temporaryDirectory: temporary, isRunning: { $0 == running })
+
+        let exists = { (url: URL) in FileManager.default.fileExists(atPath: url.path) }
+        XCTAssertTrue(exists(active), "a running instance's workspace stays")
+        XCTAssertTrue(exists(LiveLeftoverOwner.marker(forWorkspace: active)))
+        XCTAssertFalse(exists(crashed))
+        XCTAssertFalse(exists(LiveLeftoverOwner.marker(forWorkspace: crashed)))
+        XCTAssertFalse(exists(unmarked))
+        XCTAssertTrue(exists(activeHandoff), "a running instance's handoff socket stays")
+        XCTAssertFalse(exists(crashedHandoff))
+        XCTAssertTrue(exists(newHandoff), "an unmarked directory that may be mid-creation stays")
+        XCTAssertFalse(exists(oldHandoff))
+        XCTAssertTrue(exists(unrelated))
     }
 
     func testLiveJobSpecAndEventsMatchSharedWorkerFixtures() throws {

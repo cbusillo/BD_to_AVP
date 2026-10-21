@@ -132,6 +132,12 @@ final class MovieSharingController: ObservableObject {
             let isBusyConverting: @Sendable () async -> Bool = { @MainActor [weak self] in
                 self?.isConversionActive() ?? false
             }
+            // The launch sweep finishes before any live workspace or handoff socket of this run
+            // can exist. Unit-test hosts never sweep the real caches.
+            if !AppDelegate.isUnitTestHost(environment: ProcessInfo.processInfo.environment) {
+                await LiveRelayStreamStarter.leftoverSweep.value
+            }
+            guard epoch == attempt else { await catalog.stop(); return }
             // Live ISO playback is optional: without a worker, sharing still serves movies.
             let live = try? makeLiveServices(isBusyConverting)
             let host = try MovieLibraryHost(catalog: catalog, trust: trust, live: live)

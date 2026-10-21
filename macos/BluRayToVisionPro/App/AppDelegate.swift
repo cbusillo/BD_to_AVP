@@ -49,8 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             return
         }
         if !Self.isUnitTestHost(environment: ProcessInfo.processInfo.environment) {
-            // No live stream survives a relaunch: remove any workspace or handoff socket a crash left.
-            Task.detached(priority: .utility) { LiveRelayStreamStarter.sweepLeftovers() }
+            // No live stream survives a relaunch: start removing what a crash left. Sharing awaits
+            // this before it enables live services.
+            _ = LiveRelayStreamStarter.leftoverSweep
         }
         startQueueAutomationIfNeeded(arguments: arguments, environment: ProcessInfo.processInfo.environment)
         guard Self.isStartupSmoke(arguments: arguments) else {

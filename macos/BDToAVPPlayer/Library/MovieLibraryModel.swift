@@ -226,9 +226,13 @@ final class MovieLibraryModel: ObservableObject {
                 self.liveOperation = nil
                 if failure != .cancelled { self.errorMessage = failure.message }
             case let .success(ready):
-                let context = RelayLivePlaybackContext(title: title.title, streamID: ready.streamID) {
-                    try? await connection.liveStatus(streamID: ready.streamID)
-                }
+                let owner = ObjectIdentifier(operation)
+                let context = RelayLivePlaybackContext(
+                    title: title.title,
+                    streamID: ready.streamID,
+                    status: { try? await connection.liveStatus(streamID: ready.streamID) },
+                    ended: { [weak self] in self?.installedLivePlaybackEnded(owner) }
+                )
                 let outcome = await prepare(ready.configuration, context)
                 guard self.liveOperation === operation else {
                     operation.cleanUp()
@@ -244,6 +248,16 @@ final class MovieLibraryModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Installed live playback went away in the player (a decode failure, an ended stream, a
+    /// failed refresh, Done, or replacement): stop its stream now rather than leaving the Mac to
+    /// produce until its idle lease expires. The title stays with the caller for Retry.
+    private func installedLivePlaybackEnded(_ owner: ObjectIdentifier) {
+        guard let livePlayback, ObjectIdentifier(livePlayback.operation) == owner else { return }
+        livePlayback.stop()
+        self.livePlayback = nil
+        liveOperation = nil
     }
 
     /// Cancels a start in progress. Its cleanup still runs after the start task is cancelled.

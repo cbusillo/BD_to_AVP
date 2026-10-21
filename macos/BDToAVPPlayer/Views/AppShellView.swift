@@ -138,6 +138,7 @@ struct AppShellView: View {
         }
                 .onDisappear {
             preparationTask?.cancel()
+            endLivePlayback()
         }
                 .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {

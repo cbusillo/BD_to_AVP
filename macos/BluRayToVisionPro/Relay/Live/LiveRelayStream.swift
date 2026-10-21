@@ -528,6 +528,7 @@ actor LiveRelayStream: LiveRelayStreaming {
             }
             await handoffTask?.value
             try? FileManager.default.removeItem(at: workspaceURL)
+            try? FileManager.default.removeItem(at: LiveLeftoverOwner.marker(forWorkspace: workspaceURL))
             await self?.finishCleanup()
         }
     }

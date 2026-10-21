@@ -284,7 +284,19 @@ final class LiveStartOperation {
         let deadline = issuedAt.addingTimeInterval(LiveStartTiming.clientTimeout)
         while true {
             guard !Task.isCancelled, cleanupTask == nil else { return .failure(.cancelled) }
-            if let status = try? await client.liveStatus(streamID: streamID) {
+            let polled: LiveStreamStatus?
+            do {
+                polled = try await client.liveStatus(streamID: streamID)
+            } catch MovieLibraryError.needsPairing {
+                // The parent session is gone: the Mac already ended its stream, so there is
+                // nothing to clean up and nothing to wait for.
+                refusedCleanly = true
+                return .failure(.needsPairing)
+            } catch {
+                // A transient failure; keep polling until the client timeout.
+                polled = nil
+            }
+            if let status = polled {
                 guard !Task.isCancelled, cleanupTask == nil else { return .failure(.cancelled) }
                 onStatus(status)
                 switch status.state {

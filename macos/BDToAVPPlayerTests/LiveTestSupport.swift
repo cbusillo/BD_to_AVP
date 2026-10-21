@@ -192,6 +192,7 @@ actor FakeLiveMac: MovieLibraryConnection {
 
     func liveStatus(streamID: UUID) async throws -> LiveStreamStatus {
         statusCalls += 1
+        if isRevoked { throw MovieLibraryError.needsPairing }
         if holdsStatus { await withCheckedContinuation { statusWaiters.append($0) } }
         if let reason = stoppedStreams[streamID] {
             return LiveStreamStatus(state: .stopped, stopReason: reason, macBusyConverting: busyConverting)
@@ -256,6 +257,9 @@ actor FakeLiveMac: MovieLibraryConnection {
             return try signed(request, status: 204, body: Data(), session: derived)
         case RelayWireContract.positionPath:
             return try signed(request, status: 204, body: Data(), session: derived)
+        case RelayWireContract.playlistSnapshotPath where failsStream:
+            let failed = RelayLiveStreamEnded(error: .streamFailed, code: "live_video_decode_failed", message: "The decoder stopped.")
+            return try signed(request, status: 503, body: JSONEncoder().encode(failed), session: derived)
         case RelayWireContract.playlistSnapshotPath:
             let snapshot = try RelayPlaylistSnapshot(
                 earliestPlayableTimeMilliseconds: 0, totalDurationMilliseconds: 4_000, isFinalized: false,
@@ -269,6 +273,15 @@ actor FakeLiveMac: MovieLibraryConnection {
             return try signed(request, status: 200, body: Data("media".utf8), session: derived)
         }
     }
+
+    /// The parent session ended on the Mac (the device was forgotten, or sharing restarted).
+    func revokeSession() { isRevoked = true }
+    private var isRevoked = false
+
+    /// The running stream fails: its snapshot answers a signed 503 `stream_failed`, while the
+    /// stream still holds the slot until the player stops it.
+    func failStream() { failsStream = true }
+    private var failsStream = false
 
     /// Ends the current stream on the Mac, as a failure, idle lease, or Stop would.
     func endStream(reason: String) { stopSlot(reason: reason) }

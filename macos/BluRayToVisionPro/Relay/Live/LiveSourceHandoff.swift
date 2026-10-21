@@ -44,16 +44,18 @@ final class LiveSourceHandoff: @unchecked Sendable {
         guard let created = mkdtemp(&template) else { throw LiveSourceHandoffError.unavailable }
         directory = String(cString: created)
         _ = chmod(directory, 0o700)
+        // Marks the directory as this instance's, so another copy's launch sweep leaves it alone.
+        LiveLeftoverOwner.write(URL(fileURLWithPath: directory).appendingPathComponent(LiveLeftoverOwner.handoffMarkerName))
         socketPath = directory + "/s"
         var tokenBytes = [UInt8](repeating: 0, count: Self.tokenLength / 2)
         guard SecRandomCopyBytes(kSecRandomDefault, tokenBytes.count, &tokenBytes) == errSecSuccess else {
-            rmdir(directory)
+            Self.discard(directory)
             throw LiveSourceHandoffError.unavailable
         }
         token = tokenBytes.map { String(format: "%02x", $0) }.joined()
         listener = socket(AF_UNIX, SOCK_STREAM, 0)
         guard listener >= 0 else {
-            rmdir(directory)
+            Self.discard(directory)
             throw LiveSourceHandoffError.unavailable
         }
         _ = fcntl(listener, F_SETFD, FD_CLOEXEC)
@@ -62,7 +64,7 @@ final class LiveSourceHandoff: @unchecked Sendable {
         let pathBytes = Array(socketPath.utf8)
         guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
             Darwin.close(listener)
-            rmdir(directory)
+            Self.discard(directory)
             throw LiveSourceHandoffError.unavailable
         }
         withUnsafeMutableBytes(of: &address.sun_path) { raw in
@@ -77,13 +79,18 @@ final class LiveSourceHandoff: @unchecked Sendable {
         guard bound == 0, listen(listener, 1) == 0 else {
             Darwin.close(listener)
             unlink(socketPath)
-            rmdir(directory)
+            Self.discard(directory)
             throw LiveSourceHandoffError.unavailable
         }
     }
 
     deinit {
         close()
+    }
+
+    private static func discard(_ directory: String) {
+        unlink(directory + "/" + LiveLeftoverOwner.handoffMarkerName)
+        rmdir(directory)
     }
 
     var jobField: WorkerJobSpec.Source.DescriptorHandoff {
@@ -106,6 +113,7 @@ final class LiveSourceHandoff: @unchecked Sendable {
         guard let descriptor else { return }
         Darwin.close(descriptor)
         unlink(socketPath)
+        unlink(directory + "/" + LiveLeftoverOwner.handoffMarkerName)
         rmdir(directory)
     }
 

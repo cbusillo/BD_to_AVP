@@ -36,18 +36,48 @@ struct LiveRelayStreamStarter: LiveRelayStreamStarting {
             .appendingPathComponent("LiveHLS", isDirectory: true)
     }
 
-    /// Removes every leftover live workspace and handoff socket directory. Only files: it runs at
-    /// launch, before any stream can exist.
+    /// The launch sweep, started once per app run. Sharing awaits it before it enables live
+    /// services, so the sweep never races a new workspace or handoff socket of this instance.
+    static let leftoverSweep: Task<Void, Never> = Task.detached(priority: .utility) {
+        sweepLeftovers()
+    }
+
+    /// Removes live workspaces and handoff socket directories that no running app owns. Each one
+    /// carries its creator's pid (`LiveLeftoverOwner`); one whose owner is still running, such as
+    /// another copy of the app, is kept. Only files are touched.
     static func sweepLeftovers(
         workspaceRoot: URL? = try? defaultWorkspaceRoot(),
         temporaryDirectory: URL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
+        isRunning: (pid_t) -> Bool = LiveLeftoverOwner.isRunning,
+        now: Date = Date(),
         fileManager: FileManager = .default
     ) {
         if let workspaceRoot, let children = try? fileManager.contentsOfDirectory(at: workspaceRoot, includingPropertiesForKeys: nil) {
-            for child in children { try? fileManager.removeItem(at: child) }
+            let markers = Set(children.filter { $0.pathExtension == LiveLeftoverOwner.markerExtension }.map(\.lastPathComponent))
+            for child in children where child.pathExtension != LiveLeftoverOwner.markerExtension {
+                let marker = workspaceRoot.appendingPathComponent(child.lastPathComponent + "." + LiveLeftoverOwner.markerExtension)
+                if let owner = LiveLeftoverOwner.read(marker), isRunning(owner) { continue }
+                try? fileManager.removeItem(at: child)
+                try? fileManager.removeItem(at: marker)
+            }
+            // A marker whose workspace never appeared, or is already gone.
+            for name in markers {
+                let marker = workspaceRoot.appendingPathComponent(name)
+                let workspace = marker.deletingPathExtension()
+                guard !fileManager.fileExists(atPath: workspace.path) else { continue }
+                if let owner = LiveLeftoverOwner.read(marker), isRunning(owner) { continue }
+                try? fileManager.removeItem(at: marker)
+            }
         }
-        let handoffs = (try? fileManager.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil)) ?? []
+        let handoffs = (try? fileManager.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         for child in handoffs where child.lastPathComponent.hasPrefix("bdtoavp-") && child.lastPathComponent.count == 14 {
+            if let owner = LiveLeftoverOwner.read(child.appendingPathComponent(LiveLeftoverOwner.handoffMarkerName)) {
+                if isRunning(owner) { continue }
+            } else {
+                // No marker yet: another instance may be between mkdtemp and writing it.
+                let modified = (try? child.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                if now.timeIntervalSince(modified) < 60 { continue }
+            }
             try? fileManager.removeItem(at: child)
         }
     }
@@ -103,6 +133,42 @@ struct LiveRelayStreamStarter: LiveRelayStreamStarting {
         guard lstat(workspaceURL.path, &info) != 0, errno == ENOENT else {
             throw LiveRelayStreamStartError.workspaceUnavailable
         }
+        // Mark it as this instance's before the worker creates it, so a sweep by another copy of
+        // the app never removes it. The stream's cleanup removes the marker with the workspace.
+        guard LiveLeftoverOwner.write(LiveLeftoverOwner.marker(forWorkspace: workspaceURL)) else {
+            throw LiveRelayStreamStartError.workspaceUnavailable
+        }
         return workspaceURL
+    }
+}
+
+/// The pid marker that ties a live workspace or handoff directory to the app instance that made
+/// it, so the launch sweep removes only what no running instance owns.
+enum LiveLeftoverOwner {
+    static let markerExtension = "owner"
+    static let handoffMarkerName = "owner"
+
+    static func marker(forWorkspace workspace: URL) -> URL {
+        workspace.deletingLastPathComponent()
+            .appendingPathComponent(workspace.lastPathComponent + "." + markerExtension)
+    }
+
+    @discardableResult
+    static func write(_ url: URL, pid: pid_t = getpid()) -> Bool {
+        (try? Data("\(pid)\n".utf8).write(to: url, options: .atomic)) != nil
+    }
+
+    static func read(_ url: URL) -> pid_t? {
+        guard let data = try? Data(contentsOf: url), data.count <= 32,
+              let text = String(data: data, encoding: .utf8),
+              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0
+        else { return nil }
+        return pid
+    }
+
+    /// Whether a process with this pid exists. An unrelated process that reused the pid keeps a
+    /// leftover until the next launch, which is the safe direction.
+    static func isRunning(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
     }
 }

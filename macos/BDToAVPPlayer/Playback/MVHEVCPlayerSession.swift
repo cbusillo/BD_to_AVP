@@ -146,6 +146,21 @@ struct RelayLivePlaybackContext: Sendable {
     let streamID: UUID
     /// The Mac's parent-signed live status, for the busy notice and why a stream ended.
     let status: @Sendable () async -> LiveStreamStatus?
+    /// Called once when installed live playback is torn down for any reason (failure,
+    /// stream end, Done, replacement), so the owner of the stream's cleanup stops it.
+    let ended: @MainActor @Sendable () -> Void
+
+    init(
+        title: String,
+        streamID: UUID,
+        status: @escaping @Sendable () async -> LiveStreamStatus?,
+        ended: @escaping @MainActor @Sendable () -> Void = {}
+    ) {
+        self.title = title
+        self.streamID = streamID
+        self.status = status
+        self.ended = ended
+    }
 }
 
 struct RelayPlaybackTerminationEvent: Equatable {
@@ -195,6 +210,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var relayWindowRefreshTask: Task<Void, Never>?
     private var consecutiveRelayRefreshFailures = 0
     private var liveContext: RelayLivePlaybackContext?
+    /// The live context whose playback is installed; its `ended` runs when that playback goes.
+    private var installedLiveContext: RelayLivePlaybackContext?
     private var liveStatusRefreshCount = 0
     private var resumeStore: ResumeStore?
     private var itemStatusObservation: NSKeyValueObservation?
@@ -611,6 +628,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     ) {
         self.mediaItem = mediaItem
         if let live { liveContext = live }
+        installedLiveContext = liveContext
         remotePlaybackSource = source
         relayTransport = transport
         playerItem = item
@@ -1328,6 +1346,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     private func finishCurrentSession(persistResume shouldPersistResume: Bool) {
+        if let installed = installedLiveContext {
+            installedLiveContext = nil
+            installed.ended()
+        }
         eyeOrderChangeTask?.cancel()
         eyeOrderChangeTask = nil
         if shouldPersistResume {

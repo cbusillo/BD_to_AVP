@@ -111,6 +111,8 @@ actor LiveTitleIndex {
     private var worker: Task<Void, Never>?
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var stopped = false
+    private var loadTask: Task<Void, Never>?
+    private var persistTask: Task<Void, Never>?
     private(set) var inspectionCount = 0
 
     init(
@@ -127,33 +129,63 @@ actor LiveTitleIndex {
         self.now = now
         self.retryInterval = retryInterval
         self.capacity = capacity
-        if let storeURL, let data = try? Data(contentsOf: storeURL), data.count <= 4 * 1_048_576,
-           let store = try? JSONDecoder().decode(Store.self, from: data), store.version == 1 {
-            for record in store.records.suffix(capacity) where MovieLibraryContract.isDigest(record.id) {
-                records[record.id] = record
-            }
-        }
     }
 
+    /// The cache file under Application Support. Naming it touches no disk; the directory is
+    /// created by the first background write.
     static func defaultStoreURL(fileManager: FileManager = .default) -> URL? {
-        guard let support = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        else { return nil }
+        guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         return support
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.shinycomputers.bd-to-avp", isDirectory: true)
             .appendingPathComponent("live-titles.v1.json")
     }
 
-    func stop() {
+    static let maximumStoreBytes = 4 * 1_048_576
+
+    /// Reads the cache once, in the background and within the file-access limit. A file that is
+    /// missing, unreadable, too large, or slow is ignored; titles are then inspected again.
+    private func loadStoreIfNeeded() async {
+        if let loadTask { return await loadTask.value }
+        let storeURL = storeURL
+        let capacity = capacity
+        let task = Task<Void, Never> {
+            guard let storeURL else { return }
+            let loaded = await BoundedFileAccess.run { Self.readStore(at: storeURL, capacity: capacity) } ?? []
+            for record in loaded where records[record.id] == nil { records[record.id] = record }
+        }
+        loadTask = task
+        await task.value
+    }
+
+    private nonisolated static func readStore(at url: URL, capacity: Int) -> [Record] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        // Bound the size before reading anything into memory.
+        guard let size = try? handle.seekToEnd(), size <= UInt64(maximumStoreBytes) else { return [] }
+        try? handle.seek(toOffset: 0)
+        guard let data = try? handle.read(upToCount: maximumStoreBytes),
+              let store = try? JSONDecoder().decode(Store.self, from: data), store.version == 1
+        else { return [] }
+        return store.records.suffix(capacity).filter { MovieLibraryContract.isDigest($0.id) }
+    }
+
+    /// Stops inspecting and returns once a running inspection's worker has exited and the cache
+    /// has been written.
+    func stop() async {
         stopped = true
         queue.removeAll()
+        let worker = worker
         worker?.cancel()
-        worker = nil
+        await worker?.value
+        self.worker = nil
         resumeIdleWaiters()
+        await persistTask?.value
     }
 
     /// The catalog rows for the listed ISOs. Queues an inspection for each uncached title.
-    func titles(for candidates: [LiveCatalogCandidate]) -> [SharedLiveTitle] {
-        candidates.map { candidate in
+    func titles(for candidates: [LiveCatalogCandidate]) async -> [SharedLiveTitle] {
+        await loadStoreIfNeeded()
+        return candidates.map { candidate in
             if let record = records[candidate.id], record.revision == candidate.revision {
                 return SharedLiveTitle(
                     id: candidate.id, rootID: candidate.rootID, fileName: candidate.fileName, revision: candidate.revision,
@@ -177,7 +209,8 @@ actor LiveTitleIndex {
     }
 
     /// The finished inspection for exactly this revision, if any.
-    func record(id: String, revision: String) -> Record? {
+    func record(id: String, revision: String) async -> Record? {
+        await loadStoreIfNeeded()
         guard let record = records[id], record.revision == revision else { return nil }
         return record
     }
@@ -217,6 +250,8 @@ actor LiveTitleIndex {
         inspectionCount += 1
         do {
             let lease = try await authorizer.authorize(candidate, revision: candidate.revision)
+            // Sharing may have stopped while the open was waiting; never start a worker after that.
+            guard !stopped, !Task.isCancelled else { return }
             let inspection = try await inspector.inspect(lease)
             guard !stopped else { return }
             failures[candidate.id] = nil
@@ -245,8 +280,15 @@ actor LiveTitleIndex {
         guard let storeURL else { return }
         let ordered = records.values.sorted { $0.checkedAt < $1.checkedAt }
         guard let data = try? JSONEncoder().encode(Store(version: 1, records: ordered)) else { return }
-        try? FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: storeURL, options: .atomic)
+        // Writes run in order, off this actor, so catalog and start queries never wait on disk.
+        let previous = persistTask
+        persistTask = Task {
+            await previous?.value
+            _ = await BoundedFileAccess.run {
+                try? FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: storeURL, options: .atomic)
+            }
+        }
     }
 
     private func resumeIdleWaiters() {

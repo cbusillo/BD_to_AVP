@@ -907,3 +907,119 @@ final class MovieLibrarySourceAccessTests: XCTestCase {
         await catalog.stop()
     }
 }
+
+/// An inspection whose worker keeps running after a cancel until the test lets it exit.
+private actor GatedLiveTitleInspector: LiveTitleInspecting {
+    private(set) var started = 0
+    private(set) var exited = false
+    private(set) var sawCancel = false
+    private var exitGate: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func inspect(_ lease: LiveSourceLease) async throws -> LiveTitleInspection {
+        started += 1
+        await withTaskCancellationHandler {
+            await waitForExit()
+        } onCancel: {
+            Task { await self.noteCancel() }
+        }
+        exited = true
+        throw CancellationError()
+    }
+
+    func releaseExit() {
+        released = true
+        exitGate?.resume()
+        exitGate = nil
+    }
+
+    private func noteCancel() { sawCancel = true }
+
+    private func waitForExit() async {
+        guard !released else { return }
+        await withCheckedContinuation { exitGate = $0 }
+    }
+}
+
+final class LiveTitleIndexLifecycleTests: XCTestCase {
+    private func candidates(in fixture: MovieTestFixture) async throws -> (MovieCatalog, [LiveCatalogCandidate]) {
+        try Data(repeating: 1, count: 256).write(to: fixture.root.appendingPathComponent("Disc.iso"))
+        let catalog = try fixture.catalog()
+        return (catalog, try await catalog.listing().liveCandidates)
+    }
+
+    func testStopWaitsForARunningInspectionsWorkerToExit() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let (catalog, listed) = try await candidates(in: fixture)
+        let inspector = GatedLiveTitleInspector()
+        let index = LiveTitleIndex(storeURL: nil, inspector: inspector)
+        _ = await index.titles(for: listed)
+        let deadline = Date().addingTimeInterval(5)
+        while await inspector.started == 0, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+
+        let stopped = LockedBox()
+        let stopping = Task {
+            await index.stop()
+            stopped.set()
+        }
+        while await !inspector.sawCancel, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(stopped.value, "stop returns only after the worker exits")
+        await inspector.releaseExit()
+        await stopping.value
+        let exited = await inspector.exited
+        XCTAssertTrue(exited)
+        await catalog.stop()
+    }
+
+    func testStopDuringAuthorizationNeverStartsTheWorker() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let (catalog, listed) = try await candidates(in: fixture)
+        var authorizer = LiveSourceAuthorizer(deadline: 5)
+        authorizer.open = { root, components in
+            Thread.sleep(forTimeInterval: 0.3)
+            return root.openFileReportingErrno(components)
+        }
+        let inspector = FakeLiveTitleInspector()
+        let index = LiveTitleIndex(storeURL: nil, authorizer: authorizer, inspector: inspector)
+        _ = await index.titles(for: listed)
+        try await Task.sleep(for: .milliseconds(50))
+        await index.stop()
+        let calls = await inspector.calls
+        XCTAssertEqual(calls, 0)
+        await catalog.stop()
+    }
+
+    func testTheCacheIsWrittenAndReadInTheBackgroundAndAnOversizedFileIsIgnored() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let (catalog, listed) = try await candidates(in: fixture)
+        let store = fixture.directory.appendingPathComponent("support/live-titles.v1.json")
+
+        let first = LiveTitleIndex(storeURL: store, inspector: FakeLiveTitleInspector())
+        _ = await first.titles(for: listed)
+        await first.waitUntilIdle()
+        await first.stop()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.path), "stop waits for the cache write")
+
+        let secondInspector = FakeLiveTitleInspector()
+        let second = LiveTitleIndex(storeURL: store, inspector: secondInspector)
+        let cached = await second.titles(for: listed)
+        XCTAssertEqual(cached.map(\.state), [.eligible])
+        let calls = await secondInspector.calls
+        XCTAssertEqual(calls, 0)
+        await second.stop()
+
+        // The same valid cache, padded past the limit: only the size bound refuses it.
+        var padded = try Data(contentsOf: store)
+        padded.append(Data(repeating: 0x20, count: LiveTitleIndex.maximumStoreBytes))
+        try padded.write(to: store)
+        let oversized = LiveTitleIndex(storeURL: store, inspector: FakeLiveTitleInspector())
+        let fresh = await oversized.titles(for: listed)
+        XCTAssertEqual(fresh.map(\.state), [.checking])
+        await oversized.stop()
+        await catalog.stop()
+    }
+}

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import XCTest
 @testable import BDToAVPPlayer
@@ -52,6 +53,62 @@ final class MovieLibraryModelTests: XCTestCase {
         XCTAssertEqual(result, .done(.streamCancel))
         let stopped = await mac.stoppedStreams[context.streamID]
         XCTAssertEqual(stopped, "viewerStopped")
+    }
+
+    func testARuntimeFailureOfInstalledPlaybackStopsTheStreamWithItsDerivedCancel() async throws {
+        let (model, mac, _) = try await makeModel()
+        attach(model, mac)
+        let session = MVHEVCPlayerSession()
+        model.startLive(makeLiveTitle()) { configuration, context in
+            guard let source = try? RelayRemotePlaybackSource(
+                session: configuration.session, serverBaseURL: configuration.serverBaseURL
+            ) else { return .failed(.relayPreparationFailed("source")) }
+            session.installRelayPlaybackResources(
+                source: source,
+                transport: configuration.transport,
+                item: AVPlayerItem(url: URL(fileURLWithPath: "/dev/null")),
+                mediaItem: MediaItem(
+                    id: "relay:\(context.streamID.uuidString.lowercased())", title: context.title,
+                    fileName: "live.m3u8", format: .mvHEVC
+                ),
+                observeItemStatus: false,
+                startRefreshLoop: false,
+                live: context
+            )
+            return .installed
+        }
+        await waitUntil { model.livePlayback != nil }
+        let streamID = try XCTUnwrap(model.livePlayback?.streamID)
+        let runningBefore = await mac.isStreamRunning
+        XCTAssertTrue(runningBefore)
+
+        await mac.failStream()
+        await session.refreshRelayWindowNow()
+
+        XCTAssertEqual(session.state, .failed)
+        XCTAssertNil(model.livePlayback, "the player's failure hands the stream back for cleanup")
+        await waitUntil { await mac.stoppedStreams[streamID] == "viewerStopped" }
+        let paths = await mac.relayPaths
+        XCTAssertTrue(paths.contains(RelayWireContract.cancelPath), "stopped with the stream's own derived cancel")
+        let startIDCancels = await mac.cancelCalls
+        XCTAssertTrue(startIDCancels.isEmpty)
+    }
+
+    func testRevocationDuringStartupShowsThePairingMessageAtOnce() async throws {
+        let (model, mac, clock) = try await makeModel()
+        await mac.set(statusStates: [.starting])
+        attach(model, mac)
+        await mac.revokeSession()
+        let started = clock.now()
+
+        model.startLive(makeLiveTitle()) { _, _ in .installed }
+        await waitUntil { model.errorMessage != nil }
+
+        XCTAssertEqual(model.errorMessage, LiveStartFailure.needsPairing.message)
+        XCTAssertLessThan(clock.now().timeIntervalSince(started), 5, "no wait for the two-minute timeout")
+        let statusCalls = await mac.statusCalls
+        XCTAssertEqual(statusCalls, 1)
+        XCTAssertNil(model.livePlayback)
     }
 
     func testFailedAndSupersededPreparationStopTheStream() async throws {

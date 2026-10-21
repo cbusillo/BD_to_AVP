@@ -24,6 +24,9 @@ final class LiveSourceHandoffTests: XCTestCase {
         defer { close(descriptor) }
         let handoff = try LiveSourceHandoff()
         XCTAssertLessThan(handoff.socketPath.utf8.count, 104)
+        let marker = URL(fileURLWithPath: handoff.socketPath).deletingLastPathComponent()
+            .appendingPathComponent(LiveLeftoverOwner.handoffMarkerName)
+        XCTAssertEqual(LiveLeftoverOwner.read(marker), getpid(), "the socket directory is marked as this instance's")
         XCTAssertEqual(handoff.token.count, 64)
         let ownPID = getpid()
         let serving = Task { try await handoff.serve(descriptor: descriptor, expectedPeer: { ownPID }, deadline: 5) }
