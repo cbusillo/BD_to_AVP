@@ -19,7 +19,7 @@ import time
 from types import TracebackType
 
 from bd_to_avp.worker.protocol import DescriptorHandoff, JobSource, LiveSourceIdentity
-from bd_to_avp.worker.source_service import SourceServiceError
+from bd_to_avp.worker.source_errors import SourceServiceError
 
 
 HANDOFF_DEADLINE_SECONDS = 10.0

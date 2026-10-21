@@ -154,7 +154,7 @@ class ReceiveSourceTests(SourceHandoffTestCase):
         with held:
             held.verify()
             self.assertEqual(os.fstat(held.descriptor).st_ino, self.source.stat().st_ino)
-            self.assertTrue(os.get_inheritable(held.descriptor) is False)
+            self.assertIs(os.get_inheritable(held.descriptor), False)
             self.assertEqual(held.device_path, f"/dev/fd/{held.descriptor}")
 
     def test_wrong_token_gets_nothing(self) -> None:
@@ -381,7 +381,7 @@ class HandoffOperationTests(SourceHandoffTestCase):
         self.assertTrue(Path(completed["payload"]["live_hls_result"]["playlist_path"]).is_file())
         self.assert_only_source_reads_inherit({"inspect", "stream-service"})
         records = {(record[0], record[1]) for record in self.descriptor_records()}
-        self.assertTrue({("edge264_test", "-"), ("ffmpeg", "-"), ("mv-hevc-encoder", "-")} <= records)
+        self.assertLessEqual({("edge264_test", "-"), ("ffmpeg", "-"), ("mv-hevc-encoder", "-")}, records)
         assert_closed(self, self.received)
 
     def test_live_title_inspection_completes_through_the_handoff(self) -> None:

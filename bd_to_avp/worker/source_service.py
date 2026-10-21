@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Mapping, Protocol, cast
+from typing import BinaryIO, Mapping, Protocol, cast
 
 from bd_to_avp.modules.config import resolve_tool_path
 from bd_to_avp.process_runner import (
@@ -28,9 +28,8 @@ from bd_to_avp.process_runner import (
 )
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import JobSpec, LiveSourceOptions, WorkerActivityReporter
-
-if TYPE_CHECKING:
-    from bd_to_avp.worker.source_handoff import HeldSource
+from bd_to_avp.worker.source_errors import SourceServiceError
+from bd_to_avp.worker.source_handoff import SOURCE_CHANGED, SOURCE_CHANGED_MESSAGE, HeldSource, identity_matches
 
 
 SERVICE_FRAME_MAGIC = b"SSFS"
@@ -44,14 +43,6 @@ SOURCE_FRAME_TIMEOUT_SECONDS = 120
 SOURCE_READ_POLL_SECONDS = 0.1
 TIMESTAMP_MODULUS = 1 << 33
 TIMESTAMP_HALF_RANGE = TIMESTAMP_MODULUS // 2
-
-
-class SourceServiceError(Exception):
-    def __init__(self, code: str, message: str, details: str | None = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.details = details
 
 
 class ServiceRecordKind(IntEnum):
@@ -554,8 +545,6 @@ class SSIFProbeRunner:
         touched. Otherwise, the path must not be a symbolic link, and the file opened without
         following links must match the host's identity. Without an identity this is a no-op.
         """
-        from bd_to_avp.worker.source_handoff import SOURCE_CHANGED, SOURCE_CHANGED_MESSAGE, identity_matches
-
         if self.held_source is not None:
             self.held_source.verify()
             return
