@@ -5,7 +5,18 @@
   "operation": "start_live_hls",
   "source": {
     "kind": "disc_image",
-    "path": "/Volumes/Movies/Rainforest.iso"
+    "path": "/Volumes/Movies/Rainforest.iso",
+    "identity": {
+      "device": 16777234,
+      "inode": 123456789,
+      "size_bytes": 41234567168,
+      "modification_seconds": 1760000000,
+      "modification_nanoseconds": 123456789
+    },
+    "descriptor_handoff": {
+      "socket_path": "/tmp/bdtoavp-Ab12Cd/s",
+      "token": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+    }
   },
   "destination": {
     "path": "/tmp/LiveHLS/66666666-6666-4666-8666-666666666666"
@@ -15,13 +26,6 @@
     "audio_pid": 4353,
     "retention_seconds": 120,
     "retention_max_bytes": 268435456,
-    "viewer_lead_seconds": 30,
-    "source_identity": {
-      "device": 16777234,
-      "inode": 123456789,
-      "size_bytes": 41234567168,
-      "modification_seconds": 1760000000,
-      "modification_nanoseconds": 123456789
-    }
+    "viewer_lead_seconds": 30
   }
 }

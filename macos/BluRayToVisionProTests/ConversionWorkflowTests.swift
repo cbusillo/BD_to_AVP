@@ -2030,15 +2030,27 @@ final class ConversionWorkflowTests: XCTestCase {
 
     func testLiveTitleInspectionJobSpecMatchesSharedWorkerFixture() throws {
         let spec = WorkerJobSpec(
-            liveTitleInspection: ConversionSource(kind: .discImage, url: URL(fileURLWithPath: "/tmp/movie.iso")),
+            liveTitleInspectionSourcePath: "/tmp/movie.iso",
+            identity: LiveSourceIdentity(
+                device: 16_777_234,
+                inode: 123_456_789,
+                sizeBytes: 41_234_567_168,
+                modificationSeconds: 1_760_000_000,
+                modificationNanoseconds: 123_456_789
+            ),
+            descriptorHandoff: .init(
+                socketPath: "/tmp/bdtoavp-Ab12Cd/s",
+                token: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+            ),
             jobID: UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
         )
-        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
-        let fixture = try JSONSerialization.jsonObject(
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? [String: Any]
+        var fixture = try XCTUnwrap(JSONSerialization.jsonObject(
             with: currentProtocolFixtureData("native_worker_inspect_live_title")
-        ) as? NSDictionary
+        ) as? [String: Any])
+        fixture["job_id"] = (fixture["job_id"] as? String)?.uppercased()
 
-        XCTAssertEqual(encoded, fixture)
+        XCTAssertEqual(encoded as NSDictionary?, fixture as NSDictionary)
     }
 
     func testPhysicalDiscJobSpecMatchesSharedWorkerFixture() throws {

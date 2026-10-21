@@ -11,6 +11,11 @@ enum RelayTransportError: Error, Equatable {
     case sessionExpired
     case unpaired
     case unexpectedStatusCode(Int)
+    /// An unsigned, empty 401: the Mac no longer knows the parent session. Pair again.
+    case sessionRevoked
+    /// A signed 410 or 503 carrying `RelayLiveStreamEnded`: the live stream stopped or failed
+    /// on the Mac while the session itself is still valid. Never a reason to pair again.
+    case streamEnded(code: String, message: String?)
 }
 
 struct URLSessionRelayTransport: RelayTransport {

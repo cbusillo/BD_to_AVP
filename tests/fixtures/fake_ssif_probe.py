@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import os
 import struct
 import sys
 import time
@@ -95,7 +96,43 @@ def titles_document(source_path):
     }
 
 
+def note_descriptors(arguments):
+    """Records, under FAKE_TOOLS_FD_LOG, the descriptors above stdio this process inherited."""
+    log = os.environ.get("FAKE_TOOLS_FD_LOG")
+    if not log:
+        return
+    inherited = []
+    for descriptor in range(3, 256):
+        try:
+            os.fstat(descriptor)
+        except OSError:
+            continue
+        inherited.append(str(descriptor))
+    with open(log, "a", encoding="utf-8") as handle:
+        handle.write(
+            f"ssif_probe {arguments[0] if arguments else '-'} {arguments[1] if len(arguments) > 1 else '-'}"
+            + " "
+            + (",".join(inherited) or "none")
+            + "\n"
+        )
+
+
+def resolve_source(arguments):
+    """A handed-over source arrives as /dev/fd/N: read its contents as the behavior name.
+
+    Opening /dev/fd/N fails unless the descriptor was inherited, which is what the worker's
+    pass_fds must provide.
+    """
+    if len(arguments) < 2 or not arguments[1].startswith("/dev/fd/"):
+        return arguments
+    with open(arguments[1], "rb") as handle:
+        label = handle.read(256).decode("utf-8", errors="replace").strip()
+    return [arguments[0], label or "handoff.iso", *arguments[2:]]
+
+
 arguments = sys.argv[1:]
+note_descriptors(arguments)
+arguments = resolve_source(arguments)
 if arguments == ["--version"]:
     sys.stdout.write("ssif_probe contract 2\n")
 elif arguments and arguments[0] == "titles" and "oldhelper" not in arguments[1]:

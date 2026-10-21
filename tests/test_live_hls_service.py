@@ -41,13 +41,18 @@ FIXTURES = Path(__file__).parent / "fixtures"
 JOB_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 
-def live_hls_request(source: Path, destination: Path, **options: object) -> dict[str, object]:
+def live_hls_request(
+    source: Path, destination: Path, *, source_identity: object = None, **options: object
+) -> dict[str, object]:
+    source_object: dict[str, object] = {"kind": "disc_image", "path": str(source)}
+    if source_identity is not None:
+        source_object["identity"] = source_identity
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": "job.start",
         "job_id": JOB_ID,
         "operation": "start_live_hls",
-        "source": {"kind": "disc_image", "path": str(source)},
+        "source": source_object,
         "destination": {"path": str(destination)},
         "live_hls": {
             "playlist": 1005,
@@ -320,12 +325,17 @@ class LiveHLSProtocolTests(unittest.TestCase):
 
         job = JobSpec.from_json_line(fixture.read_text(encoding="utf-8"))
 
-        assert job.live_hls is not None and job.live_hls.source_identity is not None
+        assert job.live_hls is not None and job.source.identity is not None
+        assert job.source.descriptor_handoff is not None
         self.assertEqual(job.live_hls.viewer_lead_seconds, raw["live_hls"]["viewer_lead_seconds"])
-        self.assertEqual(job.live_hls.source_identity.inode, raw["live_hls"]["source_identity"]["inode"])
+        self.assertEqual(job.source.identity.inode, raw["source"]["identity"]["inode"])
         self.assertEqual(
-            job.live_hls.source_identity.modification_nanoseconds,
-            raw["live_hls"]["source_identity"]["modification_nanoseconds"],
+            job.source.identity.modification_nanoseconds,
+            raw["source"]["identity"]["modification_nanoseconds"],
+        )
+        self.assertEqual(job.source.descriptor_handoff.token, raw["source"]["descriptor_handoff"]["token"])
+        self.assertEqual(
+            str(job.source.descriptor_handoff.socket_path), raw["source"]["descriptor_handoff"]["socket_path"]
         )
 
     def test_rejects_invalid_live_hls_requests(self) -> None:
@@ -364,6 +374,16 @@ class LiveHLSProtocolTests(unittest.TestCase):
         physical = live_hls_request(Path("/tmp/a.iso"), Path("/tmp/live"))
         physical["source"] = {"kind": "physical_disc", "path": "/dev/disk9"}
         cases["physical disc"] = physical
+        removed = live_hls_request(Path("/tmp/a.iso"), Path("/tmp/live"))
+        assert isinstance(removed["live_hls"], dict)
+        removed["live_hls"]["source_identity"] = {
+            "device": 1,
+            "inode": 2,
+            "size_bytes": 3,
+            "modification_seconds": 4,
+            "modification_nanoseconds": 5,
+        }
+        cases["identity under live_hls"] = removed
         for label, request in cases.items():
             with self.subTest(label), self.assertRaises(WorkerProtocolError):
                 JobSpec.from_json_line(json.dumps(request))

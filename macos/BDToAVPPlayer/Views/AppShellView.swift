@@ -12,6 +12,7 @@ struct AppShellView: View {
     @StateObject private var movieLibrary = MovieLibraryModel()
     @State private var showsMacMovies = true
     @State private var sharedPlayback: SharedMoviePlayback?
+    @State private var liveTitle: SharedLiveTitle?
     @State private var isPlayerLocatorPresented = false
     #if BD_TO_AVP_QUALIFICATION
     @State private var hasStartedRelayQualification = false
@@ -75,7 +76,7 @@ struct AppShellView: View {
                             Divider()
                         }
                         if showsMacMovies {
-                            MovieLibraryView(model: movieLibrary, play: startSharedPlayback)
+                            MovieLibraryView(model: movieLibrary, play: startSharedPlayback, playLive: startLivePlayback)
                         } else {
                             LibraryView(model: model)
                         }
@@ -137,6 +138,7 @@ struct AppShellView: View {
         }
                 .onDisappear {
             preparationTask?.cancel()
+            endLivePlayback()
         }
                 .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
@@ -156,12 +158,14 @@ struct AppShellView: View {
                 await RelayQualificationDriver.runIfRequested(
                     coordinator: relayCoordinator, player: playerSession
                 )
+                await RelayQualificationDriver.runLiveIfRequested(library: movieLibrary, player: playerSession)
             }
             #endif
         }
     }
 
     private func prepareForPlayback(_ item: MediaItem) {
+        endLivePlayback()
         sharedPlayback = nil
         preparationTask?.cancel()
         preparationTask = Task {
@@ -174,6 +178,7 @@ struct AppShellView: View {
     }
 
     private func startSharedPlayback(_ selection: SharedMoviePlayback) {
+        endLivePlayback()
         sharedPlayback = selection
         preparationTask?.cancel()
         preparationTask = Task {
@@ -183,7 +188,29 @@ struct AppShellView: View {
         }
     }
 
+    /// Live titles start on the Mac first; the model installs the stream in the player once it
+    /// is live. There is no resume for live titles.
+    private func startLivePlayback(_ title: SharedLiveTitle) {
+        preparationTask?.cancel()
+        preparationTask = nil
+        sharedPlayback = nil
+        liveTitle = title
+        movieLibrary.startLive(title) { configuration, context in
+            await playerSession.prepareRelayPlayback(configuration, live: context)
+        }
+    }
+
+    private func endLivePlayback() {
+        guard liveTitle != nil else { return }
+        liveTitle = nil
+        movieLibrary.finishLivePlayback()
+    }
+
     private func retryPlayback() {
+        if let liveTitle {
+            startLivePlayback(liveTitle)
+            return
+        }
         if let sharedPlayback {
             startSharedPlayback(sharedPlayback)
             return
@@ -203,6 +230,7 @@ struct AppShellView: View {
         preparationTask = nil
         model.clearPlaybackRequest()
         sharedPlayback = nil
+        endLivePlayback()
     }
 
     private func startRelayPlayback() {

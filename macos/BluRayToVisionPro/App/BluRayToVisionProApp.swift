@@ -69,6 +69,7 @@ struct BluRayToVisionProApp: App {
         let settings = AppSettings()
         let relayHostController = RelayHostSessionController()
         let movieSharingController = MovieSharingController()
+        movieSharingController.isConversionActive = { [weak viewModel] in viewModel?.hasActiveWorker ?? false }
         let queueAutomationController = QueueAutomationController(
             store: QueueAutomationStore(),
             viewModel: viewModel,

@@ -49,6 +49,8 @@ class LiveTitleInspector(SSIFProbeRunner):
     def run(self) -> dict[str, object]:
         self._validate_tool()
         self.activity.stage_started("inspect_live_title", "Checking live playback eligibility")
+        if self.held_source is not None:
+            self.held_source.verify()
         listing = self._titles()
         assessments = [self._assess(title) for title in listing.titles]
         admitted = [assessment for assessment in assessments if assessment.reason is None]
@@ -70,7 +72,9 @@ class LiveTitleInspector(SSIFProbeRunner):
         return self._result(reported)
 
     def _titles(self) -> TitleListing:
-        result = self._communicate([str(self.probe_path), "titles", str(self.job.source.path)])
+        result = self._communicate(
+            [str(self.probe_path), "titles", self._source_argument()], pass_fds=self._source_pass_fds()
+        )
         if result.returncode == HELPER_USAGE_EXIT_CODE:
             raise SourceServiceError(
                 "ssif_probe_incompatible",

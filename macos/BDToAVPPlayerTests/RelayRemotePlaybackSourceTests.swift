@@ -104,4 +104,56 @@ final class RelayRemotePlaybackSourceTests: XCTestCase {
         XCTAssertEqual(request.url?.path, RelayWireContract.playlistSnapshotPath)
         XCTAssertNotNil(request.value(forHTTPHeaderField: RelayWireContract.authenticationHeader))
     }
+
+    // MARK: Live stream end and session revocation
+
+    private func refreshError(
+        status: Int, body: Data, signed: Bool
+    ) async throws -> Error? {
+        let fixedNow = now
+        let sessions = try await makePairedSessions(now: fixedNow)
+        let transport = FakeRelayTransport()
+        await transport.setHandler { request in
+            guard signed else {
+                return (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])!)
+            }
+            return (body, try makeAuthenticatedHTTPResponse(request, body: body, serverSession: sessions.server, statusCode: status))
+        }
+        var source = try RelayRemotePlaybackSource(session: sessions.client, serverBaseURL: baseURL)
+        do {
+            try await source.refreshRetainedWindow(transport: transport, clock: { fixedNow })
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    func testSignedStreamEndedBodyThrowsStreamEnded() async throws {
+        let ended = try JSONEncoder().encode(RelayLiveStreamEnded(error: .streamEnded, code: "idle", message: nil))
+        let error = try await refreshError(status: 410, body: ended, signed: true)
+        XCTAssertEqual(error as? RelayTransportError, .streamEnded(code: "idle", message: nil))
+
+        let failed = try JSONEncoder().encode(RelayLiveStreamEnded(error: .streamFailed, code: "live_start_timeout", message: "Too slow."))
+        let failure = try await refreshError(status: 503, body: failed, signed: true)
+        XCTAssertEqual(failure as? RelayTransportError, .streamEnded(code: "live_start_timeout", message: "Too slow."))
+    }
+
+    func testEmptySignedEndStatusesKeepTheirFixtureMapping() async throws {
+        let expired = try await refreshError(status: 410, body: Data(), signed: true)
+        XCTAssertEqual(expired as? RelayTransportError, .sessionExpired)
+        let unpaired = try await refreshError(status: 503, body: Data(), signed: true)
+        XCTAssertEqual(unpaired as? RelayTransportError, .unpaired)
+    }
+
+    func testUnsignedEmpty401IsSessionRevoked() async throws {
+        let error = try await refreshError(status: 401, body: Data(), signed: false)
+        XCTAssertEqual(error as? RelayTransportError, .sessionRevoked)
+    }
+
+    func testOtherUnsignedResponsesStayInvalid() async throws {
+        for (status, body) in [(200, Data("{}".utf8)), (503, Data()), (401, Data("x".utf8))] {
+            let error = try await refreshError(status: status, body: body, signed: false)
+            XCTAssertEqual(error as? RelaySessionError, .invalidResponse, "unsigned \(status)")
+        }
+    }
 }

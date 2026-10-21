@@ -162,6 +162,9 @@ final class RelayLoopbackHTTPServer: @unchecked Sendable {
             }
             return try Self.mediaResponse(data: data, contentType: contentType, range: request.header(named: "range"))
         } catch {
+            // Every upstream failure, including a signed live stream end or a revoked
+            // session, reaches AVPlayer as a bare 503. Playback termination is therefore
+            // decided by the session's verified snapshot refresh, never by AVPlayer errors.
             return .empty(statusCode: 503)
         }
     }

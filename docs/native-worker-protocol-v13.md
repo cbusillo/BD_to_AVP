@@ -45,6 +45,46 @@ Explicit media-pipeline stdin and explicit file inputs are preserved. In-memory
 StringIO provides the finite test equivalent; arbitrary blocking TextIO inputs
 are unsupported.
 
+## Live source identity and descriptor handoff
+
+`start_live_hls` and `inspect_live_title` accept two optional `source` fields;
+every other operation rejects them with `invalid_source`:
+
+```json
+{
+  "source": {
+    "kind": "disc_image",
+    "path": "/Volumes/media/Movies/Rainforest.iso",
+    "identity": {"device": 16777234, "inode": 123456789, "size_bytes": 41234567168,
+                 "modification_seconds": 1760000000, "modification_nanoseconds": 123456789},
+    "descriptor_handoff": {"socket_path": "/var/folders/xx/T/bdtoavp-Ab12Cd/s",
+                           "token": "64 lowercase hex characters"}
+  }
+}
+```
+
+- `identity` is what the Mac saw when it authorized the file: device (low 32
+  bits), inode, size, and modification time. It replaces the former
+  `live_hls.source_identity`, which is now an unknown key.
+- `descriptor_handoff` requires `identity` and a `disc_image` source. Its
+  `socket_path` is absolute and at most 103 bytes (`sun_path`).
+
+With a handoff, the worker never touches `path`: it is used for its `.iso`
+suffix and diagnostics only, with no `stat`, mounted-image lookup, or
+`resolve()`. The worker connects to `socket_path`, sends the 64 token bytes,
+and receives one data byte and one descriptor with `SCM_RIGHTS`, all within
+10 seconds; any failure is `live_source_handoff_failed`. It sets close-on-exec,
+and a descriptor that is not a regular file or does not match `identity` is
+closed and fails `live_source_changed`. One owner holds the descriptor for the
+job and closes it on rejection, cancellation, failure, and completion. Only the
+`ssif_probe` `inspect`, `titles`, and `stream-service` runs inherit it, as
+`/dev/fd/N`; `--version`, the decoder, FFmpeg, and the encoder do not.
+
+Without a handoff, `identity` is checked against a no-follow open of `path`,
+which must not be a symbolic link. The shared request shapes are
+`native_worker_start_live_hls_v13.json` and
+`native_worker_inspect_live_title_v13.json`.
+
 ## Keep Waiting command
 
 ```json

@@ -14,6 +14,8 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
         case fail(code: String, message: String)
         /// Publishes, then writes a manifest that violates the contract, then runs until cancelled.
         case invalidManifest
+        /// Never publishes, like a worker stuck opening its source, until cancelled.
+        case silent
     }
 
     private let lock = NSLock()
@@ -61,6 +63,10 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
         ))
         _ = try await emit(.workerReady)
         switch script {
+        case .silent:
+            await waitUntilCancelled()
+            let cancelledEvent = try await emit(.jobCancelled)
+            return WorkerRunResult(terminalEvent: cancelledEvent, exitStatus: 0, diagnostics: "")
         case let .fail(code, message):
             try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
             try Data("partial".utf8).write(to: workspace.appendingPathComponent("init.mp4"))
@@ -247,7 +253,7 @@ final class LiveRelayStreamTests: XCTestCase {
         XCTAssertEqual(job.operation, "start_live_hls")
         XCTAssertEqual(job.source.path, sourceURL.path)
         XCTAssertEqual(job.liveHLS?.viewerLeadSeconds, LiveRelayStreamConfiguration().viewerLeadSeconds)
-        XCTAssertEqual(job.liveHLS?.sourceIdentity?.inode, try sourceRequest().source.identity.inode)
+        XCTAssertEqual(job.source.identity?.inode, try sourceRequest().source.identity.inode)
         await stream.stop(.viewerStopped)
     }
 
@@ -355,9 +361,14 @@ final class LiveRelayStreamTests: XCTestCase {
         XCTAssertEqual(sleep.activeCount, 0)
         let response = await stream.relayResponse(for: get(RelayWireContract.playlistSnapshotPath))
         XCTAssertEqual(response.statusCode, 410)
-        XCTAssertEqual(
-            try JSONDecoder().decode(RelayLiveStreamEnded.self, from: response.body),
-            RelayLiveStreamEnded(error: .streamEnded, code: LiveRelayStopReason.appQuit.rawValue, message: nil)
+        // The two stops run concurrently, so either may record the reason; the body must
+        // still be a signed stream end carrying one of them.
+        let ended = try JSONDecoder().decode(RelayLiveStreamEnded.self, from: response.body)
+        XCTAssertEqual(ended.error, .streamEnded)
+        XCTAssertNil(ended.message)
+        XCTAssertTrue(
+            [LiveRelayStopReason.appQuit.rawValue, LiveRelayStopReason.sessionEnded.rawValue].contains(ended.code),
+            "unexpected stop reason \(String(describing: ended.code))"
         )
     }
 
@@ -383,6 +394,24 @@ final class LiveRelayStreamTests: XCTestCase {
         let playlist = await stream.relayResponse(for: get(RelayWireContract.playlistPath))
         XCTAssertTrue(String(decoding: playlist.body, as: UTF8.self).hasSuffix("#EXT-X-ENDLIST\n"))
         await stream.stop(.viewerStopped)
+    }
+
+    func testAStreamThatNeverGetsReadyFailsWithTheMacsReasonAndStopsItsWorker() async throws {
+        var configuration = fastConfiguration()
+        configuration.readyTimeout = 0.3
+        let worker = FakeLiveHLSWorker(script: .silent)
+        let stream = try await makeStream(worker, configuration: configuration)
+        let early = await stream.state()
+        XCTAssertEqual(early, .starting)
+
+        let state = await waitForState(stream) { if case .failed = $0 { return true }; return false }
+        XCTAssertEqual(state, .failed(code: "live_start_timeout", message: "The Mac could not start the live stream in time."))
+        let response = await stream.relayResponse(for: get(RelayWireContract.playlistPath))
+        XCTAssertEqual(response.statusCode, 503)
+        XCTAssertEqual(try JSONDecoder().decode(RelayLiveStreamEnded.self, from: response.body).code, "live_start_timeout")
+        await stream.stop(.cancelled)
+        XCTAssertTrue(worker.isCancelled)
+        XCTAssertTrue(worker.hasExited)
     }
 
     func testUnrenewedLeaseStopsAsIdle() async throws {
@@ -499,9 +528,57 @@ final class LiveRelayStreamTests: XCTestCase {
         XCTAssertEqual(worker.jobs.first?.destination?.path, workspace.path)
         let permissions = try FileManager.default.attributesOfItem(atPath: workspaceRoot.path)[.posixPermissions] as? Int
         XCTAssertEqual(permissions, 0o700)
+        let marker = LiveLeftoverOwner.marker(forWorkspace: workspace)
+        XCTAssertEqual(LiveLeftoverOwner.read(marker), getpid(), "the workspace is marked as this instance's")
         await XCTAssertThrowsAsyncError(try await starter.start(try sourceRequest(), id: id))
         await stream.stop(.viewerStopped)
         XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    func testTheLaunchSweepRemovesOnlyWhatNoRunningInstanceOwns() throws {
+        let root = root.appendingPathComponent("sweep", isDirectory: true)
+        let workspaces = root.appendingPathComponent("LiveHLS", isDirectory: true)
+        let temporary = root.appendingPathComponent("tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspaces, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let running: pid_t = 4_242
+        let exited: pid_t = 4_343
+        func workspace(_ name: String, owner: pid_t?) throws -> URL {
+            let url = workspaces.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            if let owner { LiveLeftoverOwner.write(LiveLeftoverOwner.marker(forWorkspace: url), pid: owner) }
+            return url
+        }
+        func handoff(_ name: String, owner: pid_t?, age: TimeInterval) throws -> URL {
+            let url = temporary.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            if let owner { LiveLeftoverOwner.write(url.appendingPathComponent(LiveLeftoverOwner.handoffMarkerName), pid: owner) }
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: url.path)
+            return url
+        }
+        let active = try workspace("active", owner: running)
+        let crashed = try workspace("crashed", owner: exited)
+        let unmarked = try workspace("unmarked", owner: nil)
+        let activeHandoff = try handoff("bdtoavp-Active", owner: running, age: 600)
+        let crashedHandoff = try handoff("bdtoavp-Crashd", owner: exited, age: 600)
+        let newHandoff = try handoff("bdtoavp-NewOne", owner: nil, age: 1)
+        let oldHandoff = try handoff("bdtoavp-OldOne", owner: nil, age: 600)
+        let unrelated = try handoff("something-else", owner: nil, age: 600)
+
+        LiveRelayStreamStarter.sweepLeftovers(workspaceRoot: workspaces, temporaryDirectory: temporary, isRunning: { $0 == running })
+
+        let exists = { (url: URL) in FileManager.default.fileExists(atPath: url.path) }
+        XCTAssertTrue(exists(active), "a running instance's workspace stays")
+        XCTAssertTrue(exists(LiveLeftoverOwner.marker(forWorkspace: active)))
+        XCTAssertFalse(exists(crashed))
+        XCTAssertFalse(exists(LiveLeftoverOwner.marker(forWorkspace: crashed)))
+        XCTAssertFalse(exists(unmarked))
+        XCTAssertTrue(exists(activeHandoff), "a running instance's handoff socket stays")
+        XCTAssertFalse(exists(crashedHandoff))
+        XCTAssertTrue(exists(newHandoff), "an unmarked directory that may be mid-creation stays")
+        XCTAssertFalse(exists(oldHandoff))
+        XCTAssertTrue(exists(unrelated))
     }
 
     func testLiveJobSpecAndEventsMatchSharedWorkerFixtures() throws {
@@ -514,6 +591,10 @@ final class LiveRelayStreamTests: XCTestCase {
                 sizeBytes: 41_234_567_168,
                 modificationSeconds: 1_760_000_000,
                 modificationNanoseconds: 123_456_789
+            ),
+            descriptorHandoff: .init(
+                socketPath: "/tmp/bdtoavp-Ab12Cd/s",
+                token: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
             ),
             workspaceURL: URL(fileURLWithPath: "/tmp/LiveHLS/66666666-6666-4666-8666-666666666666", isDirectory: true),
             playlist: 1_005,

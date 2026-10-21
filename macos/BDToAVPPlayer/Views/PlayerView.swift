@@ -437,6 +437,13 @@ private struct PlayerOrnamentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if let notice = session.liveNotice {
+                Label(notice, systemImage: "hourglass")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if let notice = session.relaySeekNotice {
                 Label(notice, systemImage: "clock.arrow.circlepath")
                     .font(.subheadline)

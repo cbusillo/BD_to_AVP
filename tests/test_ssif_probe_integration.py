@@ -247,6 +247,44 @@ class SsifProbeIntegrationTests(unittest.TestCase):
         self.assertEqual(status["pairs"], 116)
         self.assertEqual(status["audio_samples"], len(audio_dts))
 
+    def test_handed_over_descriptor_reads_exactly_what_the_path_reads(self) -> None:
+        """The worker passes the Mac's descriptor as /dev/fd/N (design 3.2a); libbluray must
+        read the same bytes through it as through the path, for every subcommand it uses."""
+        descriptor = os.open(self.source_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        self.addCleanup(os.close, descriptor)
+        handed = f"/dev/fd/{descriptor}"
+
+        def run(arguments: list[str]) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [str(self.helper_path), *arguments],
+                check=True,
+                capture_output=True,
+                timeout=120,
+                pass_fds=(descriptor,),
+            )
+
+        for label, by_path, by_descriptor in (
+            (
+                "inspect",
+                ["inspect", str(self.source_path), RAINFOREST_PLAYLIST],
+                ["inspect", handed, RAINFOREST_PLAYLIST],
+            ),
+            ("titles", ["titles", str(self.source_path)], ["titles", handed]),
+            (
+                "stream-service",
+                ["stream-service", str(self.source_path), RAINFOREST_PLAYLIST, str(0x1101), "116"],
+                ["stream-service", handed, RAINFOREST_PLAYLIST, str(0x1101), "116"],
+            ),
+        ):
+            with self.subTest(label):
+                expected = run(by_path)
+                received = run(by_descriptor)
+                self.assertGreater(len(expected.stdout), 0)
+                self.assertEqual(
+                    hashlib.sha256(received.stdout).hexdigest(), hashlib.sha256(expected.stdout).hexdigest()
+                )
+                self.assertEqual(received.stderr, expected.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

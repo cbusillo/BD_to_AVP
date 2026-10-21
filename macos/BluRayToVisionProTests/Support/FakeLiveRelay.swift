@@ -505,3 +505,133 @@ actor FakeLiveStartAdmission {
         }
     }
 }
+
+/// The admission surface the PR 1 contract tests drive. The reference model above and the
+/// production `LiveStartAdmission` (through `ProductionLiveStartAdmission`) both conform, so the
+/// same tests check both.
+protocol LiveStartAdmissionUnderTest: Actor {
+    var slot: LiveStartAdmissionSlot { get async }
+    var isWaitingOnDrain: Bool { get async }
+    var tombstoneCount: Int { get async }
+    var startRecordCount: Int { get async }
+    var sessionsWithState: Set<RelaySessionIdentifier> { get async }
+    func isEnded(_ parentSessionID: RelaySessionIdentifier) async -> Bool
+    func advanceClock(by interval: TimeInterval)
+    func start(_ key: LiveStartKey, signedAt: Date?, request: LiveStreamRequest) async -> LiveStartOutcome?
+    func cancel(
+        parentSessionID: RelaySessionIdentifier,
+        startID: UUID,
+        issuedAtUnixMilliseconds issuedAt: Int64,
+        signedAt: Date?
+    ) async -> LiveCancelOutcome?
+    func release(reason: LiveRelayStopReason) async
+    func endSession(_ parentSessionID: RelaySessionIdentifier, reason: LiveRelayStopReason) async
+}
+
+extension LiveStartAdmissionUnderTest {
+    func start(_ key: LiveStartKey, request: LiveStreamRequest) async -> LiveStartOutcome? {
+        await start(key, signedAt: nil, request: request)
+    }
+
+    func cancel(
+        parentSessionID: RelaySessionIdentifier,
+        startID: UUID,
+        issuedAtUnixMilliseconds issuedAt: Int64
+    ) async -> LiveCancelOutcome? {
+        await cancel(parentSessionID: parentSessionID, startID: startID, issuedAtUnixMilliseconds: issuedAt, signedAt: nil)
+    }
+}
+
+extension FakeLiveStartAdmission: LiveStartAdmissionUnderTest {}
+
+/// A clock tests move by hand.
+final class LiveTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+
+    init(_ start: Date = Date(timeIntervalSince1970: 1_700_000_000)) {
+        current = start
+    }
+
+    var now: Date { lock.withLock { current } }
+
+    func advance(by interval: TimeInterval) {
+        lock.withLock { current = current.addingTimeInterval(interval) }
+    }
+}
+
+/// The production admission behind the contract-test surface. Like the host, it refuses with
+/// nil any request that would fail the default freshness check before it reaches admission.
+actor ProductionLiveStartAdmission: LiveStartAdmissionUnderTest {
+    let admission: LiveStartAdmission
+    let clock: LiveTestClock
+    private let liveParentSessionIDs: Set<RelaySessionIdentifier>
+    private let policy = try! RelayRequestValidationPolicy()
+
+    init(
+        starter: any LiveRelayStreamStarting,
+        liveParentSessionIDs: Set<RelaySessionIdentifier>,
+        clock: LiveTestClock = LiveTestClock(),
+        watchInterval: Duration = .milliseconds(20)
+    ) {
+        self.clock = clock
+        self.liveParentSessionIDs = liveParentSessionIDs
+        admission = LiveStartAdmission(
+            starter: starter,
+            policy: try! RelayRequestValidationPolicy(),
+            now: { clock.now },
+            watchInterval: watchInterval
+        )
+    }
+
+    var slot: LiveStartAdmissionSlot { get async { await admission.slot } }
+    var isWaitingOnDrain: Bool { get async { await admission.isWaitingOnDrain } }
+    var tombstoneCount: Int { get async { await admission.tombstoneCount } }
+    var startRecordCount: Int { get async { await admission.startRecordCount } }
+    var sessionsWithState: Set<RelaySessionIdentifier> { get async { await admission.sessionsWithState } }
+
+    func isEnded(_ parentSessionID: RelaySessionIdentifier) async -> Bool {
+        await admission.isEnded(parentSessionID)
+    }
+
+    func advanceClock(by interval: TimeInterval) {
+        clock.advance(by: interval)
+    }
+
+    func start(_ key: LiveStartKey, signedAt: Date?, request: LiveStreamRequest) async -> LiveStartOutcome? {
+        guard let signed = verifiedTimestamp(signedAt) else { return nil }
+        return await admission.start(key, signedAt: signed, liveParentSessionIDs: liveParentSessionIDs) { request }?.outcome
+    }
+
+    func cancel(
+        parentSessionID: RelaySessionIdentifier,
+        startID: UUID,
+        issuedAtUnixMilliseconds issuedAt: Int64,
+        signedAt: Date?
+    ) async -> LiveCancelOutcome? {
+        guard let signed = verifiedTimestamp(signedAt) else { return nil }
+        return await admission.cancel(
+            parentSessionID: parentSessionID, startID: startID, issuedAtUnixMilliseconds: issuedAt, signedAt: signed
+        )
+    }
+
+    func release(reason: LiveRelayStopReason) async {
+        await admission.releaseAll(reason: reason)
+    }
+
+    func endSession(_ parentSessionID: RelaySessionIdentifier, reason: LiveRelayStopReason) async {
+        await admission.endSession(parentSessionID, reason: reason)
+    }
+
+    private func verifiedTimestamp(_ signedAt: Date?) -> Int64? {
+        let now = clock.now
+        guard let signed = RelayTime.unixMilliseconds(for: signedAt ?? now),
+              let current = RelayTime.unixMilliseconds(for: now),
+              signed <= current + policy.allowedFutureSkewMilliseconds,
+              signed >= current - policy.maximumAgeMilliseconds
+        else {
+            return nil
+        }
+        return signed
+    }
+}
