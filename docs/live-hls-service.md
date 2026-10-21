@@ -297,6 +297,78 @@ and no pipeline process. In that run the worker was started from a shell and
 connected to the relay over FIFOs, because the test app had not been granted
 access to the network volume holding the ISO; see the task evidence.
 
+## Mac Movies live titles
+
+Movie Sharing lists Blu-ray 3D ISOs from the approved folders as live titles and
+serves them through the same movie session, with no second pairing
+(`macos/BluRayToVisionPro/MovieSharing/`).
+
+- **Catalog.** The catalog stays version 1. `liveTitles` is added, and is
+  encoded only when it is non-empty; ISOs never appear in `movies`, so a
+  shipped player (0.1.0 (3)) and Mac (0.3.3) keep working. Each title carries
+  `liveVersion`, its digest `id` and `revision`, `state` (`checking`,
+  `eligible`, or `ineligible`), a `reason`, the duration, and up to 32 audio
+  tracks with a label and a default. A client skips a title whose `liveVersion`
+  it does not know.
+- **Eligibility.** The listing stats each ISO without opening it.
+  `LiveTitleIndex` caches each `(id, revision)` result from `inspect_live_title`
+  in `Application Support/<bundle>/live-titles.v1.json` (256 entries). An
+  uncached title shows `checking` while one serial background inspection runs.
+  A failed check shows its reason and retries after 10 minutes.
+- **Authorization.** A cached entry authorizes nothing. `LiveSourceAuthorizer`
+  runs before every inspection and every start. It reopens the ISO under the
+  approved root with the `O_NOFOLLOW` walk, confirms the root is still the
+  approved one, compares the revision, takes the canonical path with
+  `F_GETPATH`, and keeps the descriptor and the root's scoped access in the
+  lease for the whole job. The open runs off the host with a 10-second deadline.
+  `EPERM` or `EACCES` lists the title as ineligible with a permission message,
+  and a start for it is refused with that message. A timeout is
+  `source_unavailable`.
+- **Descriptor handoff.** The Mac app holds the folder's consent, and its
+  worker does not. `LiveSourceHandoff` binds a one-shot Unix socket in a fresh
+  0700 `$TMPDIR/bdtoavp-XXXXXX` directory, accepts only the worker's pid (or a
+  process in its group), checks the 64-character token from the job spec, and
+  sends the descriptor with `SCM_RIGHTS` within 10 seconds. It then closes the
+  listener and removes the directory. The worker reads the source only through
+  that descriptor (see `source.descriptor_handoff` in the v13 protocol).
+- **Ready deadline.** A stream still `starting` 45 seconds after launch fails
+  with `live_start_timeout`, so the player sees the Mac's reason well before its
+  own 120-second limit.
+
+Routes on the parent movie session:
+
+| Route | Answer |
+|---|---|
+| `POST /movies/v1/live/start` | Signed 202 `LiveStartResponse {liveVersion, streamID, state}`; 409 or 429 `LiveStartRefusal {outcome, message}` (`busy`, `cancelled`, `conflict`, `sourceChanged`, `rateLimited`); 422 `{"retryable":false}` when signed outside the window. |
+| `POST /movies/v1/live/cancel` | 204; signed 429 `{"retryable":true}`; signed 422 `{"retryable":false}`. |
+| `POST /movies/v1/live/release` | Signed 200 `{"drained":Bool}`. It has no signing window, records nothing, and drains only when exactly that start identity holds the slot. |
+| `GET /movies/v1/live/status/<streamID>` | Signed 200 with the state, the window, a failure or stop reason, and `macBusyConverting`; `unknown` for a stream that is not current. It renews the stream's lease. |
+
+`LiveStartAdmission` implements the slot contract in `LiveRelayStreaming.swift`
+and `LiveStartContract.swift`; the PR 1 contract tests run against it as well as
+against the reference model. The playlist always comes from the index. A stream
+that stops or fails by itself releases the slot, and the host remembers why for
+that session's most recent stream. Live playback may run while a conversion is
+active. The status then reports `macBusyConverting`, and the queue is not
+paused.
+
+Relay routes use the stream session. A request whose session ID names no
+parent session is treated as a stream ID. The host re-derives
+`liveStreamSession(streamID:)` under each live parent session (at most four),
+and the first that verifies decides the request. On all five live routes the
+`x-bdtoavp-relay-media-capability` header must match the derived capability, or
+the answer is a signed 403. The current stream answers through `relayResponse`.
+Any other stream ID, ended or never issued, gets a signed 410
+`RelayLiveStreamEnded` with the remembered reason or `not_current`. When no
+derivation verifies, the parent session is gone, and the answer is an unsigned
+401.
+
+On the Mac, Movie Sharing shows **Live playback to <device>** with a Stop
+button while a stream runs. Stopping sharing, forgetting the device, parent
+session expiry, and quitting all drain the slot and wait for the worker to
+exit. At launch the app removes any leftover `LiveHLS/<id>` workspace and
+handoff directory.
+
 ## Tools
 
 The worker resolves `ssif_probe`, `edge264_test`, `ffmpeg`, and
