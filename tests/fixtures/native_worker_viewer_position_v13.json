@@ -1,0 +1,6 @@
+{
+  "protocol_version": 13,
+  "type": "job.viewer_position",
+  "job_id": "c1ebce77-0460-462b-bd7e-8498c0355267",
+  "position_microseconds": 42000000
+}

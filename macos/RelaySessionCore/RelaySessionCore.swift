@@ -60,7 +60,7 @@ public struct RelaySessionIdentifier: Codable, Equatable, Hashable, Sendable {
         RelaySessionIdentifier(canonicalUUID: UUID())
     }
 
-    private init(canonicalUUID: UUID) {
+    fileprivate init(canonicalUUID: UUID) {
         rawValue = canonicalUUID.uuidString.lowercased()
     }
 
@@ -1161,6 +1161,8 @@ public struct RelayEstablishedSession: Sendable, CustomStringConvertible, Custom
     private let requestSigningKey: Data
     private let peerRequestVerificationKey: Data
     private let serverResponseAuthenticationKey: Data
+    private let sessionIdentityValue: Data
+    private let mediaCapabilityValue: Data
 
     fileprivate init(
         sessionID: RelaySessionIdentifier,
@@ -1168,20 +1170,97 @@ public struct RelayEstablishedSession: Sendable, CustomStringConvertible, Custom
         expiresAtUnixMilliseconds: Int64,
         keyMaterial: RelaySessionKeyMaterial
     ) {
+        self.init(
+            sessionID: sessionID,
+            role: role,
+            expiresAtUnixMilliseconds: expiresAtUnixMilliseconds,
+            keys: RelaySessionKeys(
+                sessionIdentity: keyMaterial.sessionIdentity,
+                clientToServerRequestKey: keyMaterial.clientToServerRequestKey,
+                serverToClientRequestKey: keyMaterial.serverToClientRequestKey,
+                serverToClientResponseKey: keyMaterial.serverToClientResponseKey,
+                mediaCapability: keyMaterial.mediaCapability
+            )
+        )
+    }
+
+    fileprivate init(
+        sessionID: RelaySessionIdentifier,
+        role: RelaySessionRole,
+        expiresAtUnixMilliseconds: Int64,
+        keys: RelaySessionKeys
+    ) {
         self.sessionID = sessionID
         self.role = role
         self.expiresAtUnixMilliseconds = expiresAtUnixMilliseconds
-        sessionIdentity = RelaySessionIdentity(value: RelayCrypto.base64URLEncoded(keyMaterial.sessionIdentity))
-        mediaCapability = RelayMediaCapability(value: RelayCrypto.base64URLEncoded(keyMaterial.mediaCapability))
-        serverResponseAuthenticationKey = keyMaterial.serverToClientResponseKey
+        sessionIdentityValue = keys.sessionIdentity
+        mediaCapabilityValue = keys.mediaCapability
+        sessionIdentity = RelaySessionIdentity(value: RelayCrypto.base64URLEncoded(keys.sessionIdentity))
+        mediaCapability = RelayMediaCapability(value: RelayCrypto.base64URLEncoded(keys.mediaCapability))
+        serverResponseAuthenticationKey = keys.serverToClientResponseKey
         switch role {
         case .client:
-            requestSigningKey = keyMaterial.clientToServerRequestKey
-            peerRequestVerificationKey = keyMaterial.serverToClientRequestKey
+            requestSigningKey = keys.clientToServerRequestKey
+            peerRequestVerificationKey = keys.serverToClientRequestKey
         case .server:
-            requestSigningKey = keyMaterial.serverToClientRequestKey
-            peerRequestVerificationKey = keyMaterial.clientToServerRequestKey
+            requestSigningKey = keys.serverToClientRequestKey
+            peerRequestVerificationKey = keys.clientToServerRequestKey
         }
+    }
+
+    /// The parent's established-session keys, reconstructed from the role-specific fields.
+    private var keys: RelaySessionKeys {
+        let clientToServerRequestKey: Data
+        let serverToClientRequestKey: Data
+        switch role {
+        case .client:
+            clientToServerRequestKey = requestSigningKey
+            serverToClientRequestKey = peerRequestVerificationKey
+        case .server:
+            clientToServerRequestKey = peerRequestVerificationKey
+            serverToClientRequestKey = requestSigningKey
+        }
+        return RelaySessionKeys(
+            sessionIdentity: sessionIdentityValue,
+            clientToServerRequestKey: clientToServerRequestKey,
+            serverToClientRequestKey: serverToClientRequestKey,
+            serverToClientResponseKey: serverResponseAuthenticationKey,
+            mediaCapability: mediaCapabilityValue
+        )
+    }
+
+    /// A session for one live stream. Same role and expiry as the parent; every key differs per
+    /// stream, so a request or response for one stream never verifies under another stream or
+    /// under the parent. The derived session ID is the stream ID itself, so a host can re-derive
+    /// an ended stream's session from a request alone. Both peers derive the same session.
+    /// Throws `invalidSessionIdentifier` when `streamID` is the parent's own session ID.
+    public func liveStreamSession(streamID: UUID) throws -> RelayEstablishedSession {
+        let derivedSessionID = RelaySessionIdentifier(canonicalUUID: streamID)
+        guard derivedSessionID != sessionID else {
+            throw RelaySessionError.invalidSessionIdentifier
+        }
+        let parent = keys
+        let labels = RelayLiveStreamDerivation.Label.self
+        let derive = { (parentValue: Data, label: String) in
+            RelayLiveStreamDerivation.value(
+                parentValue: parentValue,
+                parentSessionID: sessionID,
+                streamID: streamID,
+                label: label
+            )
+        }
+        return RelayEstablishedSession(
+            sessionID: derivedSessionID,
+            role: role,
+            expiresAtUnixMilliseconds: expiresAtUnixMilliseconds,
+            keys: RelaySessionKeys(
+                sessionIdentity: derive(parent.sessionIdentity, labels.sessionIdentity),
+                clientToServerRequestKey: derive(parent.clientToServerRequestKey, labels.clientToServerRequest),
+                serverToClientRequestKey: derive(parent.serverToClientRequestKey, labels.serverToClientRequest),
+                serverToClientResponseKey: derive(parent.serverToClientResponseKey, labels.serverToClientResponse),
+                mediaCapability: derive(parent.mediaCapability, labels.mediaCapability)
+            )
+        )
     }
 
     public var expirationDate: Date {
@@ -1392,6 +1471,49 @@ public struct RelayEstablishedSession: Sendable, CustomStringConvertible, Custom
         guard RelayCrypto.constantTimeEqual(expectedSignature, response.signature) else {
             throw RelaySessionError.responseSignatureMismatch
         }
+    }
+}
+
+/// The five values an established session keeps from its key schedule.
+struct RelaySessionKeys: Sendable {
+    let sessionIdentity: Data
+    let clientToServerRequestKey: Data
+    let serverToClientRequestKey: Data
+    let serverToClientResponseKey: Data
+    let mediaCapability: Data
+}
+
+/// HKDF-SHA256 derivation of a live stream's keys from its parent session.
+///
+/// Each derived value is `HKDF<SHA256>(ikm: the parent value with the same label,
+/// salt: streamID's 16 RFC 4122 bytes, info: liveStreamKeyTranscript(parentSessionID, streamID, label))`
+/// with a 32-byte output.
+enum RelayLiveStreamDerivation {
+    enum Label {
+        static let sessionIdentity = "session-identity"
+        static let clientToServerRequest = "request-client-to-server"
+        static let serverToClientRequest = "request-server-to-client"
+        static let serverToClientResponse = "response-server-to-client"
+        static let mediaCapability = "media-capability"
+    }
+
+    static func value(
+        parentValue: Data,
+        parentSessionID: RelaySessionIdentifier,
+        streamID: UUID,
+        label: String
+    ) -> Data {
+        let streamIDBytes = withUnsafeBytes(of: streamID.uuid) { Data($0) }
+        return HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: parentValue),
+            salt: streamIDBytes,
+            info: RelayCanonical.liveStreamKeyTranscript(
+                parentSessionID: parentSessionID,
+                streamIDBytes: streamIDBytes,
+                label: label
+            ),
+            outputByteCount: RelayCrypto.sha256Length
+        ).withUnsafeBytes { Data($0) }
     }
 }
 
@@ -1711,6 +1833,21 @@ enum RelayCanonical {
             fields: [
                 ("label", Data(label.utf8)),
                 ("sessionID", Data(sessionID.rawValue.utf8)),
+            ]
+        )
+    }
+
+    static func liveStreamKeyTranscript(
+        parentSessionID: RelaySessionIdentifier,
+        streamIDBytes: Data,
+        label: String
+    ) -> Data {
+        transcript(
+            domain: "bd-to-avp.relay.live-stream-key.v1",
+            fields: [
+                ("parentSessionID", Data(parentSessionID.rawValue.utf8)),
+                ("streamID", streamIDBytes),
+                ("label", Data(label.utf8)),
             ]
         )
     }
