@@ -128,6 +128,154 @@ enum RelayQualificationDriver {
         }
     }
 
+    // MARK: - Live ISO playback through Mac Movies
+
+    /// Live qualification: `BD_TO_AVP_LIVE_QUALIFICATION_MAC` names the Mac (its Bonjour name),
+    /// `BD_TO_AVP_LIVE_QUALIFICATION_TITLE` the ISO file name or title. It connects with the
+    /// remembered pairing (the Mac auto-approves a known device), plays the title with its
+    /// default audio, and scripts play, pause and resume, a retained backward seek, an evicted
+    /// seek, and Done. `BD_TO_AVP_LIVE_QUALIFICATION_PLAY_SECONDS` overrides the 600 s play.
+    static func runLiveIfRequested(library: MovieLibraryModel, player: MVHEVCPlayerSession) async {
+        let environment = ProcessInfo.processInfo.environment
+        guard let macName = environment["BD_TO_AVP_LIVE_QUALIFICATION_MAC"], !macName.isEmpty,
+              let titleName = environment["BD_TO_AVP_LIVE_QUALIFICATION_TITLE"], !titleName.isEmpty else { return }
+        let playSeconds = environment["BD_TO_AVP_LIVE_QUALIFICATION_PLAY_SECONDS"].flatMap(Double.init) ?? 600
+        let started = ContinuousClock.now
+        func liveEmit(_ message: String) {
+            let elapsed = started.duration(to: .now)
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+            emit("LIVE t=\(String(format: "%.3f", seconds)) \(message)")
+        }
+        do {
+            liveEmit("discovery_started mac=\(macName)")
+            library.discover()
+            try await wait(seconds: 30) { library.endpoints.contains { $0.displayName == macName } }
+            guard let endpoint = library.endpoints.first(where: { $0.displayName == macName }) else { return }
+            library.connect(endpoint)
+            try await wait(seconds: 60) { library.catalog != nil || library.prompt != nil || library.errorMessage != nil }
+            if let prompt = library.prompt, !prompt.isRemembered {
+                liveEmit("comparison_code=\(prompt.code) remembered=false")
+                library.confirm()
+                try await wait(seconds: 240) { library.catalog != nil || library.errorMessage != nil }
+            }
+            guard library.catalog != nil else {
+                liveEmit("connect_failed error=\(library.errorMessage ?? "none")")
+                return
+            }
+            liveEmit("connected live_titles=\(library.liveTitles.count)")
+            func matchingTitle() -> SharedLiveTitle? {
+                library.liveTitles.first { $0.fileName == titleName || $0.title == titleName }
+            }
+            try await wait(seconds: 150) {
+                guard let title = matchingTitle() else { return false }
+                return title.state != .checking
+            }
+            guard let title = matchingTitle(), title.state == .eligible else {
+                liveEmit("title_unavailable state=\(matchingTitle()?.state.rawValue ?? "missing") reason=\(matchingTitle()?.reason ?? "none")")
+                return
+            }
+            liveEmit("title_eligible duration=\(title.durationSeconds ?? -1) audio_pid=\(title.defaultAudio?.pid ?? -1) audio=\(title.defaultAudio?.label ?? "none")")
+            liveEmit("live_start_sent")
+            library.startLive(title) { configuration, context in
+                liveEmit("status_live stream=\(context.streamID.uuidString.lowercased())")
+                let outcome = await player.prepareRelayPlayback(configuration, live: context)
+                liveEmit("preparation_outcome=\(outcome)")
+                return outcome
+            }
+            try await wait(seconds: 150) {
+                player.state == .ready || player.state == .failed
+                    || (library.startingLiveTitle == nil && library.errorMessage != nil)
+            }
+            guard player.state == .ready, let item = player.player.currentItem else {
+                liveEmit("start_failed player_state=\(player.state) error=\(player.failureMessage ?? library.errorMessage ?? "none")")
+                return
+            }
+            liveEmit("player_ready forward_buffer=\(item.preferredForwardBufferDuration)")
+            let video = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            ])
+            item.add(video)
+            defer { item.remove(video) }
+            try await wait(seconds: 60) {
+                let time = player.player.currentTime()
+                return video.hasNewPixelBuffer(forItemTime: time)
+                    && video.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) != nil
+            }
+            liveEmit("first_frame playback_time=\(player.player.currentTime().seconds)")
+
+            var rebufferStart: ContinuousClock.Instant?
+            var rebuffers = 0
+            var longestRebuffer: Duration = .zero
+            func observe(for seconds: Double, label: String) async throws {
+                let deadline = ContinuousClock.now.advanced(by: .milliseconds(Int64(seconds * 1_000)))
+                var lastSample = ContinuousClock.now
+                while ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(100))
+                    guard player.state == .ready else {
+                        throw qualificationFailure("Live playback left ready: \(player.failureMessage ?? "none")")
+                    }
+                    let waiting = player.player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    if waiting, rebufferStart == nil {
+                        rebufferStart = .now
+                        liveEmit("rebuffer_start playback_time=\(player.player.currentTime().seconds) reason=\(player.player.reasonForWaitingToPlay?.rawValue ?? "none")")
+                    } else if !waiting, let began = rebufferStart {
+                        let length = began.duration(to: .now)
+                        rebuffers += 1
+                        longestRebuffer = max(longestRebuffer, length)
+                        rebufferStart = nil
+                        liveEmit("rebuffer_end duration=\(length)")
+                    }
+                    if lastSample.duration(to: .now) >= .seconds(10) {
+                        lastSample = .now
+                        let time = player.player.currentTime().seconds
+                        liveEmit("sample phase=\(label) playback_time=\(time) latest_available=\(player.duration) lead=\(player.duration - time) earliest=\(player.earliestSeekTime) notice=\(player.liveNotice ?? "none")")
+                    }
+                }
+            }
+            try await observe(for: playSeconds, label: "play")
+            liveEmit("play_complete rebuffers=\(rebuffers) longest_rebuffer=\(longestRebuffer)")
+
+            player.pause()
+            let pausedAt = player.player.currentTime().seconds
+            try await Task.sleep(for: .seconds(5))
+            liveEmit("pause_result drift=\(abs(player.player.currentTime().seconds - pausedAt)) status=\(player.player.timeControlStatus.rawValue)")
+            player.play()
+            try await wait(seconds: 10) { player.player.timeControlStatus == .playing }
+            liveEmit("resume_result playback_time=\(player.player.currentTime().seconds)")
+            try await observe(for: 10, label: "resume")
+
+            let backwardTarget = max(player.earliestSeekTime + 5, player.player.currentTime().seconds - 20)
+            player.seek(to: backwardTarget)
+            try await wait(seconds: 10) { abs(player.player.currentTime().seconds - backwardTarget) < 1 }
+            liveEmit("seek_backward_result target=\(backwardTarget) position=\(player.player.currentTime().seconds) notice=\(player.relaySeekNotice ?? "none")")
+            try await observe(for: 10, label: "after_backward_seek")
+
+            let earliest = player.earliestSeekTime
+            if earliest > 1 {
+                player.seek(to: 0)
+                try await wait(seconds: 10) { player.relaySeekNotice != nil }
+                try await Task.sleep(for: .seconds(2))
+                liveEmit("seek_evicted_result target=0 earliest_playable=\(earliest) position=\(player.player.currentTime().seconds) notice=\(player.relaySeekNotice ?? "none")")
+            } else {
+                liveEmit("seek_evicted_result skipped=true earliest_playable=\(earliest)")
+            }
+            try await observe(for: 10, label: "after_evicted_seek")
+
+            let cleanup = library.livePlayback?.stop()
+            player.finish()
+            library.finishLivePlayback()
+            let result = await cleanup?.value
+            liveEmit("cancel_acknowledged result=\(result.map { "\($0)" } ?? "none")")
+            liveEmit("live_qualification_complete")
+        } catch {
+            liveEmit("stopped error=\(error.localizedDescription) player_state=\(player.state) failure=\(player.failureMessage ?? "none")")
+            let cleanup = library.livePlayback?.stop() ?? library.liveOperation?.cleanUp()
+            player.finish()
+            library.finishLivePlayback()
+            if let result = await cleanup?.value { liveEmit("cancel_acknowledged result=\(result)") }
+        }
+    }
+
     private static func emitPlayerDetails(_ player: MVHEVCPlayerSession) {
         let item = player.player.currentItem
         emit("item_present=\(item != nil) item_status=\(item?.status.rawValue ?? -1) player_status=\(player.player.status.rawValue) waiting=\(player.player.reasonForWaitingToPlay?.rawValue ?? "none")")
