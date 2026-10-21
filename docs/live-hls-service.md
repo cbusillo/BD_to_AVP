@@ -145,3 +145,29 @@ The worker resolves `ssif_probe`, `edge264_test`, `ffmpeg`, and
 bundled `bd_to_avp/bin`, then `PATH`. A development checkout builds the encoder
 with `scripts/build_mv_hevc_encoder_macos.py` and sets
 `BD_TO_AVP_MV_HEVC_ENCODER_PATH`.
+
+## Evidence
+
+On October 20, 2026, an Apple M4 Max (128 GB, macOS 27.2) ran this operation at
+commit `1cc3ef4b` on the Rainforest ISO: playlist 1005, English DTS-HD MA 5.1
+PID 4353, 120-second and 256 MiB retention, and `maximum_pairs` 14,434.
+
+- The first segment, playlist, and manifest were ready 1.49 seconds after the
+  worker started.
+- 14,424 frames (601.6 seconds) were produced in 226.8 seconds, a 2.65x
+  realtime ratio. The process tree peaked near 160% CPU and 1.0 GB resident.
+- 301 segments were published. The byte limit bound retention: the published
+  history peaked at 268,425,124 bytes and the sampled workspace at 273,652,365
+  bytes. At completion the window was 497.9 to 601.6 seconds.
+- FFprobe found MV-HEVC view IDs `0,1` and stereo 48 kHz AAC with no audio gap.
+  Every source audio PTS step was one 512-sample DTS frame, and the encoder
+  wrote 601.601 seconds of audio against 601.6016 seconds of video.
+- AVFoundation read the first video and audio samples at 0.0. A synthetic
+  flash and click encoded by the same build measured -0.7 ms and +0.4 ms
+  audio-minus-video offsets.
+- The first and last 28 seconds played through the production loopback bridge
+  (`RelayLoopbackHTTPServer`) with video and audio tracks and decoded frames in
+  every two-second interval.
+
+FFprobe without edit-list handling reports video starting at 0.127 seconds
+because of B-frame composition offsets; AVFoundation does not.
