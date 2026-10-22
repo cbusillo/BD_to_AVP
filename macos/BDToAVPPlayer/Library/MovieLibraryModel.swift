@@ -41,9 +41,21 @@ final class MovieLibraryModel: ObservableObject {
     static let checkingRefreshInterval: TimeInterval = 3
     static let checkingRefreshLimit: TimeInterval = 120
 
-    init(relayTransport: any RelayTransport = URLSessionRelayTransport(), clock: any LiveClock = SystemLiveClock()) {
+    private let preferredLanguages: @Sendable () -> [String]
+
+    init(
+        relayTransport: any RelayTransport = URLSessionRelayTransport(),
+        clock: any LiveClock = SystemLiveClock(),
+        preferredLanguages: @escaping @Sendable () -> [String] = { Locale.preferredLanguages }
+    ) {
         self.relayTransport = relayTransport
         self.clock = clock
+        self.preferredLanguages = preferredLanguages
+    }
+
+    /// The audio a live title starts with: the viewer's language when the title has it.
+    func startingAudio(for title: SharedLiveTitle) -> SharedLiveAudio? {
+        title.startingAudio(preferredLanguages: preferredLanguages())
     }
 
     var liveTitles: [SharedLiveTitle] { catalog?.liveTitles ?? [] }
@@ -192,14 +204,14 @@ final class MovieLibraryModel: ObservableObject {
 
     // MARK: - Live playback
 
-    /// Starts a live title with its default audio. `prepare` installs the stream in the player
+    /// Starts a live title with its starting audio. `prepare` installs the stream in the player
     /// and reports whether it did; only an installed stream hands cleanup to the playback.
     func startLive(
         _ title: SharedLiveTitle,
         prepare: @escaping @MainActor (RelayRemotePlaybackConfiguration, RelayLivePlaybackContext) async
             -> RelayPlaybackPreparationOutcome
     ) {
-        guard let connection, title.state == .eligible, let audio = title.defaultAudio,
+        guard let connection, title.state == .eligible, let audio = startingAudio(for: title),
               catalog?.liveTitles.contains(where: { $0.id == title.id }) == true else { return }
         endLive()
         stopCheckingRefresh()

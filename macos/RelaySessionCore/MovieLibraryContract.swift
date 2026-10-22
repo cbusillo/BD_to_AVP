@@ -135,6 +135,36 @@ struct SharedLiveTitle: Codable, Identifiable, Equatable, Sendable {
     var title: String { (fileName as NSString).deletingPathExtension }
     var defaultAudio: SharedLiveAudio? { audio.first(where: \.isDefault) ?? audio.first }
 
+    /// The track to start with: the first track in the viewer's most preferred language that the
+    /// title has, else the Mac's default. `preferredLanguages` are BCP 47 identifiers such as
+    /// `Locale.preferredLanguages`; track languages are ISO 639 codes as the disc gives them.
+    func startingAudio(preferredLanguages: [String]) -> SharedLiveAudio? {
+        for preferred in preferredLanguages {
+            guard let wanted = Self.languageKey(preferred) else { continue }
+            if let match = audio.first(where: { $0.language.flatMap(Self.languageKey) == wanted }) {
+                return match
+            }
+        }
+        return defaultAudio
+    }
+
+    /// ISO 639-2 bibliographic codes Foundation does not resolve, mapped to their terminology form.
+    private static let bibliographicLanguageCodes = [
+        "alb": "sqi", "arm": "hye", "baq": "eus", "bur": "mya", "chi": "zho", "cze": "ces",
+        "dut": "nld", "fre": "fra", "geo": "kat", "ger": "deu", "gre": "ell", "ice": "isl",
+        "mac": "mkd", "mao": "mri", "may": "msa", "per": "fas", "rum": "ron", "slo": "slk",
+        "tib": "bod", "wel": "cym",
+    ]
+
+    private static func languageKey(_ identifier: String) -> String? {
+        let lowered = identifier.lowercased()
+        let code = bibliographicLanguageCodes[lowered] ?? lowered
+        guard let language = Locale.Language(identifier: code).languageCode,
+              language != .unavailable, language.identifier != "und", language.identifier != "mul"
+        else { return nil }
+        return language.identifier(.alpha3) ?? language.identifier
+    }
+
     init(
         id: String, rootID: String, fileName: String, revision: String, state: State,
         reason: String? = nil, durationSeconds: Double? = nil, audio: [SharedLiveAudio] = []
