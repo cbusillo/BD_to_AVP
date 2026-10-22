@@ -117,7 +117,7 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
         XCTAssertEqual(registry.activeTaskCount, 0)
     }
 
-    func testEachTransientRetryUsesFreshSignedHostHeaders() async throws {
+    func testStalledRequestTimesOutAndEachRetryUsesFreshSignedHostHeaders() async throws {
         let fixedNow = now
         let sessions = try await makePairedSessions(now: fixedNow)
         let session = sessions.client
@@ -142,7 +142,8 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
             transport: transport,
             serverBaseURL: baseURL,
             clock: { fixedNow },
-            nonce: { nonceSequence.next() }
+            nonce: { nonceSequence.next() },
+            requestTimeout: 1.5
         )
 
         let (data, _) = try await client.load(
@@ -151,6 +152,7 @@ final class RelayHLSResourceLoaderTests: XCTestCase {
         XCTAssertEqual(data, Data("segment".utf8))
         let requests = await transport.allRequests()
         XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.map(\.timeoutInterval), [1.5, 1.5])
         let authentications = try requests.map { request -> RelayAuthenticatedRequest in
             let encoded = try XCTUnwrap(request.value(forHTTPHeaderField: RelayWireContract.authenticationHeader))
             return try JSONDecoder().decode(RelayAuthenticatedRequest.self, from: XCTUnwrap(Data(base64Encoded: encoded)))

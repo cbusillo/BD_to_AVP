@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Network
+import os
 
 enum RelayNetworkServerError: Error, Equatable, Sendable {
     case unavailablePairingContext
@@ -20,6 +21,9 @@ protocol RelayNetworkHosting: Actor {
 
 final class RelayNetworkServer: @unchecked Sendable {
     private static let requestTimeout: TimeInterval = 10
+    /// One line per request, so a stalled response can be placed on the Mac side:
+    /// `log stream --predicate 'subsystem == "com.shinycomputers.bd-to-avp" && category == "relay"'`.
+    private static let log = Logger(subsystem: "com.shinycomputers.bd-to-avp", category: "relay")
 
     private let host: any RelayNetworkHosting
     private let resources: RelayNetworkServerResources
@@ -102,7 +106,13 @@ final class RelayNetworkServer: @unchecked Sendable {
                 connection.cancel()
                 return
             }
-            receiveRequest(on: connection, identifier: identifier, accumulated: Data(), peer: peer)
+            receiveRequest(
+                on: connection,
+                identifier: identifier,
+                accumulated: Data(),
+                peer: peer,
+                acceptedAt: .now
+            )
         }
     }
 
@@ -110,7 +120,8 @@ final class RelayNetworkServer: @unchecked Sendable {
         on connection: RelaySocketConnection,
         identifier: UUID,
         accumulated: Data,
-        peer: RelayHostPeer
+        peer: RelayHostPeer,
+        acceptedAt: ContinuousClock.Instant
     ) {
         connection.receive { [weak self] content, error in
             guard let self else {
@@ -124,26 +135,73 @@ final class RelayNetworkServer: @unchecked Sendable {
             let nextData = accumulated + content
             Task {
                 if await self.host.needsMoreRequestBytes(nextData) {
-                    self.receiveRequest(on: connection, identifier: identifier, accumulated: nextData, peer: peer)
+                    self.receiveRequest(
+                        on: connection,
+                        identifier: identifier,
+                        accumulated: nextData,
+                        peer: peer,
+                        acceptedAt: acceptedAt
+                    )
                     return
                 }
+                let received = acceptedAt.duration(to: .now)
                 let response = await self.host.handle(nextData, peer: peer)
-                await self.sendResponse(response.serialized(), on: connection, identifier: identifier)
+                let exchange = RelayExchangeLog(
+                    target: Self.requestTarget(nextData),
+                    statusCode: response.statusCode,
+                    acceptedAt: acceptedAt,
+                    received: received,
+                    handled: acceptedAt.duration(to: .now)
+                )
+                await self.sendResponse(response.serialized(), on: connection, identifier: identifier, exchange: exchange)
             }
         }
     }
 
-    private func sendResponse(_ data: Data, on connection: RelaySocketConnection, identifier: UUID, offset: Int = 0) async {
-        guard await resources.responseProgress(identifier) else { return }
+    private func sendResponse(
+        _ data: Data,
+        on connection: RelaySocketConnection,
+        identifier: UUID,
+        exchange: RelayExchangeLog,
+        offset: Int = 0
+    ) async {
+        guard await resources.responseProgress(identifier) else {
+            exchange.record(sentBytes: offset, of: data.count, outcome: "timed_out")
+            return
+        }
         let end = min(offset + 64 * 1_024, data.count)
         let isFinal = end == data.count
         connection.send(data.subdata(in: offset..<end)) { [weak self] error in
             guard let self else { return }
             guard error == nil, !isFinal else {
+                exchange.record(sentBytes: error == nil ? end : offset, of: data.count, outcome: error == nil ? "sent" : "send_failed")
                 self.resources.finish(identifier)
                 return
             }
-            Task { await self.sendResponse(data, on: connection, identifier: identifier, offset: end) }
+            Task { await self.sendResponse(data, on: connection, identifier: identifier, exchange: exchange, offset: end) }
+        }
+    }
+
+    /// The request line's target, without its query, for the log.
+    private static func requestTarget(_ request: Data) -> String {
+        let line = request.prefix(512).split(separator: 0x0D, maxSplits: 1).first ?? Data()
+        let parts = line.split(separator: 0x20)
+        guard parts.count >= 2, let target = String(data: Data(parts[1]), encoding: .utf8) else { return "-" }
+        return String(target.prefix { $0 != "?" })
+    }
+
+    private struct RelayExchangeLog: Sendable {
+        let target: String
+        let statusCode: Int
+        let acceptedAt: ContinuousClock.Instant
+        let received: Duration
+        let handled: Duration
+
+        func record(sentBytes: Int, of total: Int, outcome: String) {
+            let finished = acceptedAt.duration(to: .now)
+            RelayNetworkServer.log.info(
+                "\(target, privacy: .public) status=\(statusCode) \(outcome, privacy: .public) bytes=\(sentBytes)/\(total) received_ms=\(received.milliseconds) handled_ms=\(handled.milliseconds) finished_ms=\(finished.milliseconds)"
+            )
         }
     }
 
@@ -458,5 +516,11 @@ enum RelayNetworkPeerClassifier {
     private static func isActiveNonLoopback(_ interface: UnsafeMutablePointer<ifaddrs>) -> Bool {
         let flags = interface.pointee.ifa_flags
         return (flags & UInt32(IFF_UP)) != 0 && (flags & UInt32(IFF_LOOPBACK)) == 0
+    }
+}
+
+private extension Duration {
+    var milliseconds: Int64 {
+        components.seconds * 1_000 + components.attoseconds / 1_000_000_000_000_000
     }
 }

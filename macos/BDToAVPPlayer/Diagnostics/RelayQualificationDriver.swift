@@ -152,7 +152,11 @@ enum RelayQualificationDriver {
             try await wait(seconds: 30) { library.endpoints.contains { $0.displayName == macName } }
             guard let endpoint = library.endpoints.first(where: { $0.displayName == macName }) else { return }
             library.connect(endpoint)
-            try await wait(seconds: 60) { library.catalog != nil || library.prompt != nil || library.errorMessage != nil }
+            // A remembered pairing still shows its prompt until the Mac's approval and the catalog
+            // arrive, so only an unremembered prompt stops this wait.
+            try await wait(seconds: 60) {
+                library.catalog != nil || library.prompt?.isRemembered == false || library.errorMessage != nil
+            }
             if let prompt = library.prompt, !prompt.isRemembered {
                 liveEmit("comparison_code=\(prompt.code) remembered=false")
                 library.confirm()

@@ -159,14 +159,19 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
     private let clock: @Sendable () -> Date
     private let nonce: @Sendable () -> String
     private let maximumTransientRetries: Int
+    private let requestTimeout: TimeInterval
 
+    /// `requestTimeout` is how long a request may go without receiving data. The Mac answers a
+    /// relay request at once, with the resource or a 503, so a request that goes quiet has stalled.
+    /// A short timeout lets the transient retry fetch it again before the player's buffer runs out.
     init(
         signer: any RelayRequestSigning,
         transport: any RelayTransport,
         serverBaseURL: URL,
         clock: @escaping @Sendable () -> Date = { Date() },
         nonce: @escaping @Sendable () -> String = { UUID().uuidString },
-        maximumTransientRetries: Int = 1
+        maximumTransientRetries: Int = 1,
+        requestTimeout: TimeInterval = 3
     ) {
         self.signer = signer
         self.transport = transport
@@ -174,6 +179,7 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
         self.clock = clock
         self.nonce = nonce
         self.maximumTransientRetries = min(max(maximumTransientRetries, 0), 2)
+        self.requestTimeout = requestTimeout
     }
 
     func load(_ customURL: URL) async throws -> (Data, HTTPURLResponse) {
@@ -191,7 +197,9 @@ final class RelayAuthenticatedResourceClient: @unchecked Sendable {
                 let transferStarted = ContinuousClock.now
                 FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_start resource=\(customURL.lastPathComponent)\n".utf8))
 #endif
-                let result = try await transport.data(for: request.request)
+                var urlRequest = request.request
+                urlRequest.timeoutInterval = requestTimeout
+                let result = try await transport.data(for: urlRequest)
 #if BD_TO_AVP_QUALIFICATION
                 FileHandle.standardOutput.write(Data("RELAY_QUALIFICATION upstream_received resource=\(customURL.lastPathComponent) status=\(result.1.statusCode) bytes=\(result.0.count) elapsed=\(transferStarted.duration(to: .now))\n".utf8))
                 let verificationStarted = ContinuousClock.now
