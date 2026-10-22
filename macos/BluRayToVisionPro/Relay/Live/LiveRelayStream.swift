@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 
 /// Bounds and timings for one live relay stream. The defaults are the Mac's production values.
 struct LiveRelayStreamConfiguration: Sendable {
@@ -111,6 +112,7 @@ struct LiveRelaySleepAssertion: Sendable {
 /// the worker, waits for its confirmed exit, removes the workspace, and releases the source lease,
 /// and every caller awaits that same cleanup.
 actor LiveRelayStream: LiveRelayStreaming {
+    private static let log = Logger(subsystem: "com.shinycomputers.bd-to-avp", category: "relay")
     nonisolated let id: UUID
     let workspaceURL: URL
 
@@ -508,6 +510,7 @@ actor LiveRelayStream: LiveRelayStreaming {
     /// reports the stuck drain.
     private func startCleanup() {
         guard cleanupTask == nil else { return }
+        logProducerStats()
         monitorTask?.cancel()
         handoff?.close()
         let handoffTask = handoffTask
@@ -531,6 +534,16 @@ actor LiveRelayStream: LiveRelayStreaming {
             try? FileManager.default.removeItem(at: LiveLeftoverOwner.marker(forWorkspace: workspaceURL))
             await self?.finishCleanup()
         }
+    }
+
+    /// Cleanup deletes the manifest, so its last producer stats are logged first.
+    private func logProducerStats() {
+        guard let stats = workspace.window.producer else { return }
+        let unheld = stats.wallSeconds - stats.heldSeconds
+        let throughput = unheld > 0 ? Double(stats.producedMicroseconds) / (unheld * 1_000_000) : 0
+        Self.log.info(
+            "producer produced_us=\(stats.producedMicroseconds) wall_s=\(stats.wallSeconds) held_s=\(stats.heldSeconds) viewer_held_s=\(stats.viewerHeldSeconds) unheld_throughput=\(throughput)"
+        )
     }
 
     private func markWorkerExitOverdue() {
