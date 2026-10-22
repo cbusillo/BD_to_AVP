@@ -143,7 +143,7 @@ struct MovieLibraryView: View {
                     case .ineligible:
                         Text(title.reason ?? "This disc can't be played live.").font(.caption).foregroundStyle(.secondary)
                     case .eligible:
-                        Text([rootName, title.defaultAudio?.label].compactMap { $0 }.joined(separator: " · "))
+                        Text([rootName, model.startingAudio(for: title)?.label].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

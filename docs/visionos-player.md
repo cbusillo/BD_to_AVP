@@ -90,7 +90,8 @@ inspects the disc in the background; the player refreshes the catalog every 3 se
 for up to 2 minutes while any title is checking, and stops on disconnect, rediscovery,
 or leaving the library. An ineligible title shows the Mac's reason and cannot start.
 
-Choosing an eligible title starts it with the title's default audio:
+Choosing an eligible title starts it with the first audio track in the headset's most
+preferred language that the title has, or the disc's first track when none matches:
 
 1. The player creates a start ID and sends `POST /movies/v1/live/start`, signed with
    the movie session at `issuedAt`, the signed time of that first request. A retry

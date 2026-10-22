@@ -20,7 +20,7 @@ Check depth and eye order, pause and seek, then use **Done** to return to the li
 
 This Movie Sharing beta supports compatible MV-HEVC and full side-by-side or over-under SDR HEVC movies. Complete a conversion on the Mac before sharing its output.
 
-Newer builds of both apps also list Blu-ray 3D ISOs from the shared folders as live titles, which the Mac converts while you watch. A title shows **Checking** while the Mac inspects it once; then it either plays with its default audio or shows why it can't play live. Only one device streams at a time. Live playback can run while the Mac converts other movies, and the headset then notes that playback may pause. Earlier builds simply do not show ISOs. See [Live HLS Service](live-hls-service.md#mac-movies-live-titles) for details.
+Newer builds of both apps also list Blu-ray 3D ISOs from the shared folders as live titles, which the Mac converts while you watch. A title shows **Checking** while the Mac inspects it once; then it either plays, in the headset's language when the disc has it, or shows why it can't play live. Only one device streams at a time. Live playback can run while the Mac converts other movies, and the headset then notes that playback may pause. Earlier builds simply do not show ISOs. See [Live HLS Service](live-hls-service.md#mac-movies-live-titles) for details.
 
 If the Mac is missing, check the network, Local Network permission, sharing switch and whether the Mac is awake. If the folder is unavailable, reconnect its drive or choose the folder again on the Mac. Use **Refresh** after adding a movie. To remove a pairing, use **Forget** under Paired Devices on the Mac and **Forget This Mac** on the headset, then pair again.
 

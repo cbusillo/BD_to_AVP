@@ -7,10 +7,14 @@ import XCTest
 final class MovieLibraryModelTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_700_000_000)
 
-    private func makeModel() async throws -> (MovieLibraryModel, FakeLiveMac, ManualLiveClock) {
+    private func makeModel(
+        preferredLanguages: [String] = ["en-US"]
+    ) async throws -> (MovieLibraryModel, FakeLiveMac, ManualLiveClock) {
         let clock = ManualLiveClock(start)
         let mac = try await FakeLiveMac.make(clock: clock)
-        let model = MovieLibraryModel(relayTransport: await mac.makeRelayTransport(), clock: clock)
+        let model = MovieLibraryModel(
+            relayTransport: await mac.makeRelayTransport(), clock: clock, preferredLanguages: { preferredLanguages }
+        )
         return (model, mac, clock)
     }
 
@@ -53,6 +57,49 @@ final class MovieLibraryModelTests: XCTestCase {
         XCTAssertEqual(result, .done(.streamCancel))
         let stopped = await mac.stoppedStreams[context.streamID]
         XCTAssertEqual(stopped, "viewerStopped")
+    }
+
+    func testStartUsesTheViewersLanguageWhenTheDiscListsAnotherFirst() async throws {
+        let (model, mac, _) = try await makeModel(preferredLanguages: ["en-US", "de-DE"])
+        await mac.set(statusStates: [.live])
+        let base = makeLiveTitle()
+        let title = SharedLiveTitle(
+            id: base.id, rootID: base.rootID, fileName: base.fileName, revision: base.revision,
+            state: .eligible, durationSeconds: base.durationSeconds,
+            audio: [
+                SharedLiveAudio(pid: 4352, language: "deu", label: "German DTS-HD MA", isDefault: true),
+                SharedLiveAudio(pid: 4353, language: "eng", label: "English DTS-HD MA", isDefault: false),
+            ]
+        )
+        attach(model, mac, titles: [title])
+
+        XCTAssertEqual(model.startingAudio(for: title)?.label, "English DTS-HD MA")
+        model.startLive(title) { _, _ in .installed }
+        await waitUntil { model.livePlayback != nil }
+
+        let startCalls = await mac.startCalls
+        XCTAssertEqual(startCalls.first?.request.audioPID, 4353)
+        let cleanup = try XCTUnwrap(model.livePlayback?.stop())
+        model.finishLivePlayback()
+        _ = await cleanup.value
+    }
+
+    func testStartingAudioMatchesLanguageCodesAndFallsBackToTheDiscDefault() {
+        let base = makeLiveTitle()
+        let title = SharedLiveTitle(
+            id: base.id, rootID: base.rootID, fileName: base.fileName, revision: base.revision,
+            state: .eligible, durationSeconds: base.durationSeconds,
+            audio: [
+                SharedLiveAudio(pid: 4352, language: "ger", label: "German", isDefault: true),
+                SharedLiveAudio(pid: 4353, language: "fre", label: "French", isDefault: false),
+                SharedLiveAudio(pid: 4354, language: nil, label: "Commentary", isDefault: false),
+            ]
+        )
+
+        XCTAssertEqual(title.startingAudio(preferredLanguages: ["fr-CA"])?.pid, 4353)
+        XCTAssertEqual(title.startingAudio(preferredLanguages: ["ja-JP", "de-AT"])?.pid, 4352)
+        XCTAssertEqual(title.startingAudio(preferredLanguages: ["ja-JP"])?.pid, 4352)
+        XCTAssertEqual(title.startingAudio(preferredLanguages: [])?.pid, 4352)
     }
 
     func testARuntimeFailureOfInstalledPlaybackStopsTheStreamWithItsDerivedCancel() async throws {

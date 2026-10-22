@@ -178,7 +178,7 @@ enum RelayQualificationDriver {
                 liveEmit("title_unavailable state=\(matchingTitle()?.state.rawValue ?? "missing") reason=\(matchingTitle()?.reason ?? "none")")
                 return
             }
-            liveEmit("title_eligible duration=\(title.durationSeconds ?? -1) audio_pid=\(title.defaultAudio?.pid ?? -1) audio=\(title.defaultAudio?.label ?? "none")")
+            liveEmit("title_eligible duration=\(title.durationSeconds ?? -1) audio_pid=\(library.startingAudio(for: title)?.pid ?? -1) audio=\(library.startingAudio(for: title)?.label ?? "none")")
             liveEmit("live_start_sent")
             library.startLive(title) { configuration, context in
                 liveEmit("status_live stream=\(context.streamID.uuidString.lowercased())")
