@@ -95,6 +95,8 @@ from a newer uv in its own change, not during release preparation.
 
 ## Dispatch, Watch, And Approve
 
+Follow the [overall release rule](https://github.com/cbusillo/direction/blob/HEAD/DIRECTION.md#stop-boundaries).
+
 Dispatch `Stable` (`.github/workflows/briefcase.yml`) for committed Stable
 metadata, or `Prerelease` (`.github/workflows/prerelease.yml`) for Alpha, Beta,
 or RC. The only input is optional release-note text; committed metadata decides
@@ -111,14 +113,13 @@ uv run python -m scripts.github_release_run watch \
 ```
 
 Exit code `20` means the run is waiting for `macos-signing` approval and prints
-an approval fingerprint. Get explicit maintainer authorization in the
-conversation, then approve with the guarded command as `cbusillo`:
+an approval fingerprint. If approval is required, use the guarded command as `cbusillo`:
 
 ```sh
 uv run python -m scripts.github_release_run approve \
   --run-id "$RUN_ID" --workflow "$WORKFLOW" --head-sha "$MAIN_SHA" \
   --confirm-sha "$MAIN_SHA" --approval-fingerprint "$APPROVAL_FINGERPRINT" \
-  --comment "Approved after explicit release authorization for $MAIN_SHA."
+  --comment "Approved release run for $MAIN_SHA."
 ```
 
 Watch again until the run finishes, and keep other pull requests unmerged
@@ -132,7 +133,7 @@ safety failure; stop or cancel the run instead of retrying.
    or Stable PyPI version. A matching draft may resume.
 2. Run the production preflight again for this exact SHA. Signing cannot be
    requested until it passes.
-3. After the one approval, build, sign, notarize and Gatekeeper-check the app
+3. Build, sign, notarize and Gatekeeper-check the app
    and DMG without a write-capable token, and attest the package.
 4. Check the notarized DMG again on a fresh macOS 26 runner: checksum,
    signature, Gatekeeper, startup, bundled tools, and worker.
@@ -191,10 +192,8 @@ verification fail, because the embedded notes no longer match their digest.
 ## Required Repository Settings
 
 - `macos-signing` is limited to `main`, holds only the Apple certificate,
-  identity, notarization and keychain secrets, and is the only reviewed
-  environment in a normal release. Self-review is prevented and administrators
-  cannot bypass it. `KEYCHAIN_PASSWORD` is the Apple app-specific password; the
-  build keychain password is generated per run.
+  identity, notarization and keychain secrets. `KEYCHAIN_PASSWORD` is the Apple
+  app-specific password; the build keychain password is generated per run.
 - Repository-level secrets never reuse a name from `macos-signing` or
   `sparkle-release`, and `secrets: inherit` is forbidden.
 - `sparkle-release` is limited to `main`, holds only

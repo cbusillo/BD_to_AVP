@@ -205,8 +205,7 @@ disable procedure are maintained in
 Only the public key is embedded in the app. Private key material must never be
 committed, printed, uploaded as an artifact, or copied into issue/PR text.
 
-The release receives one maintainer approval at the main-only
-`macos-signing` boundary. Apple signing credentials, the Sparkle private key,
+Apple signing credentials, the Sparkle private key,
 PyPI OIDC publication, and Pages deployment remain in separate environments,
 but the downstream environments do not add redundant reviews; each job remains
 blocked on the preceding verification results.
