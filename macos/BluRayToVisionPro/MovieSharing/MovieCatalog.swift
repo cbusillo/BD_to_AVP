@@ -294,8 +294,10 @@ actor MovieCatalog {
         if scan.catalog.truncated {
             // A walk cut short never reached some files. Keep what the last read found for them,
             // so playback of an unchanged file goes on; every read still rechecks the revision.
-            entries = scan.entries.merging(entries) { new, _ in new }
-            liveEntries = scan.live.merging(liveEntries) { new, _ in new }
+            // A folder this walk found moved or unreadable keeps nothing.
+            let available = Set(scan.catalog.roots.filter(\.isAvailable).map(\.id))
+            entries = scan.entries.merging(entries.filter { available.contains($0.value.movie.rootID) }) { new, _ in new }
+            liveEntries = scan.live.merging(liveEntries.filter { available.contains($0.value.rootID) }) { new, _ in new }
         } else {
             entries = scan.entries
             liveEntries = scan.live
