@@ -45,14 +45,10 @@ struct MovieLibraryView: View {
             }
             if let prompt = model.prompt {
                 VStack(spacing: 18) {
-                    Text("Confirm \(model.selectedName)").font(.title2.bold())
+                    Text("Click Allow on \(model.selectedName)").font(.title2.bold())
                     Text(prompt.code).font(.system(size: 52, weight: .bold, design: .monospaced))
-                    Text("Compare this code with Movie Sharing on the Mac.")
-                    HStack {
-                        Button("Not My Mac") { model.reject() }
-                        Button(model.isWaitingForMac ? "Waiting for Mac…" : "Codes Match") { model.confirm() }
-                            .disabled(model.isWaitingForMac)
-                    }
+                    Text("Check that the Mac shows this same code before you click Allow there.")
+                    Button("Cancel") { model.cancelPairing() }
                 }.frame(maxWidth: .infinity).padding(28).glassBackgroundEffect()
             } else if let catalog = model.catalog {
                 TextField("Search movies", text: $search).textFieldStyle(.roundedBorder)

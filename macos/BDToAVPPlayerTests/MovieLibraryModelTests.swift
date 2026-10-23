@@ -221,12 +221,15 @@ final class MovieLibraryModelTests: XCTestCase {
         let (model, mac, _) = try await makeModel()
         await mac.set(startMode: .admitAndLoseResponse)
         attach(model, mac)
-        Task { @MainActor in
-            await waitUntil { await mac.startCalls.count == 1 }
+        // The retry can land before this task first looks, so wait for any call and finish
+        // the task inside the test; a stale wait would otherwise fail a later test.
+        let admitAfterFirstCall = Task { @MainActor in
+            await waitUntil { await mac.startCalls.count >= 1 }
             await mac.set(startMode: .admit)
         }
         model.startLive(makeLiveTitle()) { _, _ in .installed }
         await waitUntil { model.livePlayback != nil }
+        await admitAfterFirstCall.value
         let calls = await mac.startCalls
         XCTAssertEqual(calls.count, 2)
         XCTAssertEqual(calls[0].request, calls[1].request, "A retry repeats the start body")

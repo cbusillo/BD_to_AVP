@@ -23,13 +23,13 @@ struct MovieSharingSheet: View {
                 }
             }
             if let candidate = controller.pairingCandidate {
-                GroupBox("Confirm Vision Pro") {
+                GroupBox("Vision Pro Wants to Play Movies from This Mac") {
                     VStack(spacing: 10) {
-                        Text("Compare this code with the one on Vision Pro.")
+                        Text("Allow only if Vision Pro shows this same code.")
                         Text(candidate.shortAuthenticationString.formattedDigits).font(.largeTitle.monospacedDigit().bold())
                         HStack {
-                            Button("Not My Device", role: .destructive) { Task { await controller.reject() } }
-                            Button(candidate.isMacApproved ? "Waiting for Vision Pro…" : "Codes Match") { Task { await controller.approve() } }
+                            Button("Don't Allow", role: .destructive) { Task { await controller.reject() } }
+                            Button(candidate.isMacApproved ? "Connecting…" : "Allow") { Task { await controller.approve() } }
                                 .disabled(candidate.isMacApproved)
                         }
                     }.frame(maxWidth: .infinity).padding(8)
