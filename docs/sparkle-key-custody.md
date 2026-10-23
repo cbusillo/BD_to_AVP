@@ -16,7 +16,7 @@ printed in logs, or uploaded as a workflow artifact.
   login keychain.
 - Recovery store: an Apple Passwords entry synchronized by iCloud Keychain.
 - GitHub environment: `sparkle-release`.
-- Target environment protection: protected `main` only, with no separate
+- Target environment protection: protected `main` only, with no
   required-review rule.
 - Reserved environment secret: `SPARKLE_EDDSA_PRIVATE_KEY`.
 - Production public key: `sparkle-public-ed-key.txt`.

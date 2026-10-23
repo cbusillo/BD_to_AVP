@@ -27,8 +27,7 @@ Release-specific requirements below still apply when release work is authorized.
   fingerprint emitted by `watch`. Do not call the pending-deployments API
   directly.
 - Approval must use the active local GitHub identity validated by the helper.
-  Never store a user token, make the automation bot a reviewer, or remove the
-  environment review to bypass the guarded approval path.
+  Never store a user token or make the automation bot a reviewer.
 - Keep `main` fixed while either release workflow is nonterminal. Coordinate a
   temporary merge hold on other pull requests because the workflows intentionally
   reject a release when protected `main` moves.
