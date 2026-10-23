@@ -16,8 +16,8 @@ printed in logs, or uploaded as a workflow artifact.
   login keychain.
 - Recovery store: an Apple Passwords entry synchronized by iCloud Keychain.
 - GitHub environment: `sparkle-release`.
-- Target environment protection: protected `main` only, with no separate
-  required-review rule. Release intent is approved once at `macos-signing`.
+- Target environment protection: protected `main` only, with no
+  required-review rule.
 - Reserved environment secret: `SPARKLE_EDDSA_PRIVATE_KEY`.
 - Production public key: `sparkle-public-ed-key.txt`.
 - Feed URL: `https://cbusillo.github.io/BD_to_AVP/appcast.xml`.
@@ -35,8 +35,7 @@ calls the same validated Pages workflow without referencing the private key.
 
 GitHub Pages uses the GitHub Actions deployment source, and the live feed is
 bound by `appcast-state.json` to a verified durable release snapshot. The
-`sparkle-release` environment is limited to `main` and does not add a second
-approval after the run has passed the `macos-signing` release-intent gate.
+`sparkle-release` environment is limited to `main` and needs no review.
 
 The production working key is stored in the maintainer's login keychain, its
 recovery copy is imported into Apple Passwords, and
