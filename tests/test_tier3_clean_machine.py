@@ -1710,16 +1710,18 @@ class Tier3CleanMachineTests(unittest.TestCase):
             (source / "fixture.txt").write_text("fixture\n", encoding="utf-8")
             dmg = root / "fixture.dmg"
             create = subprocess.run(
-                ["hdiutil", "create", "-quiet", "-ov", "-format", "UDZO", "-srcfolder", str(source), str(dmg)],
+                ["hdiutil", "makehybrid", "-hfs", "-o", str(dmg), str(source)],
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(create.returncode, 0, create.stderr)
+            self.assertEqual(create.returncode, 0, f"stdout:\n{create.stdout}\nstderr:\n{create.stderr}")
             mount_point = root / "mount"
             operations = MacOSOperations()
             operations._mount_dmg(dmg, mount_point)
-            self.assertEqual((mount_point / "fixture.txt").read_text(encoding="utf-8"), "fixture\n")
-            operations._detach_mounts([mount_point])
+            try:
+                self.assertEqual((mount_point / "fixture.txt").read_text(encoding="utf-8"), "fixture\n")
+            finally:
+                operations._detach_mounts([mount_point])
             self.assertFalse(mount_point.exists())
 
 
