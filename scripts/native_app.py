@@ -218,7 +218,7 @@ def xcodebuild(action: str, configuration: str) -> None:
                 action,
             ],
             cwd=MACOS_ROOT,
-            environment={**os.environ, "BD_TO_AVP_TEST_PYTHON": sys.executable},
+            environment={**os.environ, "TEST_RUNNER_BD_TO_AVP_TEST_PYTHON": sys.executable},
         )
 
 
