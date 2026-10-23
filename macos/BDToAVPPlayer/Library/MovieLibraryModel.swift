@@ -17,7 +17,6 @@ final class MovieLibraryModel: ObservableObject {
     @Published private(set) var selectedName = ""
     @Published private(set) var isBusy = false
     @Published private(set) var isSearching = false
-    @Published private(set) var isWaitingForMac = false
     @Published private(set) var status = "Find a Mac sharing completed movies."
     @Published private(set) var errorMessage: String?
     /// The live title being started, until it plays or fails.
@@ -79,7 +78,6 @@ final class MovieLibraryModel: ObservableObject {
         stopDiscovery()
         catalog = nil
         prompt = nil
-        isWaitingForMac = false
         isBusy = false
         errorMessage = nil
         refreshSavedMacs()
@@ -126,22 +124,14 @@ final class MovieLibraryModel: ObservableObject {
                 guard self.client === client, !Task.isCancelled else { return }
                 self.prompt = prompt
                 self.isBusy = false
-                self.status = "Compare the code with Movie Sharing on your Mac."
-                if prompt.isRemembered { try await completePairing(client) }
+                // The wearer compares the codes and clicks Allow on the Mac; the Mac's
+                // approval is the human check, so this side confirms without a button.
+                try await completePairing(client)
             } catch { show(error, for: client) }
         }
     }
 
-    func confirm() {
-        guard let client, !isWaitingForMac else { return }
-        connectionTask?.cancel()
-        connectionTask = Task {
-            do { try await completePairing(client) }
-            catch { show(error, for: client) }
-        }
-    }
-
-    func reject() {
+    func cancelPairing() {
         guard let client else { discover(); return }
         connectionTask?.cancel()
         connectionTask = Task {
@@ -320,15 +310,13 @@ final class MovieLibraryModel: ObservableObject {
     }
 
     private func completePairing(_ client: MovieLibraryClient) async throws {
-        isWaitingForMac = true
-        status = "Waiting for confirmation on the Mac…"
+        status = "Click Allow on your Mac."
         let deadline = Date().addingTimeInterval(300)
         while Date() < deadline {
             let complete = try await client.confirm(matches: true)
             guard self.client === client, !Task.isCancelled else { return }
             if complete {
                 prompt = nil
-                isWaitingForMac = false
                 let catalog = try await client.catalog()
                 guard self.client === client, !Task.isCancelled else { return }
                 isBusy = false
@@ -350,7 +338,6 @@ final class MovieLibraryModel: ObservableObject {
         guard self.connection === client, !Task.isCancelled else { return }
         errorMessage = error.localizedDescription
         isBusy = false
-        isWaitingForMac = false
         prompt = nil
         status = "Reconnect to the Mac to try again."
     }
