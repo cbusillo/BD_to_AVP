@@ -137,6 +137,8 @@ actor MovieCatalog {
     private var liveEntries: [String: LiveCatalogCandidate] = [:]
     private var cached: (listing: MovieCatalogListing, at: Date)?
     private var reading: Task<MovieCatalogListing, Error>?
+    private var lastReadFailed = false
+    private var readObserver: (@Sendable (MovieCatalogListing) async -> Void)?
     private var stopped = false
 
     typealias BookmarkResolver = @Sendable (Data) throws -> URL
@@ -227,9 +229,16 @@ actor MovieCatalog {
         roots.removeAll()
     }
 
-    /// Shared folders the last read could not open. Empty until the first read finishes.
+    /// Shared folders the last read could not open. Every folder when the last read did not
+    /// finish, since it cannot tell which one stalled. Empty until the first read ends.
     func unreadableRootIDs() -> Set<String> {
-        Set(cached?.listing.catalog.roots.filter { !$0.isAvailable }.map(\.id) ?? [])
+        if lastReadFailed { return Set(sources.map(\.id)) }
+        return Set(cached?.listing.catalog.roots.filter { !$0.isAvailable }.map(\.id) ?? [])
+    }
+
+    /// Called after every completed read, including background rereads.
+    func observeReads(_ observer: @escaping @Sendable (MovieCatalogListing) async -> Void) {
+        readObserver = observer
     }
 
     func snapshot() async throws -> SharedMovieCatalog {
@@ -262,7 +271,12 @@ actor MovieCatalog {
         let task = Task { try await self.walk() }
         reading = task
         defer { reading = nil }
-        return try await task.value
+        do {
+            return try await task.value
+        } catch {
+            if !stopped { lastReadFailed = true }
+            throw error
+        }
     }
 
     private func walk() async throws -> MovieCatalogListing {
@@ -277,13 +291,22 @@ actor MovieCatalog {
         }) else { throw MovieLibraryError.unavailable }
         let scan = try result.get()
         guard !stopped else { throw MovieLibraryError.unavailable }
-        entries = scan.entries
-        liveEntries = scan.live
+        if scan.catalog.truncated {
+            // A walk cut short never reached some files. Keep what the last read found for them,
+            // so playback of an unchanged file goes on; every read still rechecks the revision.
+            entries = scan.entries.merging(entries) { new, _ in new }
+            liveEntries = scan.live.merging(liveEntries) { new, _ in new }
+        } else {
+            entries = scan.entries
+            liveEntries = scan.live
+        }
         let candidates = scan.live.values.sorted {
             $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending
         }
         let listing = MovieCatalogListing(catalog: scan.catalog, liveCandidates: candidates)
         cached = (listing, now())
+        lastReadFailed = false
+        await readObserver?(listing)
         return listing
     }
 

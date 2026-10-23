@@ -267,8 +267,13 @@ actor MovieLibraryHost: RelayNetworkHosting {
     /// Reads the shared folders now and queues ISO checks, so the first headset request is fast
     /// and any macOS folder-access prompt appears while someone is at the Mac.
     func prepareCatalog() async throws {
+        if let live {
+            // Every read, including background rereads, queues checks for ISOs it finds.
+            await catalog.observeReads { listing in
+                _ = await live.index.titles(for: listing.liveCandidates)
+            }
+        }
         try await catalog.read()
-        _ = try await catalogSnapshot()
     }
 
     /// Shared folders the last read could not open.

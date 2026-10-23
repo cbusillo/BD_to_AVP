@@ -550,8 +550,11 @@ final class MovieLibraryLiveTests: XCTestCase {
         clock.advance(by: 30)
         let stale = try await catalog.listing()
         XCTAssertEqual(stale.catalog.movies.map(\.fileName), ["First.mov"], "An old listing is served while the reread runs")
-        _ = try await catalog.read()
-        let reread = try await catalog.listing()
+        var reread = stale
+        for _ in 0 ..< 500 where reread.catalog.movies.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+            reread = try await catalog.listing()
+        }
         XCTAssertEqual(reread.catalog.movies.map(\.fileName), ["First.mov", "Second.mov"])
         await catalog.stop()
     }

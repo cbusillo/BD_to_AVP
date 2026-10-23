@@ -164,11 +164,14 @@ final class MovieSharingController: ObservableObject {
             status = "Available on your local network. Open Mac Movies on Vision Pro."
             // Read the folders now rather than on the first headset request. A folder that
             // cannot be read yet, for example while macOS waits for consent, is tried again.
+            // A share that never answers leaves its file call running, so retries back off.
             preparation = Task { [host] in
+                var delay: TimeInterval = 10
                 while !Task.isCancelled {
                     let prepared = (try? await host.prepareCatalog()) != nil
                     if prepared, await host.unreadableFolderIDs().isEmpty { return }
-                    try? await Task.sleep(for: .seconds(10))
+                    try? await Task.sleep(for: .seconds(delay))
+                    delay = min(delay * 2, 300)
                 }
             }
             monitor = Task { [weak self, host] in
