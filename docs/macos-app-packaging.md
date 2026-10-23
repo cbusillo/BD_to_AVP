@@ -136,6 +136,12 @@ The Debug configuration uses a Development product and bundle identifier and
 contains no Sparkle distribution metadata. It cannot enroll in a production
 update route.
 
+Xcode signs Debug builds with an Apple Development certificate for the Shiny
+Computers team, so the signature macOS checks stays the same across rebuilds
+and worktrees. Folder and network-volume access approved in one Debug build
+still works in the next. Building Debug in Xcode needs such a certificate in
+the keychain; `native_app.py build` and `test` build without signing.
+
 The project version and repository build counter come from `pyproject.toml`.
 `scripts/release.py prepare` updates the package version, `uv.lock`, the app
 build counter, and Xcode Release metadata atomically. The package command also
