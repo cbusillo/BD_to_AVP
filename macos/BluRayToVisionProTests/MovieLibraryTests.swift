@@ -246,8 +246,12 @@ private struct MovieTestFixture {
         root = directory.appendingPathComponent("Approved", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
-    func catalog() throws -> MovieCatalog {
-        try MovieCatalog(sources: [MovieSourceBookmark(id: rootID, name: "Approved", bookmark: Data())], resolve: { _ in root })
+    func catalog(maxListingAge: TimeInterval? = nil, now: @escaping @Sendable () -> Date = { Date() }) throws -> MovieCatalog {
+        let root = root
+        return try MovieCatalog(
+            sources: [MovieSourceBookmark(id: rootID, name: "Approved", bookmark: Data())],
+            maxListingAge: maxListingAge, now: now, resolve: { _ in root }
+        )
     }
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }
@@ -526,6 +530,65 @@ final class MovieLibraryLiveTests: XCTestCase {
         await harness.index.waitUntilIdle()
         calls = await harness.inspector.calls
         XCTAssertEqual(calls, 2)
+        await harness.host.stop()
+    }
+
+    func testAListingIsServedFromTheLastReadAndRereadInTheBackgroundOnceItIsOld() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let clock = LiveTestClock()
+        try Data(repeating: 1, count: 8).write(to: fixture.root.appendingPathComponent("First.mov"))
+        let catalog = try fixture.catalog(maxListingAge: 30, now: { clock.now })
+        let first = try await catalog.listing()
+        XCTAssertEqual(first.catalog.movies.map(\.fileName), ["First.mov"])
+
+        try Data(repeating: 2, count: 8).write(to: fixture.root.appendingPathComponent("Second.mov"))
+        clock.advance(by: 10)
+        let fresh = try await catalog.listing()
+        XCTAssertEqual(fresh.catalog.movies.map(\.fileName), ["First.mov"], "A young listing is served without a walk")
+
+        clock.advance(by: 30)
+        let stale = try await catalog.listing()
+        XCTAssertEqual(stale.catalog.movies.map(\.fileName), ["First.mov"], "An old listing is served while the reread runs")
+        _ = try await catalog.read()
+        let reread = try await catalog.listing()
+        XCTAssertEqual(reread.catalog.movies.map(\.fileName), ["First.mov", "Second.mov"])
+        await catalog.stop()
+    }
+
+    func testAFolderThatCouldNotBeOpenedIsOpenedAgainOnTheNextRead() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        try Data(repeating: 1, count: 8).write(to: fixture.root.appendingPathComponent("Shared.mov"))
+        let consent = LockedFlag()
+        let root = fixture.root
+        let catalog = try MovieCatalog(
+            sources: [MovieSourceBookmark(id: fixture.rootID, name: "Approved", bookmark: Data())],
+            resolve: { _ in
+                guard consent.isSet else { throw CocoaError(.fileReadNoPermission) }
+                return root
+            }
+        )
+        let denied = try await catalog.read()
+        XCTAssertEqual(denied.catalog.roots.map(\.isAvailable), [false])
+        let unreadable = await catalog.unreadableRootIDs()
+        XCTAssertEqual(unreadable, [fixture.rootID])
+
+        consent.set()
+        let allowed = try await catalog.read()
+        XCTAssertEqual(allowed.catalog.movies.map(\.fileName), ["Shared.mov"])
+        let readable = await catalog.unreadableRootIDs()
+        XCTAssertTrue(readable.isEmpty)
+        await catalog.stop()
+    }
+
+    func testPreparingTheCatalogChecksISOsBeforeAnyHeadsetAsks() async throws {
+        let harness = try LiveHostHarness()
+        defer { harness.remove() }
+        try await harness.host.prepareCatalog()
+        await harness.index.waitUntilIdle()
+        let calls = await harness.inspector.calls
+        XCTAssertEqual(calls, 1)
         await harness.host.stop()
     }
 
@@ -858,11 +921,12 @@ final class MovieLibrarySourceAccessTests: XCTestCase {
 
         let catalog = try await MovieCatalog.open(
             sources: [MovieSourceBookmark(id: fixture.rootID, name: "Share", bookmark: Data())],
-            deadline: 0.3
-        ) { _ in
-            Thread.sleep(forTimeInterval: blockingFileCall)
-            return root
-        }
+            deadline: 0.3,
+            resolve: { _ in
+                Thread.sleep(forTimeInterval: blockingFileCall)
+                return root
+            }
+        )
         let elapsed = Date().timeIntervalSince(started)
 
         XCTAssertLessThan(elapsed, 1.5, "the open gives up at its limit")
@@ -1025,4 +1089,12 @@ final class LiveTitleIndexLifecycleTests: XCTestCase {
         await oversized.stop()
         await catalog.stop()
     }
+}
+
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.withLock { value } }
+    func set() { lock.withLock { value = true } }
 }

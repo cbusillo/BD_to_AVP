@@ -113,6 +113,12 @@ struct LiveCatalogCandidate: Sendable {
     let components: [String]
 }
 
+/// The movies and live ISO candidates one read of the shared folders found.
+struct MovieCatalogListing: Sendable {
+    let catalog: SharedMovieCatalog
+    let liveCandidates: [LiveCatalogCandidate]
+}
+
 actor MovieCatalog {
     private struct Entry: Sendable {
         let movie: SharedMovie
@@ -120,9 +126,17 @@ actor MovieCatalog {
         let components: [String]
     }
     private let sources: [MovieSourceBookmark]
+    private let resolve: BookmarkResolver
+    private let openDeadline: TimeInterval
+    /// How long a listing is served before a request starts a background reread; nil rereads on
+    /// every request.
+    private let maxListingAge: TimeInterval?
+    private let now: @Sendable () -> Date
     private var roots: [String: MovieRootDirectory] = [:]
     private var entries: [String: Entry] = [:]
     private var liveEntries: [String: LiveCatalogCandidate] = [:]
+    private var cached: (listing: MovieCatalogListing, at: Date)?
+    private var reading: Task<MovieCatalogListing, Error>?
     private var stopped = false
 
     typealias BookmarkResolver = @Sendable (Data) throws -> URL
@@ -134,26 +148,31 @@ actor MovieCatalog {
 
     /// Resolves and opens the approved roots off the caller, each within `deadline`. A root on a
     /// share that does not answer in time (for example while macOS waits for network-volume
-    /// consent) is listed as unavailable instead of blocking the caller.
+    /// consent) is listed as unavailable instead of blocking the caller, and is opened again on
+    /// the next read.
     static func open(
         sources: [MovieSourceBookmark],
         deadline: TimeInterval = BoundedFileAccess.defaultDeadline,
+        maxListingAge: TimeInterval? = 30,
+        now: @escaping @Sendable () -> Date = { Date() },
         resolve: @escaping BookmarkResolver = resolveSecurityScopedBookmark
     ) async throws -> MovieCatalog {
         try validate(sources)
-        var roots: [String: MovieRootDirectory] = [:]
-        for source in sources {
-            let opened = await BoundedFileAccess.run(deadline: deadline) {
-                (try? resolve(source.bookmark)).flatMap { try? MovieRootDirectory(source: source, url: $0) }
-            }
-            if let root = opened ?? nil { roots[source.id] = root }
-        }
-        return MovieCatalog(sources: sources, roots: roots)
+        let catalog = MovieCatalog(
+            sources: sources, roots: [:], resolve: resolve, openDeadline: deadline, maxListingAge: maxListingAge, now: now
+        )
+        await catalog.openMissingRoots()
+        return catalog
     }
 
     /// Opens the roots on the calling thread. Only for tests with local folders; the app uses
     /// `open(sources:)`.
-    init(sources: [MovieSourceBookmark], resolve: BookmarkResolver = resolveSecurityScopedBookmark) throws {
+    init(
+        sources: [MovieSourceBookmark],
+        maxListingAge: TimeInterval? = nil,
+        now: @escaping @Sendable () -> Date = { Date() },
+        resolve: @escaping BookmarkResolver = resolveSecurityScopedBookmark
+    ) throws {
         try Self.validate(sources)
         var roots: [String: MovieRootDirectory] = [:]
         for source in sources {
@@ -161,12 +180,37 @@ actor MovieCatalog {
                 roots[source.id] = root
             }
         }
-        self.init(sources: sources, roots: roots)
+        self.init(
+            sources: sources, roots: roots, resolve: resolve, openDeadline: BoundedFileAccess.defaultDeadline,
+            maxListingAge: maxListingAge, now: now
+        )
     }
 
-    private init(sources: [MovieSourceBookmark], roots: [String: MovieRootDirectory]) {
+    private init(
+        sources: [MovieSourceBookmark],
+        roots: [String: MovieRootDirectory],
+        resolve: @escaping BookmarkResolver,
+        openDeadline: TimeInterval,
+        maxListingAge: TimeInterval?,
+        now: @escaping @Sendable () -> Date
+    ) {
         self.sources = sources
         self.roots = roots
+        self.resolve = resolve
+        self.openDeadline = openDeadline
+        self.maxListingAge = maxListingAge
+        self.now = now
+    }
+
+    private func openMissingRoots() async {
+        for source in sources where roots[source.id] == nil {
+            let resolve = resolve
+            let opened = await BoundedFileAccess.run(deadline: openDeadline) {
+                (try? resolve(source.bookmark)).flatMap { try? MovieRootDirectory(source: source, url: $0) }
+            }
+            guard !stopped else { return }
+            if let root = opened ?? nil { roots[source.id] = root }
+        }
     }
 
     private static func validate(_ sources: [MovieSourceBookmark]) throws {
@@ -177,9 +221,15 @@ actor MovieCatalog {
 
     func stop() {
         stopped = true
+        cached = nil
         entries.removeAll()
         liveEntries.removeAll()
         roots.removeAll()
+    }
+
+    /// Shared folders the last read could not open. Empty until the first read finishes.
+    func unreadableRootIDs() -> Set<String> {
+        Set(cached?.listing.catalog.roots.filter { !$0.isAvailable }.map(\.id) ?? [])
     }
 
     func snapshot() async throws -> SharedMovieCatalog {
@@ -192,7 +242,32 @@ actor MovieCatalog {
     }
 
     /// Movies, plus the ISOs that may stream live, sorted by name. ISOs never enter `movies`.
-    func listing() async throws -> (catalog: SharedMovieCatalog, liveCandidates: [LiveCatalogCandidate]) {
+    /// A listing younger than `maxListingAge` is served as is; an older one is served while a
+    /// reread runs in the background, so a request never waits on a walk it does not need.
+    func listing() async throws -> MovieCatalogListing {
+        guard !stopped else { throw MovieLibraryError.unavailable }
+        if let maxListingAge, let cached {
+            if now().timeIntervalSince(cached.at) > maxListingAge, reading == nil {
+                Task { _ = try? await self.read() }
+            }
+            return cached.listing
+        }
+        return try await read()
+    }
+
+    /// Reads the shared folders now, joining a read that is already running.
+    @discardableResult
+    func read() async throws -> MovieCatalogListing {
+        if let reading { return try await reading.value }
+        let task = Task { try await self.walk() }
+        reading = task
+        defer { reading = nil }
+        return try await task.value
+    }
+
+    private func walk() async throws -> MovieCatalogListing {
+        guard !stopped else { throw MovieLibraryError.unavailable }
+        await openMissingRoots()
         guard !stopped else { throw MovieLibraryError.unavailable }
         let sources = sources
         let roots = roots
@@ -207,7 +282,9 @@ actor MovieCatalog {
         let candidates = scan.live.values.sorted {
             $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending
         }
-        return (scan.catalog, candidates)
+        let listing = MovieCatalogListing(catalog: scan.catalog, liveCandidates: candidates)
+        cached = (listing, now())
+        return listing
     }
 
     private struct Scan: Sendable {

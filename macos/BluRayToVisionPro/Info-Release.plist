@@ -43,8 +43,10 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>3D Blu-ray to Vision Pro shares movies from folders you choose with your paired Vision Pro on the local network.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>3D Blu-ray to Vision Pro reads the movie folders you share from network drives so your paired Vision Pro can play them.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
-	<string>3D Blu-ray to Vision Pro reads the 3D Blu-ray disc in your drive to find the movie you want to convert.</string>
+	<string>3D Blu-ray to Vision Pro reads 3D Blu-ray discs and the movie folders you share from external drives.</string>
 	<key>SUAllowsAutomaticUpdates</key>
 	<false/>
 	<key>SUFeedURL</key>

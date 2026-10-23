@@ -264,6 +264,18 @@ actor MovieLibraryHost: RelayNetworkHosting {
 
     // MARK: - Catalog
 
+    /// Reads the shared folders now and queues ISO checks, so the first headset request is fast
+    /// and any macOS folder-access prompt appears while someone is at the Mac.
+    func prepareCatalog() async throws {
+        try await catalog.read()
+        _ = try await catalogSnapshot()
+    }
+
+    /// Shared folders the last read could not open.
+    func unreadableFolderIDs() async -> Set<String> {
+        await catalog.unreadableRootIDs()
+    }
+
     private func catalogSnapshot() async throws -> SharedMovieCatalog {
         let listing = try await catalog.listing()
         guard let live, !listing.liveCandidates.isEmpty else { return listing.catalog }

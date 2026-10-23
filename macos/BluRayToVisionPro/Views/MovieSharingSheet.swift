@@ -45,6 +45,10 @@ struct MovieSharingSheet: View {
                             Button("Remove") { Task { await controller.removeFolder(source.id) } }
                                 .disabled(controller.isBusy)
                         }
+                        if controller.unreadableFolderIDs.contains(source.id) {
+                            Label("This Mac can't read this folder. Allow access if macOS asks, or remove the folder and add it again.", systemImage: "exclamationmark.triangle")
+                                .font(.callout).foregroundStyle(.orange)
+                        }
                     }
                     Button("Add Folder…") { Task { await controller.addFolders() } }
                         .disabled(controller.isBusy || controller.sources.count >= MovieLibraryContract.maximumRoots)
