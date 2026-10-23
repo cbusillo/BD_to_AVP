@@ -113,7 +113,7 @@ uv run python -m scripts.github_release_run watch \
 ```
 
 Exit code `20` means the run is waiting for `macos-signing` approval and prints
-an approval fingerprint. If approval is required, use the guarded command as `cbusillo`:
+an approval fingerprint. Use the guarded command as `cbusillo`:
 
 ```sh
 uv run python -m scripts.github_release_run approve \

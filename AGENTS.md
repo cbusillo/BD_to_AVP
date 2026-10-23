@@ -22,7 +22,7 @@ Release-specific requirements below still apply when release work is authorized.
   A generic `gh run watch` or run waiter is not sufficient on its own.
 - The watcher exit code `20` means a GitHub environment approval is required.
   Surface that gate immediately; do not continue silently polling a waiting run.
-- If `macos-signing` requires approval, use `scripts.github_release_run approve` with
+- When `watch` exits `20`, use `scripts.github_release_run approve` with the
   exact run ID, workflow name, full `main` SHA, confirmation SHA, and approval
   fingerprint emitted by `watch`. Do not call the pending-deployments API
   directly.
