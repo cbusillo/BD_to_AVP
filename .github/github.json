@@ -159,7 +159,8 @@
     },
     "test": {
       "observabilityMigration": "uv run python scripts/validate_observability_migration.py",
-      "unitSmoke": "uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs tests",
+      "local": "uv run pytest -p no:cacheprovider -rs {test_paths}",
+      "ci": "uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs --durations 20 tests",
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
       "signedArtifactUi": "uv run python -m unittest tests.test_signed_artifact_ui",
       "preSigningUi": "uv run python -m unittest tests.test_installed_ui_qualification tests.test_pre_signing_ui tests.test_signed_artifact_ui",

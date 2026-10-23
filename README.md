@@ -534,6 +534,13 @@ applies to this repository; it has no separate DIRECTION.md. Agents start with
 records repository-specific release and validation requirements. GitHub issues
 hold the work plan.
 
+### Local tests and CI
+
+Follow [AGENTS.md's test selection](AGENTS.md#tests) and the commands in
+`.github/github.json`. The CI workflow owns fixture setup and the hosted Vision
+exception. [Native MVC integration](docs/native-mvc-integration.md) documents
+the external-fixture lane; the PGS guide above covers actual OCR qualification.
+
 ### TLS lint
 
 Run `qualityGate.lint.default` from `.github/github.json` before a PR. The

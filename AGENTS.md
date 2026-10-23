@@ -49,5 +49,11 @@ Release-specific requirements below still apply when release work is authorized.
 # Tests
 
 Follow the shared [Tests rule](https://github.com/cbusillo/codex-skills/blob/main/instructions/global.md#tests).
+The [local/CI command contract](https://github.com/cbusillo/codex-skills/blob/main/skills/github/references/config-schema.md#workflow-metadata)
+applies through `.github/github.json`. Replace `{test_paths}` with the affected
+test paths locally, selecting complete safety modules through the changed
+code's callers. CI reads `test.ci` for the complete Python suite and retains
+its native app, diagnostics and player gates. Fixture and hosted-platform
+requirements remain in their workflow steps and linked testing guides.
 Here, release workflow structure is checked by rule in
 `tests/test_workflow_security_policy.py`.
