@@ -73,6 +73,6 @@ this gated lane.
 Planted-fault evidence belongs in the pull request: invert the production eye
 mapping, drop a decoded frame, suppress the decoder's damage warning, or run a
 decoder with the damage-skip guard removed. The relevant test must fail; restore
-the original code before the full suite and commit. A bounded sleeping decoder substitute
+the original code, rerun the affected module, then commit. A bounded sleeping decoder substitute
 can additionally verify timeout handling, but is not evidence that a real
 decoder regression was reproduced.

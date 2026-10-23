@@ -534,6 +534,18 @@ applies to this repository; it has no separate DIRECTION.md. Agents start with
 records repository-specific release and validation requirements. GitHub issues
 hold the work plan.
 
+### Local tests and CI
+
+Use the [local/CI test contract](https://github.com/cbusillo/codex-skills/blob/main/skills/github/references/config-schema.md#workflow-metadata).
+Replace `{test_paths}` in `.github/github.json`'s `test.local` with the tests
+covering the changed behavior. For release and approval changes, include whole
+affected modules such as `tests/test_workflow_security_policy.py` and
+`tests/test_macos_release.py`, tracing callers for additional coverage.
+The complete Python suite is `test.ci`; CI also retains its native app,
+support-diagnostics and player lanes. The documented external-fixture and
+hosted Vision limitations still apply. Keep required lint, type and inspection
+checks alongside local tests.
+
 ### TLS lint
 
 Run `qualityGate.lint.default` from `.github/github.json` before a PR. The
