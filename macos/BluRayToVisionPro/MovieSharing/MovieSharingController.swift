@@ -10,6 +10,8 @@ final class MovieSharingController: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var status = "Add a folder of completed movies to share with Vision Pro."
     @Published private(set) var liveActivity: MovieLiveActivity?
+    /// Shared folders the Mac could not read the last time it looked.
+    @Published private(set) var unreadableFolderIDs: Set<String> = []
     @Published var errorMessage: String?
     /// True while the conversion queue has an active worker. Live playback still runs, and the
     /// Vision Pro shows that the Mac is busy converting.
@@ -23,6 +25,7 @@ final class MovieSharingController: ObservableObject {
     private var server: RelayNetworkServer?
     private var host: MovieLibraryHost?
     private var monitor: Task<Void, Never>?
+    private var preparation: Task<Void, Never>?
     private var epoch = UUID()
     private var hasRestored = false
     private static let foldersKey = "movieSharing.approvedFolders.v1"
@@ -91,8 +94,19 @@ final class MovieSharingController: ObservableObject {
             sources = updated
             defaults.set(encoded, forKey: Self.foldersKey)
             isBusy = false
-            if wasSharing { await setSharing(true) }
+            if wasSharing { await setSharing(true) } else { await checkFolders() }
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Reads the folders once while sharing is off, so macOS asks for access now, at the Mac.
+    private func checkFolders() async {
+        let attempt = epoch
+        guard let catalog = try? await MovieCatalog.open(sources: sources) else { return }
+        _ = try? await catalog.read()
+        let unreadable = await catalog.unreadableRootIDs()
+        await catalog.stop()
+        guard epoch == attempt, !isSharing else { return }
+        unreadableFolderIDs = unreadable
     }
 
     func removeFolder(_ id: String) async {
@@ -148,15 +162,29 @@ final class MovieSharingController: ObservableObject {
             isSharing = true
             defaults.set(true, forKey: Self.enabledKey)
             status = "Available on your local network. Open Mac Movies on Vision Pro."
+            // Read the folders now rather than on the first headset request. A folder that
+            // cannot be read yet, for example while macOS waits for consent, is tried again.
+            // A share that never answers leaves its file call running, so retries back off.
+            preparation = Task { [host] in
+                var delay: TimeInterval = 10
+                while !Task.isCancelled {
+                    let prepared = (try? await host.prepareCatalog()) != nil
+                    if prepared, await host.unreadableFolderIDs().isEmpty { return }
+                    try? await Task.sleep(for: .seconds(delay))
+                    delay = min(delay * 2, 300)
+                }
+            }
             monitor = Task { [weak self, host] in
                 while !Task.isCancelled {
                     let candidate = try? await host.pendingCandidate()
                     let lifecycle = await host.currentLifecycle()
                     let activity = await host.liveActivity()
+                    let unreadable = await host.unreadableFolderIDs()
                     guard let self, self.host === host, !Task.isCancelled else { return }
                     if self.pairingCandidate?.candidateID != candidate?.candidateID { self.refreshPeers() }
                     self.pairingCandidate = candidate
                     if self.liveActivity != activity { self.liveActivity = activity }
+                    if self.unreadableFolderIDs != unreadable { self.unreadableFolderIDs = unreadable }
                     if lifecycle == .stopped {
                         await self.stopForAppQuit()
                         self.errorMessage = "Movie sharing lost its network connection. Turn sharing on again."
@@ -182,11 +210,14 @@ final class MovieSharingController: ObservableObject {
     private func endSession() async {
         monitor?.cancel()
         monitor = nil
+        preparation?.cancel()
+        preparation = nil
         let server = self.server
         self.server = nil
         host = nil
         pairingCandidate = nil
         liveActivity = nil
+        unreadableFolderIDs = []
         isSharing = false
         status = "Movie sharing is off."
         await server?.stopForAppQuit()
