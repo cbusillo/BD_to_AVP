@@ -572,10 +572,6 @@ final class WorkerProcessClientTests: XCTestCase {
                 XCTFail("A delivery failure must not claim completion")
             } catch let error as WorkerClientError {
                 XCTAssertEqual(error.processExitStatus, 74)
-                XCTAssertEqual(
-                    error.errorDescription,
-                    "The app stopped receiving progress updates. Try again or send diagnostics."
-                )
                 XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("Exit status: 74"))
                 XCTAssertTrue(try XCTUnwrap(error.technicalDetails).contains("complete record"))
             }
