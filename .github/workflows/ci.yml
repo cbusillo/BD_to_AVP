@@ -154,7 +154,10 @@ jobs:
             Hosted macOS VM Vision OCR returns false without NSError; physical
             Macs on the same build pass (#893). Real PGS extraction/mux still
             runs with bitmap-checked recognition. Run locally for actual OCR.
-        run: uv run pytest -n auto --dist loadscope -p no:cacheprovider -rs --durations 20 tests
+        run: |
+          set -euo pipefail
+          test_command="$(jq -er '.qualityGate.test.ci | select(type == "string" and length > 0)' .github/github.json)"
+          bash -euo pipefail -c "$test_command"
 
       - name: Diagnose hosted native Vision OCR
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.vision_ocr_diagnostics }}
