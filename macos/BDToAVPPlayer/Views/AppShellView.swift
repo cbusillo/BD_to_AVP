@@ -187,14 +187,14 @@ struct AppShellView: View {
     }
 
     /// Live titles start on the Mac first; the model installs the stream in the player once it
-    /// is live. There is no resume for live titles.
+    /// is live. Live titles start from the beginning; the player says so when one was watched before.
     private func startLivePlayback(_ title: SharedLiveTitle) {
         preparationTask?.cancel()
         preparationTask = nil
         sharedPlayback = nil
         liveTitle = title
         movieLibrary.startLive(title) { configuration, context in
-            await playerSession.prepareRelayPlayback(configuration, live: context)
+            await playerSession.prepareRelayPlayback(configuration, live: context, resumeStore: resumeStore)
         }
     }
 

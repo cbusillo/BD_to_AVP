@@ -457,6 +457,14 @@ private struct PlayerOrnamentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if let notice = session.resumeNotice {
+                Label(notice, systemImage: "arrow.counterclockwise")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("player-resume-notice")
+            }
+
             if let notice = session.relaySeekNotice {
                 Label(notice, systemImage: "clock.arrow.circlepath")
                     .font(.subheadline)

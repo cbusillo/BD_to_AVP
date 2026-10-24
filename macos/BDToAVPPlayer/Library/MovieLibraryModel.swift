@@ -1,8 +1,22 @@
 import Foundation
 
 struct SharedMoviePlayback: Sendable {
+    typealias Read = @Sendable (SharedMovie, Int64, Int) async throws -> Data
+
     let movie: SharedMovie
-    let client: MovieLibraryClient
+    let read: Read
+
+    init(movie: SharedMovie, read: @escaping Read) {
+        self.movie = movie
+        self.read = read
+    }
+
+    init(movie: SharedMovie, client: MovieLibraryClient) {
+        self.init(movie: movie) { movie, offset, count in
+            try await client.bytes(movie: movie, offset: offset, count: count)
+        }
+    }
+
     var mediaItem: MediaItem {
         MediaItem(id: movie.resumeID, title: movie.title, fileName: movie.fileName, format: .mvHEVC)
     }
@@ -233,6 +247,7 @@ final class MovieLibraryModel: ObservableObject {
                     title: title.title,
                     streamID: ready.streamID,
                     durationSeconds: title.durationSeconds,
+                    resumeID: title.resumeID,
                     status: { try? await connection.liveStatus(streamID: ready.streamID) },
                     ended: { [weak self] in self?.installedLivePlaybackEnded(owner) }
                 )
