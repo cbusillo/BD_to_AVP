@@ -499,7 +499,7 @@ final class MovieLibraryLiveTests: XCTestCase {
 
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         var titles = try XCTUnwrap(object["liveTitles"] as? [[String: Any]])
-        titles.append(["liveVersion": 2, "someFutureShape": true])
+        titles.append(["liveVersion": MovieLibraryContract.liveVersion + 1, "someFutureShape": true])
         object["liveTitles"] = titles
         let future = try JSONDecoder().decode(SharedMovieCatalog.self, from: JSONSerialization.data(withJSONObject: object))
         XCTAssertEqual(future.liveTitles.map(\.id), [title.id])
@@ -658,6 +658,8 @@ final class MovieLibraryLiveTests: XCTestCase {
         XCTAssertEqual(call.id, streamID)
         XCTAssertEqual(call.request.playlist, 1005, "the playlist comes from the index")
         XCTAssertEqual(call.request.audioPID, 4352)
+        XCTAssertEqual(call.request.audioTracks, title.audio, "the stream carries every track the catalog lists")
+        XCTAssertEqual(call.request.alternateAudio.map(\.pid), [4353])
         XCTAssertNotNil(call.request.source.retainer as? LiveSourceDescriptorHolding)
 
         let status = try await harness.client.liveStatus(streamID: streamID)

@@ -2,7 +2,9 @@
 """Stand-ins for edge264_test, FFmpeg, and the MV-HEVC encoder, chosen by file name.
 
 The decoder and normalizer stream bytes through, the audio decoder copies its input to
-the PCM path, and the encoder records what it received and writes staged HLS output.
+the PCM path, an alternate audio encoder (FFmpeg writing HLS) records its input and
+writes 1.92-second staged segments, and the encoder records what it received and writes
+staged HLS output.
 FAKE_LIVE_HLS_MODE selects the encoder: ``batch`` (default) publishes after reading all
 input, ``streaming`` publishes a segment per input chunk, ``stall`` publishes one
 segment and then keeps reading without publishing again, and ``media`` counts the
@@ -33,11 +35,16 @@ def atomic_write(path: Path, data: bytes) -> None:
 
 
 class StagedOutput:
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, target_duration: int = 3) -> None:
         self.directory = directory
-        self.lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:3", '#EXT-X-MAP:URI="init.mp4"']
+        self.lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:7",
+            f"#EXT-X-TARGETDURATION:{target_duration}",
+            '#EXT-X-MAP:URI="init.mp4"',
+        ]
         self.count = 0
-        directory.mkdir(parents=True)
+        directory.mkdir(parents=True, exist_ok=True)
         atomic_write(directory / "init.mp4", b"init")
 
     def segment(self, duration: float, size: int) -> None:
@@ -116,7 +123,21 @@ def pass_through() -> None:
         sys.stdout.buffer.flush()
 
 
+def alternate_audio_encoder(arguments: list[str]) -> int:
+    playlist = Path(arguments[-1])
+    data = sys.stdin.buffer.read()
+    record(f"{playlist.parent.name}.bin", data)
+    record(f"{playlist.parent.name}-arguments.json", json.dumps(arguments).encode())
+    output = StagedOutput(playlist.parent, target_duration=2)
+    output.segment(1.92, 32)
+    output.segment(0.5, 16)
+    output.end()
+    return 0
+
+
 def ffmpeg(arguments: list[str]) -> int:
+    if "hls" in arguments:
+        return alternate_audio_encoder(arguments)
     if "s16le" not in arguments:
         pass_through()
         return 0

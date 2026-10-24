@@ -26,8 +26,11 @@ paths are unchanged.
 records to standard output:
 
 ```text
-ssif_probe stream-service SOURCE PLAYLIST AUDIO_PID [MAXIMUM_PAIRS]
+ssif_probe stream-service SOURCE PLAYLIST AUDIO_PID[,ALTERNATE_PID...] [MAXIMUM_PAIRS]
 ```
+
+The first PID is the selected audio. Up to seven more distinct PIDs from the same
+clip are alternate tracks; `start_live_hls` uses them for audio choices.
 
 Each record begins with a 40-byte big-endian header:
 
@@ -35,8 +38,8 @@ Each record begins with a 40-byte big-endian header:
 | --- | ---: | --- |
 | 0 | 4 | `SSFS` magic |
 | 4 | 1 | frame contract version (`1`) |
-| 5 | 1 | record kind: MVC (`1`), audio (`2`), completion (`3`) |
-| 6 | 2 | flags; bit zero marks an MVC random-access boundary |
+| 5 | 1 | record kind: MVC (`1`), audio (`2`), completion (`3`), alternate audio (`4`) |
+| 6 | 2 | flags; bit zero marks an MVC random-access boundary; for alternate audio, the track's 1-based position in the PID list after the selected one |
 | 8 | 8 | monotonically increasing record sequence |
 | 16 | 8 | raw 90 kHz PTS |
 | 24 | 8 | raw 90 kHz DTS |
@@ -44,7 +47,10 @@ Each record begins with a 40-byte big-endian header:
 | 36 | 4 | secondary payload length |
 
 An MVC record contains base-view Annex B followed by the matched dependent-view
-Annex B payload. An audio record contains the selected PES payload. The helper
+Annex B payload. An audio record contains the selected PES payload, and an
+alternate audio record contains one alternate track's PES payload. Once a
+`MAXIMUM_PAIRS` bound is reached, alternate tracks stop while the selected audio
+is flushed through the final video DTS. The helper
 marks random access only when the base access unit contains an IDR NAL. It
 rejects unavailable audio, non-monotonic MVC DTS, unmatched stereo PES data,
 oversized pending data, unsupported source shapes, and malformed transport

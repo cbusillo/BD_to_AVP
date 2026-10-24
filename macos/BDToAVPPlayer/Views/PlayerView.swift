@@ -699,7 +699,7 @@ private struct PlayerOrnamentView: View {
             title: "Audio language",
             systemImage: "character.bubble",
             identifier: "player-audio-menu",
-            isEnabled: !session.audioOptions.isEmpty,
+            isEnabled: session.isReady,
             selectedName: session.audioOptions.first { $0.id == session.selectedAudioID }?.displayName
         )
     }
@@ -710,7 +710,7 @@ private struct PlayerOrnamentView: View {
             title: "Subtitles",
             systemImage: "captions.bubble",
             identifier: "player-subtitle-menu",
-            isEnabled: !session.subtitleOptions.isEmpty,
+            isEnabled: session.isReady,
             selectedName: session.subtitleOptions.first { $0.id == session.selectedSubtitleID }?.displayName
         )
     }
@@ -748,6 +748,7 @@ private struct PlayerOrnamentView: View {
             trackList(
                 title: "Audio Language",
                 identifier: "player-audio-tracks",
+                note: PlaybackTrackListNote.note(for: .audio, optionCount: session.audioOptions.count),
                 options: session.audioOptions,
                 selectedID: session.selectedAudioID,
                 select: { session.selectAudio(id: $0) }
@@ -756,6 +757,7 @@ private struct PlayerOrnamentView: View {
             trackList(
                 title: "Subtitles",
                 identifier: "player-subtitle-tracks",
+                note: PlaybackTrackListNote.note(for: .subtitles, optionCount: session.subtitleOptions.count),
                 options: session.subtitleOptions,
                 selectedID: session.selectedSubtitleID,
                 select: { session.selectSubtitle(id: $0) }
@@ -766,6 +768,7 @@ private struct PlayerOrnamentView: View {
     private func trackList(
         title: String,
         identifier: String,
+        note: String?,
         options: [PlaybackMediaOption],
         selectedID: String,
         select: @escaping (String) -> Void
@@ -812,6 +815,13 @@ private struct PlayerOrnamentView: View {
                 }
             }
             .frame(height: min(260, CGFloat(options.count) * 48))
+
+            if let note {
+                Text(note)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("\(identifier)-note")
+            }
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))

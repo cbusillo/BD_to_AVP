@@ -91,7 +91,10 @@ for up to 2 minutes while any title is checking, and stops on disconnect, redisc
 or leaving the library. An ineligible title shows the Mac's reason and cannot start.
 
 Choosing an eligible title starts it with the first audio track in the headset's most
-preferred language that the title has, or the disc's first track when none matches:
+preferred language that the title has, or the disc's first track when none matches.
+The Mac carries the title's other supported tracks too, so the audio list offers every
+track and switching keeps the playhead; see [Live HLS Service](live-hls-service.md#alternate-audio).
+Live titles carry no subtitles yet, and the subtitle list says so:
 
 1. The player creates a start ID and sends `POST /movies/v1/live/start`, signed with
    the movie session at `issuedAt`, the signed time of that first request. A retry
@@ -590,7 +593,9 @@ notices: before the window, playback continues at its start; past the live edge,
 playback moves to the latest available time and says how far the relay reaches.
 
 The MV-HEVC audio language and subtitle lists open inside the controls ornament,
-below the transport row, rather than as system menus. A menu presented from the
+below the transport row, rather than as system menus. Both buttons are enabled once
+the movie is ready. A list with nothing to choose between says so: **This title has
+one audio track.** or **This title has no subtitles.** A menu presented from the
 ornament opened behind the video in the headset. Packed-stereo controls
 use AVKit's native visibility behavior; revealing the playback controls also
 reveals actions labeled **Eye Order: Normal** or **Eye Order: Reversed** and

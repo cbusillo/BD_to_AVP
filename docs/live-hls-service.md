@@ -4,7 +4,8 @@
 
 The worker operation `start_live_hls` turns an unencrypted, single-clip,
 single-angle Blu-ray 3D ISO or BDMV folder into a bounded live MV-HEVC HLS
-stream with the selected audio muxed as AAC. It writes only to its workspace.
+stream with the selected audio muxed as AAC and the title's other audio tracks as
+alternate AAC renditions. It writes only to its workspace.
 It does not serve the stream over the network, pair a headset, or decrypt
 anything; the relay reads the workspace.
 
@@ -32,6 +33,7 @@ Request:
   "live_hls": {
     "playlist": 1005,
     "audio_pid": 4353,
+    "alternate_audio_pids": [4352],
     "retention_seconds": 120,
     "retention_max_bytes": 268435456,
     "maximum_pairs": 14434,
@@ -44,6 +46,9 @@ Request:
 64 MiB. `maximum_pairs` is optional and bounds qualification runs. The source
 must be an ISO or Blu-ray folder, and the workspace must be empty and outside
 the source.
+
+`alternate_audio_pids` is optional: up to seven distinct PIDs other than
+`audio_pid`. Each becomes an alternate audio rendition (see Alternate audio).
 
 `viewer_lead_seconds` is optional, from 10 through half of
 `retention_seconds`; it turns on viewer pacing (see Backpressure).
@@ -110,6 +115,28 @@ ssif_probe stream-service ─┬─ video ─> edge264_test -Osk ─> ffmpeg cro
 
 Multichannel sources are downmixed to stereo by FFmpeg.
 
+### Alternate audio
+
+Each alternate PID rides the same source read: `ssif_probe` tags its records
+as alternate audio, and the worker feeds each track to its own FFmpeg, which
+decodes it, downmixes to stereo 48 kHz, encodes 192 kbps AAC, and writes
+1.92-second fMP4 segments (90 AAC frames, so no segment rounds past the
+2-second target) to `.pipeline/audio-<pid>`. The worker places each track on
+the video timeline from its first PES the way the encoder places the selected
+track: leading audio before the first frame is trimmed, and late audio is
+delayed by its offset. A PID that is not in the clip or whose codec FFmpeg
+cannot read raw (LPCM, TrueHD) is skipped with an
+`unsupported_live_alternate_audio` warning. Startup waits up to 2 seconds of
+media past the first keyframe for each track's first PES; a track that has not
+started by then is left out with `live_alternate_audio_unavailable`. The
+selected track still plays either way.
+
+The first `artifact.ready`, playlist, and manifest wait until every carried
+rendition has a segment, and `complete` waits until every rendition has ended.
+The renditions are bounded by the same time window as the video, with their
+own 64 MiB byte cap. They never hold the source: audio is about 1/100 of the
+video's size.
+
 ## Workspace
 
 The encoder writes only to `.pipeline/encoder`. The worker owns the public
@@ -121,6 +148,8 @@ sees a partial file or a playlist naming a missing one.
 ```text
 init.mp4
 segment-000000000.m4s …
+audio-<pid>-init.mp4
+audio-<pid>-segment-000000000.m4s …
 media.m3u8
 live-hls.json
 ```
@@ -136,7 +165,12 @@ and size, the earliest and latest available positions in microseconds, the
 retention limits, the retained bytes, and the video and audio stream identities.
 It also lists `retired_segments` (URI, size, and `delete_after_unix`),
 `retired_bytes`, and `retired_allowance_bytes`. `complete` becomes true with
-`EXT-X-ENDLIST`.
+`EXT-X-ENDLIST`. With alternate audio, `audio_renditions` lists each carried
+track in request order: its stream identity (`source_pid`, `source_language`,
+codec), `complete`, `initialization`, `target_duration_seconds`,
+`media_sequence`, the earliest and latest positions, `segments`, and
+`retired_segments`, in the same form as the video's. `media.m3u8` stays the
+video's playlist; the relay renders the rest.
 
 ## Retention
 
@@ -252,12 +286,25 @@ from the source lease.
 - **Serving.** Only `init.mp4`, the retained segments, and segments the
   manifest still lists as retired are served; a retired segment the worker has
   unlinked is a 404. Files are opened without following links.
-- **Playlist.** `LiveHLSPlaylistRenderer` renders the playlist and the
-  `playlist.json` snapshot from the same window. URIs are root-relative under
-  `/relay/v1/media/`, there is no `EXT-X-PLAYLIST-TYPE`, `EXT-X-START:TIME-OFFSET=0`
-  starts at the earliest retained segment, and `EXT-X-ENDLIST` follows
-  completion. Snapshot times convert segment boundaries, not durations, to
-  milliseconds, so segments stay contiguous at 23.976 fps.
+- **Playlist.** `/relay/v1/playlist.m3u8` is a multivariant playlist with one
+  video variant at `/relay/v1/media/video.m3u8` and one `EXT-X-MEDIA` audio
+  entry per track: the selected track first, as the default, without a `URI`
+  because it plays from the video segments, then each carried rendition at
+  `/relay/v1/media/audio-<pid>.m3u8`. Names are the live title index labels
+  (made unique within the group), and languages are the disc's ISO 639-2 codes
+  as BCP 47 tags (`deu` becomes `de`). AVPlayer turns these into its audible
+  media selection options, so a single-track title still shows its one track.
+  The variant sets `CLOSED-CAPTIONS=NONE` and no `REQ-VIDEO-LAYOUT`: the
+  initialization segment already marks the stereo views, and macOS
+  AVFoundation refuses a variant that requires the stereo layout.
+  `LiveHLSPlaylistRenderer` renders each media playlist and the
+  `playlist.json` snapshot from the same window; the snapshot follows the video.
+  URIs are root-relative under `/relay/v1/media/`, there is no
+  `EXT-X-PLAYLIST-TYPE`, `EXT-X-START:TIME-OFFSET=0` starts at the earliest
+  retained segment, and `EXT-X-ENDLIST` follows completion. Snapshot times
+  convert segment boundaries, not durations, to milliseconds, so segments stay
+  contiguous at 23.976 fps. A manifest whose set of renditions changes
+  mid-stream fails the stream like any other manifest violation.
 - **Pacing.** The player posts its playhead to `/relay/v1/control/position`.
   The stream clamps it to the window and forwards it as `job.viewer_position`
   when it moved at least 500 ms, at most once a second. With no report for
@@ -309,7 +356,9 @@ serves them through the same movie session, with no second pairing
   `liveVersion`, its digest `id` and `revision`, `state` (`checking`,
   `eligible`, or `ineligible`), a `reason`, the duration, and up to 32 audio
   tracks with a label and a default. A client skips a title whose `liveVersion`
-  it does not know.
+  it does not know. Version 2 serves the multivariant playlist with alternate
+  audio, so a player and Mac on different versions list no live titles to each
+  other rather than failing at playback.
 - **Eligibility.** The listing stats each ISO without opening it.
   `LiveTitleIndex` caches each `(id, revision)` result from `inspect_live_title`
   in `Application Support/<bundle>/live-titles.v1.json` (256 entries). An
@@ -412,3 +461,15 @@ source backpressure, not the encoder:
 
 FFprobe without edit-list handling reports video starting at 0.127 seconds
 because of B-frame composition offsets; AVFoundation does not.
+
+On October 24, 2026, the same Mac ran Rainforest playlist 1005 for 100 seconds
+(2,400 pairs, unpaced) with German PID 4352 selected, once with English PID
+4353 as an alternate rendition and once without. The first segment, playlist,
+and manifest were ready 1.78 seconds after the worker command started with the
+alternate and 0.97 seconds without it (both including the Python startup).
+Unheld throughput was 2.48x with the alternate and 2.53x without. On macOS,
+AVFoundation listed German and English as audible options for the
+relay-rendered multivariant playlist over those segments. During playback it
+switched from the default to the alternate and back without restarting. It
+fetched the alternate's segments only while that track was selected, and it
+seeked to 30 seconds after the switch.

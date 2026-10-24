@@ -61,6 +61,8 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
             manifestPath: workspace.appendingPathComponent("live-hls.json").path,
             playlistPath: workspace.appendingPathComponent("media.m3u8").path
         ))
+        // Like the worker, carry each requested alternate track as an audio rendition.
+        let alternateAudioPIDs = job.liveHLS?.alternateAudioPIDs ?? []
         _ = try await emit(.workerReady)
         switch script {
         case .silent:
@@ -76,13 +78,13 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
             return WorkerRunResult(terminalEvent: failed, exitStatus: 1, diagnostics: "")
         case .complete:
             let writer = try LiveHLSWorkspaceWriter(root: workspace)
-            try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), complete: true)
+            try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), complete: true, audioPIDs: alternateAudioPIDs)
             _ = try await emit(.artifactReady, ready)
             let completed = try await emit(.jobCompleted)
             return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
         case .live, .invalidManifest:
             let writer = try LiveHLSWorkspaceWriter(root: workspace)
-            try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2))
+            try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), audioPIDs: alternateAudioPIDs)
             _ = try await emit(.artifactReady, ready)
             if case .invalidManifest = script {
                 try await Task.sleep(for: .milliseconds(50))
@@ -164,14 +166,15 @@ final class LiveRelayStreamTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
-    private func sourceRequest() throws -> LiveStreamRequest {
+    private func sourceRequest(audioTracks: [SharedLiveAudio] = []) throws -> LiveStreamRequest {
         final class Retainer: Sendable {}
         var info = stat()
         XCTAssertEqual(lstat(sourceURL.path, &info), 0)
         return LiveStreamRequest(
             source: LiveSourceLease(canonicalPath: sourceURL.path, identity: LiveSourceIdentity(info), retainer: Retainer()),
             playlist: 1_005,
-            audioPID: 4_353
+            audioPID: 4_353,
+            audioTracks: audioTracks
         )
     }
 
@@ -185,11 +188,12 @@ final class LiveRelayStreamTests: XCTestCase {
     private func makeStream(
         _ worker: FakeLiveHLSWorker,
         configuration: LiveRelayStreamConfiguration? = nil,
-        sleep: SleepAssertionCounter = SleepAssertionCounter()
+        sleep: SleepAssertionCounter = SleepAssertionCounter(),
+        audioTracks: [SharedLiveAudio] = []
     ) async throws -> LiveRelayStream {
         let stream = LiveRelayStream(
             id: UUID(),
-            request: try sourceRequest(),
+            request: try sourceRequest(audioTracks: audioTracks),
             workspaceURL: root.appendingPathComponent("LiveHLS/stream", isDirectory: true),
             runner: worker,
             configuration: configuration ?? fastConfiguration(),
@@ -238,7 +242,12 @@ final class LiveRelayStreamTests: XCTestCase {
         let playlist = await stream.relayResponse(for: get(RelayWireContract.playlistPath))
         XCTAssertEqual(playlist.statusCode, 200)
         XCTAssertEqual(playlist.headers["content-type"], "application/vnd.apple.mpegurl")
-        XCTAssertTrue(String(decoding: playlist.body, as: UTF8.self).contains("/relay/v1/media/segment-000000002.m4s"))
+        let multivariant = String(decoding: playlist.body, as: UTF8.self)
+        XCTAssertEqual(multivariant.components(separatedBy: "#EXT-X-MEDIA:TYPE=AUDIO").count, 2, "one track shows as one choice")
+        XCTAssertFalse(multivariant.contains("audio-"), "a single-track title has no alternate rendition")
+        let video = await stream.relayResponse(for: get(RelayWireContract.mediaPathPrefix + "video.m3u8"))
+        XCTAssertEqual(video.headers["content-type"], "application/vnd.apple.mpegurl")
+        XCTAssertTrue(String(decoding: video.body, as: UTF8.self).contains("/relay/v1/media/segment-000000002.m4s"))
         let snapshot = await stream.relayResponse(for: get(RelayWireContract.playlistSnapshotPath))
         XCTAssertEqual(try JSONDecoder().decode(RelayPlaylistSnapshot.self, from: snapshot.body).totalDurationMilliseconds, 6_000)
         let media = await stream.relayResponse(for: get(RelayWireContract.mediaPathPrefix + "segment-000000001.m4s"))
@@ -254,6 +263,36 @@ final class LiveRelayStreamTests: XCTestCase {
         XCTAssertEqual(job.source.path, sourceURL.path)
         XCTAssertEqual(job.liveHLS?.viewerLeadSeconds, LiveRelayStreamConfiguration().viewerLeadSeconds)
         XCTAssertEqual(job.source.identity?.inode, try sourceRequest().source.identity.inode)
+        await stream.stop(.viewerStopped)
+    }
+
+    func testEveryTrackIsAnAudioChoiceAndTheSelectedOneIsTheMuxedDefault() async throws {
+        let worker = FakeLiveHLSWorker()
+        let stream = try await makeStream(worker, audioTracks: [
+            SharedLiveAudio(pid: 4_352, language: "deu", label: "German DTS-HD Master Audio", isDefault: true),
+            SharedLiveAudio(pid: 4_353, language: "eng", label: "English DTS-HD Master Audio", isDefault: false),
+        ])
+        _ = await waitForState(stream, isLive)
+        XCTAssertEqual(worker.jobs.first?.liveHLS?.alternateAudioPIDs, [4_352], "the selected PID 4353 plays muxed")
+
+        let playlist = await stream.relayResponse(for: get(RelayWireContract.playlistPath))
+        let media = String(decoding: playlist.body, as: UTF8.self).components(separatedBy: "\n")
+            .filter { $0.hasPrefix("#EXT-X-MEDIA:") }
+        XCTAssertEqual(media.count, 2)
+        XCTAssertTrue(media[0].contains("NAME=\"English DTS-HD Master Audio\",LANGUAGE=\"en\",DEFAULT=YES"))
+        XCTAssertFalse(media[0].contains("URI="))
+        XCTAssertTrue(media[1].contains("NAME=\"German DTS-HD Master Audio\",LANGUAGE=\"de\",DEFAULT=NO"))
+        XCTAssertTrue(media[1].hasSuffix("URI=\"/relay/v1/media/audio-4352.m3u8\""))
+
+        let audio = await stream.relayResponse(for: get(RelayWireContract.mediaPathPrefix + "audio-4352.m3u8"))
+        XCTAssertEqual(audio.statusCode, 200)
+        XCTAssertTrue(String(decoding: audio.body, as: UTF8.self).contains("/relay/v1/media/audio-4352-segment-000000002.m4s"))
+        let segment = await stream.relayResponse(for: get(RelayWireContract.mediaPathPrefix + "audio-4352-segment-000000001.m4s"))
+        XCTAssertEqual(segment.statusCode, 200)
+        XCTAssertEqual(segment.headers["content-type"], "audio/mp4")
+        XCTAssertEqual(segment.body, Data("audio 4352 1".utf8))
+        let other = await stream.relayResponse(for: get(RelayWireContract.mediaPathPrefix + "audio-4353.m3u8"))
+        XCTAssertEqual(other.statusCode, 404, "the muxed track has no playlist of its own")
         await stream.stop(.viewerStopped)
     }
 
@@ -391,7 +430,7 @@ final class LiveRelayStreamTests: XCTestCase {
 
         let state = await waitForState(stream) { if case .complete = $0 { return true }; return false }
         XCTAssertEqual(state, .complete(earliestMs: 0, latestMs: 6_000))
-        let playlist = await stream.relayResponse(for: get(RelayWireContract.playlistPath))
+        let playlist = await stream.relayResponse(for: get(RelayWireContract.mediaPathPrefix + "video.m3u8"))
         XCTAssertTrue(String(decoding: playlist.body, as: UTF8.self).hasSuffix("#EXT-X-ENDLIST\n"))
         await stream.stop(.viewerStopped)
     }
