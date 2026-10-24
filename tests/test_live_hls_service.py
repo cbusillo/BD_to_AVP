@@ -557,6 +557,13 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         self.assertTrue(manifest["complete"])
         (rendition,) = manifest["audio_renditions"]
         self.assertEqual(rendition["source_pid"], 0x1101)
+        # The fake video encoder targets 3 s and the audio 2 s; one multivariant playlist needs one target.
+        self.assertEqual(rendition["target_duration_seconds"], manifest["target_duration_seconds"])
+        self.assertIn(
+            f"#EXT-X-TARGETDURATION:{manifest['target_duration_seconds']}\n",
+            Path(str(result["playlist_path"])).read_text(),
+        )
+        self.assertEqual(result["encoder_summary"]["output_mode"], "hls", "the summary is the video encoder's")
         self.assertEqual(rendition["source_language"], "deu")
         published = {path.name for path in destination.iterdir()}
         self.assertIn(rendition["initialization"], published)
@@ -566,6 +573,15 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         warnings = [event["payload"] for event in events if event["type"] == "warning"]
         self.assertEqual([warning["code"] for warning in warnings], ["unsupported_live_alternate_audio"])
         self.assertEqual(warnings[0]["details"], "pid 4354")
+
+    def test_video_keeps_publishing_after_an_alternate_track_finishes(self) -> None:
+        with mock.patch.dict(os.environ, {"FAKE_LIVE_HLS_TAIL_CHECK": "1"}):
+            service, _, _, _ = self.service("alternates.iso", alternate_audio_pids=[0x1101])
+            result = service.run()
+
+        self.assertEqual((self.records / "tail-published").read_text(), "True")
+        self.assertEqual(result["published_segments"], 2)
+        self.assertEqual(result["encoder_summary"]["output_mode"], "hls")
 
     def test_alternate_track_that_starts_late_is_left_out(self) -> None:
         service, _, output, _ = self.service("latealternates.iso", alternate_audio_pids=[0x1101])

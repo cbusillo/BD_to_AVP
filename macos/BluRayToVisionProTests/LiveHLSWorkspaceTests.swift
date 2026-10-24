@@ -14,10 +14,13 @@ struct LiveHLSWorkspaceWriter {
 
     let root: URL
     let targetDurationSeconds: Int
+    /// Audio renditions cut shorter segments than the video, as the worker's 1.92-second AAC cuts do.
+    let audioTargetDurationSeconds: Int
 
-    init(root: URL, targetDurationSeconds: Int = 2) throws {
+    init(root: URL, targetDurationSeconds: Int = 2, audioTargetDurationSeconds: Int? = nil) throws {
         self.root = root
         self.targetDurationSeconds = targetDurationSeconds
+        self.audioTargetDurationSeconds = audioTargetDurationSeconds ?? targetDurationSeconds
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("init".utf8).write(to: root.appendingPathComponent("init.mp4"))
     }
@@ -82,7 +85,7 @@ struct LiveHLSWorkspaceWriter {
                     "source_pid": pid,
                     "complete": complete,
                     "initialization": "audio-\(pid)-init.mp4",
-                    "target_duration_seconds": targetDurationSeconds,
+                    "target_duration_seconds": audioTargetDurationSeconds,
                     "media_sequence": segments.first?.sequence ?? 0,
                     "earliest_available_microseconds": segments.first?.startMicroseconds ?? 0,
                     "latest_available_microseconds": segments.last.map { $0.startMicroseconds + $0.durationMicroseconds } ?? 0,
@@ -287,6 +290,25 @@ final class LiveHLSWorkspaceTests: XCTestCase {
         try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 3))
         XCTAssertThrowsError(try workspace.poll(), "a rendition disappeared mid-stream") {
             XCTAssertEqual($0 as? LiveHLSManifestError, LiveHLSManifestError(reason: "audio_renditions_changed"))
+        }
+    }
+
+    func testEveryServedPlaylistSharesOneTargetDuration() throws {
+        for (video, audio) in [(3, 2), (2, 3)] {
+            let writer = try LiveHLSWorkspaceWriter(root: root, targetDurationSeconds: video, audioTargetDurationSeconds: audio)
+            var workspace = LiveHLSWorkspace(rootURL: root)
+            try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), audioPIDs: [4_353, 4_354])
+            XCTAssertTrue(try workspace.poll())
+
+            let playlists = ["video.m3u8", "audio-4353.m3u8", "audio-4354.m3u8"].compactMap {
+                workspace.window.mediaPlaylist(named: $0)
+            }
+            XCTAssertEqual(playlists.count, 3)
+            let targets = playlists.map { playlist in
+                playlist.components(separatedBy: "\n").first { $0.hasPrefix("#EXT-X-TARGETDURATION:") }
+            }
+            XCTAssertEqual(Set(targets), ["#EXT-X-TARGETDURATION:\(max(video, audio))"], "video \(video), audio \(audio)")
+            try FileManager.default.removeItem(at: root)
         }
     }
 

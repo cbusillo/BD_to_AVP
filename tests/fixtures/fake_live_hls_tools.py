@@ -10,7 +10,9 @@ input, ``streaming`` publishes a segment per input chunk, ``stall`` publishes on
 segment and then keeps reading without publishing again, and ``media`` counts the
 ``base-`` frame markers it receives and publishes one segment per
 FAKE_LIVE_HLS_FRAMES_PER_SEGMENT frames, recording the most completed segments it
-ever saw waiting in staging.
+ever saw waiting in staging. With FAKE_LIVE_HLS_TAIL_CHECK, the encoder waits after its
+other children have finished input, writes its last segment, and records in ``tail-published``
+whether the worker published that segment before the encoder ended.
 """
 
 import json
@@ -110,8 +112,23 @@ def encoder(arguments: list[str]) -> int:
     if mode == "media":
         remaining = video.count(b"base-") - emitted_frames
         segments = [(remaining * 1001 / 24000, segment_size)] if remaining else []
+    tail = segments.pop() if os.environ.get("FAKE_LIVE_HLS_TAIL_CHECK") and segments else None
     for duration, size in segments:
         output.segment(duration, size)
+    if tail is not None:
+        # Long enough for an alternate audio encoder fed the same source to exit first.
+        time.sleep(0.5)
+        output.segment(*tail)
+        manifest = Path(options["--hls-directory"]).parents[1] / "live-hls.json"
+        published = False
+        deadline = time.monotonic() + 3
+        while not published and time.monotonic() < deadline:
+            try:
+                published = len(json.loads(manifest.read_text())["segments"]) >= output.count
+            except (OSError, ValueError, KeyError):
+                pass
+            time.sleep(0.02)
+        record("tail-published", str(published).encode())
     output.end()
     print(json.dumps({"frame_count": output.count, "output_mode": "hls"}))
     return 0

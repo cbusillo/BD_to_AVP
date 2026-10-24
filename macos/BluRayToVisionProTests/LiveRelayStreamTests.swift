@@ -77,13 +77,15 @@ final class FakeLiveHLSWorker: WorkerProcessRunning, @unchecked Sendable {
             ))
             return WorkerRunResult(terminalEvent: failed, exitStatus: 1, diagnostics: "")
         case .complete:
-            let writer = try LiveHLSWorkspaceWriter(root: workspace)
+            // Targets as the real encoders write them: 3 s video, 2 s alternate audio.
+            let writer = try LiveHLSWorkspaceWriter(root: workspace, targetDurationSeconds: 3, audioTargetDurationSeconds: 2)
             try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), complete: true, audioPIDs: alternateAudioPIDs)
             _ = try await emit(.artifactReady, ready)
             let completed = try await emit(.jobCompleted)
             return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
         case .live, .invalidManifest:
-            let writer = try LiveHLSWorkspaceWriter(root: workspace)
+            // Targets as the real encoders write them: 3 s video, 2 s alternate audio.
+            let writer = try LiveHLSWorkspaceWriter(root: workspace, targetDurationSeconds: 3, audioTargetDurationSeconds: 2)
             try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), audioPIDs: alternateAudioPIDs)
             _ = try await emit(.artifactReady, ready)
             if case .invalidManifest = script {
@@ -291,6 +293,10 @@ final class LiveRelayStreamTests: XCTestCase {
         XCTAssertEqual(segment.statusCode, 200)
         XCTAssertEqual(segment.headers["content-type"], "audio/mp4")
         XCTAssertEqual(segment.body, Data("audio 4352 1".utf8))
+        let video = await stream.relayResponse(for: get(RelayWireContract.mediaPathPrefix + "video.m3u8"))
+        for body in [audio.body, video.body] {
+            XCTAssertTrue(String(decoding: body, as: UTF8.self).contains("#EXT-X-TARGETDURATION:3\n"), "one target for every playlist")
+        }
         let other = await stream.relayResponse(for: get(RelayWireContract.mediaPathPrefix + "audio-4353.m3u8"))
         XCTAssertEqual(other.statusCode, 404, "the muxed track has no playlist of its own")
         await stream.stop(.viewerStopped)

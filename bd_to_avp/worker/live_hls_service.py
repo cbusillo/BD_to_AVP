@@ -309,6 +309,21 @@ class HLSPublisher:
         return bool(self.segments) and all(alternate.segments for alternate in self.alternates)
 
     @property
+    def common_target_duration_seconds(self) -> int | None:
+        """The target every playlist under one multivariant playlist advertises: the largest of
+        the video's and each alternate rendition's own target."""
+        owner = self.owner or self
+        targets = [
+            target
+            for target in (
+                owner.target_duration_seconds,
+                *(alternate.target_duration_seconds for alternate in owner.alternates),
+            )
+            if target is not None
+        ]
+        return max(targets) if targets else None
+
+    @property
     def initialization_name(self) -> str:
         return f"{self.name_prefix}{INITIALIZATION_FILENAME}"
 
@@ -483,7 +498,7 @@ class HLSPublisher:
         lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:7",
-            f"#EXT-X-TARGETDURATION:{self.target_duration_seconds}",
+            f"#EXT-X-TARGETDURATION:{self.common_target_duration_seconds}",
             f"#EXT-X-MEDIA-SEQUENCE:{self.segments[0].sequence}",
             "#EXT-X-INDEPENDENT-SEGMENTS",
             f'#EXT-X-MAP:URI="{INITIALIZATION_FILENAME}"',
@@ -502,7 +517,7 @@ class HLSPublisher:
             "complete": self.complete,
             "playlist": PLAYLIST_FILENAME,
             "initialization": INITIALIZATION_FILENAME,
-            "target_duration_seconds": self.target_duration_seconds,
+            "target_duration_seconds": self.common_target_duration_seconds,
             "media_sequence": self.segments[0].sequence,
             "earliest_available_microseconds": self.segments[0].start_microseconds,
             "latest_available_microseconds": self.segments[-1].end_microseconds,
@@ -528,7 +543,7 @@ class HLSPublisher:
             **self.streams,
             "complete": self.complete,
             "initialization": self.initialization_name,
-            "target_duration_seconds": self.target_duration_seconds,
+            "target_duration_seconds": self.common_target_duration_seconds,
             "media_sequence": self.segments[0].sequence,
             "earliest_available_microseconds": self.segments[0].start_microseconds,
             "latest_available_microseconds": self.segments[-1].end_microseconds,
@@ -770,6 +785,8 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         self.frame_microseconds = 0.0
         self.alternate_audio: list[AlternateAudio] = []
         self.alternate_feeders: dict[int, PipeFeeder] = {}
+        # The MV-HEVC encoder's run: its exit ends video publication and its stdout is the summary.
+        self.encoder_child: ChildRun | None = None
 
     def run(self) -> dict[str, object]:
         for path, code, message in (
@@ -933,7 +950,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         result = self.publisher.result()
         result["held_seconds"] = round(self.held_seconds, 3)
         result["viewer_held_seconds"] = round(self.viewer_held_seconds, 3)
-        encoder_run = self.children[-1] if self.children else None
+        encoder_run = self.encoder_child
         if encoder_run is not None and encoder_run.result is not None:
             # The summary is diagnostic only; an unreadable one leaves the result without it.
             with suppress(UnicodeDecodeError, json.JSONDecodeError):
@@ -1232,9 +1249,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             ),
             "live_audio_decode_failed",
         )
-        # Keep the encoder last so its captured summary is easy to find.
-        self.children.remove(encoder)
-        self.children.append(encoder)
+        self.encoder_child = encoder
         self._start(encoder, close_after_start=(normalized_read,))
         self.last_publication = time.monotonic()
         self._start(normalizer, close_after_start=(decoded_read, normalized_write))
@@ -1322,8 +1337,6 @@ class SSIFLiveHLSService(SSIFSourceHelper):
                 ),
                 "live_audio_decode_failed",
             )
-            # Keep the MV-HEVC encoder last so its captured summary is easy to find.
-            self.children.insert(len(self.children) - 1, child)
             self._start(child, close_after_start=(audio_read,))
             feeder = PipeFeeder(
                 f"audio-{alternate.pid}",
@@ -1377,7 +1390,8 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         assert self.publisher is not None
         try:
             while not self.internal_cancellation.is_set() and not self.failure_event.is_set():
-                encoder_done = self.children[-1].done.is_set()
+                assert self.encoder_child is not None
+                encoder_done = self.encoder_child.done.is_set()
                 if self.publisher.poll():
                     self.last_publication = time.monotonic()
                     # Ready once the manifest exists, which waits for every rendition's first segment.

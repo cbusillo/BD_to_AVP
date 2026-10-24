@@ -279,10 +279,14 @@ struct LiveHLSWindow: Sendable {
                 throw LiveHLSManifestError(reason: "timing_changed")
             }
         }
+        // Every media playlist under one multivariant playlist advertises the same target.
+        let renditions = manifest.audioRenditions ?? []
+        let targetDurationSeconds = ([manifest.targetDurationSeconds] + renditions.map(\.targetDurationSeconds)).max()
+            ?? manifest.targetDurationSeconds
         let rendered: LiveHLSRenderedWindow
         do {
             rendered = try LiveHLSPlaylistRenderer.render(
-                targetDurationSeconds: manifest.targetDurationSeconds,
+                targetDurationSeconds: targetDurationSeconds,
                 initialization: manifest.initialization,
                 segments: next,
                 complete: manifest.complete
@@ -290,7 +294,7 @@ struct LiveHLSWindow: Sendable {
         } catch {
             throw LiveHLSManifestError(reason: "unrenderable")
         }
-        let nextAudio = try nextAudioWindows(manifest.audioRenditions ?? [])
+        let nextAudio = try nextAudioWindows(renditions, targetDurationSeconds: targetDurationSeconds)
         for segment in next where history[segment.uri] == nil {
             history[segment.uri] = Timing(
                 startMicroseconds: segment.startMicroseconds,
@@ -317,7 +321,10 @@ struct LiveHLSWindow: Sendable {
 
     /// The next audio windows. The rendition set never changes, and each rendition's media
     /// sequence and latest position never go back nor its completion revert.
-    private func nextAudioWindows(_ renditions: [LiveHLSManifest.AudioRendition]) throws -> [AudioWindow] {
+    private func nextAudioWindows(
+        _ renditions: [LiveHLSManifest.AudioRendition],
+        targetDurationSeconds: Int
+    ) throws -> [AudioWindow] {
         if rendered != nil, renditions.map(\.sourcePID) != audioWindows.map(\.pid) {
             throw LiveHLSManifestError(reason: "audio_renditions_changed")
         }
@@ -340,7 +347,7 @@ struct LiveHLSWindow: Sendable {
             let playlist: String
             do {
                 playlist = try LiveHLSPlaylistRenderer.render(
-                    targetDurationSeconds: rendition.targetDurationSeconds,
+                    targetDurationSeconds: targetDurationSeconds,
                     initialization: rendition.initialization,
                     segments: segments,
                     complete: rendition.complete
