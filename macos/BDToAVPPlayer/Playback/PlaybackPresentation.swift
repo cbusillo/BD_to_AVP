@@ -187,10 +187,16 @@ struct PlaybackHUDVisibilityState: Equatable {
         case trackPicker
     }
 
+    /// Whether the controls are fully shown. When false they are faded, not removed: they stay
+    /// interactive, and the system's hover effect brightens them while the wearer looks at them.
     private(set) var isVisible = true
     private(set) var isAutoHideScheduled = false
     private(set) var autoHideGeneration = 0
     private var holds: Set<Hold> = []
+
+    var isFaded: Bool {
+        !isVisible
+    }
 
     mutating func reconcile(isPlaying: Bool) {
         guard PlaybackHUDVisibilityPolicy.shouldAutoHide(
@@ -280,6 +286,16 @@ struct PlaybackTrackPickerState: Equatable {
 
     mutating func close() {
         openPicker = nil
+    }
+}
+
+/// How faded controls look. visionOS never reports where the wearer looks; the system renders
+/// the hover effect, so `isLookedAt` comes from the effect itself, never from app state.
+enum PlaybackHUDPresentation {
+    static let fadedOpacity = 0.08
+
+    static func opacity(isFaded: Bool, isLookedAt: Bool) -> Double {
+        isFaded && !isLookedAt ? fadedOpacity : 1
     }
 }
 

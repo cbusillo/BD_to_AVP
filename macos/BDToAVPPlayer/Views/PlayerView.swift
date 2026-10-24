@@ -106,43 +106,28 @@ struct PlayerView: View {
             contentAlignment: .topBack
         ) {
             if !isPackedStereoMedia {
-                Group {
-                    if hudVisibility.isVisible {
-                        VStack(spacing: 0) {
-                            Color.clear
-                                .frame(height: 16)
-                                .accessibilityHidden(true)
-                            PlayerOrnamentView(
-                                session: session,
-                                onRetry: onRetry,
-                                onLocate: onLocate,
-                                onDone: done,
-                                onHoldChanged: { hold, isActive in
-                                    if hold == .hover, isActive {
-                                        hudVisibility.hoverBegan(isPlaying: isAutomaticHidingAllowed)
-                                    } else {
-                                        hudVisibility.setHold(hold, isActive: isActive, isPlaying: isAutomaticHidingAllowed)
-                                    }
-                                },
-                                onInteraction: {
-                                    hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
-                                }
-                            )
-                        }
-                    } else {
-                        Button {
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(height: 16)
+                        .accessibilityHidden(true)
+                    PlayerOrnamentView(
+                        session: session,
+                        isFaded: hudVisibility.isFaded,
+                        onRetry: onRetry,
+                        onLocate: onLocate,
+                        onDone: done,
+                        onHoldChanged: { hold, isActive in
+                            if hold == .hover, isActive {
+                                hudVisibility.hoverBegan(isPlaying: isAutomaticHidingAllowed)
+                            } else {
+                                hudVisibility.setHold(hold, isActive: isActive, isPlaying: isAutomaticHidingAllowed)
+                            }
+                        },
+                        onInteraction: {
                             hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
-                        } label: {
-                            Label("Show controls", systemImage: "chevron.down")
-                                .frame(minWidth: 60, minHeight: 60)
                         }
-                        .buttonStyle(.bordered)
-                        .glassBackgroundEffect()
-                        .accessibilityIdentifier("player-show-controls")
-                        .accessibilityHint("Expands the playback controls.")
-                    }
+                    )
                 }
-                .animation(.easeInOut(duration: 0.2), value: hudVisibility.isVisible)
             }
         }
         .onDisappear {
@@ -375,7 +360,11 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
 }
 
 private struct PlayerOrnamentView: View {
+    private static let cornerRadius: CGFloat = 40
+
     @ObservedObject var session: MVHEVCPlayerSession
+    /// Faded controls stay mounted and interactive; looking at them brings them back.
+    let isFaded: Bool
     let onRetry: () -> Void
     let onLocate: () -> Void
     let onDone: () -> Void
@@ -421,7 +410,14 @@ private struct PlayerOrnamentView: View {
         .padding(.top, 30)
         .padding(.bottom, 20)
         .frame(maxWidth: 980)
-        .glassBackgroundEffect()
+        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: Self.cornerRadius))
+        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: Self.cornerRadius))
+        .hoverEffect { [isFaded] effect, isActive, _ in
+            effect.animation(.easeInOut(duration: 0.3)) {
+                $0.opacity(PlaybackHUDPresentation.opacity(isFaded: isFaded, isLookedAt: isActive))
+            }
+        }
+        .hoverEffectGroup()
         .onHover { isHovered in
             onHoldChanged(.hover, isHovered)
         }
