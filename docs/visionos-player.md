@@ -559,7 +559,7 @@ Together the controls provide:
 
 - play and pause;
 - 10-second backward and 30-second forward seeks;
-- a position slider and elapsed/duration display;
+- a scrub bar with elapsed and total time, described below;
 - audio-track selection;
 - subtitle selection, including Off;
 - eye-order swapping for side-by-side and over-under playback;
@@ -573,6 +573,17 @@ Control is active. During uninterrupted playback it hides three seconds after
 the last of those ends. visionOS does not report eye gaze to apps, so looking at
 the controls without a pointer does not hold them. Pinching the video surface or
 the downward **Show controls** chevron reveals the controls again.
+
+The MV-HEVC scrub bar spans the title's full length from the first frame and
+shows the range that can be played right now as a lighter band. A completed
+movie's length comes from the movie itself, and the band is the player's
+buffered range around the playhead. A live title's length comes from the Mac's
+live title index (`durationSeconds`), and the band is the retained live window.
+Its end time stays fixed while the stream loads, and the real length replaces it
+once the stream is finalized. When the Mac has not reported a length, the bar
+grows with the stream as before. A seek outside the band keeps the existing
+notices: before the window, playback continues at its start; past the live edge,
+playback moves to the latest available time and says how far the relay reaches.
 
 The MV-HEVC audio language and subtitle lists open inside the controls ornament,
 below the transport row, rather than as system menus. A menu presented from the

@@ -32,6 +32,74 @@ enum PlaybackSeekPolicy {
     }
 }
 
+/// The scrub bar's span and its loaded range. The span is the title's full length whenever that
+/// is known up front, so the bar does not grow while a live stream or a movie loads; the loaded
+/// range shows how far playback can seek right now.
+struct PlaybackTimeline: Equatable {
+    let duration: TimeInterval
+    let loadedStart: TimeInterval
+    let loadedEnd: TimeInterval
+
+    /// - Parameters:
+    ///   - titleDuration: The title's full length as the source reports it before playback,
+    ///     such as the Mac's live title index. Ignored once `isFinal` reports the real length.
+    ///   - playerDuration: The length the player knows so far.
+    ///   - loadedRange: What can be played right now, or nil when that is the whole timeline.
+    ///   - isFinal: Whether the source has reported its complete length.
+    init(
+        titleDuration: TimeInterval?,
+        playerDuration: TimeInterval,
+        loadedRange: ClosedRange<TimeInterval>?,
+        isFinal: Bool = false
+    ) {
+        let candidates = [
+            isFinal ? nil : titleDuration,
+            playerDuration,
+            loadedRange?.upperBound,
+        ]
+        let span = candidates
+            .compactMap { $0 }
+            .filter { $0.isFinite && $0 > 0 }
+            .max() ?? 0
+        duration = span
+
+        let lower = loadedRange?.lowerBound ?? 0
+        let upper = loadedRange?.upperBound ?? span
+        loadedStart = min(max(0, lower.isFinite ? lower : 0), span)
+        loadedEnd = min(max(loadedStart, upper.isFinite ? upper : 0), span)
+    }
+
+    var loadedStartFraction: Double {
+        fraction(of: loadedStart)
+    }
+
+    var loadedEndFraction: Double {
+        fraction(of: loadedEnd)
+    }
+
+    func fraction(of time: TimeInterval) -> Double {
+        guard duration > 0, time.isFinite else {
+            return 0
+        }
+        return min(max(0, time / duration), 1)
+    }
+
+    func time(atFraction fraction: Double) -> TimeInterval {
+        guard fraction.isFinite else {
+            return 0
+        }
+        return min(max(0, fraction), 1) * duration
+    }
+
+    /// The buffered range that holds `time`, from the player's loaded time ranges.
+    static func bufferedRange(
+        containing time: TimeInterval,
+        in ranges: [ClosedRange<TimeInterval>]
+    ) -> ClosedRange<TimeInterval>? {
+        ranges.first { $0.contains(time) }
+    }
+}
+
 struct PlaybackPendingResumeState: Equatable {
     private(set) var value: TimeInterval? = nil
 

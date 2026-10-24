@@ -181,6 +181,83 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertNil(scrubState.finish())
     }
 
+    func testTimelineSpansTheKnownTitleLengthWhileALiveStreamGrows() {
+        let early = PlaybackTimeline(titleDuration: 5_400, playerDuration: 12, loadedRange: 0 ... 12)
+        let later = PlaybackTimeline(titleDuration: 5_400, playerDuration: 600, loadedRange: 0 ... 600)
+
+        XCTAssertEqual(early.duration, 5_400)
+        XCTAssertEqual(later.duration, 5_400)
+        XCTAssertEqual(early.loadedEnd, 12)
+        XCTAssertEqual(later.loadedEnd, 600)
+    }
+
+    func testTimelineShowsTheRetainedLiveWindowAsTheLoadedRange() {
+        let timeline = PlaybackTimeline(titleDuration: 1_000, playerDuration: 400, loadedRange: 100 ... 400)
+
+        XCTAssertEqual(timeline.loadedStart, 100)
+        XCTAssertEqual(timeline.loadedEnd, 400)
+        XCTAssertEqual(timeline.loadedStartFraction, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(timeline.loadedEndFraction, 0.4, accuracy: 0.0001)
+    }
+
+    func testTimelineUsesTheRealLengthOnceTheStreamIsFinal() {
+        let timeline = PlaybackTimeline(
+            titleDuration: 5_400,
+            playerDuration: 5_390,
+            loadedRange: 0 ... 5_390,
+            isFinal: true
+        )
+
+        XCTAssertEqual(timeline.duration, 5_390)
+        XCTAssertEqual(timeline.loadedEnd, 5_390)
+    }
+
+    func testTimelineFallsBackToTheLoadedLengthWhenTheTitleLengthIsUnknown() {
+        let timeline = PlaybackTimeline(titleDuration: nil, playerDuration: 30, loadedRange: 0 ... 30)
+
+        XCTAssertEqual(timeline.duration, 30)
+        XCTAssertEqual(timeline.loadedEnd, 30)
+    }
+
+    func testTimelineGrowsPastAShortTitleLengthRatherThanHidingPlayableTime() {
+        let timeline = PlaybackTimeline(titleDuration: 100, playerDuration: 120, loadedRange: 0 ... 120)
+
+        XCTAssertEqual(timeline.duration, 120)
+    }
+
+    func testTimelineForACompletedMovieSpansItsDurationWithTheBufferedRangeLoaded() {
+        let timeline = PlaybackTimeline(titleDuration: nil, playerDuration: 5_640, loadedRange: 60 ... 90)
+
+        XCTAssertEqual(timeline.duration, 5_640)
+        XCTAssertEqual(timeline.loadedStart, 60)
+        XCTAssertEqual(timeline.loadedEnd, 90)
+    }
+
+    func testTimelineMapsBetweenTimeAndBarPositionWithinItsSpan() {
+        let timeline = PlaybackTimeline(titleDuration: 200, playerDuration: 50, loadedRange: 0 ... 50)
+
+        XCTAssertEqual(timeline.fraction(of: 50), 0.25, accuracy: 0.0001)
+        XCTAssertEqual(timeline.fraction(of: 400), 1)
+        XCTAssertEqual(timeline.fraction(of: -5), 0)
+        XCTAssertEqual(timeline.time(atFraction: 0.5), 100, accuracy: 0.0001)
+        XCTAssertEqual(timeline.time(atFraction: 1.5), 200, accuracy: 0.0001)
+    }
+
+    func testTimelineIsEmptyBeforeAnyLengthIsKnown() {
+        let timeline = PlaybackTimeline(titleDuration: nil, playerDuration: 0, loadedRange: nil)
+
+        XCTAssertEqual(timeline.duration, 0)
+        XCTAssertEqual(timeline.fraction(of: 10), 0)
+        XCTAssertEqual(timeline.loadedEnd, 0)
+    }
+
+    func testBufferedRangeIsTheLoadedRangeHoldingThePlayhead() {
+        let ranges: [ClosedRange<TimeInterval>] = [0 ... 20, 300 ... 330]
+
+        XCTAssertEqual(PlaybackTimeline.bufferedRange(containing: 310, in: ranges), 300 ... 330)
+        XCTAssertNil(PlaybackTimeline.bufferedRange(containing: 100, in: ranges))
+    }
+
     func testHUDVisibilitySchedulesAutomaticHidingOnlyDuringUnfocusedPlayback() {
         var visibility = PlaybackHUDVisibilityState()
 
