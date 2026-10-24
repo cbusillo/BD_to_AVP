@@ -1,0 +1,5 @@
+# Throwaway spike: the source and the 645 MB clip stay local.
+edge264-src/
+Resources/clip.264
+build/
+*.xcodeproj/
