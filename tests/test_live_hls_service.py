@@ -735,6 +735,7 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
     def test_failures_remove_the_workspace_with_the_failing_stage_code(self) -> None:
         cases = {
             "fail.iso": ({}, "synthetic_producer_failure"),
+            "latefail.iso": ({}, "synthetic_producer_failure"),
             "encoder.iso": ({"FAKE_LIVE_HLS_ENCODER_FAIL": "1"}, "live_video_encode_failed"),
             "lpcm.iso": ({}, "unsupported_live_audio"),
             "interlaced.iso": ({}, "unsupported_live_video"),
