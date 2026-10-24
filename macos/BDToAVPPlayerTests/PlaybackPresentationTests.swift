@@ -642,6 +642,41 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(ResumeWritePolicy.decision(currentTime: 117, duration: 120), .remove)
     }
 
+    func testResumeIsSavedPeriodicallyWhilePlaying() {
+        let interval = ResumeWritePolicy.periodicSaveInterval
+
+        XCTAssertTrue(ResumeWritePolicy.isPeriodicSaveDue(lastSaveUptime: nil, now: 100))
+        XCTAssertFalse(ResumeWritePolicy.isPeriodicSaveDue(lastSaveUptime: 100, now: 100 + interval / 2))
+        XCTAssertTrue(ResumeWritePolicy.isPeriodicSaveDue(lastSaveUptime: 100, now: 100 + interval))
+    }
+
+    func testLiveTitleSaysItStartsOverOnlyWhenTheWearerWatchedPartOfItBefore() throws {
+        let minimum = ResumeWritePolicy.liveResumeNoticeMinimumPosition
+
+        XCTAssertNil(ResumeWritePolicy.liveResumeNotice(savedPosition: minimum / 2))
+        let notice = try XCTUnwrap(ResumeWritePolicy.liveResumeNotice(savedPosition: 3_725))
+        XCTAssertTrue(notice.contains(PlaybackTimeFormatter.string(for: 3_725)))
+    }
+
+    func testSharedMovieResumesUnderTheMacsStableKeyAndFallsBackForOlderMacs() throws {
+        let id = String(repeating: "a", count: 64)
+        let revision = String(repeating: "b", count: 64)
+        let stableKey = String(repeating: "c", count: 64)
+        let fromNewMac = SharedMovie(id: id, rootID: UUID().uuidString, fileName: "Movie.mov", byteCount: 10, revision: revision, resumeKey: stableKey)
+        // The same file after its folder was removed and added again: new approval, new id and revision.
+        let afterReAdd = SharedMovie(
+            id: String(repeating: "d", count: 64), rootID: UUID().uuidString, fileName: "Movie.mov",
+            byteCount: 10, revision: String(repeating: "e", count: 64), resumeKey: stableKey
+        )
+        XCTAssertEqual(fromNewMac.resumeID, afterReAdd.resumeID)
+
+        let olderMacJSON = Data(#"{"id":"\#(id)","rootID":"\#(UUID().uuidString)","fileName":"Movie.mov","byteCount":10,"revision":"\#(revision)"}"#.utf8)
+        let fromOlderMac = try JSONDecoder().decode(SharedMovie.self, from: olderMacJSON)
+        XCTAssertNoThrow(try fromOlderMac.validate())
+        XCTAssertEqual(fromOlderMac.resumeID, fromOlderMac.legacyResumeID)
+        XCTAssertNotEqual(fromNewMac.resumeID, fromNewMac.legacyResumeID)
+    }
+
     func testResumePolicySkipsInvalidPosition() {
         XCTAssertEqual(ResumeWritePolicy.decision(currentTime: .infinity, duration: 120), .skip)
     }

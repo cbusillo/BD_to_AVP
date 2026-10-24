@@ -369,7 +369,10 @@ actor MovieCatalog {
                 else { continue }
                 defer { Darwin.close(fd) }
                 guard let info = try? Self.fileInfo(fd) else { continue }
-                let movie = SharedMovie(id: id, rootID: source.id, fileName: url.lastPathComponent, byteCount: info.st_size, revision: Self.revision(info))
+                let movie = SharedMovie(
+                    id: id, rootID: source.id, fileName: url.lastPathComponent, byteCount: info.st_size,
+                    revision: Self.revision(info), resumeKey: Self.resumeKey(fileName: url.lastPathComponent, info)
+                )
                 guard (try? movie.validate()) != nil else { continue }
                 next[id] = Entry(movie: movie, root: root, components: components)
             }
@@ -414,6 +417,14 @@ actor MovieCatalog {
             throw MovieLibraryError.sourceChanged
         }
         return info
+    }
+
+    /// A key for the player's resume position that survives what does not change the movie:
+    /// removing and re-adding its folder (a new approval ID), moving it between approved
+    /// folders, rebuilding the Mac app, and change-time or generation churn on a network share.
+    /// Editing or replacing the file changes its size or modification time, and with it the key.
+    static func resumeKey(fileName: String, _ info: stat) -> String {
+        MovieLibraryContract.digest(Data("resume-v1:\(fileName):\(info.st_size):\(info.st_mtimespec.tv_sec):\(info.st_mtimespec.tv_nsec)".utf8))
     }
 
     static func revision(_ info: stat) -> String {

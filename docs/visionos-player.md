@@ -111,7 +111,10 @@ Live titles carry no subtitles yet, and the subtitle list says so:
    media capability; the parent session signs only `/movies/v1/...` routes. The
    one-second snapshot refresh also reports the playhead to
    `POST /relay/v1/control/position`, and a pause or seek reports it at once. Live
-   items use a 20-second forward buffer. There is no resume position for live titles.
+   items use a 20-second forward buffer. A live title cannot resume yet, because the
+   Mac can only start the stream from the beginning. The player still records how far
+   the wearer got, and when they open the title again it says that playback starts
+   from the beginning and where they stopped, instead of silently starting over.
 
 Cleanup is owned by the start until the player installs the stream, then by the
 playback. It runs detached, with a fresh signature on every attempt and retries after
@@ -630,8 +633,19 @@ paused if they complete while the app is in the background. Returning active
 restores scene permission but never infers a new play request; playback remains
 paused until the user starts it. Loading or failed preparations never overwrite
 an existing resume point because resume writes begin only after a player item
-has reached ready state. Completed or near-completed playback is cleared instead
-of resuming at the end.
+has reached ready state. While playing, the position is also saved every 10
+seconds, so a forced quit or a closed window that runs no end path loses only
+seconds. Completed or near-completed playback is cleared instead of resuming at
+the end.
+
+A shared movie's position is keyed by the Mac's `resumeKey`: a digest of the
+file's name, size, and modification time. Unlike the movie's `id` (which digests
+the folder approval's ID and path) and its `revision` (which includes change time
+and generation), it survives removing and re-adding the folder, a Mac app rebuild,
+and metadata churn on a network share; editing or replacing the file changes it.
+A position saved under the older `shared:<id>:<revision>` key moves to the new key
+the first time the movie is opened while that key still matches. A Mac that does
+not send `resumeKey` keeps the older key.
 
 Packed stereo playback uses a visionOS 26 custom video composition with one
 stable two-buffer output contract: output zero is always tagged as the left eye

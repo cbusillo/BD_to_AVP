@@ -147,6 +147,9 @@ struct RelayLivePlaybackContext: Sendable {
     let streamID: UUID
     /// The title's full length from the Mac's live title index, when the Mac knows it.
     let durationSeconds: TimeInterval?
+    /// Where the last position in this title is kept. A live title cannot resume yet, so the
+    /// position is only used to say so when the wearer comes back to it.
+    let resumeID: String?
     /// The Mac's parent-signed live status, for the busy notice and why a stream ended.
     let status: @Sendable () async -> LiveStreamStatus?
     /// Called once when installed live playback is torn down for any reason (failure,
@@ -157,12 +160,14 @@ struct RelayLivePlaybackContext: Sendable {
         title: String,
         streamID: UUID,
         durationSeconds: TimeInterval? = nil,
+        resumeID: String? = nil,
         status: @escaping @Sendable () async -> LiveStreamStatus?,
         ended: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.title = title
         self.streamID = streamID
         self.durationSeconds = durationSeconds
+        self.resumeID = resumeID
         self.status = status
         self.ended = ended
     }
@@ -208,6 +213,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var relayTerminationEvent: RelayPlaybackTerminationEvent?
     /// For live ISO playback, a notice such as the Mac being busy converting.
     @Published private(set) var liveNotice: String?
+    /// Says why a title the wearer watched before starts from the beginning.
+    @Published private(set) var resumeNotice: String?
 
     static let liveBusyNotice = "The Mac is busy converting; playback may pause."
     static let liveForwardBufferDuration: TimeInterval = 20
@@ -224,6 +231,9 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var installedLiveContext: RelayLivePlaybackContext?
     private var liveStatusRefreshCount = 0
     private var resumeStore: ResumeStore?
+    /// The key the resume position is saved under, or nil when this playback keeps none.
+    private var resumeID: String?
+    private var lastResumeSaveUptime: TimeInterval?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlStatusObservation: NSKeyValueObservation?
     private var timeObserver: Any?
@@ -370,6 +380,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             playerEntity.components.remove(VideoPlayerComponent.self)
         }
         self.resumeStore = resumeStore
+        resumeID = nil
         state = .loading
         failureMessage = nil
         failurePresentation = nil
@@ -403,7 +414,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         do {
             if let sharedMovie {
                 let loader = try MovieResourceLoader(movie: sharedMovie.movie) { offset, count in
-                    try await sharedMovie.client.bytes(movie: sharedMovie.movie, offset: offset, count: count)
+                    try await sharedMovie.read(sharedMovie.movie, offset, count)
                 }
                 makeAsset = { loader.makeAsset() }
                 asset = makeAsset()
@@ -444,6 +455,10 @@ final class MVHEVCPlayerSession: ObservableObject {
                 MediaItem(id: $0.movie.resumeID, title: $0.movie.title, fileName: $0.movie.fileName, format: detectedFormat)
             } ?? mediaItem
             self.mediaItem = mediaItem
+            resumeID = mediaItem.id
+            if let sharedMovie {
+                try? resumeStore.adoptPosition(from: sharedMovie.movie.legacyResumeID, to: sharedMovie.movie.resumeID)
+            }
             guard detectedFormat != .unsupported else {
                 resourceLease = nil
                 openedLease.close()
@@ -527,7 +542,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     @discardableResult
     func prepareRelayPlayback(
         _ configuration: RelayRemotePlaybackConfiguration,
-        live: RelayLivePlaybackContext? = nil
+        live: RelayLivePlaybackContext? = nil,
+        resumeStore liveResumeStore: ResumeStore? = nil
     ) async -> RelayPlaybackPreparationOutcome {
         preparationGeneration += 1
         let generation = preparationGeneration
@@ -542,7 +558,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         )
         liveContext = live
         mediaItem = relayItem
-        resumeStore = nil
+        resumeID = live?.resumeID
+        resumeStore = resumeID == nil ? nil : liveResumeStore
+        resumeNotice = resumeID
+            .flatMap { liveResumeStore?.resumeTime(for: $0) }
+            .flatMap(ResumeWritePolicy.liveResumeNotice(savedPosition:))
         state = .loading
         failureMessage = nil
         failurePresentation = nil
@@ -985,6 +1005,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         liveContext = nil
         mediaItem = nil
         resumeStore = nil
+        resumeID = nil
         state = .idle
         failureMessage = nil
         failurePresentation = nil
@@ -1014,6 +1035,14 @@ final class MVHEVCPlayerSession: ObservableObject {
                     return
                 }
                 self.currentTime = max(0, time.seconds.isFinite ? time.seconds : 0)
+                if self.isPlaying,
+                   ResumeWritePolicy.isPeriodicSaveDue(
+                       lastSaveUptime: self.lastResumeSaveUptime,
+                       now: ProcessInfo.processInfo.systemUptime
+                   )
+                {
+                    self.persistResume()
+                }
                 if self.remotePlaybackSource == nil {
                     let loadedRanges = item.loadedTimeRanges.compactMap { value -> ClosedRange<TimeInterval>? in
                         let range = value.timeRangeValue
@@ -1462,6 +1491,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         consecutiveRelayRefreshFailures = 0
         relaySeekNotice = nil
         liveNotice = nil
+        resumeNotice = nil
         liveStatusRefreshCount = 0
         titleDuration = nil
         bufferedRange = nil
@@ -1482,6 +1512,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         isPlaying = false
         pendingResume.clear()
         hasEstablishedPlayback = false
+        lastResumeSaveUptime = nil
         failurePresentation = nil
         preparationPhase = .openingSource
     }
@@ -1491,9 +1522,10 @@ final class MVHEVCPlayerSession: ObservableObject {
             isChangingEyeOrder: isChangingEyeOrder,
             isFinishing: isFinishing,
             hasEstablishedPlayback: hasEstablishedPlayback
-        ), let mediaItem, let resumeStore else {
+        ), let resumeID, let resumeStore else {
             return
         }
+        lastResumeSaveUptime = ProcessInfo.processInfo.systemUptime
 
         let resumeTime = ResumeWritePolicy.position(
             currentTime: currentTime,
@@ -1503,11 +1535,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         )
 
         do {
-            switch ResumeWritePolicy.decision(currentTime: resumeTime, duration: duration) {
+            switch ResumeWritePolicy.decision(currentTime: resumeTime, duration: titleDuration ?? duration) {
             case let .write(position):
-                try resumeStore.setResumeTime(position, for: mediaItem.id)
+                try resumeStore.setResumeTime(position, for: resumeID)
             case .remove:
-                try resumeStore.remove(id: mediaItem.id)
+                try resumeStore.remove(id: resumeID)
             case .skip:
                 break
             }

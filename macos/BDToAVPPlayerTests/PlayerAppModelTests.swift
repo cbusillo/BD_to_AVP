@@ -630,6 +630,106 @@ final class PlayerAppModelTests: XCTestCase {
         session.finish()
     }
 
+    /// A shared movie read through the same byte-range loader as Movie Sharing, from a local file.
+    private func makeSharedPlayback(named name: String) throws -> SharedMoviePlayback {
+        let destinationDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerSharedResumeFixture")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let installedCheck = try BuiltInStereoChecks.install(destinationDirectory: destinationDirectory)[0]
+        let data = try Data(contentsOf: installedCheck.url)
+        let movie = SharedMovie(
+            id: MovieLibraryContract.digest(Data("\(UUID())/\(name)".utf8)),
+            rootID: UUID().uuidString,
+            // The bundled fixture is side-by-side; the name tells the format inspector so.
+            fileName: "\(name) SBS.mov",
+            byteCount: Int64(data.count),
+            revision: MovieLibraryContract.digest(Data(UUID().uuidString.utf8)),
+            resumeKey: MovieLibraryContract.digest(Data("\(name):\(data.count)".utf8))
+        )
+        return SharedMoviePlayback(movie: movie) { _, offset, count in
+            data.subdata(in: Int(offset) ..< Int(offset) + count)
+        }
+    }
+
+    @MainActor
+    private func startSharedPlayback(
+        _ playback: SharedMoviePlayback,
+        session: MVHEVCPlayerSession,
+        resumeStore: ResumeStore
+    ) async throws {
+        await session.prepare(
+            mediaItem: playback.mediaItem,
+            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
+            resumeStore: resumeStore,
+            sharedMovie: playback
+        )
+        for _ in 0 ..< 100 where !session.isReady {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(session.isReady, session.failureMessage ?? "Shared movie did not become ready.")
+    }
+
+    @MainActor
+    func testSharedMovieSavesItsPositionWhilePlayingWithoutAnyEndEvent() async throws {
+        let playback = try makeSharedPlayback(named: "Ocean Dreams")
+        let storageURL = temporaryURL()
+        let resumeStore = ResumeStore(storageURL: storageURL)
+        let session = MVHEVCPlayerSession()
+        try await startSharedPlayback(playback, session: session, resumeStore: resumeStore)
+
+        session.play()
+        for _ in 0 ..< 50 where resumeStore.resumeTime(for: playback.movie.resumeID) == nil {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        // A forced quit runs no end path; the position saved during playback survives it.
+        let reloaded = ResumeStore(storageURL: storageURL)
+        XCTAssertNotNil(reloaded.resumeTime(for: playback.movie.resumeID))
+        session.finish()
+    }
+
+    @MainActor
+    func testSharedMovieSavesWhenTheAppGoesToTheBackgroundAndWhenPlaybackIsClosed() async throws {
+        let playback = try makeSharedPlayback(named: "Rainforest")
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        let session = MVHEVCPlayerSession()
+        try await startSharedPlayback(playback, session: session, resumeStore: resumeStore)
+
+        session.seek(to: 20)
+        for _ in 0 ..< 50 where session.currentTime < 19 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        session.handleScenePhase(.inactive)
+        session.handleScenePhase(.background)
+        XCTAssertEqual(try XCTUnwrap(resumeStore.resumeTime(for: playback.movie.resumeID)), session.currentTime, accuracy: 1)
+
+        session.handleScenePhase(.active)
+        session.seek(to: 30)
+        for _ in 0 ..< 50 where session.currentTime < 29 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        session.finish()
+        XCTAssertEqual(try XCTUnwrap(resumeStore.resumeTime(for: playback.movie.resumeID)), 30, accuracy: 1)
+    }
+
+    @MainActor
+    func testSharedMovieCarriesAPositionSavedUnderTheOldKeyAndResumesThere() async throws {
+        let playback = try makeSharedPlayback(named: "Space Station")
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        try resumeStore.setResumeTime(20, for: playback.movie.legacyResumeID)
+        let session = MVHEVCPlayerSession()
+
+        try await startSharedPlayback(playback, session: session, resumeStore: resumeStore)
+        for _ in 0 ..< 50 where session.currentTime < 19 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        XCTAssertEqual(session.currentTime, 20, accuracy: 1.5)
+        XCTAssertNil(resumeStore.resumeTime(for: playback.movie.legacyResumeID))
+        XCTAssertNotNil(resumeStore.resumeTime(for: playback.movie.resumeID))
+        session.finish()
+    }
+
     @MainActor
     func testInactiveSceneKeepsPlayingAndSavesThePositionWhileBackgroundPauses() async throws {
         let destinationDirectory = FileManager.default.temporaryDirectory
