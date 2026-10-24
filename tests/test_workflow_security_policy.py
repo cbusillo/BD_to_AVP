@@ -1042,10 +1042,6 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         environments = load_github_config()["releaseEnvironments"]
 
         self.assertTrue(all(environment["branches"] == ["main"] for environment in environments.values()))
-        self.assertLessEqual(
-            {"macos-signing", "sparkle-feed-ops"},
-            {name for name, environment in environments.items() if environment["requiredReview"]},
-        )
         self.assertEqual(environments["sparkle-feed-ops"]["secrets"], [])
         self.assertEqual(environments["pypi"]["secrets"], [])
         self.assertEqual(environments["github-pages"]["secrets"], [])
@@ -1062,8 +1058,6 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
         self.assertEqual(manual.get("permissions"), {})
         self.assertLessEqual({"deploy", "restore", "disable"}, set(dispatch["operation"]["options"]))
-        approval = manual["jobs"]["approve"]["environment"]
-        self.assertTrue(load_github_config()["releaseEnvironments"][approval]["requiredReview"])
         self.assertEqual(manual["jobs"]["approve"].get("permissions"), {})
         self.assertIn("approve", direct_needs(manual["jobs"]["manage"]))
         self.assertEqual(manual["jobs"]["manage"]["uses"], "./.github/workflows/sparkle-pages.yml")

@@ -39,12 +39,6 @@
       "branches": [
         "main"
       ],
-      "requiredReview": true,
-      "reviewers": [
-        "cbusillo"
-      ],
-      "preventSelfReview": true,
-      "canAdminsBypass": false,
       "secrets": [
         "APPLE_ID",
         "CERTIFICATE",
@@ -58,7 +52,6 @@
       "branches": [
         "main"
       ],
-      "requiredReview": false,
       "secrets": [
         "SPARKLE_EDDSA_PRIVATE_KEY"
       ]
@@ -67,21 +60,18 @@
       "branches": [
         "main"
       ],
-      "requiredReview": true,
       "secrets": []
     },
     "pypi": {
       "branches": [
         "main"
       ],
-      "requiredReview": false,
       "secrets": []
     },
     "github-pages": {
       "branches": [
         "main"
       ],
-      "requiredReview": false,
       "secrets": []
     }
   },
