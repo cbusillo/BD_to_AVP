@@ -567,9 +567,16 @@ Together the controls provide:
 - Done, which persists progress and releases the session.
 
 The MV-HEVC ornament remains visible while playback is paused, loading, failed,
-or being scrubbed, and automatic hiding is disabled while VoiceOver or Switch
-Control is active. During uninterrupted playback it hides after three seconds.
-Pinching the video surface reveals the controls again. Packed-stereo controls
+or being scrubbed, while a pointer hovers over it, and while its audio or
+subtitle list is open. Automatic hiding is disabled while VoiceOver or Switch
+Control is active. During uninterrupted playback it hides three seconds after
+the last of those ends. visionOS does not report eye gaze to apps, so looking at
+the controls without a pointer does not hold them. Pinching the video surface or
+the downward **Show controls** chevron reveals the controls again.
+
+The MV-HEVC audio language and subtitle lists open inside the controls ornament,
+below the transport row, rather than as system menus. A menu presented from the
+ornament opened behind the video in the headset. Packed-stereo controls
 use AVKit's native visibility behavior; revealing the playback controls also
 reveals actions labeled **Eye Order: Normal** or **Eye Order: Reversed** and
 **Done**.
@@ -577,7 +584,7 @@ reveals actions labeled **Eye Order: Normal** or **Eye Order: Reversed** and
 AVKit owns the packed-stereo audio menu and may present multiple same-language
 tracks with the same localized label. The app explicitly asserts the active
 packed-stereo audio option after the item becomes ready, but it does not replace
-or claim to relabel AVKit's native menu. The app-owned MV-HEVC audio menu leaves
+or claim to relabel AVKit's native menu. The app-owned MV-HEVC audio list leaves
 unique names unchanged and adds role and stable track-number details only when
 labels collide.
 

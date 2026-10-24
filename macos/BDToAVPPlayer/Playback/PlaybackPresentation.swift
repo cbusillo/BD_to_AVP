@@ -111,15 +111,23 @@ struct PlaybackScrubState: Equatable {
 struct PlaybackHUDVisibilityState: Equatable {
     static let autoHideDelay: TimeInterval = 3
 
+    /// Reasons the controls stay up. While any hold is active the controls
+    /// never auto-hide; the auto-hide delay starts again once the last hold ends.
+    enum Hold: Hashable {
+        case hover
+        case scrubbing
+        case trackPicker
+    }
+
     private(set) var isVisible = true
     private(set) var isAutoHideScheduled = false
     private(set) var autoHideGeneration = 0
-    private var isInteracting = false
+    private var holds: Set<Hold> = []
 
     mutating func reconcile(isPlaying: Bool) {
         guard PlaybackHUDVisibilityPolicy.shouldAutoHide(
             isPlaying: isPlaying,
-            isInteracting: isInteracting
+            isInteracting: !holds.isEmpty
         )
         else {
             showAndCancelAutomaticHiding()
@@ -131,13 +139,22 @@ struct PlaybackHUDVisibilityState: Equatable {
         }
     }
 
-    mutating func setInteracting(_ isInteracting: Bool, isPlaying: Bool) {
-        self.isInteracting = isInteracting
+    mutating func setHold(_ hold: Hold, isActive: Bool, isPlaying: Bool) {
+        if isActive {
+            holds.insert(hold)
+        } else {
+            holds.remove(hold)
+        }
         reconcile(isPlaying: isPlaying)
     }
 
     mutating func hoverBegan(isPlaying: Bool) {
-        reveal(isPlaying: isPlaying)
+        isVisible = true
+        setHold(.hover, isActive: true, isPlaying: isPlaying)
+    }
+
+    mutating func hoverEnded(isPlaying: Bool) {
+        setHold(.hover, isActive: false, isPlaying: isPlaying)
     }
 
     mutating func reveal(isPlaying: Bool) {
@@ -172,6 +189,29 @@ struct PlaybackHUDVisibilityState: Equatable {
 
         autoHideGeneration += 1
         isAutoHideScheduled = false
+    }
+}
+
+enum PlaybackTrackPicker: Equatable {
+    case audio
+    case subtitles
+}
+
+/// Which track list the controls show inline. The lists render inside the
+/// controls ornament instead of as system menus, which open behind the video.
+struct PlaybackTrackPickerState: Equatable {
+    private(set) var openPicker: PlaybackTrackPicker? = nil
+
+    var isOpen: Bool {
+        openPicker != nil
+    }
+
+    mutating func toggle(_ picker: PlaybackTrackPicker) {
+        openPicker = openPicker == picker ? nil : picker
+    }
+
+    mutating func close() {
+        openPicker = nil
     }
 }
 

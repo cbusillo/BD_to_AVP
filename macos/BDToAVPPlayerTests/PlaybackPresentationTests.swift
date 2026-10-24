@@ -240,24 +240,75 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertTrue(visibility.isVisible)
         XCTAssertFalse(visibility.isAutoHideScheduled)
 
-        visibility.setInteracting(true, isPlaying: true)
+        visibility.setHold(.scrubbing, isActive: true, isPlaying: true)
         XCTAssertTrue(visibility.isVisible)
         XCTAssertFalse(visibility.isAutoHideScheduled)
 
-        visibility.setInteracting(false, isPlaying: true)
+        visibility.setHold(.scrubbing, isActive: false, isPlaying: true)
         XCTAssertTrue(visibility.isAutoHideScheduled)
     }
 
-    func testHUDHoverRestartsAutoHideWithoutPinningControlsVisible() {
+    func testHUDStaysVisibleForAsLongAsTheControlsAreHovered() {
         var visibility = PlaybackHUDVisibilityState()
         visibility.reconcile(isPlaying: true)
+        let generationBeforeHover = visibility.autoHideGeneration
 
         visibility.hoverBegan(isPlaying: true)
-        let generation = visibility.autoHideGeneration
-        visibility.autoHideTimerFired(generation: generation)
+        visibility.autoHideTimerFired(generation: generationBeforeHover)
+        visibility.reconcile(isPlaying: true)
 
-        XCTAssertFalse(visibility.isVisible)
+        XCTAssertTrue(visibility.isVisible)
         XCTAssertFalse(visibility.isAutoHideScheduled)
+    }
+
+    func testHUDHidesOnlyAfterTheAutoHideDelayFollowingHoverEnd() {
+        var visibility = PlaybackHUDVisibilityState()
+        visibility.reconcile(isPlaying: true)
+        visibility.hoverBegan(isPlaying: true)
+
+        visibility.hoverEnded(isPlaying: true)
+        XCTAssertTrue(visibility.isVisible)
+        XCTAssertTrue(visibility.isAutoHideScheduled)
+
+        visibility.autoHideTimerFired(generation: visibility.autoHideGeneration)
+        XCTAssertFalse(visibility.isVisible)
+    }
+
+    func testHUDHoverEndingKeepsControlsUpWhileAnotherHoldRemains() {
+        var visibility = PlaybackHUDVisibilityState()
+        visibility.reconcile(isPlaying: true)
+        visibility.hoverBegan(isPlaying: true)
+        visibility.setHold(.trackPicker, isActive: true, isPlaying: true)
+
+        visibility.hoverEnded(isPlaying: true)
+        XCTAssertTrue(visibility.isVisible)
+        XCTAssertFalse(visibility.isAutoHideScheduled)
+
+        visibility.setHold(.trackPicker, isActive: false, isPlaying: true)
+        XCTAssertTrue(visibility.isAutoHideScheduled)
+    }
+
+    func testHUDHoverDoesNotScheduleHidingWhilePaused() {
+        var visibility = PlaybackHUDVisibilityState()
+        visibility.hoverBegan(isPlaying: false)
+        visibility.hoverEnded(isPlaying: false)
+
+        XCTAssertTrue(visibility.isVisible)
+        XCTAssertFalse(visibility.isAutoHideScheduled)
+    }
+
+    func testTrackPickerOpensOneListAtATimeAndTogglesClosed() {
+        var picker = PlaybackTrackPickerState()
+
+        picker.toggle(.audio)
+        XCTAssertEqual(picker.openPicker, .audio)
+
+        picker.toggle(.subtitles)
+        XCTAssertEqual(picker.openPicker, .subtitles)
+
+        picker.toggle(.subtitles)
+        XCTAssertNil(picker.openPicker)
+        XCTAssertFalse(picker.isOpen)
     }
 
     func testEyeOrderPresentationHasVisibleAndAccessibleSelectedState() {
