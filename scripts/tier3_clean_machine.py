@@ -1304,6 +1304,9 @@ class MacOSOperations:
             "BD_TO_AVP_UI_PHASE": phase,
             "BD_TO_AVP_UI_RELEASE_NOTES_URL": release_notes_url,
             "BD_TO_AVP_UI_RELEASES_URL": RELEASES_URL,
+            # A clean machine has no development certificate, so sign the Debug build ad hoc.
+            "CODE_SIGN_IDENTITY": "-",
+            "DEVELOPMENT_TEAM": "",
         }
         collector = self._start_accessibility_collector(
             repo=repo,
