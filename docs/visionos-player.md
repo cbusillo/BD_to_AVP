@@ -573,7 +573,9 @@ Control is active. During uninterrupted playback the ornament fades to nearly
 invisible three seconds after the last of those ends; it is never removed. The
 faded controls stay in place and interactive, and a system hover effect brings
 them back to full opacity while the wearer looks at them, so a look and pinch
-works without a separate show-controls button. visionOS renders that effect out
+works without a separate show-controls button. The reveal is quick; after the
+wearer looks away the controls hold for about 1.5 seconds and then fade more
+slowly. The timings live in `PlaybackHUDPresentation`. visionOS renders that effect out
 of process and never reports where the wearer looks, so the app's own state
 stays faded until an interaction or pinching the video surface reveals the
 controls again.
@@ -589,12 +591,22 @@ grows with the stream as before. A seek outside the band keeps the existing
 notices: before the window, playback continues at its start; past the live edge,
 playback moves to the latest available time and says how far the relay reaches.
 
-The MV-HEVC audio language and subtitle lists open inside the controls ornament,
-below the transport row, rather than as system menus. A menu presented from the
-ornament opened behind the video in the headset. Packed-stereo controls
-use AVKit's native visibility behavior; revealing the playback controls also
-reveals actions labeled **Eye Order: Normal** or **Eye Order: Reversed** and
-**Done**.
+The MV-HEVC audio language and subtitle lists open over the bottom edge of the
+video, just in front of it and directly above the controls, so they read as part of
+the controls panel. The list is a RealityView attachment placed in the video's own
+space. The alternatives each failed: growing the controls ornament pushed the list
+below the window; a second ornament, or a SwiftUI view in the window, sat behind
+the window's surface and was hidden; a plain SwiftUI overlay floated at the front
+of the window's depth and loomed over the controls; and a system menu presented
+from the ornament opened behind the video. The list is also outside the controls'
+hover group, so only the row the wearer looks at highlights. It shows up to five
+rows and scrolls beyond that, starting at the current selection, so a disc with a
+dozen or more tracks stays usable. While a list is open, the video surface does not
+take pinches, so they reach the list.
+
+Packed-stereo controls use AVKit's native visibility behavior; revealing the
+playback controls also reveals actions labeled **Eye Order: Normal** or
+**Eye Order: Reversed** and **Done**.
 
 AVKit owns the packed-stereo audio menu and may present multiple same-language
 tracks with the same localized label. The app explicitly asserts the active

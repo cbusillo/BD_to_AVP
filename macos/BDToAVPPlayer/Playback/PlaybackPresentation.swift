@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 enum PlaybackTimeFormatter {
@@ -289,13 +290,47 @@ struct PlaybackTrackPickerState: Equatable {
     }
 }
 
+/// How tall a track list grows. Short lists show every entry; longer ones stop at a fixed number
+/// of rows and scroll, so a disc with a dozen or more tracks still fits above the controls.
+enum PlaybackTrackListLayout {
+    static let rowHeight: CGFloat = 48
+    static let maximumVisibleRows = 5
+
+    static func listHeight(rowCount: Int) -> CGFloat {
+        CGFloat(min(max(0, rowCount), maximumVisibleRows)) * rowHeight
+    }
+
+    static func scrolls(rowCount: Int) -> Bool {
+        rowCount > maximumVisibleRows
+    }
+}
+
 /// How faded controls look. visionOS never reports where the wearer looks; the system renders
 /// the hover effect, so `isLookedAt` comes from the effect itself, never from app state.
 enum PlaybackHUDPresentation {
     static let fadedOpacity = 0.08
+    /// Looking at faded controls brings them back quickly.
+    static let revealDuration: TimeInterval = 0.2
+    /// After the wearer looks away, the controls stay up this long before they start to fade,
+    /// so a glance at the video and back does not flicker them.
+    static let fadeOutHold: TimeInterval = 1.5
+    /// The fade-out itself is slower than the reveal.
+    static let fadeOutDuration: TimeInterval = 0.8
+
+    struct LookTransition: Equatable {
+        let delay: TimeInterval
+        let duration: TimeInterval
+    }
 
     static func opacity(isFaded: Bool, isLookedAt: Bool) -> Double {
         isFaded && !isLookedAt ? fadedOpacity : 1
+    }
+
+    /// The timing of the opacity change when the look starts (`isLookedAt`) or ends.
+    static func lookTransition(isLookedAt: Bool) -> LookTransition {
+        isLookedAt
+            ? LookTransition(delay: 0, duration: revealDuration)
+            : LookTransition(delay: fadeOutHold, duration: fadeOutDuration)
     }
 }
 
