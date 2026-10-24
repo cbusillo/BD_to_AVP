@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import ffmpeg
 
-from bd_to_avp.modules import container
+from bd_to_avp.modules import audio, container
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.audio_selection import (
     load_audio_selection_manifest,
@@ -619,6 +620,68 @@ class MuxCommandTests(unittest.TestCase):
 
         command = run_command.call_args.args[0]
         self.assertIn("movie.ace.srt#1:hdlr=sbtl:lang=ace:group=2:name=Achinese Subtitles:tx3g", command)
+
+
+@unittest.skipUnless(
+    container.config.FFMPEG_PATH.is_file() and container.config.FFPROBE_PATH.is_file(),
+    "FFmpeg integration tools are unavailable",
+)
+class SourceLanguageTaggingIntegrationTests(unittest.TestCase):
+    """A source's audio language reaches the final track tag unchanged, and stays unknown when missing."""
+
+    def test_final_audio_tags_follow_source_stream_languages(self) -> None:
+        # MakeMKV writes ISO 639-2/B codes ("ger"), so the fixture does too.
+        source_languages = ["ger", "eng", None]
+        for route in ("extracted_pcm", "direct_from_mkv"):
+            with self.subTest(route=route), tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                source_path = temp_path / "source.mkv"
+                write_audio_fixture(source_path, source_languages)
+                aac_path = temp_path / "Movie_audio_AAC.m4a"
+
+                with (
+                    patch.object(container.config, "audio_preferred_language", None),
+                    patch.object(container.config, "audio_mode", AudioMode.CONVERT_AAC),
+                    patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+                ):
+                    transcode_source = source_path
+                    if route == "extracted_pcm":
+                        transcode_source = temp_path / "Movie_audio_PCM.mov"
+                        container.extract_mvc_and_audio(source_path, None, transcode_source)
+                    audio.transcode_audio(transcode_source, aac_path, 192, activity=Mock())
+
+                    with (
+                        patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+                        patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+                        patch.object(container, "run_process_capture") as run_command,
+                    ):
+                        container.mux_video_audio_subs(
+                            temp_path / "movie_MV-HEVC.mov",
+                            aac_path,
+                            temp_path / "movie_AVP.mov",
+                            temp_path,
+                        )
+
+                command = run_command.call_args.args[0]
+                audio_imports = [argument for argument in command if str(argument).startswith(f"{aac_path}#")]
+                self.assertEqual(
+                    [argument.split(":lang=")[1].split(":")[0] for argument in audio_imports],
+                    ["deu", "eng", "und"],
+                )
+
+
+def write_audio_fixture(path: Path, languages: list[str | None]) -> None:
+    command: list[str | Path] = [container.config.FFMPEG_PATH, "-hide_banner", "-loglevel", "error"]
+    for _ in languages:
+        command += ["-f", "lavfi", "-t", "0.1", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+    for input_index in range(len(languages)):
+        command += ["-map", f"{input_index}:a"]
+    command += ["-c:a", "pcm_s16le"]
+    for output_index, language in enumerate(languages):
+        if language is not None:
+            command += [f"-metadata:s:a:{output_index}", f"language={language}"]
+    command += ["-y", path]
+    subprocess.run(command, check=True)
 
 
 def audio_stream(
