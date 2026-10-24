@@ -78,6 +78,7 @@
   "releaseOperations": {
     "watchCommand": "uv run python -m scripts.github_release_run watch",
     "safetyErrorExitCode": 21,
+    "readUnavailableExitCode": 23,
     "repository": "cbusillo/BD_to_AVP",
     "releaseActor": "shiny-code-app[bot]",
     "requiredBranch": "main",

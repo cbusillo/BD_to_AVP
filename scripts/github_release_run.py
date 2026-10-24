@@ -20,6 +20,8 @@ EXIT_SUCCESS = 0
 EXIT_FAILED = 1
 EXIT_SAFETY_ERROR = 21
 EXIT_TIMEOUT = 22
+EXIT_READ_UNAVAILABLE = 23
+MAX_CONSECUTIVE_READ_FAILURES = 30
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 NONTERMINAL_STATUSES = {"in_progress", "pending", "queued", "requested"}
@@ -36,6 +38,10 @@ REQUIRED_EVENT = "workflow_dispatch"
 
 class ReleaseRunError(RuntimeError):
     pass
+
+
+class GitHubReadError(RuntimeError):
+    """A GitHub read failed; it says nothing about whether the release run is safe."""
 
 
 class GitHubAPI(Protocol):
@@ -84,15 +90,15 @@ class GhAPIClient:
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
-            raise ReleaseRunError("GitHub CLI request timed out.") from error
+            raise GitHubReadError("GitHub CLI request timed out.") from error
         if result.returncode != 0:
-            raise ReleaseRunError(f"GitHub CLI request failed with exit status {result.returncode}.")
+            raise GitHubReadError(f"GitHub CLI request failed with exit status {result.returncode}.")
         if not result.stdout.strip():
             return None
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError as error:
-            raise ReleaseRunError("GitHub CLI returned invalid JSON.") from error
+            raise GitHubReadError("GitHub CLI returned invalid JSON.") from error
 
     def get_json(self, endpoint: str) -> object:
         return self._run_json(
@@ -361,74 +367,44 @@ def watch_release_run(
     sleeper: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     emit: Emitter = _emit_json,
+    max_read_failures: int = MAX_CONSECUTIVE_READ_FAILURES,
 ) -> int:
     validate_expectation(expectation)
     if poll_seconds <= 0:
         raise ReleaseRunError("Poll interval must be greater than zero.")
     if timeout_seconds <= 0:
         raise ReleaseRunError("Timeout must be greater than zero.")
+    if max_read_failures <= 0:
+        raise ReleaseRunError("Read failure limit must be greater than zero.")
     started_at = clock()
     previous_snapshot: tuple[str, str] | None = None
+    read_failures = 0
     while True:
-        run = _mapping(client.get_json(expectation.run_endpoint), "Workflow run")
-        identity = validate_run_identity(run, expectation)
-        if identity.status == "completed":
-            event = "succeeded" if identity.conclusion == "success" else "failed"
+        try:
+            run = _mapping(client.get_json(expectation.run_endpoint), "Workflow run")
+            identity = validate_run_identity(run, expectation)
+            branch_sha = None if identity.status == "completed" else current_branch_sha(client, expectation)
+        except GitHubReadError as error:
+            read_failures += 1
+            event = "read_unavailable" if read_failures >= max_read_failures else "read_failed"
             emit(
                 {
                     "event": event,
                     "run_id": expectation.run_id,
                     "workflow": expectation.workflow,
-                    "workflow_id": identity.workflow_id,
-                    "workflow_path": expectation.workflow_path,
-                    "release_route": expectation.route,
                     "head_sha": expectation.head_sha,
-                    "conclusion": identity.conclusion,
-                    "run_actor": identity.run_actor,
-                    "triggering_actor": identity.triggering_actor,
-                    "run_attempt": identity.run_attempt,
+                    "consecutive_failures": read_failures,
+                    "message": str(error),
                 }
             )
-            return EXIT_SUCCESS if identity.conclusion == "success" else EXIT_FAILED
-
-        branch_sha = current_branch_sha(client, expectation)
-        if branch_sha != expectation.head_sha:
-            emit(
-                {
-                    "event": "source_moved",
-                    "run_id": expectation.run_id,
-                    "workflow": expectation.workflow,
-                    "expected_head_sha": expectation.head_sha,
-                    "current_branch_sha": branch_sha,
-                    "branch": expectation.branch,
-                }
-            )
-            return EXIT_SAFETY_ERROR
-
-        if identity.status == "waiting":
-            raise ReleaseRunError(
-                "Release run is waiting for an environment approval; no release environment should require one. "
-                "Check the release environments' protection rules."
-            )
-
-        if identity.status not in NONTERMINAL_STATUSES:
-            raise ReleaseRunError(f"Unexpected workflow run status: {identity.status!r}.")
-        snapshot = (identity.status, identity.conclusion)
-        if snapshot != previous_snapshot:
-            emit(
-                {
-                    "event": "running",
-                    "run_id": expectation.run_id,
-                    "workflow": expectation.workflow,
-                    "workflow_id": identity.workflow_id,
-                    "workflow_path": expectation.workflow_path,
-                    "release_route": expectation.route,
-                    "head_sha": expectation.head_sha,
-                    "branch": expectation.branch,
-                    "status": identity.status,
-                }
-            )
-            previous_snapshot = snapshot
+            if event == "read_unavailable":
+                return EXIT_READ_UNAVAILABLE
+        else:
+            read_failures = 0
+            result = _evaluate_poll(expectation, identity, branch_sha, previous_snapshot, emit)
+            if isinstance(result, int):
+                return result
+            previous_snapshot = result
         if clock() - started_at >= timeout_seconds:
             emit(
                 {
@@ -441,6 +417,72 @@ def watch_release_run(
             )
             return EXIT_TIMEOUT
         sleeper(poll_seconds)
+
+
+def _evaluate_poll(
+    expectation: RunExpectation,
+    identity: ValidatedRunIdentity,
+    branch_sha: str | None,
+    previous_snapshot: tuple[str, str] | None,
+    emit: Emitter,
+) -> int | tuple[str, str]:
+    """Return an exit code when the watch is over, otherwise the snapshot to compare next time."""
+    if identity.status == "completed":
+        event = "succeeded" if identity.conclusion == "success" else "failed"
+        emit(
+            {
+                "event": event,
+                "run_id": expectation.run_id,
+                "workflow": expectation.workflow,
+                "workflow_id": identity.workflow_id,
+                "workflow_path": expectation.workflow_path,
+                "release_route": expectation.route,
+                "head_sha": expectation.head_sha,
+                "conclusion": identity.conclusion,
+                "run_actor": identity.run_actor,
+                "triggering_actor": identity.triggering_actor,
+                "run_attempt": identity.run_attempt,
+            }
+        )
+        return EXIT_SUCCESS if identity.conclusion == "success" else EXIT_FAILED
+
+    if branch_sha != expectation.head_sha:
+        emit(
+            {
+                "event": "source_moved",
+                "run_id": expectation.run_id,
+                "workflow": expectation.workflow,
+                "expected_head_sha": expectation.head_sha,
+                "current_branch_sha": branch_sha,
+                "branch": expectation.branch,
+            }
+        )
+        return EXIT_SAFETY_ERROR
+
+    if identity.status == "waiting":
+        raise ReleaseRunError(
+            "Release run is waiting for an environment approval; no release environment should require one. "
+            "Check the release environments' protection rules."
+        )
+
+    if identity.status not in NONTERMINAL_STATUSES:
+        raise ReleaseRunError(f"Unexpected workflow run status: {identity.status!r}.")
+    snapshot = (identity.status, identity.conclusion)
+    if snapshot != previous_snapshot:
+        emit(
+            {
+                "event": "running",
+                "run_id": expectation.run_id,
+                "workflow": expectation.workflow,
+                "workflow_id": identity.workflow_id,
+                "workflow_path": expectation.workflow_path,
+                "release_route": expectation.route,
+                "head_sha": expectation.head_sha,
+                "branch": expectation.branch,
+                "status": identity.status,
+            }
+        )
+    return snapshot
 
 
 def _positive_int(value: str) -> int:

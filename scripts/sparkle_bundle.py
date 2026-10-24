@@ -143,15 +143,20 @@ def verify_code_signatures(app_path: Path) -> None:
     _verify_codesign_identity(app_path, "Containing app")
 
 
+def _run_distribution_check(command: list[str | Path], description: str) -> None:
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as error:
+        output = "\n".join(part.strip() for part in (error.stdout, error.stderr) if part and part.strip())
+        raise SparkleBundleError(
+            f"{description} failed with exit status {error.returncode}: {output or '(no output)'}"
+        ) from error
+
+
 def verify_dmg_distribution(dmg_path: Path) -> None:
     _verify_codesign_identity(dmg_path, "DMG")
-    subprocess.run(
-        ["xcrun", "stapler", "validate", dmg_path],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(
+    _run_distribution_check(["xcrun", "stapler", "validate", dmg_path], "DMG stapler validation")
+    _run_distribution_check(
         [
             "spctl",
             "--assess",
@@ -162,18 +167,14 @@ def verify_dmg_distribution(dmg_path: Path) -> None:
             "--verbose=4",
             dmg_path,
         ],
-        check=True,
-        capture_output=True,
-        text=True,
+        "DMG Gatekeeper assessment",
     )
 
 
 def verify_app_distribution(app_path: Path) -> None:
-    subprocess.run(
+    _run_distribution_check(
         ["spctl", "--assess", "--type", "execute", "--verbose=4", app_path],
-        check=True,
-        capture_output=True,
-        text=True,
+        "App Gatekeeper assessment",
     )
 
 
