@@ -144,6 +144,8 @@ enum RelayPlaybackPreparationOutcome: Equatable {
 struct RelayLivePlaybackContext: Sendable {
     let title: String
     let streamID: UUID
+    /// The title's full length from the Mac's live title index, when the Mac knows it.
+    let durationSeconds: TimeInterval?
     /// The Mac's parent-signed live status, for the busy notice and why a stream ended.
     let status: @Sendable () async -> LiveStreamStatus?
     /// Called once when installed live playback is torn down for any reason (failure,
@@ -153,11 +155,13 @@ struct RelayLivePlaybackContext: Sendable {
     init(
         title: String,
         streamID: UUID,
+        durationSeconds: TimeInterval? = nil,
         status: @escaping @Sendable () async -> LiveStreamStatus?,
         ended: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.title = title
         self.streamID = streamID
+        self.durationSeconds = durationSeconds
         self.status = status
         self.ended = ended
     }
@@ -188,6 +192,11 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
+    /// The title's full length as reported before playback, for a live title whose stream is
+    /// still growing. Nil when the player's own duration is already the full length.
+    @Published private(set) var titleDuration: TimeInterval?
+    /// The player's buffered range around the playhead, for file and shared-movie playback.
+    @Published private(set) var bufferedRange: ClosedRange<TimeInterval>?
     @Published private(set) var relaySeekNotice: String?
     @Published private(set) var audioOptions: [PlaybackMediaOption] = []
     @Published private(set) var subtitleOptions: [PlaybackMediaOption] = []
@@ -315,6 +324,24 @@ final class MVHEVCPlayerSession: ObservableObject {
         remotePlaybackSource?.retainedSeekPolicy.earliestPlayableTime ?? 0
     }
 
+    /// The scrub bar's full span and the range that can be played right now.
+    var timeline: PlaybackTimeline {
+        if let remotePlaybackSource {
+            let policy = remotePlaybackSource.retainedSeekPolicy
+            return PlaybackTimeline(
+                titleDuration: titleDuration,
+                playerDuration: duration,
+                loadedRange: policy.earliestPlayableTime ... max(policy.earliestPlayableTime, policy.latestAvailableTime),
+                isFinal: policy.window?.isFinalized == true
+            )
+        }
+        return PlaybackTimeline(
+            titleDuration: nil,
+            playerDuration: duration,
+            loadedRange: bufferedRange ?? currentTime ... currentTime
+        )
+    }
+
     var supportsEyeSwap: Bool {
         packedStereoSource != nil
     }
@@ -350,6 +377,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         preparationPhase = .openingSource
         currentTime = 0
         duration = 0
+        titleDuration = nil
+        bufferedRange = nil
         audioOptions = []
         subtitleOptions = []
         selectedAudioID = ""
@@ -521,6 +550,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         preparationPhase = .preparingMedia
         currentTime = 0
         duration = 0
+        titleDuration = nil
+        bufferedRange = nil
         audioOptions = []
         subtitleOptions = []
         selectedAudioID = ""
@@ -629,6 +660,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         self.mediaItem = mediaItem
         if let live { liveContext = live }
         installedLiveContext = liveContext
+        titleDuration = liveContext?.durationSeconds.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         remotePlaybackSource = source
         relayTransport = transport
         playerItem = item
@@ -958,6 +990,16 @@ final class MVHEVCPlayerSession: ObservableObject {
                     return
                 }
                 self.currentTime = max(0, time.seconds.isFinite ? time.seconds : 0)
+                if self.remotePlaybackSource == nil {
+                    let loadedRanges = item.loadedTimeRanges.compactMap { value -> ClosedRange<TimeInterval>? in
+                        let range = value.timeRangeValue
+                        let start = range.start.seconds
+                        let end = range.end.seconds
+                        guard start.isFinite, end.isFinite, end >= start else { return nil }
+                        return start ... end
+                    }
+                    self.bufferedRange = PlaybackTimeline.bufferedRange(containing: self.currentTime, in: loadedRanges)
+                }
 #if BD_TO_AVP_QUALIFICATION
                 self.qualificationRecorder?.recordSampleIfNeeded(
                     player: self.player,
@@ -1397,6 +1439,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         relaySeekNotice = nil
         liveNotice = nil
         liveStatusRefreshCount = 0
+        titleDuration = nil
+        bufferedRange = nil
         audioGroup = nil
         subtitleGroup = nil
         audioSelectionByID = [:]

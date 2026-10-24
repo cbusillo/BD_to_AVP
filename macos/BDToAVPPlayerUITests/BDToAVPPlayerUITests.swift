@@ -51,6 +51,18 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(playPauseButton.waitForExistence(timeout: 30))
         attachScreenshot(named: "player-controls-visible")
 
+        // The scrub bar spans the movie's full length from the start.
+        let scrubBar = app.descendants(matching: .any)["player-scrub-bar"]
+        XCTAssertTrue(scrubBar.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(scrubBar.frame.width, 400)
+        XCTAssertTrue((scrubBar.value as? String)?.contains("/ 0:24") == true, String(describing: scrubBar.value))
+        scrubBar.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        let seekedExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value BEGINSWITH '0:1' OR value BEGINSWITH '0:2'"),
+            object: scrubBar
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [seekedExpectation], timeout: 5), .completed, String(describing: scrubBar.value))
+
         let doneButton = app.buttons["player-done"]
         XCTAssertTrue(doneButton.exists)
         doneButton.tap()
@@ -71,6 +83,50 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(showControlsButton, timeout: 5))
         showControlsButton.tap()
         XCTAssertTrue(playPauseButton.waitForExistence(timeout: 5))
+    }
+
+    func testTrackListsOpenInsideTheControlsAndHoldThemUp() throws {
+        let app = XCUIApplication()
+        app.launch()
+        app.buttons["source-on-my-vision-pro"].tap()
+        XCTAssertTrue(app.staticTexts["built-in-stereo-checks-title"].waitForExistence(timeout: 30))
+
+        let movieID = "documents:playerlongfixture.mov"
+        let libraryPlayButton = app.buttons["play-library-\(movieID)"]
+        guard libraryPlayButton.waitForExistence(timeout: 10) else {
+            throw XCTSkip("Requires PlayerLongFixture.mov in the app Documents directory.")
+        }
+        libraryPlayButton.tap()
+
+        let playPauseButton = app.buttons["player-play-pause"]
+        XCTAssertTrue(playPauseButton.waitForExistence(timeout: 30))
+
+        let audioButton = app.buttons["player-audio-menu"]
+        guard waitForHittable(audioButton, timeout: 10), audioButton.isEnabled else {
+            throw XCTSkip("Requires a PlayerLongFixture.mov with selectable audio tracks.")
+        }
+        audioButton.tap()
+        let audioTracks = app.descendants(matching: .any)["player-audio-tracks"]
+        XCTAssertTrue(audioTracks.waitForExistence(timeout: 5))
+        attachScreenshot(named: "player-audio-tracks")
+
+        // An open track list holds the controls up past the auto-hide delay.
+        sleep(UInt32(5))
+        XCTAssertTrue(playPauseButton.exists)
+        XCTAssertTrue(audioTracks.exists)
+
+        let subtitleButton = app.buttons["player-subtitle-menu"]
+        if subtitleButton.isEnabled {
+            subtitleButton.tap()
+            let subtitleTracks = app.descendants(matching: .any)["player-subtitle-tracks"]
+            XCTAssertTrue(subtitleTracks.waitForExistence(timeout: 5))
+            XCTAssertFalse(audioTracks.exists)
+            attachScreenshot(named: "player-subtitle-tracks")
+            subtitleButton.tap()
+            XCTAssertFalse(subtitleTracks.exists)
+        }
+
+        app.buttons["player-done"].tap()
     }
 
     func testBuiltInStereoCheckExposesNativeEyeOrderAndDoneActions() throws {
