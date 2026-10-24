@@ -1058,6 +1058,9 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
         self.assertEqual(manual.get("permissions"), {})
         self.assertLessEqual({"deploy", "restore", "disable"}, set(dispatch["operation"]["options"]))
+        # The feed operation waits on a dedicated approval environment, never one holding release secrets.
+        approval = manual["jobs"]["approve"]["environment"]
+        self.assertEqual(load_github_config()["releaseEnvironments"][approval]["secrets"], [])
         self.assertEqual(manual["jobs"]["approve"].get("permissions"), {})
         self.assertIn("approve", direct_needs(manual["jobs"]["manage"]))
         self.assertEqual(manual["jobs"]["manage"]["uses"], "./.github/workflows/sparkle-pages.yml")
