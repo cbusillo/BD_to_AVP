@@ -52,6 +52,7 @@ targets:
         PRODUCT_NAME: 3D Blu-ray to Vision Pro
       configs:
         Debug:
+          DEVELOPMENT_TEAM: MM5YXC7T6E
           PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.development
           PRODUCT_NAME: 3D Blu-ray to Vision Pro Development
         Release:
