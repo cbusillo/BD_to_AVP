@@ -179,8 +179,8 @@ group and call `.github/workflows/release-engine.yml`; the reusable engine owns
 the shared packaging, signing, notarization, appcast, attestation, publication,
 and cleanup path without declaring a competing concurrency group. The engine
 binds its OIDC `job_workflow_ref` and `job_workflow_sha` claims to the exact
-operator run, then revalidates that policy fingerprint after the `macos-signing`
-signing job.
+operator run, then revalidates that policy fingerprint when the `macos-signing`
+job starts, before signing.
 
 The engine's package job runs on GitHub's Apple-Silicon `xcode-27` runner. It selects
 the Xcode pinned by `XCODE_VERSION` and `XCODE_BUILD_VERSION` in the workflow explicitly and installs the XcodeGen 2.45.4 release

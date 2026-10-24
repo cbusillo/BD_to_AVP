@@ -262,12 +262,6 @@ def _mapping(value: object, description: str) -> Mapping[str, Any]:
     return cast(Mapping[str, Any], value)
 
 
-def _sequence(value: object, description: str) -> Sequence[object]:
-    if not isinstance(value, list):
-        raise ReleaseRunError(f"{description} must be a JSON array.")
-    return value
-
-
 def _string(record: Mapping[str, Any], key: str, description: str) -> str:
     value = record.get(key)
     if not isinstance(value, str):

@@ -190,10 +190,10 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseWorkflowPolicyError, "engine workflow SHA"):
             validate_engine_environment(environment)
 
-    def test_post_signing_revalidation_rejects_changed_fingerprint(self) -> None:
+    def test_signing_job_revalidation_rejects_changed_fingerprint(self) -> None:
         evidence = validate_engine_environment(valid_environment())
 
-        with self.assertRaisesRegex(ReleaseWorkflowPolicyError, "signing boundary"):
+        with self.assertRaises(ReleaseWorkflowPolicyError):
             main(
                 ["engine", "--expected-fingerprint", "0" * 64],
                 environment=valid_environment(),

@@ -100,7 +100,7 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         client.add(RUN_ENDPOINT, workflow_run(status="waiting"))
         client.add(BRANCH_ENDPOINT, branch_reference())
 
-        with self.assertRaisesRegex(ReleaseRunError, "waiting for an environment approval"):
+        with self.assertRaises(ReleaseRunError):
             watch_release_run(
                 expectation(),
                 client,

@@ -25,7 +25,7 @@ REQUIRED_REF = "refs/heads/main"
 REQUIRED_EVENT = "workflow_dispatch"
 REQUIRED_ACTOR = "shiny-code-app[bot]"
 # Reading immutable evidence must continue to accept the actor that published it.
-# This set is not authorization to dispatch or approve a new release.
+# This set is not authorization to dispatch a new release.
 RECEIPT_ACTORS = frozenset({"shiny-code-bot", REQUIRED_ACTOR})
 SIGNING_ENVIRONMENT = "macos-signing"
 OIDC_AUDIENCE = "bd-to-avp-release-engine"
@@ -460,7 +460,7 @@ def main(argv: list[str] | None = None, *, environment: Mapping[str, str] | None
         evidence = validate_engine_environment(_with_oidc_workflow_identity(values))
         fingerprint = evidence.fingerprint()
         if args.expected_fingerprint is not None and not hmac.compare_digest(args.expected_fingerprint, fingerprint):
-            raise ReleaseWorkflowPolicyError("Release policy fingerprint changed across the signing boundary.")
+            raise ReleaseWorkflowPolicyError("Release policy fingerprint changed before the signing job.")
         if args.github_output is not None:
             _write_github_output(args.github_output, evidence)
     else:
