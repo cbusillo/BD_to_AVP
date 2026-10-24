@@ -27,7 +27,12 @@ from bd_to_avp.process_runner import (
     ProcessTimeoutError,
 )
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
-from bd_to_avp.worker.protocol import JobSpec, LiveSourceOptions, WorkerActivityReporter
+from bd_to_avp.worker.protocol import (
+    LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO,
+    JobSpec,
+    LiveSourceOptions,
+    WorkerActivityReporter,
+)
 from bd_to_avp.worker.source_errors import SourceServiceError
 from bd_to_avp.worker.source_handoff import SOURCE_CHANGED, SOURCE_CHANGED_MESSAGE, HeldSource, identity_matches
 
@@ -49,6 +54,7 @@ class ServiceRecordKind(IntEnum):
     VIDEO = 1
     AUDIO = 2
     COMPLETE = 3
+    ALTERNATE_AUDIO = 4
 
 
 @dataclass(frozen=True)
@@ -60,6 +66,8 @@ class ServiceRecord:
     primary: bytes
     secondary: bytes
     random_access: bool
+    # For ALTERNATE_AUDIO, the 1-based alternate track; 0 for every other record.
+    track: int = 0
 
 
 @dataclass(frozen=True)
@@ -127,7 +135,11 @@ class ServiceFrameReader:
         payload_length = primary_length + secondary_length
         if payload_length > MAXIMUM_RECORD_BYTES:
             raise SourceServiceError("invalid_source_stream", "The source helper returned an oversized record.")
-        if flags & ~SERVICE_FLAG_RANDOM_ACCESS:
+        if kind is ServiceRecordKind.ALTERNATE_AUDIO:
+            # The flags carry the record's 1-based position in the requested alternate list.
+            if not 1 <= flags <= LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO or primary_length == 0 or secondary_length != 0:
+                raise SourceServiceError("invalid_source_stream", "An alternate audio record is malformed.")
+        elif flags & ~SERVICE_FLAG_RANDOM_ACCESS:
             raise SourceServiceError("invalid_source_stream", "The source helper returned unsupported frame flags.")
         if kind is ServiceRecordKind.VIDEO and (primary_length == 0 or secondary_length == 0):
             raise SourceServiceError("invalid_source_stream", "An MVC record must contain both stereo views.")
@@ -143,7 +155,8 @@ class ServiceFrameReader:
             dts=dts,
             primary=payload[:primary_length],
             secondary=payload[primary_length:],
-            random_access=bool(flags & SERVICE_FLAG_RANDOM_ACCESS),
+            random_access=kind is not ServiceRecordKind.ALTERNATE_AUDIO and bool(flags & SERVICE_FLAG_RANDOM_ACCESS),
+            track=flags if kind is ServiceRecordKind.ALTERNATE_AUDIO else 0,
         )
 
     def _read_exact(self, size: int, *, allow_eof: bool) -> bytes | None:

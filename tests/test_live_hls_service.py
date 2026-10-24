@@ -20,10 +20,12 @@ from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.live_hls_service import (
     HLSPublisher,
     SSIFLiveHLSService,
+    alternate_audio_filter,
     parse_staged_playlist,
 )
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
+    LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO,
     LIVE_HLS_MINIMUM_RETENTION_BYTES,
     LIVE_HLS_MINIMUM_RETENTION_SECONDS,
     LIVE_HLS_MINIMUM_VIEWER_LEAD_SECONDS,
@@ -295,6 +297,50 @@ class HLSPublisherTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "invalid_encoder_playlist")
 
+    def test_alternate_rendition_gates_the_manifest_and_completion(self) -> None:
+        publisher = self.publisher()
+        alternate_staging = StagingEncoder(self.root / ".pipeline/audio-4353", target_duration=2)
+        publisher.add_alternate(
+            HLSPublisher(
+                self.root,
+                alternate_staging.staging,
+                retention_seconds=30,
+                retention_max_bytes=1_000_000,
+                streams={"source_pid": 4353},
+                clock=lambda: self.now,
+                name_prefix="audio-4353-",
+            )
+        )
+        self.encoder.segment(100)
+        publisher.poll()
+        self.assertFalse(publisher.has_published)
+        self.assertFalse(publisher.manifest_path.exists(), "the viewer must not see a rendition without media")
+
+        alternate_staging.segment(10, 1.92)
+        publisher.poll()
+        manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
+        (rendition,) = manifest["audio_renditions"]
+        self.assertEqual(rendition["source_pid"], 4353)
+        self.assertEqual(rendition["initialization"], "audio-4353-init.mp4")
+        self.assertEqual([segment["uri"] for segment in rendition["segments"]], ["audio-4353-segment-000000000.m4s"])
+        self.assertTrue((self.root / "audio-4353-segment-000000000.m4s").exists())
+        self.assertTrue((self.root / "audio-4353-init.mp4").exists())
+        self.assertNotIn("audio-4353", publisher.playlist_path.read_text(encoding="utf-8"))
+
+        self.encoder.end()
+        publisher.poll()
+        self.assertFalse(publisher.complete, "the stream completes only when every rendition has")
+        alternate_staging.end()
+        publisher.finish()
+        manifest = json.loads(publisher.manifest_path.read_text(encoding="utf-8"))
+        self.assertTrue(manifest["complete"])
+        self.assertTrue(manifest["audio_renditions"][0]["complete"])
+
+    def test_alternate_audio_starts_on_the_video_timeline(self) -> None:
+        self.assertEqual(alternate_audio_filter(9_000), "aresample=48000,adelay=delays=4800S:all=1")
+        self.assertEqual(alternate_audio_filter(0), "aresample=48000,adelay=delays=0S:all=1")
+        self.assertEqual(alternate_audio_filter(-9_000), "aresample=48000,atrim=start_sample=4800,asetpts=PTS-STARTPTS")
+
     def test_staged_playlist_parser_rejects_unsafe_or_inconsistent_entries(self) -> None:
         header = '#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MAP:URI="init.mp4"\n'
         malformed = {
@@ -337,6 +383,32 @@ class LiveHLSProtocolTests(unittest.TestCase):
         self.assertEqual(
             str(job.source.descriptor_handoff.socket_path), raw["source"]["descriptor_handoff"]["socket_path"]
         )
+
+    def test_parses_alternate_audio_pids(self) -> None:
+        request = live_hls_request(Path("/tmp/a.iso"), Path("/tmp/live"), alternate_audio_pids=[0x1101, 0x1102])
+
+        job = JobSpec.from_json_line(json.dumps(request))
+
+        assert job.live_hls is not None
+        self.assertEqual(job.live_hls.alternate_audio_pids, (0x1101, 0x1102))
+        default = JobSpec.from_json_line(json.dumps(live_hls_request(Path("/tmp/a.iso"), Path("/tmp/live"))))
+        assert default.live_hls is not None
+        self.assertEqual(default.live_hls.alternate_audio_pids, ())
+
+    def test_rejects_invalid_alternate_audio_pids(self) -> None:
+        cases = {
+            "selected pid": [0x1100],
+            "duplicate": [0x1101, 0x1101],
+            "out of range": [0],
+            "not an integer": ["4353"],
+            "boolean": [True],
+            "too many": list(range(0x1101, 0x1101 + LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO + 1)),
+            "not a list": 0x1101,
+        }
+        for label, pids in cases.items():
+            request = live_hls_request(Path("/tmp/a.iso"), Path("/tmp/live"), alternate_audio_pids=pids)
+            with self.subTest(label), self.assertRaises(WorkerProtocolError):
+                JobSpec.from_json_line(json.dumps(request))
 
     def test_rejects_invalid_live_hls_requests(self) -> None:
         cases = {
@@ -469,6 +541,59 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         ready = [event for event in events if event["type"] == "artifact.ready"]
         self.assertEqual(len(ready), 1)
         self.assertEqual(ready[0]["payload"]["live_hls"]["kind"], "live_hls_manifest")
+
+    def test_alternate_tracks_become_renditions_from_the_same_source_read(self) -> None:
+        service, _, output, destination = self.service("alternates.iso", alternate_audio_pids=[0x1101, 0x1102])
+
+        result = service.run()
+
+        probe_arguments = json.loads((self.records / "probe-arguments.json").read_text())
+        self.assertEqual(probe_arguments[3], "4352,4353", "the LPCM track 4354 is never requested")
+        self.assertEqual((self.records / "audio-4353.bin").read_bytes(), b"other-zeroother-one")
+        self.assertEqual((self.records / "audio.bin").read_bytes(), b"audio-zeroaudio-one")
+        alternate_arguments = json.loads((self.records / "audio-4353-arguments.json").read_text())
+        self.assertEqual(alternate_arguments[alternate_arguments.index("-af") + 1], alternate_audio_filter(-1))
+        manifest = json.loads(Path(str(result["manifest_path"])).read_text(encoding="utf-8"))
+        self.assertTrue(manifest["complete"])
+        (rendition,) = manifest["audio_renditions"]
+        self.assertEqual(rendition["source_pid"], 0x1101)
+        # The fake video encoder targets 3 s and the audio 2 s; one multivariant playlist needs one target.
+        self.assertEqual(rendition["target_duration_seconds"], manifest["target_duration_seconds"])
+        self.assertIn(
+            f"#EXT-X-TARGETDURATION:{manifest['target_duration_seconds']}\n",
+            Path(str(result["playlist_path"])).read_text(),
+        )
+        self.assertEqual(result["encoder_summary"]["output_mode"], "hls", "the summary is the video encoder's")
+        self.assertEqual(rendition["source_language"], "deu")
+        published = {path.name for path in destination.iterdir()}
+        self.assertIn(rendition["initialization"], published)
+        self.assertLessEqual({segment["uri"] for segment in rendition["segments"]}, published)
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(len([event for event in events if event["type"] == "artifact.ready"]), 1)
+        warnings = [event["payload"] for event in events if event["type"] == "warning"]
+        self.assertEqual([warning["code"] for warning in warnings], ["unsupported_live_alternate_audio"])
+        self.assertEqual(warnings[0]["details"], "pid 4354")
+
+    def test_video_keeps_publishing_after_an_alternate_track_finishes(self) -> None:
+        with mock.patch.dict(os.environ, {"FAKE_LIVE_HLS_TAIL_CHECK": "1"}):
+            service, _, _, _ = self.service("alternates.iso", alternate_audio_pids=[0x1101])
+            result = service.run()
+
+        self.assertEqual((self.records / "tail-published").read_text(), "True")
+        self.assertEqual(result["published_segments"], 2)
+        self.assertEqual(result["encoder_summary"]["output_mode"], "hls")
+
+    def test_alternate_track_that_starts_late_is_left_out(self) -> None:
+        service, _, output, _ = self.service("latealternates.iso", alternate_audio_pids=[0x1101])
+
+        result = service.run()
+
+        manifest = json.loads(Path(str(result["manifest_path"])).read_text(encoding="utf-8"))
+        self.assertTrue(manifest["complete"])
+        self.assertNotIn("audio_renditions", manifest)
+        self.assertFalse((self.records / "audio-4353.bin").exists())
+        warnings = [json.loads(line)["payload"] for line in output.getvalue().splitlines()]
+        self.assertIn("live_alternate_audio_unavailable", [warning.get("code") for warning in warnings])
 
     def test_bounded_run_drops_trailing_partial_gop(self) -> None:
         service, _, _, _ = self.service("bounded.iso", maximum_pairs=4)

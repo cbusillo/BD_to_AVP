@@ -40,6 +40,14 @@ struct LiveStreamRequest: Sendable {
     let source: LiveSourceLease
     let playlist: Int
     let audioPID: Int
+    /// The title's audio tracks from the live title index, in disc order. The selected track
+    /// plays muxed with the video; the others become alternate renditions the viewer can switch to.
+    var audioTracks: [SharedLiveAudio] = []
+
+    /// The tracks the worker encodes beside the selected one, at most the source helper's limit.
+    var alternateAudio: [SharedLiveAudio] {
+        Array(audioTracks.filter { $0.pid != audioPID }.prefix(LiveHLSManifest.maximumAudioRenditions))
+    }
 }
 
 enum LiveRelayStreamState: Equatable, Sendable {

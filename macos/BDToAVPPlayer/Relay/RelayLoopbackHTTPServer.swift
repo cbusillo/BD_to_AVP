@@ -154,7 +154,7 @@ final class RelayLoopbackHTTPServer: @unchecked Sendable {
             var (data, _) = try await loadResource(url)
             try Task.checkCancellation()
             let contentType: String
-            if path == RelayWireContract.playlistPath {
+            if Self.isPlaylistPath(path) {
                 data = try Self.rewritePlaylist(data, prefix: prefix)
                 contentType = "application/vnd.apple.mpegurl"
             } else {
@@ -169,8 +169,16 @@ final class RelayLoopbackHTTPServer: @unchecked Sendable {
         }
     }
 
+    /// The relay playlist, or a media playlist a live multivariant playlist names under the
+    /// media prefix (`video.m3u8`, `audio-<pid>.m3u8`).
+    static func isPlaylistPath(_ path: String) -> Bool {
+        path == RelayWireContract.playlistPath
+            || (path.hasPrefix(RelayWireContract.mediaPathPrefix) && path.hasSuffix(".m3u8"))
+    }
+
     /// The host emits only root-relative media identifiers. Reject any other
     /// URI instead of allowing AVFoundation to bypass response authentication.
+    /// `EXT-X-MAP` and `EXT-X-MEDIA` are the only tags whose `URI` attribute is rewritten.
     static func rewritePlaylist(_ data: Data, prefix: String) throws -> Data {
         guard let text = String(data: data, encoding: .utf8), text.hasPrefix("#EXTM3U\n") else {
             throw RelayTransportError.invalidRelayURL
@@ -189,6 +197,13 @@ final class RelayLoopbackHTTPServer: @unchecked Sendable {
                 return "#EXT-X-MAP:URI=\"\(try localPath(path))\""
             }
             if !line.isEmpty && !line.hasPrefix("#") { return try localPath(line) }
+            if line.hasPrefix("#EXT-X-MEDIA:"), let uri = line.range(of: ",URI=\"") {
+                let rest = line[uri.upperBound...]
+                guard let close = rest.firstIndex(of: "\""), rest.index(after: close) == rest.endIndex,
+                      !line[..<uri.lowerBound].contains("URI=")
+                else { throw RelayTransportError.invalidRelayURL }
+                return "\(line[..<uri.upperBound])\(try localPath(String(rest[..<close])))\""
+            }
             guard !line.contains("URI=") else { throw RelayTransportError.invalidRelayURL }
             return line
         }

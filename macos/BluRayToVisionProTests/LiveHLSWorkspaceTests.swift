@@ -14,10 +14,13 @@ struct LiveHLSWorkspaceWriter {
 
     let root: URL
     let targetDurationSeconds: Int
+    /// Audio renditions cut shorter segments than the video, as the worker's 1.92-second AAC cuts do.
+    let audioTargetDurationSeconds: Int
 
-    init(root: URL, targetDurationSeconds: Int = 2) throws {
+    init(root: URL, targetDurationSeconds: Int = 2, audioTargetDurationSeconds: Int? = nil) throws {
         self.root = root
         self.targetDurationSeconds = targetDurationSeconds
+        self.audioTargetDurationSeconds = audioTargetDurationSeconds ?? targetDurationSeconds
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("init".utf8).write(to: root.appendingPathComponent("init.mp4"))
     }
@@ -29,14 +32,23 @@ struct LiveHLSWorkspaceWriter {
         }
     }
 
+    /// Writes the manifest, with an alternate audio rendition on the same timeline for each of
+    /// `audioPIDs`, as the worker does for a title with more than one audio track.
     func publish(
         _ segments: [Segment],
         retired: [String] = [],
         complete: Bool = false,
+        audioPIDs: [Int] = [],
         overrides: [String: Any] = [:]
     ) throws {
         for segment in segments where !FileManager.default.fileExists(atPath: root.appendingPathComponent(segment.uri).path) {
             try Data("media \(segment.sequence)".utf8).write(to: root.appendingPathComponent(segment.uri))
+        }
+        for pid in audioPIDs {
+            try Data("audio init \(pid)".utf8).write(to: root.appendingPathComponent("audio-\(pid)-init.mp4"))
+            for segment in segments {
+                try Data("audio \(pid) \(segment.sequence)".utf8).write(to: root.appendingPathComponent("audio-\(pid)-\(segment.uri)"))
+            }
         }
         var manifest: [String: Any] = [
             "schema_version": 1,
@@ -65,6 +77,31 @@ struct LiveHLSWorkspaceWriter {
                 "viewer_held_seconds": 0.25,
             ],
         ]
+        if !audioPIDs.isEmpty {
+            manifest["audio_renditions"] = audioPIDs.map { pid in
+                [
+                    "id": "aac:\(pid)",
+                    "codec": "aac",
+                    "source_pid": pid,
+                    "complete": complete,
+                    "initialization": "audio-\(pid)-init.mp4",
+                    "target_duration_seconds": audioTargetDurationSeconds,
+                    "media_sequence": segments.first?.sequence ?? 0,
+                    "earliest_available_microseconds": segments.first?.startMicroseconds ?? 0,
+                    "latest_available_microseconds": segments.last.map { $0.startMicroseconds + $0.durationMicroseconds } ?? 0,
+                    "segments": segments.map {
+                        [
+                            "sequence": $0.sequence,
+                            "uri": "audio-\(pid)-\($0.uri)",
+                            "start_microseconds": $0.startMicroseconds,
+                            "duration_microseconds": $0.durationMicroseconds,
+                            "size_bytes": 7,
+                        ] as [String: Any]
+                    },
+                    "retired_segments": [[String: Any]](),
+                ] as [String: Any]
+            }
+        }
         manifest.merge(overrides) { $1 }
         try write(JSONSerialization.data(withJSONObject: manifest))
     }
@@ -232,6 +269,95 @@ final class LiveHLSWorkspaceTests: XCTestCase {
         _ = try retimed.poll()
         try writer.publish(LiveHLSWorkspaceWriter.segments(1 ... 2, durationMicroseconds: 1_500_000))
         XCTAssertThrowsError(try retimed.poll(), "a URI changed its timing")
+    }
+
+    func testAudioRenditionsAreRenderedAndServedBesideTheVideo() throws {
+        let writer = try LiveHLSWorkspaceWriter(root: root)
+        var workspace = LiveHLSWorkspace(rootURL: root)
+        try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), audioPIDs: [4_353])
+        XCTAssertTrue(try workspace.poll())
+
+        XCTAssertEqual(workspace.window.audioWindows.map(\.pid), [4_353])
+        let audio = try XCTUnwrap(workspace.window.mediaPlaylist(named: "audio-4353.m3u8"))
+        XCTAssertTrue(audio.contains("#EXT-X-MAP:URI=\"/relay/v1/media/audio-4353-init.mp4\""))
+        XCTAssertTrue(audio.contains("\n/relay/v1/media/audio-4353-segment-000000002.m4s\n"))
+        XCTAssertEqual(workspace.window.mediaPlaylist(named: "video.m3u8"), workspace.window.rendered?.playlist)
+        XCTAssertNil(workspace.window.mediaPlaylist(named: "audio-4352.m3u8"), "only carried renditions are served")
+        XCTAssertEqual(try workspace.media(named: "audio-4353-segment-000000001.m4s"), Data("audio 4353 1".utf8))
+        XCTAssertEqual(try workspace.media(named: "audio-4353-init.mp4"), Data("audio init 4353".utf8))
+        XCTAssertThrowsError(try workspace.media(named: "audio-4352-segment-000000001.m4s"))
+
+        try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 3))
+        XCTAssertThrowsError(try workspace.poll(), "a rendition disappeared mid-stream") {
+            XCTAssertEqual($0 as? LiveHLSManifestError, LiveHLSManifestError(reason: "audio_renditions_changed"))
+        }
+    }
+
+    func testEveryServedPlaylistSharesOneTargetDuration() throws {
+        for (video, audio) in [(3, 2), (2, 3)] {
+            let writer = try LiveHLSWorkspaceWriter(root: root, targetDurationSeconds: video, audioTargetDurationSeconds: audio)
+            var workspace = LiveHLSWorkspace(rootURL: root)
+            try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), audioPIDs: [4_353, 4_354])
+            XCTAssertTrue(try workspace.poll())
+
+            let playlists = ["video.m3u8", "audio-4353.m3u8", "audio-4354.m3u8"].compactMap {
+                workspace.window.mediaPlaylist(named: $0)
+            }
+            XCTAssertEqual(playlists.count, 3)
+            let targets = playlists.map { playlist in
+                playlist.components(separatedBy: "\n").first { $0.hasPrefix("#EXT-X-TARGETDURATION:") }
+            }
+            XCTAssertEqual(Set(targets), ["#EXT-X-TARGETDURATION:\(max(video, audio))"], "video \(video), audio \(audio)")
+            try FileManager.default.removeItem(at: root)
+        }
+    }
+
+    func testMalformedAudioRenditionsFail() throws {
+        let writer = try LiveHLSWorkspaceWriter(root: root)
+        func rendition(_ edit: (inout [String: Any]) -> Void) throws -> [[String: Any]] {
+            try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), audioPIDs: [4_353])
+            let data = try Data(contentsOf: root.appendingPathComponent("live-hls.json"))
+            let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            var renditions = try XCTUnwrap(manifest["audio_renditions"] as? [[String: Any]])
+            edit(&renditions[0])
+            return renditions
+        }
+        let cases: [String: [[String: Any]]] = [
+            "video name": try rendition { $0["segments"] = [["sequence": 0, "uri": "segment-000000000.m4s",
+                                                            "start_microseconds": 0, "duration_microseconds": 2_000_000, "size_bytes": 7]] },
+            "other prefix": try rendition { $0["initialization"] = "audio-4352-init.mp4" },
+            "pid": try rendition { $0["source_pid"] = 0 },
+            "latest": try rendition { $0["latest_available_microseconds"] = 1 },
+        ]
+        for (label, renditions) in cases {
+            var workspace = LiveHLSWorkspace(rootURL: root)
+            try writer.publish(LiveHLSWorkspaceWriter.segments(0 ... 2), audioPIDs: [4_353], overrides: ["audio_renditions": renditions])
+            XCTAssertThrowsError(try workspace.poll(), label)
+        }
+    }
+
+    func testMultivariantPlaylistOffersTheMuxedTrackAndEachRendition() {
+        let playlist = LiveHLSPlaylistRenderer.renderMultivariant(audio: [
+            LiveHLSAudioChoice(name: "German DTS-HD Master Audio", language: "de", playlistName: nil),
+            LiveHLSAudioChoice(name: "English DTS-HD Master Audio", language: "en", playlistName: "audio-4353.m3u8"),
+            LiveHLSAudioChoice(name: "English DTS-HD Master Audio", language: "en", playlistName: "audio-4354.m3u8"),
+        ])
+        let lines = playlist.components(separatedBy: "\n")
+        let media = lines.filter { $0.hasPrefix("#EXT-X-MEDIA:") }
+        XCTAssertEqual(media.count, 3)
+        XCTAssertTrue(media[0].contains("NAME=\"German DTS-HD Master Audio\",LANGUAGE=\"de\",DEFAULT=YES"))
+        XCTAssertFalse(media[0].contains("URI="), "the selected track plays from the video segments")
+        XCTAssertTrue(media[1].hasSuffix(",URI=\"/relay/v1/media/audio-4353.m3u8\""))
+        XCTAssertTrue(media[1].contains("DEFAULT=NO"))
+        XCTAssertTrue(media[2].contains("NAME=\"English DTS-HD Master Audio (3)\""), "names stay unique in the group")
+        let variant = try? XCTUnwrap(lines.firstIndex { $0.hasPrefix("#EXT-X-STREAM-INF:") })
+        XCTAssertEqual(variant.map { lines[$0 + 1] }, "/relay/v1/media/video.m3u8")
+        XCTAssertEqual(variant.map { lines[$0].contains("AUDIO=\"audio\"") && lines[$0].contains("CLOSED-CAPTIONS=NONE") }, true)
+
+        XCTAssertEqual(LiveHLSPlaylistRenderer.languageTag(forDiscLanguage: "deu"), "de")
+        XCTAssertEqual(LiveHLSPlaylistRenderer.languageTag(forDiscLanguage: "eng"), "en")
+        XCTAssertNil(LiveHLSPlaylistRenderer.languageTag(forDiscLanguage: nil))
+        XCTAssertNil(LiveHLSPlaylistRenderer.languageTag(forDiscLanguage: "e\"n"))
     }
 
     func testSymlinkedManifestAndMediaAreRefused() throws {

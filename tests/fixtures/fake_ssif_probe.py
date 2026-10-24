@@ -10,8 +10,8 @@ import time
 HEADER = struct.Struct(">4sBBHQQQII")
 
 
-def record(kind, sequence, pts=0, dts=0, primary=b"", secondary=b"", random_access=False):
-    flags = 1 if random_access else 0
+def record(kind, sequence, pts=0, dts=0, primary=b"", secondary=b"", random_access=False, flags=None):
+    flags = flags if flags is not None else 1 if random_access else 0
     return (
         HEADER.pack(
             b"SSFS",
@@ -181,7 +181,9 @@ elif arguments and arguments[0] == "inspect":
                                     "format": 6,
                                     "rate": 3,
                                     "language": "eng",
-                                }
+                                },
+                                {"pid": 4353, "coding_type": 134, "format": 6, "rate": 3, "language": "deu"},
+                                {"pid": 4354, "coding_type": 128, "format": 6, "rate": 3, "language": "fra"},
                             ],
                         }
                     ],
@@ -189,6 +191,25 @@ elif arguments and arguments[0] == "inspect":
             }
         )
     )
+elif arguments and arguments[0] == "stream-service" and "alternates" in arguments[1]:
+    # Alternate track 1 starts one tick before the keyframe; with "latealternate" it starts
+    # only after startup stopped waiting for it.
+    directory = os.environ.get("FAKE_LIVE_HLS_RECORD_DIR")
+    if directory:
+        with open(os.path.join(directory, "probe-arguments.json"), "w", encoding="utf-8") as handle:
+            json.dump(arguments, handle)
+    late = "latealternate" in arguments[1]
+    stream = [
+        record(2, 0, 80, 80, b"audio-zero"),
+        record(4, 1, 89, 89, b"other-zero", flags=1) if not late else record(2, 1, 85, 85, b"audio-half"),
+        record(1, 2, 90, 90, b"base-zero", b"dependent-zero", True),
+        record(2, 3, 95, 95, b"audio-one"),
+        record(1, 4, 180090, 180090, b"base-two", b"dependent-two", True),
+        record(4, 5, 180100, 180100, b"other-one", flags=1),
+        record(3, 6),
+    ]
+    sys.stdout.buffer.write(b"".join(stream))
+    sys.stdout.buffer.flush()
 elif arguments and arguments[0] == "stream-service" and "bounded" in arguments[1]:
     # Two GOPs; a four-pair bound ends inside the second one.
     sys.stdout.buffer.write(record(2, 0, 90, 90, b"audio-zero"))

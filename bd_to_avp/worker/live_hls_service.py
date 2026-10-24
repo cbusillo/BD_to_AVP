@@ -1,10 +1,11 @@
 """Bounded live MV-HEVC HLS production from one direct SSIF source read.
 
-One ``ssif_probe stream-service`` read feeds both the MVC decoder and the selected
-audio decoder. The MV-HEVC encoder writes into a private staging directory; the
-publisher here is the single owner of the public workspace: it renames finished
-segments into place, evicts whole segments to honor the retention limits, and
-atomically republishes ``media.m3u8`` and ``live-hls.json``.
+One ``ssif_probe stream-service`` read feeds the MVC decoder, the selected audio
+decoder, and one AAC encoder per alternate audio track. The MV-HEVC encoder and the
+alternate encoders write into private staging directories; the publisher here is the
+single owner of the public workspace: it renames finished segments into place, evicts
+whole segments to honor the retention limits, and atomically republishes
+``media.m3u8`` and ``live-hls.json``.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Callable, Mapping, cast
+from typing import TYPE_CHECKING, BinaryIO, Callable, Iterator, Mapping, cast
 
 from bd_to_avp.modules.config import resolve_tool_path
 from bd_to_avp.process_runner import (
@@ -72,6 +73,14 @@ STARTUP_BYTE_LIMIT = 64 * 1_024 * 1_024
 FEEDER_BYTE_LIMIT = 64 * 1_024 * 1_024
 MAXIMUM_STAGING_PLAYLIST_BYTES = 16 * 1_024 * 1_024
 STAGED_SEGMENT_PATTERN = re.compile(r"segment-[0-9]{5,}\.m4s")
+AUDIO_BITRATE = 192_000
+# Alternate audio is cut at whole AAC frames: 90 frames of 1,024 samples is 1.92 s, so no
+# segment rounds past the 2-second target.
+ALTERNATE_AUDIO_SEGMENT_SECONDS = "1.92"
+# An alternate track's media is small, so its own byte cap only guards against a runaway.
+ALTERNATE_AUDIO_RETENTION_BYTES = 64 * 1_024 * 1_024
+# How far past the first keyframe startup waits for each alternate track's first audio.
+ALTERNATE_AUDIO_STARTUP_TICKS = 2 * 90_000
 
 # Blu-ray stream coding types whose PES payloads FFmpeg reads as a raw elementary stream.
 AUDIO_INPUT_FORMATS = {
@@ -235,8 +244,14 @@ class HLSPublisher:
         streams: Mapping[str, object],
         clock: Callable[[], float] = time.time,
         producer_stats: Callable[[], Mapping[str, object]] | None = None,
+        name_prefix: str = "",
     ) -> None:
         self.root = root
+        # An alternate rendition publishes ``<prefix>init.mp4`` and ``<prefix>segment-…``
+        # beside the video, and its owner writes the shared playlist and manifest.
+        self.name_prefix = name_prefix
+        self.owner: HLSPublisher | None = None
+        self.alternates: list[HLSPublisher] = []
         self.producer_stats = producer_stats
         self.clock = clock
         self.staging = staging
@@ -290,10 +305,43 @@ class HLSPublisher:
 
     @property
     def has_published(self) -> bool:
-        return bool(self.segments)
+        """Whether the playlist and manifest exist: every rendition has a segment."""
+        return bool(self.segments) and all(alternate.segments for alternate in self.alternates)
+
+    @property
+    def common_target_duration_seconds(self) -> int | None:
+        """The target every playlist under one multivariant playlist advertises: the largest of
+        the video's and each alternate rendition's own target."""
+        owner = self.owner or self
+        targets = [
+            target
+            for target in (
+                owner.target_duration_seconds,
+                *(alternate.target_duration_seconds for alternate in owner.alternates),
+            )
+            if target is not None
+        ]
+        return max(targets) if targets else None
+
+    @property
+    def initialization_name(self) -> str:
+        return f"{self.name_prefix}{INITIALIZATION_FILENAME}"
+
+    def add_alternate(self, alternate: HLSPublisher) -> None:
+        alternate.owner = self
+        self.alternates.append(alternate)
 
     def poll(self) -> bool:
-        """Publishes every newly finished staged segment; returns whether any were published."""
+        """Publishes every newly finished staged segment; returns whether any were published.
+
+        The owner polls its alternates first, so its completion includes theirs.
+        """
+        alternate_published = False
+        for alternate in self.alternates:
+            alternate_published = alternate.poll() or alternate_published
+        return self._poll_own() or alternate_published
+
+    def _poll_own(self) -> bool:
         self._delete_expired_retired()
         staged = self._read_staged_playlist()
         if staged is None:
@@ -317,14 +365,14 @@ class HLSPublisher:
             published = True
         self.staged_backlog = len(staged.segments) - self.staged_published
         self.peak_staged_backlog = max(self.peak_staged_backlog, self.staged_backlog)
-        if staged.ended and self.staged_backlog == 0:
+        if staged.ended and self.staged_backlog == 0 and all(alternate.complete for alternate in self.alternates):
             self.complete = True
             self._write_outputs()
         return published
 
     def finish(self) -> None:
         self.poll()
-        if not self.complete or not self.segments:
+        if not self.complete or not self.has_published:
             raise SourceServiceError("incomplete_live_hls", "The encoder finished without a complete playlist.")
 
     def _read_staged_playlist(self) -> StagedPlaylist | None:
@@ -349,7 +397,7 @@ class HLSPublisher:
             raise SourceServiceError("invalid_encoder_output", "The encoder playlist has no initialization.") from error
         if size <= 0:
             raise SourceServiceError("invalid_encoder_output", "The encoder initialization segment is empty.")
-        source.replace(self.root / INITIALIZATION_FILENAME)
+        source.replace(self.root / self.initialization_name)
         self.initialization_bytes = size
 
     def _publish_segment(self, staged_name: str, duration_microseconds: int) -> bool:
@@ -370,7 +418,7 @@ class HLSPublisher:
             )
         segment = PublishedSegment(
             sequence=self.next_sequence,
-            uri=f"segment-{self.next_sequence:09d}.m4s",
+            uri=f"{self.name_prefix}segment-{self.next_sequence:09d}.m4s",
             start_microseconds=self.next_start_microseconds,
             duration_microseconds=duration_microseconds,
             size_bytes=size,
@@ -437,7 +485,10 @@ class HLSPublisher:
         return evicted
 
     def _write_outputs(self) -> None:
-        if not self.segments or self.target_duration_seconds is None:
+        if self.owner is not None:
+            self.owner._write_outputs()
+            return
+        if not self.has_published or self.target_duration_seconds is None:
             return
         _atomic_write(self.playlist_path, self.render_playlist())
         _atomic_write(self.manifest_path, json.dumps(self.manifest(), sort_keys=True, separators=(",", ":")) + "\n")
@@ -447,7 +498,7 @@ class HLSPublisher:
         lines = [
             "#EXTM3U",
             "#EXT-X-VERSION:7",
-            f"#EXT-X-TARGETDURATION:{self.target_duration_seconds}",
+            f"#EXT-X-TARGETDURATION:{self.common_target_duration_seconds}",
             f"#EXT-X-MEDIA-SEQUENCE:{self.segments[0].sequence}",
             "#EXT-X-INDEPENDENT-SEGMENTS",
             f'#EXT-X-MAP:URI="{INITIALIZATION_FILENAME}"',
@@ -466,7 +517,7 @@ class HLSPublisher:
             "complete": self.complete,
             "playlist": PLAYLIST_FILENAME,
             "initialization": INITIALIZATION_FILENAME,
-            "target_duration_seconds": self.target_duration_seconds,
+            "target_duration_seconds": self.common_target_duration_seconds,
             "media_sequence": self.segments[0].sequence,
             "earliest_available_microseconds": self.segments[0].start_microseconds,
             "latest_available_microseconds": self.segments[-1].end_microseconds,
@@ -478,7 +529,26 @@ class HLSPublisher:
             "retired_bytes": self.retired_bytes,
             "retired_allowance_bytes": self.retired_allowance_bytes,
             **({"producer": dict(self.producer_stats())} if self.producer_stats is not None else {}),
+            **(
+                {"audio_renditions": [alternate.rendition() for alternate in self.alternates]}
+                if self.alternates
+                else {}
+            ),
             **self.streams,
+        }
+
+    def rendition(self) -> dict[str, object]:
+        """An alternate rendition's window, as its owner's manifest lists it."""
+        return {
+            **self.streams,
+            "complete": self.complete,
+            "initialization": self.initialization_name,
+            "target_duration_seconds": self.common_target_duration_seconds,
+            "media_sequence": self.segments[0].sequence,
+            "earliest_available_microseconds": self.segments[0].start_microseconds,
+            "latest_available_microseconds": self.segments[-1].end_microseconds,
+            "segments": [segment.__dict__ for segment in self.segments],
+            "retired_segments": [segment.__dict__ for segment in self.retired],
         }
 
     def artifact(self) -> dict[str, object]:
@@ -491,7 +561,17 @@ class HLSPublisher:
     def result(self) -> dict[str, object]:
         if not self.segments:
             raise SourceServiceError("empty_live_hls", "The live HLS stream produced no segments.")
+        alternates = (
+            {
+                "alternate_audio_segments": {
+                    alternate.name_prefix: alternate.next_sequence for alternate in self.alternates
+                }
+            }
+            if self.alternates
+            else {}
+        )
         return {
+            **alternates,
             "manifest_path": str(self.manifest_path),
             "playlist_path": str(self.playlist_path),
             "earliest_available_microseconds": self.segments[0].start_microseconds,
@@ -587,6 +667,51 @@ class PipeFeeder:
                 self._on_failure(error)
 
 
+@dataclass(frozen=True)
+class AlternateAudio:
+    """One alternate audio track: its 1-based position in the source request and its source."""
+
+    track: int
+    pid: int
+    input_format: str
+    stream: Mapping[str, object]
+
+
+def live_alternate_audio(
+    title: Mapping[str, object], alternate_pids: tuple[int, ...]
+) -> tuple[list[AlternateAudio], list[int]]:
+    """The requested alternate tracks the pipeline can carry, and the PIDs it must skip.
+
+    A PID that is missing from the clip, or whose codec FFmpeg cannot read raw, is skipped
+    rather than failing the stream: the selected track still plays.
+    """
+    clip = cast(Mapping[str, object], cast(list[object], title["clips"])[0])
+    streams = {
+        cast(int, stream.get("pid")): stream
+        for stream in cast(list[object], clip.get("audio_streams") or [])
+        if isinstance(stream, Mapping)
+    }
+    carried: list[AlternateAudio] = []
+    skipped: list[int] = []
+    for pid in alternate_pids:
+        stream = streams.get(pid)
+        input_format = AUDIO_INPUT_FORMATS.get(cast(int, stream.get("coding_type"))) if stream else None
+        if stream is None or input_format is None:
+            skipped.append(pid)
+            continue
+        carried.append(AlternateAudio(len(carried) + 1, pid, input_format, stream))
+    return carried, skipped
+
+
+def alternate_audio_filter(start_ticks: int) -> str:
+    """Places an alternate track on the video timeline as the encoder places the selected one:
+    leading audio before the first frame is dropped, and late audio starts at its offset."""
+    start_samples = start_ticks * AUDIO_SAMPLE_RATE // 90_000
+    if start_samples >= 0:
+        return f"aresample={AUDIO_SAMPLE_RATE},adelay=delays={start_samples}S:all=1"
+    return f"aresample={AUDIO_SAMPLE_RATE},atrim=start_sample={-start_samples},asetpts=PTS-STARTPTS"
+
+
 @dataclass
 class ChildRun:
     spec: ProcessSpec
@@ -658,6 +783,10 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         self.production_started: float | None = None
         self.forwarded_microseconds = 0.0
         self.frame_microseconds = 0.0
+        self.alternate_audio: list[AlternateAudio] = []
+        self.alternate_feeders: dict[int, PipeFeeder] = {}
+        # The MV-HEVC encoder's run: its exit ends video publication and its stdout is the summary.
+        self.encoder_child: ChildRun | None = None
 
     def run(self) -> dict[str, object]:
         for path, code, message in (
@@ -673,8 +802,16 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         self._verify_source_identity()
         inspection = self._inspect()
         video_stream, audio_stream = self._stream_descriptors(inspection)
-        eye_width, eye_height, frame_rate = live_video_shape(cast(Mapping[str, object], inspection["title"]))
+        title = cast(Mapping[str, object], inspection["title"])
+        eye_width, eye_height, frame_rate = live_video_shape(title)
         audio_format = live_audio_input_format(audio_stream)
+        self.alternate_audio, skipped = live_alternate_audio(title, self.options.alternate_audio_pids)
+        for pid in skipped:
+            self.activity.warning(
+                "An alternate audio track can't play live and was left out.",
+                code="unsupported_live_alternate_audio",
+                details=f"pid {pid}",
+            )
         if self.destination.exists() and any(self.destination.iterdir()):
             raise SourceServiceError("destination_not_empty", "The live HLS workspace must be empty.")
         self.destination.mkdir(parents=True, exist_ok=True)
@@ -779,10 +916,11 @@ class SSIFLiveHLSService(SSIFSourceHelper):
                 cancellation_event=self.cancellation,
                 read_timeout_seconds=SOURCE_FRAME_TIMEOUT_SECONDS,
             )
-            startup, audio_start_ticks = self._read_startup(reader)
+            startup, audio_start_ticks, alternate_start_ticks = self._read_startup(reader)
             self._start_media_pipeline(
                 staging, audio_fifo, eye_width, eye_height, frame_rate, audio_format, audio_start_ticks
             )
+            self._start_alternate_audio(pipeline, alternate_start_ticks)
             publisher_thread = threading.Thread(target=self._publish_loop, name="live-hls-publisher", daemon=True)
             publisher_thread.start()
             self._forward(reader, startup)
@@ -812,7 +950,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         result = self.publisher.result()
         result["held_seconds"] = round(self.held_seconds, 3)
         result["viewer_held_seconds"] = round(self.viewer_held_seconds, 3)
-        encoder_run = self.children[-1] if self.children else None
+        encoder_run = self.encoder_child
         if encoder_run is not None and encoder_run.result is not None:
             # The summary is diagnostic only; an unreadable one leaves the result without it.
             with suppress(UnicodeDecodeError, json.JSONDecodeError):
@@ -825,21 +963,39 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             "stream-service",
             self._source_argument(),
             str(self.options.playlist),
-            str(self.options.audio_pid),
+            ",".join(str(pid) for pid in (self.options.audio_pid, *(track.pid for track in self.alternate_audio))),
         ]
         if self.options.maximum_pairs is not None:
             command.append(str(self.options.maximum_pairs))
         return command
 
-    def _read_startup(self, reader: ServiceFrameReader) -> tuple[list[ServiceRecord], int]:
-        """Buffers records until the first keyframe and first audio fix the shared timeline."""
+    def _read_startup(self, reader: ServiceFrameReader) -> tuple[list[ServiceRecord], int, dict[int, int]]:
+        """Buffers records until the first keyframe and first audio fix the shared timeline.
+
+        Startup then waits, up to ``ALTERNATE_AUDIO_STARTUP_TICKS`` past the keyframe, for each
+        alternate track's first audio. A track that has not started by then is left out.
+        """
         records: list[ServiceRecord] = []
         buffered_bytes = 0
         first_video: ServiceRecord | None = None
         first_audio: ServiceRecord | None = None
-        while first_video is None or first_audio is None:
+        first_alternates: dict[int, ServiceRecord] = {}
+        wanted_alternates = {track.track for track in self.alternate_audio}
+        while True:
+            if first_video is not None and first_audio is not None:
+                waited = self._timestamp_delta(records[-1].pts, first_video.pts)
+                if wanted_alternates <= first_alternates.keys() or waited >= ALTERNATE_AUDIO_STARTUP_TICKS:
+                    break
+                if len(records) >= STARTUP_RECORD_LIMIT or buffered_bytes >= STARTUP_BYTE_LIMIT:
+                    break
             record = reader.read()
-            if record is None or record.kind is ServiceRecordKind.COMPLETE:
+            if first_video is not None and first_audio is not None and record is not None:
+                if record.kind is ServiceRecordKind.COMPLETE:
+                    # A short source can end while startup waits for alternates; forwarding
+                    # sees the completion in order.
+                    records.append(record)
+                    break
+            elif record is None or record.kind is ServiceRecordKind.COMPLETE:
                 raise SourceServiceError(
                     "selected_audio_unavailable" if first_video is not None else "empty_source_stream",
                     "The live source ended before both video and selected audio started.",
@@ -853,15 +1009,27 @@ class SSIFLiveHLSService(SSIFSourceHelper):
                 first_video = record
             if record.kind is ServiceRecordKind.AUDIO and first_audio is None:
                 first_audio = record
+            if record is None:
+                raise SourceServiceError(
+                    "truncated_source_stream", "The source helper ended without completing the stream."
+                )
+            if record.kind is ServiceRecordKind.ALTERNATE_AUDIO:
+                first_alternates.setdefault(record.track, record)
             records.append(record)
             buffered_bytes += len(record.primary) + len(record.secondary)
-            if len(records) > STARTUP_RECORD_LIMIT or buffered_bytes > STARTUP_BYTE_LIMIT:
+            if (first_video is None or first_audio is None) and (
+                len(records) > STARTUP_RECORD_LIMIT or buffered_bytes > STARTUP_BYTE_LIMIT
+            ):
                 raise SourceServiceError(
                     "selected_audio_unavailable",
                     "The selected audio did not start near the first video keyframe.",
                 )
+        assert first_video is not None and first_audio is not None
         audio_start_ticks = self._timestamp_delta(first_audio.pts, first_video.pts)
-        return records, audio_start_ticks
+        alternate_start_ticks = {
+            track: self._timestamp_delta(record.pts, first_video.pts) for track, record in first_alternates.items()
+        }
+        return records, audio_start_ticks, alternate_start_ticks
 
     @staticmethod
     def _timestamp_delta(timestamp: int, origin: int) -> int:
@@ -874,9 +1042,10 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         """Forwards whole GOPs to the decoder and audio immediately.
 
         A bounded run stops at an arbitrary access unit; its trailing partial GOP is
-        dropped so the decoder never emits a display-order gap at the end.
+        dropped so the decoder never emits a display-order gap at the end. Records of an
+        alternate track that startup left out are discarded.
         """
-        video_feeder, audio_feeder = self.feeders
+        video_feeder, audio_feeder = self.feeders[:2]
         gop: list[bytes] = []
         video_records = 0
 
@@ -885,21 +1054,29 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             if item.kind is ServiceRecordKind.AUDIO:
                 audio_feeder.put(item.primary)
                 return
+            if item.kind is ServiceRecordKind.ALTERNATE_AUDIO:
+                alternate_feeder = self.alternate_feeders.get(item.track)
+                if alternate_feeder is not None:
+                    alternate_feeder.put(item.primary)
+                return
             video_records += 1
             if item.random_access and gop:
                 self._forward_gop(video_feeder, gop)
                 gop = []
             gop.append(item.primary + item.secondary)
 
-        for startup_record in startup:
-            handle(startup_record)
-        while True:
-            self.owner.check_cancelled()
-            record = reader.read()
-            if record is None:
-                raise SourceServiceError(
-                    "truncated_source_stream", "The source helper ended without completing the stream."
-                )
+        def records() -> Iterator[ServiceRecord]:
+            yield from startup
+            while True:
+                self.owner.check_cancelled()
+                next_record = reader.read()
+                if next_record is None:
+                    raise SourceServiceError(
+                        "truncated_source_stream", "The source helper ended without completing the stream."
+                    )
+                yield next_record
+
+        for record in records():
             if record.kind is ServiceRecordKind.COMPLETE:
                 if reader.read() is not None:
                     raise SourceServiceError(
@@ -911,8 +1088,8 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         bounded_cut = self.options.maximum_pairs is not None and video_records >= self.options.maximum_pairs
         if gop and not (bounded_cut and video_records > len(gop)):
             self._forward_gop(video_feeder, gop)
-        video_feeder.close()
-        audio_feeder.close()
+        for feeder in self.feeders:
+            feeder.close()
 
     def _forward_gop(self, feeder: PipeFeeder, gop: list[bytes]) -> None:
         self._wait_for_room()
@@ -1072,9 +1249,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             ),
             "live_audio_decode_failed",
         )
-        # Keep the encoder last so its captured summary is easy to find.
-        self.children.remove(encoder)
-        self.children.append(encoder)
+        self.encoder_child = encoder
         self._start(encoder, close_after_start=(normalized_read,))
         self.last_publication = time.monotonic()
         self._start(normalizer, close_after_start=(decoded_read, normalized_write))
@@ -1096,6 +1271,102 @@ class SSIFLiveHLSService(SSIFSourceHelper):
                 no_progress_seconds=self.no_progress_seconds,
             ),
         ]
+
+    def _start_alternate_audio(self, pipeline: Path, start_ticks: Mapping[int, int]) -> None:
+        """Starts one AAC HLS encoder per alternate track that started near the first frame.
+
+        Each writes 1.92-second fMP4 segments to its own staging directory, and the publisher
+        republishes them as ``audio-<pid>-…`` beside the video.
+        """
+        assert self.publisher is not None
+        carried: list[AlternateAudio] = []
+        for alternate in self.alternate_audio:
+            if alternate.track not in start_ticks:
+                self.activity.warning(
+                    "An alternate audio track did not start with the video and was left out.",
+                    code="live_alternate_audio_unavailable",
+                    details=f"pid {alternate.pid}",
+                )
+                continue
+            carried.append(alternate)
+            staging = pipeline / f"audio-{alternate.pid}"
+            staging.mkdir()
+            audio_read, audio_write = self._pipe()
+            child = self._child(
+                self._spec(
+                    (
+                        str(self.ffmpeg_path),
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        alternate.input_format,
+                        "-i",
+                        "pipe:0",
+                        "-af",
+                        alternate_audio_filter(start_ticks[alternate.track]),
+                        "-ac",
+                        str(AUDIO_CHANNELS),
+                        "-ar",
+                        str(AUDIO_SAMPLE_RATE),
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        str(AUDIO_BITRATE),
+                        "-f",
+                        "hls",
+                        "-hls_time",
+                        ALTERNATE_AUDIO_SEGMENT_SECONDS,
+                        "-hls_list_size",
+                        "0",
+                        "-hls_segment_type",
+                        "fmp4",
+                        "-hls_fmp4_init_filename",
+                        INITIALIZATION_FILENAME,
+                        "-hls_segment_filename",
+                        str(staging / "segment-%05d.m4s"),
+                        "-hls_flags",
+                        "temp_file",
+                        "-hls_playlist_type",
+                        "event",
+                        str(staging / PLAYLIST_FILENAME),
+                    ),
+                    "ffmpeg",
+                    f"Live alternate audio encoder (PID {alternate.pid})",
+                    stdin=audio_read,
+                ),
+                "live_audio_decode_failed",
+            )
+            self._start(child, close_after_start=(audio_read,))
+            feeder = PipeFeeder(
+                f"audio-{alternate.pid}",
+                audio_write,
+                self.cancellation,
+                self._feeder_failed,
+                no_progress_seconds=self.no_progress_seconds,
+            )
+            self.feeders.append(feeder)
+            self.alternate_feeders[alternate.track] = feeder
+            self.publisher.add_alternate(
+                HLSPublisher(
+                    self.destination,
+                    staging,
+                    retention_seconds=self.options.retention_seconds,
+                    retention_max_bytes=ALTERNATE_AUDIO_RETENTION_BYTES,
+                    streams={
+                        "id": f"aac:{alternate.pid}",
+                        "codec": "aac",
+                        "channels": AUDIO_CHANNELS,
+                        "sample_rate": AUDIO_SAMPLE_RATE,
+                        "source_pid": alternate.pid,
+                        "source_coding_type": alternate.stream.get("coding_type"),
+                        "source_language": alternate.stream.get("language"),
+                    },
+                    clock=self.clock,
+                    name_prefix=f"audio-{alternate.pid}-",
+                )
+            )
+        self.alternate_audio = carried
 
     def _await_media_pipeline(self, publisher_thread: threading.Thread) -> None:
         """Waits for every child to exit and for the last staged segment to publish."""
@@ -1119,10 +1390,12 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         assert self.publisher is not None
         try:
             while not self.internal_cancellation.is_set() and not self.failure_event.is_set():
-                encoder_done = self.children[-1].done.is_set()
+                assert self.encoder_child is not None
+                encoder_done = self.encoder_child.done.is_set()
                 if self.publisher.poll():
                     self.last_publication = time.monotonic()
-                    if not self.ready_sent:
+                    # Ready once the manifest exists, which waits for every rendition's first segment.
+                    if not self.ready_sent and self.publisher.has_published:
                         self.activity.live_hls_ready(self.publisher.artifact())
                         self.ready_sent = True
                 if self.publisher.complete:
