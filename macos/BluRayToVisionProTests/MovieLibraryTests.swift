@@ -36,6 +36,38 @@ final class MovieLibraryTests: XCTestCase {
         await catalog.stop()
     }
 
+    func testResumeKeySurvivesAFolderReAddAndChangeTimeChurnButNotAnEdit() async throws {
+        let fixture = try MovieTestFixture()
+        defer { fixture.remove() }
+        let file = fixture.root.appendingPathComponent("Ocean Dreams.mov")
+        try Data(repeating: 3, count: 64).write(to: file)
+        let root = fixture.root
+        func scan(approvalID: String) async throws -> SharedMovie {
+            let catalog = try MovieCatalog(
+                sources: [MovieSourceBookmark(id: approvalID, name: "Testers", bookmark: Data())],
+                resolve: { _ in root }
+            )
+            let movie = try await catalog.snapshot().movies.first
+            await catalog.stop()
+            return try XCTUnwrap(movie)
+        }
+
+        let original = try await scan(approvalID: UUID().uuidString)
+        let reAdded = try await scan(approvalID: UUID().uuidString)
+        XCTAssertNotEqual(reAdded.id, original.id)
+        XCTAssertEqual(reAdded.resumeID, original.resumeID)
+
+        // A permission change moves the change time, as metadata churn on a share can.
+        XCTAssertEqual(chmod(file.path, 0o600), 0)
+        let churned = try await scan(approvalID: UUID().uuidString)
+        XCTAssertNotEqual(churned.revision, reAdded.revision)
+        XCTAssertEqual(churned.resumeID, original.resumeID)
+
+        try Data(repeating: 4, count: 80).write(to: file)
+        let edited = try await scan(approvalID: UUID().uuidString)
+        XCTAssertNotEqual(edited.resumeID, original.resumeID)
+    }
+
     func testLoaderCancellationFinishesLoadingAndCancelsOutstandingRead() async throws {
         let started = expectation(description: "Range read started")
         let cancelled = expectation(description: "Range read cancelled")

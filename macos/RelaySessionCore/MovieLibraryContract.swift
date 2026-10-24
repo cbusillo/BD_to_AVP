@@ -82,12 +82,30 @@ struct SharedMovie: Codable, Identifiable, Equatable, Sendable {
     let fileName: String
     let byteCount: Int64
     let revision: String
+    /// The Mac's stable key for this file's content: its name, size and modification time.
+    /// Unlike `id` and `revision`, it does not change when the folder is removed and added
+    /// again or when a network share churns the file's change time. Additive to catalog
+    /// version 1: older players ignore it, and older Macs omit it.
+    let resumeKey: String?
+
+    init(id: String, rootID: String, fileName: String, byteCount: Int64, revision: String, resumeKey: String? = nil) {
+        self.id = id
+        self.rootID = rootID
+        self.fileName = fileName
+        self.byteCount = byteCount
+        self.revision = revision
+        self.resumeKey = resumeKey
+    }
 
     var title: String { (fileName as NSString).deletingPathExtension }
-    var resumeID: String { "shared:\(id):\(revision)" }
+    /// Where the player keeps this movie's resume position.
+    var resumeID: String { resumeKey.map { "shared-file:\($0)" } ?? legacyResumeID }
+    /// The key used before the Mac sent `resumeKey`, still read once to carry a saved position over.
+    var legacyResumeID: String { "shared:\(id):\(revision)" }
 
     func validate() throws {
         guard MovieLibraryContract.isDigest(id), MovieLibraryContract.isDigest(revision),
+              resumeKey.map(MovieLibraryContract.isDigest) ?? true,
               UUID(uuidString: rootID) != nil, byteCount > 0,
               fileName.utf8.count <= 512, !fileName.isEmpty,
               !fileName.contains("/"), !fileName.contains("\\"),
@@ -136,6 +154,9 @@ struct SharedLiveTitle: Codable, Identifiable, Equatable, Sendable {
 
     var title: String { (fileName as NSString).deletingPathExtension }
     var defaultAudio: SharedLiveAudio? { audio.first(where: \.isDefault) ?? audio.first }
+    /// Where the player keeps the last position in this title, keyed by file name so it survives
+    /// the folder being removed and added again.
+    var resumeID: String { "live-file:\(MovieLibraryContract.digest(Data(fileName.utf8)))" }
 
     /// The track to start with: the first track in the viewer's most preferred language that the
     /// title has, else the Mac's default. `preferredLanguages` are BCP 47 identifiers such as

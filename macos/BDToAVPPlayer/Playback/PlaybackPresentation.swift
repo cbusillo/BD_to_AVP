@@ -563,6 +563,26 @@ enum ResumeWriteDecision: Equatable {
 
 enum ResumeWritePolicy {
     static let completedPlaybackThreshold: TimeInterval = 5
+    /// How often a position is saved while playing, so a forced quit loses only seconds.
+    static let periodicSaveInterval: TimeInterval = 10
+    /// A live title watched for less than this is not worth mentioning when it starts over.
+    static let liveResumeNoticeMinimumPosition: TimeInterval = 30
+
+    static func isPeriodicSaveDue(lastSaveUptime: TimeInterval?, now: TimeInterval) -> Bool {
+        guard let lastSaveUptime else {
+            return true
+        }
+        return now - lastSaveUptime >= periodicSaveInterval
+    }
+
+    /// What a live title says when the wearer comes back to it. Live titles can only start from
+    /// the beginning until the Mac can start the stream mid-title.
+    static func liveResumeNotice(savedPosition: TimeInterval) -> String? {
+        guard savedPosition.isFinite, savedPosition >= liveResumeNoticeMinimumPosition else {
+            return nil
+        }
+        return "Live titles can't resume yet, so this starts from the beginning. You stopped at \(PlaybackTimeFormatter.string(for: savedPosition))."
+    }
 
     static func allowsWrite(
         isChangingEyeOrder: Bool,
