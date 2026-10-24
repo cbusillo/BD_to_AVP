@@ -63,6 +63,21 @@ final class IsolatedUserDefaultsTests: XCTestCase {
     }
 
     @MainActor
+    func testMovieSharingReadsAndWritesIdentityOffTheMainThread() async throws {
+        // A Keychain call can wait on an access prompt, which would freeze the window.
+        let calls = TrustStoreThreadRecorder()
+        let trust = MovieLibraryTrustStore(read: { calls.record(); return nil }, write: { _ in calls.record() })
+        let controller = MovieSharingController(defaults: try isolatedDefaults(), trust: trust)
+
+        await controller.restoreIfNeeded()
+        await controller.forget(MovieTrustedPeer(publicKey: Data(repeating: 7, count: 32), name: "Headset"))
+
+        XCTAssertNil(controller.errorMessage)
+        XCTAssertGreaterThan(calls.total, 0)
+        XCTAssertEqual(calls.onMainThread, 0)
+    }
+
+    @MainActor
     func testUnitTestHostNeverSelectsKeychainEvenWhenTeamSigned() {
         XCTAssertFalse(MovieSharingController.usesKeychain())
         let environment = [AppDelegate.unitTestHomeEnvironmentKey: "/tmp/test-home"]
@@ -99,4 +114,12 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         )
         XCTAssertEqual(stored[key] as? Bool, true)
     }
+}
+
+private final class TrustStoreThreadRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [Bool] = []
+    var total: Int { lock.withLock { calls.count } }
+    var onMainThread: Int { lock.withLock { calls.filter { $0 }.count } }
+    func record() { let isMain = Thread.isMainThread; lock.withLock { calls.append(isMain) } }
 }
