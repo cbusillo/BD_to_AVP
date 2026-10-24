@@ -17,8 +17,10 @@ enum MovieLibraryContract {
     static let supportedExtensions: Set<String> = ["mov", "mp4", "m4v"]
 
     // Live playback of Blu-ray 3D ISOs. Additive to catalog version 1: older clients ignore
-    // `liveTitles`, and ISOs never appear in `movies`.
-    static let liveVersion = 1
+    // `liveTitles`, and ISOs never appear in `movies`. Version 2 serves a multivariant relay
+    // playlist with alternate audio renditions, which a version 1 player's loopback bridge
+    // cannot rewrite, so each side skips the other's live titles instead of failing to play.
+    static let liveVersion = 2
     static let liveExtensions: Set<String> = ["iso"]
     static let maximumLiveTitles = 64
     static let maximumLiveAudio = 32

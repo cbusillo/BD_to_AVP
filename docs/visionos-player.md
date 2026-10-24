@@ -91,7 +91,10 @@ for up to 2 minutes while any title is checking, and stops on disconnect, redisc
 or leaving the library. An ineligible title shows the Mac's reason and cannot start.
 
 Choosing an eligible title starts it with the first audio track in the headset's most
-preferred language that the title has, or the disc's first track when none matches:
+preferred language that the title has, or the disc's first track when none matches.
+The Mac carries the title's other supported tracks too, so the audio list offers every
+track and switching keeps the playhead; see [Live HLS Service](live-hls-service.md#alternate-audio).
+Live titles carry no subtitles yet, and the subtitle list says so:
 
 1. The player creates a start ID and sends `POST /movies/v1/live/start`, signed with
    the movie session at `issuedAt`, the signed time of that first request. A retry
@@ -593,16 +596,18 @@ playback moves to the latest available time and says how far the relay reaches.
 
 The MV-HEVC audio language and subtitle lists open over the bottom edge of the
 video, just in front of it and directly above the controls, so they read as part of
-the controls panel. The list is a RealityView attachment placed in the video's own
-space. The alternatives each failed: growing the controls ornament pushed the list
-below the window; a second ornament, or a SwiftUI view in the window, sat behind
-the window's surface and was hidden; a plain SwiftUI overlay floated at the front
-of the window's depth and loomed over the controls; and a system menu presented
-from the ornament opened behind the video. The list is also outside the controls'
-hover group, so only the row the wearer looks at highlights. It shows up to five
-rows and scrolls beyond that, starting at the current selection, so a disc with a
-dozen or more tracks stays usable. While a list is open, the video surface does not
-take pinches, so they reach the list.
+the controls panel. Both buttons are enabled once the movie is ready. A list with
+nothing to choose between says so: **This title has one audio track.** or **This
+title has no subtitles.** The list is a RealityView attachment placed in the
+video's own space. The alternatives each failed: growing the controls ornament
+pushed the list below the window; a second ornament, or a SwiftUI view in the
+window, sat behind the window's surface and was hidden; a plain SwiftUI overlay
+floated at the front of the window's depth and loomed over the controls; and a
+system menu presented from the ornament opened behind the video. The list is also
+outside the controls' hover group, so only the row the wearer looks at highlights.
+It shows up to five rows and scrolls beyond that, starting at the current
+selection, so a disc with a dozen or more tracks stays usable. While a list is
+open, the video surface does not take pinches, so they reach the list.
 
 Packed-stereo controls use AVKit's native visibility behavior; revealing the
 playback controls also reveals actions labeled **Eye Order: Normal** or

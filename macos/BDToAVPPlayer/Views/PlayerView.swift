@@ -748,7 +748,7 @@ private struct PlayerOrnamentView: View {
             title: "Audio language",
             systemImage: "character.bubble",
             identifier: "player-audio-menu",
-            isEnabled: !session.audioOptions.isEmpty,
+            isEnabled: session.isReady,
             selectedName: session.audioOptions.first { $0.id == session.selectedAudioID }?.displayName
         )
     }
@@ -759,7 +759,7 @@ private struct PlayerOrnamentView: View {
             title: "Subtitles",
             systemImage: "captions.bubble",
             identifier: "player-subtitle-menu",
-            isEnabled: !session.subtitleOptions.isEmpty,
+            isEnabled: session.isReady,
             selectedName: session.subtitleOptions.first { $0.id == session.selectedSubtitleID }?.displayName
         )
     }
@@ -791,8 +791,8 @@ private struct PlayerOrnamentView: View {
     }
 }
 
-/// The audio or subtitle list, shown in its own ornament directly above the controls. A long
-/// list stops at a fixed height and scrolls, starting at the current selection.
+/// The audio or subtitle list, shown over the bottom of the video directly above the controls.
+/// A long list stops at a fixed height and scrolls, starting at the current selection.
 private struct PlayerTrackListView: View {
     private static let cornerRadius: CGFloat = 28
     private static let width: CGFloat = 420
@@ -808,6 +808,7 @@ private struct PlayerTrackListView: View {
             trackList(
                 title: "Audio Language",
                 identifier: "player-audio-tracks",
+                note: PlaybackTrackListNote.note(for: .audio, optionCount: session.audioOptions.count),
                 options: session.audioOptions,
                 selectedID: session.selectedAudioID,
                 select: { session.selectAudio(id: $0) }
@@ -816,6 +817,7 @@ private struct PlayerTrackListView: View {
             trackList(
                 title: "Subtitles",
                 identifier: "player-subtitle-tracks",
+                note: PlaybackTrackListNote.note(for: .subtitles, optionCount: session.subtitleOptions.count),
                 options: session.subtitleOptions,
                 selectedID: session.selectedSubtitleID,
                 select: { session.selectSubtitle(id: $0) }
@@ -826,6 +828,7 @@ private struct PlayerTrackListView: View {
     private func trackList(
         title: String,
         identifier: String,
+        note: String?,
         options: [PlaybackMediaOption],
         selectedID: String,
         select: @escaping (String) -> Void
@@ -860,6 +863,13 @@ private struct PlayerTrackListView: View {
                 .onAppear {
                     proxy.scrollTo(selectedID, anchor: .center)
                 }
+            }
+
+            if let note {
+                Text(note)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("\(identifier)-note")
             }
         }
         .padding(16)

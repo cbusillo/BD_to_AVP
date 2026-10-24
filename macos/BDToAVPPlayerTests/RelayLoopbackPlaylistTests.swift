@@ -40,6 +40,37 @@ final class RelayLoopbackPlaylistTests: XCTestCase {
         }
     }
 
+    func testLiveMultivariantPlaylistPassesTheRealBridgeRewrite() throws {
+        let playlist = LiveHLSPlaylistRenderer.renderMultivariant(audio: [
+            LiveHLSAudioChoice(name: "German DTS-HD Master Audio", language: "de", playlistName: nil),
+            LiveHLSAudioChoice(name: "English DTS-HD Master Audio", language: "en", playlistName: "audio-4353.m3u8"),
+        ])
+        let rewritten = try RelayLoopbackHTTPServer.rewritePlaylist(Data(playlist.utf8), prefix: "/capability")
+        let lines = String(decoding: rewritten, as: UTF8.self).components(separatedBy: "\n")
+
+        let media = lines.filter { $0.hasPrefix("#EXT-X-MEDIA:") }
+        XCTAssertEqual(media.count, 2)
+        XCTAssertFalse(media[0].contains("URI="))
+        XCTAssertTrue(media[1].hasSuffix(",URI=\"/capability/relay/v1/media/audio-4353.m3u8\""))
+        XCTAssertEqual(lines.filter { !$0.isEmpty && !$0.hasPrefix("#") }, ["/capability/relay/v1/media/video.m3u8"])
+
+        // Every media playlist the variant and its renditions name is rewritten on the bridge too.
+        XCTAssertTrue(RelayLoopbackHTTPServer.isPlaylistPath("/relay/v1/media/video.m3u8"))
+        XCTAssertTrue(RelayLoopbackHTTPServer.isPlaylistPath("/relay/v1/media/audio-4353.m3u8"))
+        XCTAssertTrue(RelayLoopbackHTTPServer.isPlaylistPath(RelayWireContract.playlistPath))
+        XCTAssertFalse(RelayLoopbackHTTPServer.isPlaylistPath("/relay/v1/media/audio-4353-segment-000000001.m4s"))
+    }
+
+    func testRenditionURIsOutsideTheMediaPrefixAreRefused() {
+        let base = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"English\",URI=\"%@\"\n"
+        for uri in ["https://other.test/audio.m3u8", "/relay/v1/playlist.json", "/relay/v1/media/a%2e.m3u8"] {
+            let playlist = String(format: base, uri)
+            XCTAssertThrowsError(try RelayLoopbackHTTPServer.rewritePlaylist(Data(playlist.utf8), prefix: "/capability"), uri)
+        }
+        let trailing = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,URI=\"/relay/v1/media/audio-1.m3u8\",NAME=\"x\"\n"
+        XCTAssertThrowsError(try RelayLoopbackHTTPServer.rewritePlaylist(Data(trailing.utf8), prefix: "/capability"))
+    }
+
     func testSnapshotMatchesThePlaylistWindow() throws {
         let rendered = try LiveHLSPlaylistRenderer.render(
             targetDurationSeconds: 3,

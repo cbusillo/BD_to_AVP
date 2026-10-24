@@ -52,9 +52,39 @@ struct LiveHLSManifest: Decodable, Equatable {
         }
     }
 
+    /// One alternate audio track the worker encodes beside the video's muxed audio. Its files
+    /// are `audio-<pid>-init.mp4` and `audio-<pid>-segment-<n>.m4s` in the same workspace.
+    struct AudioRendition: Decodable, Equatable {
+        let sourcePID: Int
+        let complete: Bool
+        let initialization: String
+        let targetDurationSeconds: Int
+        let mediaSequence: UInt64
+        let earliestAvailableMicroseconds: Int64
+        let latestAvailableMicroseconds: Int64
+        let segments: [Segment]
+        let retiredSegments: [RetiredSegment]
+
+        enum CodingKeys: String, CodingKey {
+            case sourcePID = "source_pid"
+            case complete
+            case initialization
+            case targetDurationSeconds = "target_duration_seconds"
+            case mediaSequence = "media_sequence"
+            case earliestAvailableMicroseconds = "earliest_available_microseconds"
+            case latestAvailableMicroseconds = "latest_available_microseconds"
+            case segments
+            case retiredSegments = "retired_segments"
+        }
+
+        var namePrefix: String { LiveHLSManifest.audioNamePrefix(pid: sourcePID) }
+    }
+
     static let fileName = "live-hls.json"
     static let initialization = "init.mp4"
     static let maximumBytes = 4 * 1_024 * 1_024
+    /// The source helper carries at most seven alternate tracks.
+    static let maximumAudioRenditions = 7
 
     let schemaVersion: Int
     let type: String
@@ -67,6 +97,7 @@ struct LiveHLSManifest: Decodable, Equatable {
     let segments: [Segment]
     let retiredSegments: [RetiredSegment]
     let producer: Producer?
+    let audioRenditions: [AudioRendition]?
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -80,6 +111,7 @@ struct LiveHLSManifest: Decodable, Equatable {
         case segments
         case retiredSegments = "retired_segments"
         case producer
+        case audioRenditions = "audio_renditions"
     }
 
     static func decode(_ data: Data) throws -> LiveHLSManifest {
@@ -94,10 +126,15 @@ struct LiveHLSManifest: Decodable, Equatable {
         return manifest
     }
 
-    /// Public segment names; staging uses other names and never appears here.
-    static func isSegmentName(_ name: String) -> Bool {
+    static func audioNamePrefix(pid: Int) -> String {
+        "audio-\(pid)-"
+    }
+
+    /// Public segment names; staging uses other names and never appears here. An alternate audio
+    /// rendition's names carry its `audio-<pid>-` prefix.
+    static func isSegmentName(_ name: String, namePrefix: String = "") -> Bool {
         let bytes = Array(name.utf8)
-        let prefix = Array("segment-".utf8)
+        let prefix = Array("\(namePrefix)segment-".utf8)
         let suffix = Array(".m4s".utf8)
         let digits = bytes.count - prefix.count - suffix.count
         guard (5 ... 12).contains(digits),
@@ -113,6 +150,45 @@ struct LiveHLSManifest: Decodable, Equatable {
         }
         try require(schemaVersion == 1 && type == "live_hls", "schema")
         try require(initialization == Self.initialization, "initialization")
+        try Self.validateWindow(
+            namePrefix: "",
+            targetDurationSeconds: targetDurationSeconds,
+            mediaSequence: mediaSequence,
+            earliestAvailableMicroseconds: earliestAvailableMicroseconds,
+            latestAvailableMicroseconds: latestAvailableMicroseconds,
+            segments: segments,
+            retiredSegments: retiredSegments
+        )
+        let renditions = audioRenditions ?? []
+        try require(renditions.count <= Self.maximumAudioRenditions, "audio_rendition_count")
+        try require(Set(renditions.map(\.sourcePID)).count == renditions.count, "audio_rendition_duplicate")
+        for rendition in renditions {
+            try require((1 ... 8_191).contains(rendition.sourcePID), "audio_rendition_pid")
+            try require(rendition.initialization == rendition.namePrefix + Self.initialization, "audio_initialization")
+            try Self.validateWindow(
+                namePrefix: rendition.namePrefix,
+                targetDurationSeconds: rendition.targetDurationSeconds,
+                mediaSequence: rendition.mediaSequence,
+                earliestAvailableMicroseconds: rendition.earliestAvailableMicroseconds,
+                latestAvailableMicroseconds: rendition.latestAvailableMicroseconds,
+                segments: rendition.segments,
+                retiredSegments: rendition.retiredSegments
+            )
+        }
+    }
+
+    private static func validateWindow(
+        namePrefix: String,
+        targetDurationSeconds: Int,
+        mediaSequence: UInt64,
+        earliestAvailableMicroseconds: Int64,
+        latestAvailableMicroseconds: Int64,
+        segments: [Segment],
+        retiredSegments: [RetiredSegment]
+    ) throws {
+        func require(_ condition: Bool, _ reason: String) throws {
+            if !condition { throw LiveHLSManifestError(reason: reason) }
+        }
         try require(targetDurationSeconds > 0 && targetDurationSeconds <= 60, "target_duration")
         try require(!segments.isEmpty, "empty")
         let maximumDuration = Int64(targetDurationSeconds) * 1_000_000 + 500_000
@@ -120,7 +196,7 @@ struct LiveHLSManifest: Decodable, Equatable {
         var expectedStart = segments[0].startMicroseconds
         try require(expectedStart >= 0 && expectedStart == earliestAvailableMicroseconds, "earliest")
         for segment in segments {
-            try require(Self.isSegmentName(segment.uri), "segment_name")
+            try require(Self.isSegmentName(segment.uri, namePrefix: namePrefix), "segment_name")
             try require(segment.sequence == expectedSequence, "sequence_gap")
             try require(segment.startMicroseconds == expectedStart, "timeline_gap")
             try require(segment.durationMicroseconds > 0 && segment.durationMicroseconds <= maximumDuration, "duration")
@@ -133,7 +209,7 @@ struct LiveHLSManifest: Decodable, Equatable {
         }
         try require(expectedStart == latestAvailableMicroseconds, "latest")
         try require(
-            retiredSegments.allSatisfy { Self.isSegmentName($0.uri) && $0.sizeBytes > 0 },
+            retiredSegments.allSatisfy { Self.isSegmentName($0.uri, namePrefix: namePrefix) && $0.sizeBytes > 0 },
             "retired_segment"
         )
     }
@@ -149,9 +225,23 @@ struct LiveHLSWindow: Sendable {
         let durationMicroseconds: Int64
     }
 
+    /// One alternate audio rendition's current window and its rendered media playlist.
+    struct AudioWindow: Equatable, Sendable {
+        let pid: Int
+        let initialization: String
+        let segments: [LiveHLSWindowSegment]
+        let retiredURIs: Set<String>
+        let complete: Bool
+        let mediaSequence: UInt64
+        let latestMicroseconds: Int64
+        let playlist: String
+    }
+
     static let historyLimit = 512
 
     private(set) var segments: [LiveHLSWindowSegment] = []
+    /// Fixed by the first manifest: the worker never adds or drops a rendition mid-stream.
+    private(set) var audioWindows: [AudioWindow] = []
     private(set) var retiredURIs: Set<String> = []
     private(set) var complete = false
     private(set) var rendered: LiveHLSRenderedWindow?
@@ -189,10 +279,14 @@ struct LiveHLSWindow: Sendable {
                 throw LiveHLSManifestError(reason: "timing_changed")
             }
         }
+        // Every media playlist under one multivariant playlist advertises the same target.
+        let renditions = manifest.audioRenditions ?? []
+        let targetDurationSeconds = ([manifest.targetDurationSeconds] + renditions.map(\.targetDurationSeconds)).max()
+            ?? manifest.targetDurationSeconds
         let rendered: LiveHLSRenderedWindow
         do {
             rendered = try LiveHLSPlaylistRenderer.render(
-                targetDurationSeconds: manifest.targetDurationSeconds,
+                targetDurationSeconds: targetDurationSeconds,
                 initialization: manifest.initialization,
                 segments: next,
                 complete: manifest.complete
@@ -200,6 +294,7 @@ struct LiveHLSWindow: Sendable {
         } catch {
             throw LiveHLSManifestError(reason: "unrenderable")
         }
+        let nextAudio = try nextAudioWindows(renditions, targetDurationSeconds: targetDurationSeconds)
         for segment in next where history[segment.uri] == nil {
             history[segment.uri] = Timing(
                 startMicroseconds: segment.startMicroseconds,
@@ -220,15 +315,78 @@ struct LiveHLSWindow: Sendable {
         mediaSequence = manifest.mediaSequence
         latestMicroseconds = manifest.latestAvailableMicroseconds
         producer = manifest.producer
+        audioWindows = nextAudio
         self.rendered = rendered
     }
 
-    /// `init.mp4`, a retained segment, or a segment the manifest still lists as retired.
+    /// The next audio windows. The rendition set never changes, and each rendition's media
+    /// sequence and latest position never go back nor its completion revert.
+    private func nextAudioWindows(
+        _ renditions: [LiveHLSManifest.AudioRendition],
+        targetDurationSeconds: Int
+    ) throws -> [AudioWindow] {
+        if rendered != nil, renditions.map(\.sourcePID) != audioWindows.map(\.pid) {
+            throw LiveHLSManifestError(reason: "audio_renditions_changed")
+        }
+        return try renditions.enumerated().map { index, rendition in
+            if rendered != nil {
+                let previous = audioWindows[index]
+                guard rendition.mediaSequence >= previous.mediaSequence,
+                      rendition.latestAvailableMicroseconds >= previous.latestMicroseconds,
+                      rendition.complete || !previous.complete
+                else { throw LiveHLSManifestError(reason: "regressed") }
+            }
+            let segments = rendition.segments.map {
+                LiveHLSWindowSegment(
+                    sequence: $0.sequence,
+                    uri: $0.uri,
+                    startMicroseconds: $0.startMicroseconds,
+                    durationMicroseconds: $0.durationMicroseconds
+                )
+            }
+            let playlist: String
+            do {
+                playlist = try LiveHLSPlaylistRenderer.render(
+                    targetDurationSeconds: targetDurationSeconds,
+                    initialization: rendition.initialization,
+                    segments: segments,
+                    complete: rendition.complete
+                ).playlist
+            } catch {
+                throw LiveHLSManifestError(reason: "unrenderable")
+            }
+            return AudioWindow(
+                pid: rendition.sourcePID,
+                initialization: rendition.initialization,
+                segments: segments,
+                retiredURIs: Set(rendition.retiredSegments.map(\.uri)),
+                complete: rendition.complete,
+                mediaSequence: rendition.mediaSequence,
+                latestMicroseconds: rendition.latestAvailableMicroseconds,
+                playlist: playlist
+            )
+        }
+    }
+
+    /// The rendered media playlist served as `name`: `video.m3u8`, or `audio-<pid>.m3u8` for a
+    /// rendition this stream carries.
+    func mediaPlaylist(named name: String) -> String? {
+        guard let rendered else { return nil }
+        if name == LiveHLSPlaylistRenderer.videoPlaylistName { return rendered.playlist }
+        return audioWindows.first { LiveHLSPlaylistRenderer.audioPlaylistName(pid: $0.pid) == name }?.playlist
+    }
+
+    /// `init.mp4`, a retained segment, or a segment the manifest still lists as retired, of the
+    /// video or of an audio rendition.
     func isServable(_ name: String) -> Bool {
         guard rendered != nil else { return false }
         return name == LiveHLSManifest.initialization
             || retiredURIs.contains(name)
             || segments.contains { $0.uri == name }
+            || audioWindows.contains { audio in
+                name == audio.initialization || audio.retiredURIs.contains(name)
+                    || audio.segments.contains { $0.uri == name }
+            }
     }
 
     func timing(for uri: String) -> Timing? {

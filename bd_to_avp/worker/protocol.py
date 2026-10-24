@@ -43,6 +43,8 @@ ZERO_JOB_ID = str(UUID(int=0))
 LIVE_HLS_MINIMUM_RETENTION_SECONDS = 30
 LIVE_HLS_MINIMUM_RETENTION_BYTES = 64 * 1_024 * 1_024
 LIVE_HLS_MINIMUM_VIEWER_LEAD_SECONDS = 10
+# The source helper serves at most seven alternate audio tracks beside the selected one.
+LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO = 7
 
 
 def bounded_detail(value: str) -> str:
@@ -291,6 +293,8 @@ class LiveHLSOptions:
     maximum_pairs: int | None = None
     # Hold production while it is this far ahead of the reported viewer position.
     viewer_lead_seconds: int | None = None
+    # Other audio tracks carried as alternate renditions the viewer can switch to.
+    alternate_audio_pids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1515,7 +1519,7 @@ class JobSpec:
         required_keys = {"playlist", "audio_pid", "retention_seconds", "retention_max_bytes"}
         cls._reject_unknown_keys(
             value,
-            required_keys | {"maximum_pairs", "viewer_lead_seconds"},
+            required_keys | {"maximum_pairs", "viewer_lead_seconds", "alternate_audio_pids"},
             "live_hls",
             job_id,
             error_code="invalid_live_hls",
@@ -1541,9 +1545,10 @@ class JobSpec:
             )
 
         retention_seconds = parse("retention_seconds", LIVE_HLS_MINIMUM_RETENTION_SECONDS, 24 * 3_600)
+        audio_pid = parse("audio_pid", 1, 8_191)
         return LiveHLSOptions(
             playlist=parse("playlist", 0, 99_999),
-            audio_pid=parse("audio_pid", 1, 8_191),
+            audio_pid=audio_pid,
             retention_seconds=retention_seconds,
             retention_max_bytes=parse(
                 "retention_max_bytes",
@@ -1556,7 +1561,28 @@ class JobSpec:
                 if "viewer_lead_seconds" in value
                 else None
             ),
+            alternate_audio_pids=cls._parse_alternate_audio_pids(
+                value.get("alternate_audio_pids", []), audio_pid, job_id
+            ),
         )
+
+    @staticmethod
+    def _parse_alternate_audio_pids(value: Any, audio_pid: int, job_id: str) -> tuple[int, ...]:
+        """Distinct PIDs other than the selected one, at most ``LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO``."""
+        if (
+            not isinstance(value, list)
+            or len(value) > LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO
+            or not all(isinstance(pid, int) and not isinstance(pid, bool) and 1 <= pid <= 8_191 for pid in value)
+            or len(set(value)) != len(value)
+            or audio_pid in value
+        ):
+            raise WorkerProtocolError(
+                "invalid_live_hls",
+                f"live_hls.alternate_audio_pids must list at most {LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO} distinct "
+                "PIDs other than audio_pid.",
+                job_id=job_id,
+            )
+        return tuple(value)
 
     @classmethod
     def _parse_source_authorization(

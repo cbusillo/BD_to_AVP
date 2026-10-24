@@ -123,6 +123,10 @@ actor LiveRelayStream: LiveRelayStreaming {
     private let sleepAssertion: LiveRelaySleepAssertion
     private let sourcePath: String
     private let sourceIdentity: LiveSourceIdentity
+    private let audioPID: Int
+    private let audioTracks: [SharedLiveAudio]
+    /// Rendered once the first manifest fixes which renditions the worker carries.
+    private var multivariantPlaylist: String?
     private var lease: LiveSourceLease?
     private let handoff: LiveSourceHandoff?
     private var handoffTask: Task<Void, Never>?
@@ -165,6 +169,8 @@ actor LiveRelayStream: LiveRelayStreaming {
         lease = request.source
         sourcePath = request.source.canonicalPath
         sourceIdentity = request.source.identity
+        audioPID = request.audioPID
+        audioTracks = request.audioTracks
         workspace = LiveHLSWorkspace(rootURL: workspaceURL, maximumMediaBytes: configuration.maximumMediaBytes)
         let started = now()
         startedAt = started
@@ -185,6 +191,7 @@ actor LiveRelayStream: LiveRelayStreaming {
             workspaceURL: workspaceURL,
             playlist: request.playlist,
             audioPID: request.audioPID,
+            alternateAudioPIDs: request.alternateAudio.map(\.pid),
             retentionSeconds: configuration.retentionSeconds,
             retentionMaxBytes: configuration.retentionMaxBytes,
             viewerLeadSeconds: configuration.viewerLeadSeconds,
@@ -257,8 +264,8 @@ actor LiveRelayStream: LiveRelayStreaming {
         switch request.requestTarget {
         case RelayWireContract.playlistPath:
             guard request.method == "GET" else { return .empty(statusCode: 405) }
-            guard let rendered = workspace.window.rendered else { return Self.notYetAvailable }
-            return .text(rendered.playlist, contentType: "application/vnd.apple.mpegurl")
+            guard let multivariantPlaylist else { return Self.notYetAvailable }
+            return .text(multivariantPlaylist, contentType: Self.playlistContentType)
         case RelayWireContract.playlistSnapshotPath:
             guard request.method == "GET" else { return .empty(statusCode: 405) }
             guard let rendered = workspace.window.rendered else { return Self.notYetAvailable }
@@ -293,10 +300,40 @@ actor LiveRelayStream: LiveRelayStreaming {
     // MARK: - Serving
 
     private static let notYetAvailable = RelayHTTPResponse(statusCode: 503, headers: ["retry-after": "1"])
+    private static let playlistContentType = "application/vnd.apple.mpegurl"
+
+    /// The audio choices the multivariant playlist offers: the selected track, muxed into the
+    /// video, then each rendition the worker carries, named from the live title index.
+    static func audioChoices(
+        audioPID: Int,
+        audioTracks: [SharedLiveAudio],
+        renditionPIDs: [Int]
+    ) -> [LiveHLSAudioChoice] {
+        func choice(pid: Int, playlistName: String?) -> LiveHLSAudioChoice {
+            let track = audioTracks.first { $0.pid == pid }
+            return LiveHLSAudioChoice(
+                name: track?.label ?? "Audio \(pid)",
+                language: LiveHLSPlaylistRenderer.languageTag(forDiscLanguage: track?.language),
+                playlistName: playlistName
+            )
+        }
+        return [choice(pid: audioPID, playlistName: nil)]
+            + renditionPIDs.map { choice(pid: $0, playlistName: LiveHLSPlaylistRenderer.audioPlaylistName(pid: $0)) }
+    }
 
     private func media(named name: String) async -> RelayHTTPResponse {
+        if name.hasSuffix(".m3u8") {
+            guard let playlist = workspace.window.mediaPlaylist(named: name) else {
+                return workspace.window.rendered == nil ? Self.notYetAvailable : .empty(statusCode: 404)
+            }
+            return .text(playlist, contentType: Self.playlistContentType)
+        }
         let isInitialization = name == LiveHLSManifest.initialization
-        guard isInitialization || LiveHLSManifest.isSegmentName(name) else { return .empty(statusCode: 404) }
+        let isAudio = workspace.window.audioWindows.contains { audio in
+            name == audio.initialization
+                || LiveHLSManifest.isSegmentName(name, namePrefix: LiveHLSManifest.audioNamePrefix(pid: audio.pid))
+        }
+        guard isInitialization || isAudio || LiveHLSManifest.isSegmentName(name) else { return .empty(statusCode: 404) }
         let data: Data
         do {
             data = try workspace.media(named: name)
@@ -313,7 +350,7 @@ actor LiveRelayStream: LiveRelayStreaming {
         }
         return RelayHTTPResponse(
             statusCode: 200,
-            headers: ["content-type": isInitialization ? "video/mp4" : "video/iso.segment"],
+            headers: ["content-type": isAudio ? "audio/mp4" : isInitialization ? "video/mp4" : "video/iso.segment"],
             body: data
         )
     }
@@ -386,6 +423,13 @@ actor LiveRelayStream: LiveRelayStreaming {
             return
         }
         let window = workspace.window
+        if multivariantPlaylist == nil {
+            multivariantPlaylist = LiveHLSPlaylistRenderer.renderMultivariant(audio: Self.audioChoices(
+                audioPID: audioPID,
+                audioTracks: audioTracks,
+                renditionPIDs: window.audioWindows.map(\.pid)
+            ))
+        }
         guard let earliest = window.earliestMicroseconds, let latest = window.latestAvailableMicroseconds else { return }
         let earliestMilliseconds = LiveHLSPlaylistRenderer.milliseconds(boundaryMicroseconds: earliest)
         let latestMilliseconds = LiveHLSPlaylistRenderer.milliseconds(boundaryMicroseconds: latest)

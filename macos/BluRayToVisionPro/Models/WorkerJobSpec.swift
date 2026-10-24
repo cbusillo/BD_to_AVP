@@ -568,6 +568,8 @@ struct WorkerJobSpec: Encodable, Equatable {
         let retentionMaxBytes: Int
         let viewerLeadSeconds: Int?
         let maximumPairs: Int?
+        /// The title's other tracks, carried as alternate audio renditions; omitted when empty.
+        let alternateAudioPIDs: [Int]?
 
         enum CodingKeys: String, CodingKey {
             case playlist
@@ -576,6 +578,7 @@ struct WorkerJobSpec: Encodable, Equatable {
             case retentionMaxBytes = "retention_max_bytes"
             case viewerLeadSeconds = "viewer_lead_seconds"
             case maximumPairs = "maximum_pairs"
+            case alternateAudioPIDs = "alternate_audio_pids"
         }
     }
 
@@ -716,6 +719,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         workspaceURL: URL,
         playlist: Int,
         audioPID: Int,
+        alternateAudioPIDs: [Int] = [],
         retentionSeconds: Int,
         retentionMaxBytes: Int,
         viewerLeadSeconds: Int?,
@@ -743,7 +747,8 @@ struct WorkerJobSpec: Encodable, Equatable {
             retentionSeconds: retentionSeconds,
             retentionMaxBytes: retentionMaxBytes,
             viewerLeadSeconds: viewerLeadSeconds,
-            maximumPairs: maximumPairs
+            maximumPairs: maximumPairs,
+            alternateAudioPIDs: alternateAudioPIDs.isEmpty ? nil : alternateAudioPIDs
         )
     }
 

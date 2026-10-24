@@ -305,6 +305,24 @@ enum PlaybackTrackListLayout {
     }
 }
 
+/// The line a track list shows when it has nothing to choose between, so a single-track or
+/// unsubtitled title says so instead of graying out its button. The subtitle list's own "Off"
+/// entry is not a subtitle.
+enum PlaybackTrackListNote {
+    static func note(for picker: PlaybackTrackPicker, optionCount: Int) -> String? {
+        switch picker {
+        case .audio:
+            switch optionCount {
+            case 0: "This title has no selectable audio tracks."
+            case 1: "This title has one audio track."
+            default: nil
+            }
+        case .subtitles:
+            optionCount <= 1 ? "This title has no subtitles." : nil
+        }
+    }
+}
+
 /// How faded controls look. visionOS never reports where the wearer looks; the system renders
 /// the hover effect, so `isLookedAt` comes from the effect itself, never from app state.
 enum PlaybackHUDPresentation {

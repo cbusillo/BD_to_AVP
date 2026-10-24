@@ -5,6 +5,16 @@ import XCTest
 @testable import BDToAVPPlayer
 
 final class PlaybackPresentationTests: XCTestCase {
+    func testTrackListsSayWhenThereIsNothingToChoose() {
+        XCTAssertEqual(PlaybackTrackListNote.note(for: .audio, optionCount: 1), "This title has one audio track.")
+        XCTAssertNotNil(PlaybackTrackListNote.note(for: .audio, optionCount: 0))
+        XCTAssertNil(PlaybackTrackListNote.note(for: .audio, optionCount: 2))
+        // The subtitle list's first entry is Off.
+        XCTAssertEqual(PlaybackTrackListNote.note(for: .subtitles, optionCount: 0), "This title has no subtitles.")
+        XCTAssertEqual(PlaybackTrackListNote.note(for: .subtitles, optionCount: 1), "This title has no subtitles.")
+        XCTAssertNil(PlaybackTrackListNote.note(for: .subtitles, optionCount: 2))
+    }
+
     func testTimeFormatterUsesMinutesAndSeconds() {
         XCTAssertEqual(PlaybackTimeFormatter.string(for: 65.9), "1:05")
     }

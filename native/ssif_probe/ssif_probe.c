@@ -20,12 +20,14 @@
 #define SERVICE_RECORD_VIDEO 1
 #define SERVICE_RECORD_AUDIO 2
 #define SERVICE_RECORD_COMPLETE 3
+#define SERVICE_RECORD_ALTERNATE_AUDIO 4
 #define SERVICE_FLAG_RANDOM_ACCESS 1
 #define M2TS_PACKET_SIZE 192
 #define READ_CHUNK_SIZE (6144 * 32)
 #define MAX_PES_BYTES (16 * 1024 * 1024)
 #define MAX_PENDING_BYTES (256 * 1024 * 1024)
 #define TITLES_MINIMUM_SECONDS 60
+#define MAX_ALTERNATE_AUDIO 7
 #define TITLES_MAXIMUM_LISTED 64
 #define TITLES_MAXIMUM_LISTED_BYTES (512 * 1024)
 
@@ -84,12 +86,15 @@ typedef struct {
     PesBuilder base_builder;
     PesBuilder dependent_builder;
     PesBuilder audio_builder;
+    PesBuilder alternate_builders[MAX_ALTERNATE_AUDIO];
     PesQueue base_pending;
     PesQueue dependent_pending;
     DemuxStats stats;
     uint64_t maximum_pairs;
     uint64_t record_sequence;
     uint16_t selected_audio_pid;
+    uint16_t alternate_audio_pids[MAX_ALTERNATE_AUDIO];
+    size_t alternate_audio_count;
     bool service_framing;
     bool pair_limit_reached;
     uint64_t cutoff_dts;
@@ -285,6 +290,9 @@ static void free_demux(DemuxContext *context) {
     free_builder(&context->base_builder);
     free_builder(&context->dependent_builder);
     free_builder(&context->audio_builder);
+    for (size_t index = 0; index < MAX_ALTERNATE_AUDIO; index++) {
+        free_builder(&context->alternate_builders[index]);
+    }
     free_queue(&context->base_pending);
     free_queue(&context->dependent_pending);
 }
@@ -392,11 +400,40 @@ static DemuxResult emit_pair(DemuxContext *context, PesItem *base, PesItem *depe
     return DEMUX_OK;
 }
 
+/// The 0-based alternate audio track for `pid`, or -1 when it is not an alternate.
+static int alternate_audio_index(const DemuxContext *context, uint16_t pid) {
+    for (size_t index = 0; index < context->alternate_audio_count; index++) {
+        if (context->alternate_audio_pids[index] == pid) {
+            return (int)index;
+        }
+    }
+    return -1;
+}
+
 static DemuxResult complete_pes(DemuxContext *context, uint16_t pid, PesBuilder *builder) {
     if (!builder->active || builder->length == 0) {
         builder->active = false;
         builder->length = 0;
         return DEMUX_OK;
+    }
+
+    int alternate = alternate_audio_index(context, pid);
+    if (alternate >= 0) {
+        // Alternate tracks are served for choice only; their record carries the 1-based track.
+        DemuxResult result = write_service_record(
+            context,
+            SERVICE_RECORD_ALTERNATE_AUDIO,
+            (uint16_t)(alternate + 1),
+            builder->pts,
+            builder->dts,
+            builder->data,
+            builder->length,
+            NULL,
+            0
+        );
+        builder->active = false;
+        builder->length = 0;
+        return result;
     }
 
     if (context->selected_audio_pid != 0 && pid == context->selected_audio_pid) {
@@ -465,7 +502,8 @@ static DemuxResult process_packet(DemuxContext *context, const uint8_t *packet) 
 
     uint16_t pid = (uint16_t)(((packet[5] & 0x1f) << 8) | packet[6]);
     bool selected_audio = context->selected_audio_pid != 0 && pid == context->selected_audio_pid;
-    if (pid != 0x1011 && pid != 0x1012 && !selected_audio) {
+    int alternate = alternate_audio_index(context, pid);
+    if (pid != 0x1011 && pid != 0x1012 && !selected_audio && alternate < 0) {
         return DEMUX_OK;
     }
     if (context->pair_limit_reached && !selected_audio) {
@@ -493,6 +531,8 @@ static DemuxResult process_packet(DemuxContext *context, const uint8_t *packet) 
         builder = &context->base_builder;
     } else if (pid == 0x1012) {
         builder = &context->dependent_builder;
+    } else if (alternate >= 0) {
+        builder = &context->alternate_builders[alternate];
     } else {
         builder = &context->audio_builder;
     }
@@ -542,16 +582,22 @@ static DemuxResult demux_stream(
     void *write_context,
     uint64_t maximum_pairs,
     uint16_t selected_audio_pid,
+    const uint16_t *alternate_audio_pids,
+    size_t alternate_audio_count,
     bool service_framing,
     DemuxStats *stats
 ) {
     DemuxContext context = {
         .maximum_pairs = maximum_pairs,
         .selected_audio_pid = selected_audio_pid,
+        .alternate_audio_count = alternate_audio_count,
         .service_framing = service_framing,
         .write_function = write_function,
         .write_context = write_context,
     };
+    for (size_t index = 0; index < alternate_audio_count; index++) {
+        context.alternate_audio_pids[index] = alternate_audio_pids[index];
+    }
     uint8_t buffer[READ_CHUNK_SIZE];
     DemuxResult result = DEMUX_OK;
     bool completed_early = false;
@@ -594,6 +640,11 @@ static DemuxResult demux_stream(
     if (result == DEMUX_DONE) {
         completed_early = true;
         result = DEMUX_OK;
+    }
+    for (size_t index = 0; index < alternate_audio_count; index++) {
+        if (result == DEMUX_OK && !completed_early && !context.pair_limit_reached) {
+            result = complete_pes(&context, alternate_audio_pids[index], &context.alternate_builders[index]);
+        }
     }
     if (result == DEMUX_OK && !completed_early && selected_audio_pid != 0) {
         result = complete_pes(&context, selected_audio_pid, &context.audio_builder);
@@ -1213,10 +1264,21 @@ static int list_titles(const char *source_path) {
     return 0;
 }
 
+static bool clip_has_audio_pid(const BLURAY_CLIP_INFO *clip, uint16_t pid) {
+    for (uint8_t index = 0; index < clip->audio_stream_count; index++) {
+        if (clip->audio_streams[index].pid == pid) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int stream_source(
     const char *source_path,
     uint32_t playlist,
     uint16_t selected_audio_pid,
+    const uint16_t *alternate_audio_pids,
+    size_t alternate_audio_count,
     uint64_t maximum_pairs,
     bool service_framing
 ) {
@@ -1267,18 +1329,19 @@ static int stream_source(
         bd_close(bluray);
         return print_error(reason, "The requested playlist is outside the bounded direct-SSIF prototype.");
     }
-    if (selected_audio_pid != 0) {
-        bool audio_available = false;
-        for (uint8_t index = 0; index < title_info->clips[0].audio_stream_count; index++) {
-            if (title_info->clips[0].audio_streams[index].pid == selected_audio_pid) {
-                audio_available = true;
-                break;
-            }
-        }
-        if (!audio_available) {
+    if (selected_audio_pid != 0 && !clip_has_audio_pid(&title_info->clips[0], selected_audio_pid)) {
+        bd_free_title_info(title_info);
+        bd_close(bluray);
+        return print_error("selected_audio_unavailable", "The selected audio PID is not available in the playlist.");
+    }
+    for (size_t index = 0; index < alternate_audio_count; index++) {
+        if (!clip_has_audio_pid(&title_info->clips[0], alternate_audio_pids[index])) {
             bd_free_title_info(title_info);
             bd_close(bluray);
-            return print_error("selected_audio_unavailable", "The selected audio PID is not available in the playlist.");
+            return print_error(
+                "alternate_audio_unavailable",
+                "An alternate audio PID is not available in the playlist."
+            );
         }
     }
 
@@ -1302,6 +1365,8 @@ static int stream_source(
         stdout,
         maximum_pairs,
         selected_audio_pid,
+        alternate_audio_pids,
+        alternate_audio_count,
         service_framing,
         &stats
     );
@@ -1327,21 +1392,27 @@ static int stream_source(
 }
 
 static int stream_mvc(const char *source_path, uint32_t playlist, uint64_t maximum_pairs) {
-    return stream_source(source_path, playlist, 0, maximum_pairs, false);
+    return stream_source(source_path, playlist, 0, NULL, 0, maximum_pairs, false);
 }
 
 static int stream_service(
     const char *source_path,
     uint32_t playlist,
     uint16_t selected_audio_pid,
+    const uint16_t *alternate_audio_pids,
+    size_t alternate_audio_count,
     uint64_t maximum_pairs
 ) {
-    return stream_source(source_path, playlist, selected_audio_pid, maximum_pairs, true);
+    return stream_source(
+        source_path, playlist, selected_audio_pid, alternate_audio_pids, alternate_audio_count, maximum_pairs, true
+    );
 }
 
 static int demux_input_file(
     const char *input_path,
     uint16_t selected_audio_pid,
+    const uint16_t *alternate_audio_pids,
+    size_t alternate_audio_count,
     uint64_t maximum_pairs,
     bool service_framing
 ) {
@@ -1358,6 +1429,8 @@ static int demux_input_file(
         stdout,
         maximum_pairs,
         selected_audio_pid,
+        alternate_audio_pids,
+        alternate_audio_count,
         service_framing,
         &stats
     );
@@ -1379,11 +1452,63 @@ static int demux_input_file(
 }
 
 static int demux_file(const char *input_path, uint64_t maximum_pairs) {
-    return demux_input_file(input_path, 0, maximum_pairs, false);
+    return demux_input_file(input_path, 0, NULL, 0, maximum_pairs, false);
 }
 
-static int demux_service_file(const char *input_path, uint16_t selected_audio_pid, uint64_t maximum_pairs) {
-    return demux_input_file(input_path, selected_audio_pid, maximum_pairs, true);
+static int demux_service_file(
+    const char *input_path,
+    uint16_t selected_audio_pid,
+    const uint16_t *alternate_audio_pids,
+    size_t alternate_audio_count,
+    uint64_t maximum_pairs
+) {
+    return demux_input_file(
+        input_path, selected_audio_pid, alternate_audio_pids, alternate_audio_count, maximum_pairs, true
+    );
+}
+
+/// Parses `<selected-pid>[,<alternate-pid>...]`: distinct PIDs from 1 through 8191, with at
+/// most MAX_ALTERNATE_AUDIO alternates.
+static bool parse_audio_pids(
+    const char *value,
+    uint16_t *selected_audio_pid,
+    uint16_t *alternate_audio_pids,
+    size_t *alternate_audio_count
+) {
+    char buffer[128];
+    if (value == NULL || strlen(value) >= sizeof(buffer)) {
+        return false;
+    }
+    strcpy(buffer, value);
+    uint16_t pids[MAX_ALTERNATE_AUDIO + 1];
+    size_t count = 0;
+    char *cursor = buffer;
+    while (true) {
+        char *comma = strchr(cursor, ',');
+        if (comma != NULL) {
+            *comma = '\0';
+        }
+        uint64_t pid = 0;
+        if (count > MAX_ALTERNATE_AUDIO || !parse_unsigned(cursor, 8191, &pid) || pid == 0) {
+            return false;
+        }
+        for (size_t index = 0; index < count; index++) {
+            if (pids[index] == pid) {
+                return false;
+            }
+        }
+        pids[count++] = (uint16_t)pid;
+        if (comma == NULL) {
+            break;
+        }
+        cursor = comma + 1;
+    }
+    *selected_audio_pid = pids[0];
+    for (size_t index = 1; index < count; index++) {
+        alternate_audio_pids[index - 1] = pids[index];
+    }
+    *alternate_audio_count = count - 1;
+    return true;
 }
 
 static int print_usage(void) {
@@ -1392,9 +1517,9 @@ static int print_usage(void) {
         "  ssif_probe inspect <source> <playlist>\n"
         "  ssif_probe titles <source>\n"
         "  ssif_probe stream-mvc <source> <playlist> [maximum-pairs]\n"
-        "  ssif_probe stream-service <source> <playlist> <audio-pid> [maximum-pairs]\n"
+        "  ssif_probe stream-service <source> <playlist> <audio-pid>[,<alternate-pid>...] [maximum-pairs]\n"
         "  ssif_probe demux-file <m2ts-file> [maximum-pairs]\n"
-        "  ssif_probe demux-service-file <m2ts-file> <audio-pid> [maximum-pairs]\n"
+        "  ssif_probe demux-service-file <m2ts-file> <audio-pid>[,<alternate-pid>...] [maximum-pairs]\n"
         "  ssif_probe --version\n",
         stderr
     );
@@ -1428,17 +1553,21 @@ int main(int argc, char **argv) {
     }
     if ((argc == 5 || argc == 6) && strcmp(argv[1], "stream-service") == 0) {
         uint64_t playlist = 0;
-        uint64_t selected_audio_pid = 0;
+        uint16_t selected_audio_pid = 0;
+        uint16_t alternate_audio_pids[MAX_ALTERNATE_AUDIO];
+        size_t alternate_audio_count = 0;
         uint64_t maximum_pairs = 0;
         if (!parse_unsigned(argv[3], 99999, &playlist) ||
-            !parse_unsigned(argv[4], 8191, &selected_audio_pid) || selected_audio_pid == 0 ||
+            !parse_audio_pids(argv[4], &selected_audio_pid, alternate_audio_pids, &alternate_audio_count) ||
             (argc == 6 && !parse_unsigned(argv[5], UINT64_MAX, &maximum_pairs))) {
             return print_error(
                 "invalid_arguments",
                 "Playlist, audio-pid, and maximum-pairs must be valid non-negative integers."
             );
         }
-        return stream_service(argv[2], (uint32_t)playlist, (uint16_t)selected_audio_pid, maximum_pairs);
+        return stream_service(
+            argv[2], (uint32_t)playlist, selected_audio_pid, alternate_audio_pids, alternate_audio_count, maximum_pairs
+        );
     }
     if ((argc == 3 || argc == 4) && strcmp(argv[1], "demux-file") == 0) {
         uint64_t maximum_pairs = 0;
@@ -1448,16 +1577,20 @@ int main(int argc, char **argv) {
         return demux_file(argv[2], maximum_pairs);
     }
     if ((argc == 4 || argc == 5) && strcmp(argv[1], "demux-service-file") == 0) {
-        uint64_t selected_audio_pid = 0;
+        uint16_t selected_audio_pid = 0;
+        uint16_t alternate_audio_pids[MAX_ALTERNATE_AUDIO];
+        size_t alternate_audio_count = 0;
         uint64_t maximum_pairs = 0;
-        if (!parse_unsigned(argv[3], 8191, &selected_audio_pid) || selected_audio_pid == 0 ||
+        if (!parse_audio_pids(argv[3], &selected_audio_pid, alternate_audio_pids, &alternate_audio_count) ||
             (argc == 5 && !parse_unsigned(argv[4], UINT64_MAX, &maximum_pairs))) {
             return print_error(
                 "invalid_arguments",
                 "audio-pid and maximum-pairs must be valid non-negative integers."
             );
         }
-        return demux_service_file(argv[2], (uint16_t)selected_audio_pid, maximum_pairs);
+        return demux_service_file(
+            argv[2], selected_audio_pid, alternate_audio_pids, alternate_audio_count, maximum_pairs
+        );
     }
     return print_usage();
 }

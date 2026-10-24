@@ -371,7 +371,7 @@ actor MovieLibraryHost: RelayNetworkHosting {
         else { throw unavailable }
         do {
             let lease = try await live.authorizer.authorize(candidate, revision: body.revision)
-            return LiveStreamRequest(source: lease, playlist: playlist, audioPID: body.audioPID)
+            return LiveStreamRequest(source: lease, playlist: playlist, audioPID: body.audioPID, audioTracks: record.audio)
         } catch let error as LiveSourceAuthorizationError {
             throw LiveStartPreparationRefusal(message: error.message)
         }

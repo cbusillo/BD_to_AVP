@@ -77,7 +77,7 @@ class SsifProbeTests(unittest.TestCase):
     def run_service_demux(
         self,
         packets: list[bytes],
-        audio_pid: int,
+        audio_pid: int | str,
         maximum_pairs: int | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -323,6 +323,38 @@ class SsifProbeTests(unittest.TestCase):
         status = json.loads(result.stderr)
         self.assertEqual(status["pairs"], 2)
         self.assertEqual(status["audio_samples"], 2)
+
+    def test_service_demux_tags_each_alternate_track(self) -> None:
+        base = b"\x00\x00\x00\x01\x65base"
+        dependent = b"\x00\x00\x00\x01\x74dependent"
+        result = self.run_service_demux(
+            [
+                m2ts_pes_packet(0x1102, 80, b"second-alternate"),
+                m2ts_pes_packet(0x1100, 90, b"selected"),
+                m2ts_pes_packet(0x1101, 90, b"first-alternate"),
+                m2ts_pes_packet(0x1103, 90, b"not-requested"),
+                m2ts_pes_packet(0x1012, 90, dependent),
+                m2ts_pes_packet(0x1011, 90, base),
+            ],
+            "4352,4353,4354",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        records = self.parse_service_records(result.stdout)
+        # The helper emits each PES when it completes, so the test checks the tags, not the order.
+        self.assertCountEqual(
+            [(record["kind"], record["flags"], record["primary"]) for record in records if record["kind"] in (2, 4)],
+            [(4, 2, b"second-alternate"), (2, 0, b"selected"), (4, 1, b"first-alternate")],
+        )
+        self.assertEqual([record["sequence"] for record in records], list(range(len(records))))
+
+    def test_service_demux_rejects_invalid_audio_pid_lists(self) -> None:
+        packets = [m2ts_pes_packet(0x1012, 90, b"d"), m2ts_pes_packet(0x1011, 90, b"\x00\x00\x00\x01\x65b")]
+        for pids in ("4352,4352", "4352,", ",4352", "4352,0", "4352,8192", ",".join(str(4352 + n) for n in range(9))):
+            with self.subTest(pids):
+                result = self.run_service_demux(packets, pids)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(json.loads(result.stderr)["code"], "invalid_arguments")
 
     def test_service_demux_requires_selected_audio(self) -> None:
         result = self.run_service_demux(
