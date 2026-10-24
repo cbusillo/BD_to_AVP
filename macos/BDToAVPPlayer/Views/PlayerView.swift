@@ -880,6 +880,8 @@ private struct PlaybackScrubBar: View {
         }
         .frame(minWidth: 600, maxWidth: .infinity)
         .frame(height: 44)
+        // The look highlight follows the bar's rounded shape instead of the view's square frame.
+        .contentShape(.hoverEffect, Capsule())
         .hoverEffect(.highlight)
         .allowsHitTesting(isEnabled)
         .opacity(isEnabled ? 1 : 0.5)
