@@ -1,6 +1,6 @@
 # Shiny 3D Cinema Privacy Policy
 
-Last updated: September 14, 2026
+Last updated: October 23, 2026
 
 Shiny 3D Cinema is a movie player for Apple Vision Pro provided by Shiny
 Computers Leasing LLC. This policy covers the Vision Pro player.
@@ -25,13 +25,19 @@ paired Mac receives requests for its shared movie catalog and the movie bytes
 you choose to play. Pairing keys and trusted-device records are stored in the
 device Keychain and are not synchronized by the player.
 
+When you play a Blu-ray 3D disc live, your paired Mac also receives the title
+and audio track you chose, your playback position while you watch, and a request
+to stop when you are done, so it can prepare the part of the movie you are
+watching.
+
 Movie sharing authenticates requests and movie data, but the current local
 network stream is not encrypted. Use a trusted network. The app does not publish
 your Mac's movie library to the internet.
 
 ## Retention and your controls
 
-Library records and playback positions remain on your device. Removing a movie
+Library records and saved playback positions remain on your device. Live discs
+have no saved playback position. Removing a movie
 from the library removes its library entry and saved file access; it does not
 delete the original video. Playback positions are stored in a bounded local
 history and may remain until overwritten, removed when that history reaches its

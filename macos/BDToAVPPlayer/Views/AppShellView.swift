@@ -55,7 +55,7 @@ struct AppShellView: View {
                         Section("About") {
                             if let privacyURL = URL(
                                 string:
-                                "https://github.com/cbusillo/BD_to_AVP/blob/c564646ff5fc80838196ee5bc839cdadf17a3068/docs/visionos-player-privacy.md"
+                                "https://github.com/cbusillo/BD_to_AVP/blob/4acaa39f320107b4a169b4dd4bcd9e00e641eae2/docs/visionos-player-privacy.md"
                             ) {
                                 Link(destination: privacyURL) {
                                     Label("Privacy Policy", systemImage: "hand.raised")
