@@ -129,11 +129,11 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertNil(pendingResume.consume())
     }
 
-    func testPlaybackIntentInactiveSceneCancelsAutoplayWithoutRearmingOnReturn() {
+    func testPlaybackIntentBackgroundSceneCancelsAutoplayWithoutRearmingOnReturn() {
         var intent = PlaybackIntentState()
         intent.requestPlayback()
 
-        intent.sceneBecameInactive()
+        intent.sceneEnteredBackground()
 
         XCTAssertFalse(intent.isSceneActive)
         XCTAssertFalse(intent.shouldPlay)
@@ -144,9 +144,9 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertFalse(intent.shouldPlay)
     }
 
-    func testPlaybackIntentRequiresANewRequestAfterInactivePreparation() {
+    func testPlaybackIntentRequiresANewRequestAfterBackgroundPreparation() {
         var intent = PlaybackIntentState()
-        intent.sceneBecameInactive()
+        intent.sceneEnteredBackground()
 
         intent.requestPlayback()
         intent.sceneBecameActive()
@@ -168,7 +168,7 @@ final class PlaybackPresentationTests: XCTestCase {
         intent.preservePlaybackIntent(wasPlaying: false)
         XCTAssertFalse(intent.shouldPlay)
 
-        intent.sceneBecameInactive()
+        intent.sceneEnteredBackground()
         intent.preservePlaybackIntent(wasPlaying: true)
         XCTAssertFalse(intent.shouldPlay)
     }
@@ -393,6 +393,38 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: true, isLookedAt: true), 1)
         XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: false, isLookedAt: false), 1)
         XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: false, isLookedAt: true), 1)
+    }
+
+    func testLookingAtControlsRevealsThemAtOnceAndLookingAwayWaitsBeforeASlowerFade() {
+        let reveal = PlaybackHUDPresentation.lookTransition(isLookedAt: true)
+        let fadeOut = PlaybackHUDPresentation.lookTransition(isLookedAt: false)
+
+        XCTAssertEqual(reveal.delay, 0)
+        XCTAssertGreaterThan(fadeOut.delay, 0)
+        XCTAssertGreaterThan(fadeOut.duration, reveal.duration)
+    }
+
+    func testShortTrackListsShowEveryEntryWithoutScrolling() {
+        let rowCount = 3
+
+        XCTAssertFalse(PlaybackTrackListLayout.scrolls(rowCount: rowCount))
+        XCTAssertEqual(
+            PlaybackTrackListLayout.listHeight(rowCount: rowCount),
+            CGFloat(rowCount) * PlaybackTrackListLayout.rowHeight
+        )
+    }
+
+    func testTrackListsWithManyEntriesStopAtAFixedHeightAndScroll() {
+        let manyTracks = 14
+        let cappedHeight = PlaybackTrackListLayout.listHeight(rowCount: manyTracks)
+
+        XCTAssertTrue(PlaybackTrackListLayout.scrolls(rowCount: manyTracks))
+        XCTAssertLessThan(cappedHeight, CGFloat(manyTracks) * PlaybackTrackListLayout.rowHeight)
+        XCTAssertEqual(cappedHeight, PlaybackTrackListLayout.listHeight(rowCount: 40))
+        XCTAssertEqual(
+            cappedHeight,
+            PlaybackTrackListLayout.listHeight(rowCount: PlaybackTrackListLayout.maximumVisibleRows)
+        )
     }
 
     func testHUDStaysVisibleForAsLongAsTheControlsAreHovered() {

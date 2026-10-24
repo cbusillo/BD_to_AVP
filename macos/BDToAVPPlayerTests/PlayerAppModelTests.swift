@@ -631,6 +631,54 @@ final class PlayerAppModelTests: XCTestCase {
     }
 
     @MainActor
+    func testInactiveSceneKeepsPlayingAndSavesThePositionWhileBackgroundPauses() async throws {
+        let destinationDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BDToAVPPlayerScenePhaseFixture")
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let installedCheck = try BuiltInStereoChecks.install(destinationDirectory: destinationDirectory)[0]
+        let bookmarkStore = BookmarkStore(storageURL: temporaryURL())
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        try bookmarkStore.save(url: installedCheck.url, for: installedCheck.item.id)
+        let session = MVHEVCPlayerSession()
+
+        await session.prepare(
+            mediaItem: installedCheck.item,
+            bookmarkStore: bookmarkStore,
+            resumeStore: resumeStore
+        )
+        for _ in 0 ..< 100 where !session.isReady {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(session.isReady, session.failureMessage ?? "Packed stereo session did not become ready.")
+        session.play()
+        for _ in 0 ..< 50 where session.currentTime < 1 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertGreaterThan(session.player.rate, 0)
+
+        // Control Center or another window makes the scene inactive: playback continues, and the
+        // position is saved in case the app is closed from there.
+        session.handleScenePhase(.inactive)
+        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertGreaterThan(session.player.rate, 0)
+        XCTAssertTrue(session.canControlPlayback)
+        let savedWhileInactive = try XCTUnwrap(resumeStore.resumeTime(for: installedCheck.item.id))
+        XCTAssertGreaterThan(savedWhileInactive, 0)
+
+        session.handleScenePhase(.active)
+        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertGreaterThan(session.player.rate, 0)
+
+        // Leaving the app pauses and saves.
+        session.handleScenePhase(.inactive)
+        session.handleScenePhase(.background)
+        XCTAssertEqual(session.player.rate, 0)
+        let savedInBackground = try XCTUnwrap(resumeStore.resumeTime(for: installedCheck.item.id))
+        XCTAssertGreaterThanOrEqual(savedInBackground, savedWhileInactive)
+        session.finish()
+    }
+
+    @MainActor
     func testBackgroundingDuringInitialPreparationPreventsAutoplay() async throws {
         let destinationDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerInactivePreparationFixture")
@@ -650,7 +698,7 @@ final class PlayerAppModelTests: XCTestCase {
         }
         await Task.yield()
         XCTAssertTrue(session.isLoading)
-        session.applicationBecameInactive()
+        session.handleScenePhase(.background)
         await preparationTask.value
 
         for _ in 0 ..< 100 where !session.isReady {
@@ -660,7 +708,7 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertTrue(session.isReady, session.failureMessage ?? "Packed stereo session did not become ready.")
         XCTAssertEqual(session.player.rate, 0)
 
-        session.applicationBecameActive()
+        session.handleScenePhase(.active)
         try await Task.sleep(nanoseconds: 250_000_000)
 
         XCTAssertEqual(session.player.rate, 0)
@@ -704,7 +752,7 @@ final class PlayerAppModelTests: XCTestCase {
 
         session.toggleEyeSwap()
         XCTAssertTrue(session.isChangingEyeOrder)
-        session.applicationBecameInactive()
+        session.handleScenePhase(.background)
 
         for _ in 0 ..< 100 where session.isChangingEyeOrder || !session.isEyeSwapped {
             try await Task.sleep(nanoseconds: 100_000_000)
@@ -714,7 +762,7 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertFalse(session.isChangingEyeOrder)
         XCTAssertEqual(session.player.rate, 0)
 
-        session.applicationBecameActive()
+        session.handleScenePhase(.active)
         try await Task.sleep(nanoseconds: 250_000_000)
 
         XCTAssertEqual(session.player.rate, 0)

@@ -576,7 +576,9 @@ Control is active. During uninterrupted playback the ornament fades to nearly
 invisible three seconds after the last of those ends; it is never removed. The
 faded controls stay in place and interactive, and a system hover effect brings
 them back to full opacity while the wearer looks at them, so a look and pinch
-works without a separate show-controls button. visionOS renders that effect out
+works without a separate show-controls button. The reveal is quick; after the
+wearer looks away the controls hold for about 1.5 seconds and then fade more
+slowly. The timings live in `PlaybackHUDPresentation`. visionOS renders that effect out
 of process and never reports where the wearer looks, so the app's own state
 stays faded until an interaction or pinching the video surface reveals the
 controls again.
@@ -592,14 +594,24 @@ grows with the stream as before. A seek outside the band keeps the existing
 notices: before the window, playback continues at its start; past the live edge,
 playback moves to the latest available time and says how far the relay reaches.
 
-The MV-HEVC audio language and subtitle lists open inside the controls ornament,
-below the transport row, rather than as system menus. Both buttons are enabled once
-the movie is ready. A list with nothing to choose between says so: **This title has
-one audio track.** or **This title has no subtitles.** A menu presented from the
-ornament opened behind the video in the headset. Packed-stereo controls
-use AVKit's native visibility behavior; revealing the playback controls also
-reveals actions labeled **Eye Order: Normal** or **Eye Order: Reversed** and
-**Done**.
+The MV-HEVC audio language and subtitle lists open over the bottom edge of the
+video, just in front of it and directly above the controls, so they read as part of
+the controls panel. Both buttons are enabled once the movie is ready. A list with
+nothing to choose between says so: **This title has one audio track.** or **This
+title has no subtitles.** The list is a RealityView attachment placed in the
+video's own space. The alternatives each failed: growing the controls ornament
+pushed the list below the window; a second ornament, or a SwiftUI view in the
+window, sat behind the window's surface and was hidden; a plain SwiftUI overlay
+floated at the front of the window's depth and loomed over the controls; and a
+system menu presented from the ornament opened behind the video. The list is also
+outside the controls' hover group, so only the row the wearer looks at highlights.
+It shows up to five rows and scrolls beyond that, starting at the current
+selection, so a disc with a dozen or more tracks stays usable. While a list is
+open, the video surface does not take pinches, so they reach the list.
+
+Packed-stereo controls use AVKit's native visibility behavior; revealing the
+playback controls also reveals actions labeled **Eye Order: Normal** or
+**Eye Order: Reversed** and **Done**.
 
 AVKit owns the packed-stereo audio menu and may present multiple same-language
 tracks with the same localized label. The app explicitly asserts the active
@@ -609,15 +621,17 @@ unique names unchanged and adds role and stable track-number details only when
 labels collide.
 
 The app saves in-progress playback positions and restores them when the same
-library item is opened again. Any non-active scene phase cancels pending
-autoplay and pauses playback, saving current progress when a player item is
-available. Initial preparation and eye-order replacement remain paused if they
-complete while the scene is inactive. Returning active restores scene
-permission but never infers a new play request; playback remains paused until
-the user starts it. Loading or failed preparations never overwrite an existing
-resume point because resume writes begin only after a player item has reached
-ready state. Completed or near-completed playback is cleared instead of resuming
-at the end.
+library item is opened again. An inactive scene keeps playing: on visionOS that
+phase covers Control Center, looking at another window, and other ordinary focus
+changes, so the player only saves current progress then. Moving to the background
+cancels pending autoplay and pauses playback, saving current progress when a
+player item is available. Initial preparation and eye-order replacement remain
+paused if they complete while the app is in the background. Returning active
+restores scene permission but never infers a new play request; playback remains
+paused until the user starts it. Loading or failed preparations never overwrite
+an existing resume point because resume writes begin only after a player item
+has reached ready state. Completed or near-completed playback is cleared instead
+of resuming at the end.
 
 Packed stereo playback uses a visionOS 26 custom video composition with one
 stable two-buffer output contract: output zero is always tagged as the left eye

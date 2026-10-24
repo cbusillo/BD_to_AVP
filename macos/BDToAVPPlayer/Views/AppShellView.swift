@@ -145,10 +145,8 @@ struct AppShellView: View {
                 Task {
                     await model.refreshSourceStatuses()
                 }
-                playerSession.applicationBecameActive()
-            } else {
-                playerSession.applicationBecameInactive()
             }
+            playerSession.handleScenePhase(phase)
         }
                 .task {
             await model.bootstrap()
