@@ -39,14 +39,14 @@ targets:
     settings:
       base:
         CODE_SIGN_STYLE: Automatic
-        CURRENT_PROJECT_VERSION: 178
+        CURRENT_PROJECT_VERSION: 179
         BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ""
         CODE_SIGN_ENTITLEMENTS: BluRayToVisionPro/App.entitlements
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: BluRayToVisionPro/Info.plist
-        MARKETING_VERSION: 0.3.4a1
+        MARKETING_VERSION: 0.3.4a2
         PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp
         PRODUCT_MODULE_NAME: BluRayToVisionPro
         PRODUCT_NAME: 3D Blu-ray to Vision Pro
