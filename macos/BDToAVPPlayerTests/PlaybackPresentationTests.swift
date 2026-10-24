@@ -119,11 +119,11 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertNil(pendingResume.consume())
     }
 
-    func testPlaybackIntentInactiveSceneCancelsAutoplayWithoutRearmingOnReturn() {
+    func testPlaybackIntentBackgroundSceneCancelsAutoplayWithoutRearmingOnReturn() {
         var intent = PlaybackIntentState()
         intent.requestPlayback()
 
-        intent.sceneBecameInactive()
+        intent.sceneEnteredBackground()
 
         XCTAssertFalse(intent.isSceneActive)
         XCTAssertFalse(intent.shouldPlay)
@@ -134,9 +134,9 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertFalse(intent.shouldPlay)
     }
 
-    func testPlaybackIntentRequiresANewRequestAfterInactivePreparation() {
+    func testPlaybackIntentRequiresANewRequestAfterBackgroundPreparation() {
         var intent = PlaybackIntentState()
-        intent.sceneBecameInactive()
+        intent.sceneEnteredBackground()
 
         intent.requestPlayback()
         intent.sceneBecameActive()
@@ -158,7 +158,7 @@ final class PlaybackPresentationTests: XCTestCase {
         intent.preservePlaybackIntent(wasPlaying: false)
         XCTAssertFalse(intent.shouldPlay)
 
-        intent.sceneBecameInactive()
+        intent.sceneEnteredBackground()
         intent.preservePlaybackIntent(wasPlaying: true)
         XCTAssertFalse(intent.shouldPlay)
     }

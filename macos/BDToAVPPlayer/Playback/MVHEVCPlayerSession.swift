@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import Foundation
 import RealityKit
+import SwiftUI
 
 struct PlaybackMediaOption: Identifiable, Equatable, Hashable {
     let id: String
@@ -934,8 +935,31 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
     }
 
+    /// Follows the scene's phase. Playback pauses only when the app goes to the background.
+    /// An inactive scene, such as while Control Center is open or the wearer looks at another
+    /// window, keeps playing and only saves the resume position.
+    func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            applicationBecameActive()
+        case .inactive:
+            applicationBecameInactive()
+        case .background:
+            applicationEnteredBackground()
+        @unknown default:
+            applicationEnteredBackground()
+        }
+    }
+
     func applicationBecameInactive() {
-        playbackIntent.sceneBecameInactive()
+        guard playerItem != nil else {
+            return
+        }
+        persistResume()
+    }
+
+    func applicationEnteredBackground() {
+        playbackIntent.sceneEnteredBackground()
 #if BD_TO_AVP_QUALIFICATION
         qualificationNativePausePending = false
         qualificationNativePausePlayerTime = nil
