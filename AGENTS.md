@@ -24,6 +24,10 @@ Release-specific requirements below still apply when release work is authorized.
   approval, `watch` stops with a safety error; report it to the Director rather
   than approving it. Never store a user token or make the automation bot a
   reviewer.
+- `watch` retries a failed GitHub read and reports each one as `read_failed`.
+  Exit `23` (GitHub stayed unreadable) and exit `22` (the watch timed out) mean
+  the run's state is unknown: read the run again and restart `watch`. Never
+  cancel a release on either.
 - Keep `main` fixed while either release workflow is nonterminal. Coordinate a
   temporary merge hold on other pull requests because the workflows intentionally
   reject a release when protected `main` moves.

@@ -1,5 +1,6 @@
 import io
 import plistlib
+import subprocess
 import tarfile
 import tempfile
 import tomllib
@@ -155,6 +156,24 @@ class SparkleBundleTests(unittest.TestCase):
             "SUAllowsAutomaticUpdates": False,
             "SUVerifyUpdateBeforeExtraction": True,
         }
+
+    @patch("scripts.sparkle_bundle._verify_codesign_identity")
+    @patch("scripts.sparkle_bundle.subprocess.run")
+    def test_stapler_failure_reports_stapler_output(self, run_mock: Mock, _identity_mock: Mock) -> None:
+        run_mock.side_effect = subprocess.CalledProcessError(
+            68,
+            ["xcrun", "stapler", "validate", "Release.dmg"],
+            output="Processing: Release.dmg\n",
+            stderr='CloudKit query failed due to "Network unavailable".\n',
+        )
+
+        with self.assertRaises(sparkle_bundle.SparkleBundleError) as raised:
+            sparkle_bundle.verify_dmg_distribution(Path("Release.dmg"))
+
+        message = str(raised.exception)
+        self.assertIn("exit status 68", message)
+        self.assertIn("Processing: Release.dmg", message)
+        self.assertIn("Network unavailable", message)
 
     @patch("scripts.sparkle_bundle.subprocess.run")
     def test_codesign_identity_requires_exact_production_authority_and_team(self, run_mock: Mock) -> None:

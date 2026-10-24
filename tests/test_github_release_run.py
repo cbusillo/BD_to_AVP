@@ -11,9 +11,11 @@ from unittest.mock import patch
 
 from scripts.github_release_run import (
     EXIT_FAILED,
+    EXIT_READ_UNAVAILABLE,
     EXIT_SAFETY_ERROR,
     EXIT_SUCCESS,
     GhAPIClient,
+    GitHubReadError,
     ReleaseRunError,
     RunExpectation,
     main,
@@ -59,6 +61,9 @@ class FakeGitHubAPI:
         if isinstance(response, Exception):
             raise response
         return response
+
+    def get_bytes(self, endpoint: str, *, max_bytes: int, timeout_seconds: float) -> bytes:
+        raise AssertionError(f"Unexpected GitHub byte GET: endpoint={endpoint!r}")
 
 
 def expectation(**overrides: Any) -> RunExpectation:
@@ -193,6 +198,78 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         self.assertEqual(sleeps, [3])
         self.assertEqual([event["event"] for event in events], ["running", "succeeded"])
 
+    def test_transient_read_failures_keep_watching_until_the_run_finishes(self) -> None:
+        client = FakeGitHubAPI()
+        client.add(RUN_ENDPOINT, GitHubReadError("GitHub CLI request failed with exit status 1."))
+        client.add(RUN_ENDPOINT, workflow_run(status="in_progress"))
+        client.add(BRANCH_ENDPOINT, GitHubReadError("GitHub CLI request timed out."))
+        client.add(RUN_ENDPOINT, workflow_run(status="completed", conclusion="success"))
+        events: list[dict[str, object]] = []
+        sleeps: list[float] = []
+
+        result = watch_release_run(expectation(), client, poll_seconds=3, sleeper=sleeps.append, emit=events.append)
+
+        self.assertEqual(result, EXIT_SUCCESS)
+        self.assertEqual(sleeps, [3, 3])
+        self.assertEqual([event["event"] for event in events], ["read_failed", "read_failed", "succeeded"])
+        self.assertEqual(events[1]["message"], "GitHub CLI request timed out.")
+
+    def test_persistent_read_failure_is_not_a_safety_error(self) -> None:
+        client = FakeGitHubAPI()
+        for _ in range(3):
+            client.add(RUN_ENDPOINT, GitHubReadError("GitHub CLI request failed with exit status 1."))
+        events: list[dict[str, object]] = []
+
+        result = watch_release_run(
+            expectation(),
+            client,
+            sleeper=lambda _: None,
+            emit=events.append,
+            max_read_failures=3,
+        )
+
+        self.assertEqual(result, EXIT_READ_UNAVAILABLE)
+        self.assertNotEqual(result, EXIT_SAFETY_ERROR)
+        self.assertEqual([event["event"] for event in events], ["read_failed", "read_failed", "read_unavailable"])
+        self.assertEqual(events[-1]["consecutive_failures"], 3)
+
+    def test_unsafe_status_is_reported_even_when_the_branch_read_fails(self) -> None:
+        for status in ("waiting", "action_required"):
+            with self.subTest(status=status):
+                client = FakeGitHubAPI()
+                client.add(RUN_ENDPOINT, workflow_run(status=status))
+                client.add(BRANCH_ENDPOINT, GitHubReadError("GitHub CLI request timed out."))
+                events: list[dict[str, object]] = []
+
+                result = main(
+                    ["watch", "--run-id", str(RUN_ID), "--workflow", WORKFLOW, "--head-sha", HEAD_SHA],
+                    client=client,
+                    sleeper=lambda _: self.fail("An unsafe status must not wait for another read."),
+                    emit=events.append,
+                )
+
+                self.assertEqual(result, EXIT_SAFETY_ERROR)
+                self.assertEqual([event["event"] for event in events], ["safety_error"])
+                self.assertEqual(client.get_calls, [RUN_ENDPOINT])
+
+    def test_a_successful_read_resets_the_failure_count(self) -> None:
+        client = FakeGitHubAPI()
+        client.add(RUN_ENDPOINT, GitHubReadError("GitHub CLI request failed with exit status 1."))
+        client.add(RUN_ENDPOINT, workflow_run(status="in_progress"))
+        client.add(BRANCH_ENDPOINT, branch_reference())
+        client.add(RUN_ENDPOINT, GitHubReadError("GitHub CLI request failed with exit status 1."))
+        client.add(RUN_ENDPOINT, workflow_run(status="completed", conclusion="success"))
+
+        result = watch_release_run(
+            expectation(),
+            client,
+            sleeper=lambda _: None,
+            emit=lambda _: None,
+            max_read_failures=2,
+        )
+
+        self.assertEqual(result, EXIT_SUCCESS)
+
     def test_wrong_workflow_is_a_safety_error(self) -> None:
         client = FakeGitHubAPI()
         client.add(RUN_ENDPOINT, workflow_run(status="in_progress", name="Unexpected release workflow"))
@@ -305,6 +382,7 @@ class GitHubReleaseRunContractTests(unittest.TestCase):
         operations = json.loads((repository / ".github/github.json").read_text(encoding="utf-8"))["releaseOperations"]
 
         self.assertEqual(operations["safetyErrorExitCode"], EXIT_SAFETY_ERROR)
+        self.assertEqual(operations["readUnavailableExitCode"], EXIT_READ_UNAVAILABLE)
         self.assertEqual(
             operations["workflows"],
             {name: {"path": policy.path, "route": policy.route} for name, policy in OPERATOR_WORKFLOWS.items()},
@@ -359,7 +437,7 @@ class GhAPIClientTests(unittest.TestCase):
         )
         client = GhAPIClient()
 
-        with self.assertRaisesRegex(ReleaseRunError, "exit status 1") as context:
+        with self.assertRaisesRegex(GitHubReadError, "exit status 1") as context:
             client.get_json(RUN_ENDPOINT)
 
         self.assertNotIn("sensitive-token-value", str(context.exception))
@@ -369,7 +447,7 @@ class GhAPIClientTests(unittest.TestCase):
         run.side_effect = subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
         client = GhAPIClient()
 
-        with self.assertRaisesRegex(ReleaseRunError, "timed out"):
+        with self.assertRaisesRegex(GitHubReadError, "timed out"):
             client.get_json(RUN_ENDPOINT)
 
     def test_binary_download_uses_bounded_bytes_mode(self) -> None:
