@@ -233,6 +233,25 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["read_failed", "read_failed", "read_unavailable"])
         self.assertEqual(events[-1]["consecutive_failures"], 3)
 
+    def test_unsafe_status_is_reported_even_when_the_branch_read_fails(self) -> None:
+        for status in ("waiting", "action_required"):
+            with self.subTest(status=status):
+                client = FakeGitHubAPI()
+                client.add(RUN_ENDPOINT, workflow_run(status=status))
+                client.add(BRANCH_ENDPOINT, GitHubReadError("GitHub CLI request timed out."))
+                events: list[dict[str, object]] = []
+
+                result = main(
+                    ["watch", "--run-id", str(RUN_ID), "--workflow", WORKFLOW, "--head-sha", HEAD_SHA],
+                    client=client,
+                    sleeper=lambda _: self.fail("An unsafe status must not wait for another read."),
+                    emit=events.append,
+                )
+
+                self.assertEqual(result, EXIT_SAFETY_ERROR)
+                self.assertEqual([event["event"] for event in events], ["safety_error"])
+                self.assertEqual(client.get_calls, [RUN_ENDPOINT])
+
     def test_a_successful_read_resets_the_failure_count(self) -> None:
         client = FakeGitHubAPI()
         client.add(RUN_ENDPOINT, GitHubReadError("GitHub CLI request failed with exit status 1."))

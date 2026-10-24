@@ -358,6 +358,17 @@ def current_branch_sha(client: GitHubAPI, expectation: RunExpectation) -> str:
     return _string(git_object, "sha", "Git reference object")
 
 
+def reject_unsafe_status(identity: ValidatedRunIdentity) -> None:
+    """Fail on an unsafe status before any further read can hide it."""
+    if identity.status == "waiting":
+        raise ReleaseRunError(
+            "Release run is waiting for an environment approval; no release environment should require one. "
+            "Check the release environments' protection rules."
+        )
+    if identity.status != "completed" and identity.status not in NONTERMINAL_STATUSES:
+        raise ReleaseRunError(f"Unexpected workflow run status: {identity.status!r}.")
+
+
 def watch_release_run(
     expectation: RunExpectation,
     client: GitHubAPI,
@@ -383,6 +394,7 @@ def watch_release_run(
         try:
             run = _mapping(client.get_json(expectation.run_endpoint), "Workflow run")
             identity = validate_run_identity(run, expectation)
+            reject_unsafe_status(identity)
             branch_sha = None if identity.status == "completed" else current_branch_sha(client, expectation)
         except GitHubReadError as error:
             read_failures += 1
@@ -459,14 +471,6 @@ def _evaluate_poll(
         )
         return EXIT_SAFETY_ERROR
 
-    if identity.status == "waiting":
-        raise ReleaseRunError(
-            "Release run is waiting for an environment approval; no release environment should require one. "
-            "Check the release environments' protection rules."
-        )
-
-    if identity.status not in NONTERMINAL_STATUSES:
-        raise ReleaseRunError(f"Unexpected workflow run status: {identity.status!r}.")
     snapshot = (identity.status, identity.conclusion)
     if snapshot != previous_snapshot:
         emit(
