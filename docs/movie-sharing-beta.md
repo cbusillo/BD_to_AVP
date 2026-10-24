@@ -2,14 +2,14 @@
 
 The full **3D Blu-ray to Vision Pro** Mac app converts movies and shares completed files. **Shiny 3D Cinema** on Vision Pro lets you browse the shared folder and choose what to play.
 
-Use published **3D Blu-ray to Vision Pro 0.3.3 Stable or later** with **Shiny 3D Cinema 0.1.0 (3)**. Compatible Mac prereleases start at **0.3.3b2 (173)**. The Mac app requires Apple Silicon and macOS 26 or later; the player requires visionOS 26 or later.
+Use published **3D Blu-ray to Vision Pro 0.3.3 Stable or later** with **Shiny 3D Cinema 0.1.0 (3)**. Compatible Mac prereleases start at **0.3.3b2 (173)**. The Mac app requires Apple Silicon and macOS 26 or later; the player requires visionOS 26 or later. Live Blu-ray 3D discs need **3D Blu-ray to Vision Pro 0.3.4 alpha 2 (179) or later** on the **Alpha** update route, with **Shiny 3D Cinema 0.1.0 (4)**.
 
-1. On the Mac, open **Settings → Updates**, keep **Update route** on **Stable**, then choose **Check for Updates…**. If this is your first Mac install, download the Stable DMG from [Mac releases](https://github.com/cbusillo/BD_to_AVP/releases) and install the app. Choose Beta only when you intend to test Mac prereleases; the Vision Pro TestFlight beta does not require that Mac route.
+1. On the Mac, open **Settings → Updates**, keep **Update route** on **Stable**, then choose **Check for Updates…**. If this is your first Mac install, download the Stable DMG from [Mac releases](https://github.com/cbusillo/BD_to_AVP/releases) and install the app. Choose Beta only when you intend to test Mac prereleases, or Alpha to test live Blu-ray 3D discs; completed-movie sharing does not require either route.
 2. On Vision Pro, install **Shiny 3D Cinema** through [TestFlight](https://testflight.apple.com/join/2qERGYYg).
 3. Put a small completed MOV, MP4 or M4V movie in a folder on the Mac. For a common starting point, download the [side-by-side sample](../macos/BDToAVPPlayer/Resources/Stereo-Check-SBS.mov) or [over-under sample](../macos/BDToAVPPlayer/Resources/Stereo-Check-OU.mov). Both synthetic samples last 45 seconds and are intentionally silent.
 4. In the Mac app's toolbar, open **Movie Sharing**, choose **Add Folder…**, select that folder, and enable **Share movies on this Mac**. Keep the Mac app open and the Mac awake.
 5. Connect both devices to the same trusted network. In Shiny 3D Cinema, choose **Mac Movies**, then **Find Macs**. Allow Local Network access when prompted and select your Mac.
-6. Compare the pairing code on both devices and choose **Codes Match** on each. Choose a movie from the headset's list to begin playback.
+6. Compare the pairing code on both devices, then choose **Allow** on the Mac (**Codes Match** in 0.3.3). Shiny 3D Cinema 0.1.0 (3) also asks you to choose **Codes Match** on the headset; build 4 continues by itself. Choose a movie from the headset's list to begin playback.
 
 For the corrected depth convention, use fresh copies of the linked samples:
 blue behind the screen, green on it, red in front. Older downloaded or bundled
@@ -20,13 +20,14 @@ Check depth and eye order, pause and seek, then use **Done** to return to the li
 
 This Movie Sharing beta supports compatible MV-HEVC and full side-by-side or over-under SDR HEVC movies. Complete a conversion on the Mac before sharing its output.
 
-Newer builds of both apps also list Blu-ray 3D ISOs from the shared folders as live titles, which the Mac converts while you watch. A title shows **Checking** while the Mac inspects it once; then it either plays, in the headset's language when the disc has it, or shows why it can't play live. Only one device streams at a time. Live playback can run while the Mac converts other movies, and the headset then notes that playback may pause. Earlier builds simply do not show ISOs. See [Live HLS Service](live-hls-service.md#mac-movies-live-titles) for details.
+With the versions above for live discs, both apps also list Blu-ray 3D ISOs from the shared folders as live titles, which the Mac converts while you watch. A title shows **Checking** while the Mac inspects it once; then it either plays, in the headset's language when the disc has it, or shows why it can't play live. Only one device streams at a time. Live playback can run while the Mac converts other movies, and the headset then notes that playback may pause. Earlier builds simply do not show ISOs. See [Live HLS Service](live-hls-service.md#mac-movies-live-titles) for details.
 
 If the Mac is missing, check the network, Local Network permission, sharing switch and whether the Mac is awake. If the folder is unavailable, reconnect its drive or choose the folder again on the Mac. Use **Refresh** after adding a movie. To remove a pairing, use **Forget** under Paired Devices on the Mac and **Forget This Mac** on the headset, then pair again.
 
 The player's **On My Vision Pro** section and bundled **Start SBS Check** / **Start Over-Under Check** samples also work without the Mac. Those built-in samples are useful for playback and eye-label checks if Mac
-sharing is unavailable. The supported player build listed above predates the
-corrected fixtures, so use freshly downloaded samples from step 3 when judging
-the corrected blue-behind/red-in-front depth convention.
+sharing is unavailable. Shiny 3D Cinema 0.1.0 (3) predates the corrected
+fixtures, so with that build use freshly downloaded samples from step 3 when
+judging the corrected blue-behind/red-in-front depth convention. Build 4
+bundles the corrected samples.
 
 Send player feedback through TestFlight. Include both app versions, device OS versions, the movie format and the steps that failed; do not attach private movie content. Mac conversion or updater problems can be reported through the Mac app's existing support flow.
