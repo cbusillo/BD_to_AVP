@@ -117,13 +117,12 @@ struct PlayerView: View {
                                 onRetry: onRetry,
                                 onLocate: onLocate,
                                 onDone: done,
-                                onHoverChanged: { isHovered in
-                                    if isHovered {
+                                onHoldChanged: { hold, isActive in
+                                    if hold == .hover, isActive {
                                         hudVisibility.hoverBegan(isPlaying: isAutomaticHidingAllowed)
+                                    } else {
+                                        hudVisibility.setHold(hold, isActive: isActive, isPlaying: isAutomaticHidingAllowed)
                                     }
-                                },
-                                onScrubbingChanged: { isScrubbing in
-                                    hudVisibility.setInteracting(isScrubbing, isPlaying: isAutomaticHidingAllowed)
                                 },
                                 onInteraction: {
                                     hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
@@ -134,7 +133,7 @@ struct PlayerView: View {
                         Button {
                             hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
                         } label: {
-                            Label("Show controls", systemImage: "chevron.up")
+                            Label("Show controls", systemImage: "chevron.down")
                                 .frame(minWidth: 60, minHeight: 60)
                         }
                         .buttonStyle(.bordered)
@@ -380,11 +379,11 @@ private struct PlayerOrnamentView: View {
     let onRetry: () -> Void
     let onLocate: () -> Void
     let onDone: () -> Void
-    let onHoverChanged: (Bool) -> Void
-    let onScrubbingChanged: (Bool) -> Void
+    let onHoldChanged: (PlaybackHUDVisibilityState.Hold, Bool) -> Void
     let onInteraction: () -> Void
 
     @State private var scrubState = PlaybackScrubState()
+    @State private var trackPicker = PlaybackTrackPickerState()
 
     var body: some View {
         Group {
@@ -423,13 +422,31 @@ private struct PlayerOrnamentView: View {
         .padding(.bottom, 20)
         .frame(maxWidth: 980)
         .glassBackgroundEffect()
-        .onHover(perform: onHoverChanged)
+        .onHover { isHovered in
+            onHoldChanged(.hover, isHovered)
+        }
+        .onChange(of: trackPicker.isOpen) { _, isOpen in
+            onHoldChanged(.trackPicker, isOpen)
+        }
+        .onChange(of: session.state) { _, state in
+            if state != .ready {
+                trackPicker.close()
+            }
+        }
+        .onDisappear {
+            onHoldChanged(.hover, false)
+            onHoldChanged(.trackPicker, false)
+        }
         .accessibilityElement(children: .contain)
     }
 
     private var readyControls: some View {
         VStack(spacing: 14) {
             controlBar
+
+            if let picker = trackPicker.openPicker {
+                trackList(for: picker)
+            }
 
             if let warning = session.failureMessage {
                 Label(warning, systemImage: "exclamationmark.triangle")
@@ -452,25 +469,26 @@ private struct PlayerOrnamentView: View {
             }
 
             VStack(spacing: 8) {
-                Slider(
-                    value: Binding(
-                        get: { max(session.earliestSeekTime, scrubState.value ?? session.currentTime) },
-                        set: {
-                            scrubState.update(requestedTime: $0, duration: session.duration)
-                            onInteraction()
-                        }
-                    ),
-                    in: session.earliestSeekTime ... max(session.earliestSeekTime + 1, session.duration),
-                    onEditingChanged: handleScrubbing
+                PlaybackScrubBar(
+                    timeline: session.timeline,
+                    position: displayedTime,
+                    isEnabled: session.canSeek,
+                    accessibilityValue: displayedTimeSummary,
+                    onScrubbingChanged: handleScrubbing,
+                    onScrub: { requestedTime in
+                        scrubState.update(requestedTime: requestedTime, duration: session.timeline.duration)
+                        onInteraction()
+                    },
+                    onAdjust: { step in
+                        onInteraction()
+                        session.seek(to: session.currentTime + step)
+                    }
                 )
-                .disabled(!session.canSeek)
-                .accessibilityLabel("Playback position")
-                .accessibilityValue(displayedTimeSummary)
 
                 HStack {
-                    Text(PlaybackTimeFormatter.string(for: max(session.earliestSeekTime, scrubState.value ?? session.currentTime)))
+                    Text(PlaybackTimeFormatter.string(for: displayedTime))
                     Spacer()
-                    Text(PlaybackTimeFormatter.string(for: session.duration))
+                    Text(PlaybackTimeFormatter.string(for: session.timeline.duration))
                 }
                 .font(.system(.subheadline, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -656,60 +674,233 @@ private struct PlayerOrnamentView: View {
     }
 
     private func handleScrubbing(_ isEditing: Bool) {
-        onScrubbingChanged(isEditing)
+        onHoldChanged(.scrubbing, isEditing)
         if isEditing {
-            scrubState.begin(currentTime: max(session.earliestSeekTime, session.currentTime))
+            scrubState.begin(currentTime: session.currentTime)
         } else if let scrubbedTime = scrubState.finish() {
             session.seek(to: scrubbedTime)
         }
     }
 
-    private var displayedTimeSummary: String {
-        let displayedTime = max(session.earliestSeekTime, scrubState.value ?? session.currentTime)
-        return "\(PlaybackTimeFormatter.string(for: displayedTime)) / \(PlaybackTimeFormatter.string(for: session.duration))"
+    private var displayedTime: TimeInterval {
+        scrubState.value ?? session.currentTime
     }
 
-    private var audioMenu: some View {
-        Menu {
-            ForEach(session.audioOptions) { option in
-                Button {
-                    onInteraction()
-                    session.selectAudio(id: option.id)
-                } label: {
-                    if session.selectedAudioID == option.id {
-                        Label(option.displayName, systemImage: "checkmark")
-                            .accessibilityAddTraits(.isSelected)
-                    } else {
-                        Text(option.displayName)
-                    }
-                }
-            }
-        } label: {
-            Label("Audio", systemImage: "speaker.wave.2")
-                .labelStyle(.iconOnly)
-                .frame(minWidth: 60, minHeight: 60)
+    private var displayedTimeSummary: String {
+        let timeline = session.timeline
+        let summary = "\(PlaybackTimeFormatter.string(for: displayedTime)) / \(PlaybackTimeFormatter.string(for: timeline.duration))"
+        guard timeline.loadedEnd < timeline.duration else {
+            return summary
         }
-        .disabled(session.audioOptions.isEmpty)
-        .accessibilityLabel("Audio track")
-        .accessibilityValue(
-            session.audioOptions.first { $0.id == session.selectedAudioID }?.displayName ?? "None selected"
+        return "\(summary), loaded through \(PlaybackTimeFormatter.string(for: timeline.loadedEnd))"
+    }
+
+    // The track lists render inside this ornament rather than as system
+    // menus, because a menu presented from the ornament opens behind the video.
+    private var audioMenu: some View {
+        trackPickerButton(
+            .audio,
+            title: "Audio language",
+            systemImage: "character.bubble",
+            identifier: "player-audio-menu",
+            isEnabled: !session.audioOptions.isEmpty,
+            selectedName: session.audioOptions.first { $0.id == session.selectedAudioID }?.displayName
         )
     }
 
     private var subtitleMenu: some View {
-        Menu {
-            ForEach(session.subtitleOptions) { option in
-                Button(option.displayName) {
-                    onInteraction()
-                    session.selectSubtitle(id: option.id)
-                }
-            }
+        trackPickerButton(
+            .subtitles,
+            title: "Subtitles",
+            systemImage: "captions.bubble",
+            identifier: "player-subtitle-menu",
+            isEnabled: !session.subtitleOptions.isEmpty,
+            selectedName: session.subtitleOptions.first { $0.id == session.selectedSubtitleID }?.displayName
+        )
+    }
+
+    private func trackPickerButton(
+        _ picker: PlaybackTrackPicker,
+        title: String,
+        systemImage: String,
+        identifier: String,
+        isEnabled: Bool,
+        selectedName: String?
+    ) -> some View {
+        let isOpen = trackPicker.openPicker == picker
+        return Button {
+            onInteraction()
+            trackPicker.toggle(picker)
         } label: {
-            Label("CC", systemImage: "captions.bubble")
+            Label(title, systemImage: systemImage)
                 .labelStyle(.iconOnly)
                 .frame(minWidth: 60, minHeight: 60)
         }
-        .disabled(session.subtitleOptions.isEmpty)
-        .accessibilityLabel("Closed captions")
+        .buttonStyle(.bordered)
+        .tint(isOpen ? .accentColor : nil)
+        .disabled(!isEnabled)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(title)
+        .accessibilityValue(selectedName ?? "None selected")
+        .accessibilityAddTraits(isOpen ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private func trackList(for picker: PlaybackTrackPicker) -> some View {
+        switch picker {
+        case .audio:
+            trackList(
+                title: "Audio Language",
+                identifier: "player-audio-tracks",
+                options: session.audioOptions,
+                selectedID: session.selectedAudioID,
+                select: { session.selectAudio(id: $0) }
+            )
+        case .subtitles:
+            trackList(
+                title: "Subtitles",
+                identifier: "player-subtitle-tracks",
+                options: session.subtitleOptions,
+                selectedID: session.selectedSubtitleID,
+                select: { session.selectSubtitle(id: $0) }
+            )
+        }
+    }
+
+    private func trackList(
+        title: String,
+        identifier: String,
+        options: [PlaybackMediaOption],
+        selectedID: String,
+        select: @escaping (String) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.headline)
+                Spacer()
+                Button {
+                    trackPicker.close()
+                } label: {
+                    Label("Close \(title)", systemImage: "xmark")
+                        .labelStyle(.iconOnly)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+            }
+
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(options) { option in
+                        Button {
+                            onInteraction()
+                            select(option.id)
+                            trackPicker.close()
+                        } label: {
+                            HStack {
+                                Text(option.displayName)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if option.id == selectedID {
+                                    Image(systemName: "checkmark")
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .frame(height: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .hoverEffect()
+                        .accessibilityAddTraits(option.id == selectedID ? .isSelected : [])
+                    }
+                }
+            }
+            .frame(height: min(260, CGFloat(options.count) * 48))
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// A streaming-style scrub bar: the track spans the title's full length, a lighter band shows
+/// the range that can be played right now, and the filled part shows the playhead.
+private struct PlaybackScrubBar: View {
+    private static let trackHeight: CGFloat = 8
+    private static let thumbSize: CGFloat = 22
+    private static let adjustmentStep: TimeInterval = 10
+
+    let timeline: PlaybackTimeline
+    let position: TimeInterval
+    let isEnabled: Bool
+    let accessibilityValue: String
+    let onScrubbingChanged: (Bool) -> Void
+    let onScrub: (TimeInterval) -> Void
+    let onAdjust: (TimeInterval) -> Void
+
+    @State private var isScrubbing = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = max(1, geometry.size.width)
+            let playheadX = CGFloat(timeline.fraction(of: position)) * width
+            let loadedX = CGFloat(timeline.loadedStartFraction) * width
+            let loadedWidth = CGFloat(timeline.loadedEndFraction - timeline.loadedStartFraction) * width
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.quaternary)
+                    .frame(height: Self.trackHeight)
+                Capsule()
+                    .fill(.secondary)
+                    .frame(width: loadedWidth, height: Self.trackHeight)
+                    .offset(x: loadedX)
+                Capsule()
+                    .fill(.tint)
+                    .frame(width: playheadX, height: Self.trackHeight)
+                Circle()
+                    .fill(.white)
+                    .frame(width: Self.thumbSize, height: Self.thumbSize)
+                    .offset(x: playheadX - Self.thumbSize / 2)
+                    .opacity(isEnabled ? 1 : 0)
+            }
+            .frame(width: width, height: geometry.size.height)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !isScrubbing {
+                            isScrubbing = true
+                            onScrubbingChanged(true)
+                        }
+                        onScrub(timeline.time(atFraction: Double(value.location.x / width)))
+                    }
+                    .onEnded { _ in
+                        isScrubbing = false
+                        onScrubbingChanged(false)
+                    }
+            )
+        }
+        .frame(minWidth: 600, maxWidth: .infinity)
+        .frame(height: 44)
+        .hoverEffect(.highlight)
+        .allowsHitTesting(isEnabled)
+        .opacity(isEnabled ? 1 : 0.5)
+        .accessibilityElement()
+        .accessibilityIdentifier("player-scrub-bar")
+        .accessibilityLabel("Playback position")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAdjustableAction { direction in
+            guard isEnabled else { return }
+            switch direction {
+            case .increment:
+                onAdjust(Self.adjustmentStep)
+            case .decrement:
+                onAdjust(-Self.adjustmentStep)
+            @unknown default:
+                break
+            }
+        }
     }
 }
