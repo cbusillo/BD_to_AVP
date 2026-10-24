@@ -126,7 +126,8 @@ def encoder(arguments: list[str]) -> int:
             try:
                 published = len(json.loads(manifest.read_text())["segments"]) >= output.count
             except (OSError, ValueError, KeyError):
-                pass
+                # The manifest is not written yet or is mid-write; poll again.
+                published = False
             time.sleep(0.02)
         record("tail-published", str(published).encode())
     output.end()
