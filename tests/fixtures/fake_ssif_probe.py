@@ -236,7 +236,9 @@ elif arguments and arguments[0] == "stream-service":
     if "fail" in source:
         if "latefail" in source:
             # Close the stream first and report the error afterwards, as a slow real helper can.
-            os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, 1)
+            os.close(devnull)
             time.sleep(1)
         sys.stderr.write(
             json.dumps(
