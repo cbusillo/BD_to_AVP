@@ -1,0 +1,7 @@
+# Throwaway spike: the source and the 645 MB clip stay local.
+edge264-src/
+Resources/clip.264
+Resources/clip_mvhevc_labeled.mov
+build/
+*.xcodeproj/
+edge264-sim/

@@ -1,0 +1,34 @@
+name: StereoSpike
+options:
+  bundleIdPrefix: com.shinycomputers.bd-to-avp
+  deploymentTarget:
+    visionOS: "26.0"
+targets:
+  StereoSpike:
+    type: application
+    platform: visionOS
+    sources:
+      - path: StereoSpike
+      - path: Resources/clip.264
+        buildPhase: resources
+      - path: Resources/clip_mvhevc_labeled.mov
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.stereo-spike
+        PRODUCT_NAME: StereoSpike
+        DEVELOPMENT_TEAM: MM5YXC7T6E
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        SWIFT_OBJC_BRIDGING_HEADER: StereoSpike/StereoSpike-Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(SRCROOT)/edge264-src $(SRCROOT)/StereoSpike
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/edge264-src
+        OTHER_LDFLAGS: -ledge264mvc
+        GCC_OPTIMIZATION_LEVEL: "3"
+        SWIFT_OPTIMIZATION_LEVEL: -O
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Stereo Spike
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"

@@ -1,0 +1,1995 @@
+{
+  "avg_cpu_percent_of_one_core" : 88.462226596753922,
+  "component" : {
+    "player_screen_size_m" : [
+      1.7799999713897705,
+      1
+    ],
+    "rendering_status" : "ready",
+    "viewing_mode" : "Optional((extension in RealityFoundation):RealityKit.VideoPlaybackController.ViewingMode.stereo)"
+  },
+  "decoder_corrupt_nals" : 0,
+  "decoder_mono_frames" : 0,
+  "decoder_result" : 0,
+  "device" : {
+    "active_processors" : 8,
+    "hw_machine" : "RealityDevice14,1",
+    "low_power_mode" : false,
+    "os" : "Version 27.2 (Build 24N5103f)"
+  },
+  "display_observation" : {
+    "clock_minus_pts_ms" : {
+      "count" : 4444,
+      "max" : -1.4156663333333361,
+      "mean" : -29.345100744443041,
+      "min" : -38.202291333330862,
+      "p01" : -36.941749999996887,
+      "p50" : -29.340833666665844,
+      "p99" : -21.821583333334615,
+      "p999" : -20.177416333332587
+    },
+    "displayed_buffer_eye" : {
+      "left" : 31710,
+      "right" : 0
+    },
+    "frames_seen" : 4444,
+    "frames_skipped" : 0,
+    "interval_ms" : {
+      "count" : 4443,
+      "max" : 51.79712496465072,
+      "mean" : 41.701378741843662,
+      "min" : 5.7310000411234796,
+      "p01" : 28.669625055044889,
+      "p50" : 42.556500004138798,
+      "p99" : 48.622959002386779,
+      "p999" : 49.320833990350366
+    },
+    "method" : "displayedPixelBuffer polled every 5 ms; the frame index is read from cells burned into the picture",
+    "nil" : 7,
+    "out_of_order" : 0,
+    "polls" : 31717,
+    "unmatched" : 0
+  },
+  "display_path" : "AVSampleBufferVideoRenderer + RealityKit VideoPlayerComponent(videoRenderer:), CMTaggedBuffer stereoView left\/right, NV12 CVPixelBuffer per eye",
+  "enqueue_lead_ms" : {
+    "count" : 4446,
+    "max" : 245.98887634277344,
+    "mean" : 230.84497985290719,
+    "min" : 154.69195556640625,
+    "p01" : 217.89125061035156,
+    "p50" : 230.88371276855469,
+    "p99" : 243.55079650878906,
+    "p999" : 244.92408752441406
+  },
+  "events" : [
+    {
+      "detail" : "v2026.10.17",
+      "kind" : "decoder",
+      "t" : 0.017627916997298598
+    },
+    {
+      "detail" : "CVPixelBufferAttributes(storage: CoreVideo.TypedCFDictionary(storage: [IOSurfaceProperties: {\n}, MetalCompatibility: 1]))",
+      "kind" : "recommended_pixel_buffer_attributes",
+      "t" : 0.023226666962727904
+    },
+    {
+      "detail" : "[\"PixelFormatType\": 875704438, \"MetalCompatibility\": true, \"Width\": 1920, \"Height\": 1080, \"IOSurfaceProperties\": [:]]",
+      "kind" : "pixel_buffer_attributes",
+      "t" : 0.023251959006302059
+    },
+    {
+      "detail" : "<CMTaggedBufferGroupFormatDescription 0x10aaa91a0 [0x1f977e268]> {\n\tmediaType:'tbgr' \n\tmediaSubType:'tbgr' \n\tmediaSpecific: {\n\t\tsubType: 'tbgr' \n\t} \n\textensions: {(null)}\n}",
+      "kind" : "format_description",
+      "t" : 0.025666749977972358
+    },
+    {
+      "detail" : "after 4 frames",
+      "kind" : "clock_started",
+      "t" : 0.046315208950545639
+    },
+    {
+      "detail" : "invalid -> stereo",
+      "kind" : "content_type",
+      "t" : 0.063754791975952685
+    },
+    {
+      "detail" : "mesh SIMD2<Float>(1.78, 1.0) video SIMD2<Float>(1920.0, 1080.0)",
+      "kind" : "video_size",
+      "t" : 0.086065541952848434
+    },
+    {
+      "detail" : "nil -> Optional((extension in RealityFoundation):RealityKit.VideoPlaybackController.ViewingMode.stereo)",
+      "kind" : "viewing_mode",
+      "t" : 0.086125583969987929
+    },
+    {
+      "detail" : "loading -> ready",
+      "kind" : "rendering_status",
+      "t" : 0.086134833982214332
+    }
+  ],
+  "frames_decoded" : 4451,
+  "frames_enqueued" : 4450,
+  "issue" : 1103,
+  "late_enqueues" : 0,
+  "max_backpressure_wait_ms" : 95.591749995946884,
+  "peak_footprint_mb" : 289.14202117919922,
+  "pool_failures" : 0,
+  "prepare_two_eyes_ms" : {
+    "count" : 4450,
+    "max" : 6.476707935333252,
+    "mean" : 2.1420102037338729,
+    "min" : 0.66504096984863281,
+    "p01" : 0.73141700029373169,
+    "p50" : 1.9806669950485229,
+    "p99" : 4.4689579010009766,
+    "p999" : 5.6077909469604492
+  },
+  "renderer_error" : null,
+  "renderer_metrics" : {
+    "accumulated_frame_delay_s" : 0,
+    "corrupted_frames" : 0,
+    "dropped_frames" : 0,
+    "optimized_compositing_frames" : 0,
+    "total_frames" : 4330
+  },
+  "renderer_status" : 1,
+  "samples" : [
+    {
+      "clock" : 0.96884020800000004,
+      "cpu_percent_of_one_core" : 71.314676508551557,
+      "footprint_mb" : 238.78218841552734,
+      "fps" : 28.970092000341722,
+      "frames_enqueued" : 29,
+      "renderer_status" : 1,
+      "t" : 1.0148422089987434,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 1.96922625,
+      "cpu_percent_of_one_core" : 88.925032096771076,
+      "footprint_mb" : 249.46971130371094,
+      "fps" : 23.989325757913889,
+      "frames_enqueued" : 53,
+      "renderer_status" : 1,
+      "t" : 2.0152871669852175,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 2.9702899170000001,
+      "cpu_percent_of_one_core" : 82.352553349802946,
+      "footprint_mb" : 250.17283630371094,
+      "fps" : 23.974658785283662,
+      "frames_enqueued" : 77,
+      "renderer_status" : 1,
+      "t" : 3.0163441670010798,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 3.9713384170000001,
+      "cpu_percent_of_one_core" : 76.608774527728869,
+      "footprint_mb" : 250.89160919189453,
+      "fps" : 23.974705679329304,
+      "frames_enqueued" : 101,
+      "renderer_status" : 1,
+      "t" : 4.0173992089694366,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 4.972035333,
+      "cpu_percent_of_one_core" : 84.581393080468231,
+      "footprint_mb" : 248.68848419189453,
+      "fps" : 23.983438452492059,
+      "frames_enqueued" : 125,
+      "renderer_status" : 1,
+      "t" : 5.0180897499667481,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 5.9751480829999997,
+      "cpu_percent_of_one_core" : 89.635322823130622,
+      "footprint_mb" : 247.95410919189453,
+      "fps" : 23.925348915699669,
+      "frames_enqueued" : 149,
+      "renderer_status" : 1,
+      "t" : 6.0212099169730209,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 6.9760998330000001,
+      "cpu_percent_of_one_core" : 90.349608325708289,
+      "footprint_mb" : 248.54785919189453,
+      "fps" : 23.977338417835977,
+      "frames_enqueued" : 173,
+      "renderer_status" : 1,
+      "t" : 7.0221550419810228,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 7.9771521249999999,
+      "cpu_percent_of_one_core" : 85.123287865663741,
+      "footprint_mb" : 246.51660919189453,
+      "fps" : 23.974704696530605,
+      "frames_enqueued" : 197,
+      "renderer_status" : 1,
+      "t" : 8.0232101249857806,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 8.9781804170000008,
+      "cpu_percent_of_one_core" : 88.203949932901509,
+      "footprint_mb" : 246.62598419189453,
+      "fps" : 23.975305435763335,
+      "frames_enqueued" : 221,
+      "renderer_status" : 1,
+      "t" : 9.0242401249706745,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 9.9792201249999994,
+      "cpu_percent_of_one_core" : 55.359220962893374,
+      "footprint_mb" : 246.84473419189453,
+      "fps" : 23.975106838000855,
+      "frames_enqueued" : 245,
+      "renderer_status" : 1,
+      "t" : 10.025278416986112,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 10.983227791999999,
+      "cpu_percent_of_one_core" : 104.55748313866668,
+      "footprint_mb" : 246.48538208007812,
+      "fps" : 23.904385446612856,
+      "frames_enqueued" : 269,
+      "renderer_status" : 1,
+      "t" : 11.029278291971423,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 11.984305042000001,
+      "cpu_percent_of_one_core" : 114.25232197789184,
+      "footprint_mb" : 249.71975708007812,
+      "fps" : 23.973964274705324,
+      "frames_enqueued" : 293,
+      "renderer_status" : 1,
+      "t" : 12.030364291975275,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 12.985342333,
+      "cpu_percent_of_one_core" : 109.66497640384854,
+      "footprint_mb" : 249.23538208007812,
+      "fps" : 23.975093881359381,
+      "frames_enqueued" : 317,
+      "renderer_status" : 1,
+      "t" : 13.031403124972712,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 13.986362792,
+      "cpu_percent_of_one_core" : 101.27259515348202,
+      "footprint_mb" : 249.89163208007812,
+      "fps" : 24.974475037381133,
+      "frames_enqueued" : 342,
+      "renderer_status" : 1,
+      "t" : 14.032425166980829,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 14.987382792,
+      "cpu_percent_of_one_core" : 74.233820692659677,
+      "footprint_mb" : 249.79788208007812,
+      "fps" : 22.97660694247525,
+      "frames_enqueued" : 365,
+      "renderer_status" : 1,
+      "t" : 15.033443291962612,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 15.990599791999999,
+      "cpu_percent_of_one_core" : 77.346929274158441,
+      "footprint_mb" : 249.89165496826172,
+      "fps" : 23.923210489563814,
+      "frames_enqueued" : 389,
+      "renderer_status" : 1,
+      "t" : 16.036653124960139,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 16.990746667,
+      "cpu_percent_of_one_core" : 87.535551113358792,
+      "footprint_mb" : 249.42290496826172,
+      "fps" : 23.99653250118919,
+      "frames_enqueued" : 413,
+      "renderer_status" : 1,
+      "t" : 17.036797624954488,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 17.991000708000001,
+      "cpu_percent_of_one_core" : 89.706920877490361,
+      "footprint_mb" : 249.46977996826172,
+      "fps" : 23.993987489716545,
+      "frames_enqueued" : 437,
+      "renderer_status" : 1,
+      "t" : 18.037048208992928,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 18.991258167000002,
+      "cpu_percent_of_one_core" : 111.29874786151413,
+      "footprint_mb" : 276.34480285644531,
+      "fps" : 23.993801609452607,
+      "frames_enqueued" : 461,
+      "renderer_status" : 1,
+      "t" : 19.037306541984435,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 19.9923225,
+      "cpu_percent_of_one_core" : 89.732668183595095,
+      "footprint_mb" : 276.40730285644531,
+      "fps" : 23.974155859955548,
+      "frames_enqueued" : 485,
+      "renderer_status" : 1,
+      "t" : 20.038384541985579,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 20.995217374999999,
+      "cpu_percent_of_one_core" : 93.447251622180957,
+      "footprint_mb" : 276.59480285644531,
+      "fps" : 23.930894563877203,
+      "frames_enqueued" : 509,
+      "renderer_status" : 1,
+      "t" : 21.041272250004113,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 21.996253917000001,
+      "cpu_percent_of_one_core" : 77.501791442610667,
+      "footprint_mb" : 276.65732574462891,
+      "fps" : 23.975002057454262,
+      "frames_enqueued" : 533,
+      "renderer_status" : 1,
+      "t" : 22.042314916965552,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 22.997304166999999,
+      "cpu_percent_of_one_core" : 68.794590909968576,
+      "footprint_mb" : 276.71982574462891,
+      "fps" : 24.974040532993957,
+      "frames_enqueued" : 558,
+      "renderer_status" : 1,
+      "t" : 23.043354374996852,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 23.998382082999999,
+      "cpu_percent_of_one_core" : 91.675209129543703,
+      "footprint_mb" : 276.82920074462891,
+      "fps" : 22.975216427941067,
+      "frames_enqueued" : 581,
+      "renderer_status" : 1,
+      "t" : 24.044433083967306,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 24.998904875000001,
+      "cpu_percent_of_one_core" : 85.739737066911133,
+      "footprint_mb" : 276.92295074462891,
+      "fps" : 24.987246109948693,
+      "frames_enqueued" : 606,
+      "renderer_status" : 1,
+      "t" : 25.044943499960937,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 26.003847624999999,
+      "cpu_percent_of_one_core" : 76.395549959728257,
+      "footprint_mb" : 276.75107574462891,
+      "fps" : 23.881600991913587,
+      "frames_enqueued" : 630,
+      "renderer_status" : 1,
+      "t" : 26.049901249993127,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 27.004809250000001,
+      "cpu_percent_of_one_core" : 78.321890212015504,
+      "footprint_mb" : 276.79795074462891,
+      "fps" : 23.976945159882948,
+      "frames_enqueued" : 654,
+      "renderer_status" : 1,
+      "t" : 27.050862792006228,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 28.005896750000002,
+      "cpu_percent_of_one_core" : 75.500875283716937,
+      "footprint_mb" : 276.84482574462891,
+      "fps" : 23.973986235085398,
+      "frames_enqueued" : 678,
+      "renderer_status" : 1,
+      "t" : 28.05194787500659,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 29.006358792,
+      "cpu_percent_of_one_core" : 78.234318836161179,
+      "footprint_mb" : 276.79795074462891,
+      "fps" : 22.989338694627417,
+      "frames_enqueued" : 701,
+      "renderer_status" : 1,
+      "t" : 29.052411624987144,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 30.00664025,
+      "cpu_percent_of_one_core" : 85.432151450675619,
+      "footprint_mb" : 276.8604736328125,
+      "fps" : 23.993189916919114,
+      "frames_enqueued" : 725,
+      "renderer_status" : 1,
+      "t" : 30.052695458987728,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 31.012085667000001,
+      "cpu_percent_of_one_core" : 88.497571345167486,
+      "footprint_mb" : 277.0323486328125,
+      "fps" : 24.864623537910923,
+      "frames_enqueued" : 750,
+      "renderer_status" : 1,
+      "t" : 31.058139999979176,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 32.013212625000001,
+      "cpu_percent_of_one_core" : 91.137200974270442,
+      "footprint_mb" : 277.0792236328125,
+      "fps" : 22.974086172821401,
+      "frames_enqueued" : 773,
+      "renderer_status" : 1,
+      "t" : 32.059267958975397,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 33.014275042000001,
+      "cpu_percent_of_one_core" : 90.916324928167882,
+      "footprint_mb" : 277.1104736328125,
+      "fps" : 24.973389829213726,
+      "frames_enqueued" : 798,
+      "renderer_status" : 1,
+      "t" : 33.060333499975968,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 34.015333792,
+      "cpu_percent_of_one_core" : 97.706819305570775,
+      "footprint_mb" : 277.1729736328125,
+      "fps" : 23.974706684432739,
+      "frames_enqueued" : 822,
+      "renderer_status" : 1,
+      "t" : 34.061388499976601,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 35.016728833000002,
+      "cpu_percent_of_one_core" : 47.324026646234117,
+      "footprint_mb" : 277.2042236328125,
+      "fps" : 23.966791015531239,
+      "frames_enqueued" : 846,
+      "renderer_status" : 1,
+      "t" : 35.062774124962743,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 36.022178832999998,
+      "cpu_percent_of_one_core" : 84.246646840466283,
+      "footprint_mb" : 277.2510986328125,
+      "fps" : 23.869821939284073,
+      "frames_enqueued" : 870,
+      "renderer_status" : 1,
+      "t" : 36.0682277919841,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 37.023267333,
+      "cpu_percent_of_one_core" : 74.993510178539083,
+      "footprint_mb" : 277.2979736328125,
+      "fps" : 23.973949307824679,
+      "frames_enqueued" : 894,
+      "renderer_status" : 1,
+      "t" : 37.069314416963607,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 38.024349667000003,
+      "cpu_percent_of_one_core" : 75.606418994715256,
+      "footprint_mb" : 277.39174652099609,
+      "fps" : 23.973941331629366,
+      "frames_enqueued" : 918,
+      "renderer_status" : 1,
+      "t" : 38.07040137500735,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 39.025295374999999,
+      "cpu_percent_of_one_core" : 75.028288901584119,
+      "footprint_mb" : 277.45424652099609,
+      "fps" : 22.978313251908968,
+      "frames_enqueued" : 941,
+      "renderer_status" : 1,
+      "t" : 39.071345167001709,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 40.026381458000003,
+      "cpu_percent_of_one_core" : 77.871810605123912,
+      "footprint_mb" : 277.43862152099609,
+      "fps" : 24.972808782426494,
+      "frames_enqueued" : 966,
+      "renderer_status" : 1,
+      "t" : 40.072433999972418,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 41.032381542000003,
+      "cpu_percent_of_one_core" : 79.442028437754232,
+      "footprint_mb" : 277.53237152099609,
+      "fps" : 23.856972464455403,
+      "frames_enqueued" : 990,
+      "renderer_status" : 1,
+      "t" : 41.078429208952002,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 42.033577291999997,
+      "cpu_percent_of_one_core" : 81.512865776361949,
+      "footprint_mb" : 277.59487152099609,
+      "fps" : 23.971463984549679,
+      "frames_enqueued" : 1014,
+      "renderer_status" : 1,
+      "t" : 42.079619625001214,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 43.034644083000003,
+      "cpu_percent_of_one_core" : 80.423472279887534,
+      "footprint_mb" : 277.62612152099609,
+      "fps" : 23.974087008849796,
+      "frames_enqueued" : 1038,
+      "renderer_status" : 1,
+      "t" : 43.080700499995146,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 44.034794042000001,
+      "cpu_percent_of_one_core" : 92.059181269765773,
+      "footprint_mb" : 277.68862152099609,
+      "fps" : 23.996606472685201,
+      "frames_enqueued" : 1062,
+      "renderer_status" : 1,
+      "t" : 44.080841916962527,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 45.035854458000003,
+      "cpu_percent_of_one_core" : 88.789509716685657,
+      "footprint_mb" : 277.87614440917969,
+      "fps" : 23.974432274807711,
+      "frames_enqueued" : 1086,
+      "renderer_status" : 1,
+      "t" : 45.081908374966588,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 46.041071500000001,
+      "cpu_percent_of_one_core" : 104.13784909244237,
+      "footprint_mb" : 277.98551940917969,
+      "fps" : 23.87526762715046,
+      "frames_enqueued" : 1110,
+      "renderer_status" : 1,
+      "t" : 46.087132708984427,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 47.042097750000003,
+      "cpu_percent_of_one_core" : 93.77360000972233,
+      "footprint_mb" : 278.01676940917969,
+      "fps" : 23.97540423260034,
+      "frames_enqueued" : 1134,
+      "renderer_status" : 1,
+      "t" : 47.088158583967015,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 48.042507458000003,
+      "cpu_percent_of_one_core" : 88.901276435025551,
+      "footprint_mb" : 278.09489440917969,
+      "fps" : 23.990171034787334,
+      "frames_enqueued" : 1158,
+      "renderer_status" : 1,
+      "t" : 48.088568291976117,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 49.043549833,
+      "cpu_percent_of_one_core" : 91.248174164739311,
+      "footprint_mb" : 278.14176940917969,
+      "fps" : 23.975084899267213,
+      "frames_enqueued" : 1182,
+      "renderer_status" : 1,
+      "t" : 49.089607500005513,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 50.043946208000001,
+      "cpu_percent_of_one_core" : 92.974291637409493,
+      "footprint_mb" : 278.09489440917969,
+      "fps" : 23.990424822095143,
+      "frames_enqueued" : 1206,
+      "renderer_status" : 1,
+      "t" : 50.090006624988746,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 51.047491542000003,
+      "cpu_percent_of_one_core" : 92.506354703769816,
+      "footprint_mb" : 278.20429229736328,
+      "fps" : 23.915372465930776,
+      "frames_enqueued" : 1230,
+      "renderer_status" : 1,
+      "t" : 51.093545249954332,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 52.047738582999997,
+      "cpu_percent_of_one_core" : 91.601072188505256,
+      "footprint_mb" : 278.25116729736328,
+      "fps" : 23.99402047417885,
+      "frames_enqueued" : 1254,
+      "renderer_status" : 1,
+      "t" : 52.093794458953198,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 53.048806708000001,
+      "cpu_percent_of_one_core" : 95.977040411264639,
+      "footprint_mb" : 278.32929229736328,
+      "fps" : 23.97450610872032,
+      "frames_enqueued" : 1278,
+      "renderer_status" : 1,
+      "t" : 53.094857833988499,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 54.049860125000002,
+      "cpu_percent_of_one_core" : 94.900650536767031,
+      "footprint_mb" : 278.37616729736328,
+      "fps" : 23.974648823511451,
+      "frames_enqueued" : 1302,
+      "renderer_status" : 1,
+      "t" : 54.095915249956306,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 55.050901457999998,
+      "cpu_percent_of_one_core" : 59.867728423517164,
+      "footprint_mb" : 278.39179229736328,
+      "fps" : 23.974902256023711,
+      "frames_enqueued" : 1326,
+      "renderer_status" : 1,
+      "t" : 55.09696208400419,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 56.054920125000002,
+      "cpu_percent_of_one_core" : 87.746184675200453,
+      "footprint_mb" : 278.36054229736328,
+      "fps" : 23.903940033290155,
+      "frames_enqueued" : 1350,
+      "renderer_status" : 1,
+      "t" : 56.100980666989926,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 57.055947875000001,
+      "cpu_percent_of_one_core" : 69.413210989933987,
+      "footprint_mb" : 278.40741729736328,
+      "fps" : 23.975411225518357,
+      "frames_enqueued" : 1374,
+      "renderer_status" : 1,
+      "t" : 57.102006250002887,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 58.056987417000002,
+      "cpu_percent_of_one_core" : 87.466936846162426,
+      "footprint_mb" : 278.46994018554688,
+      "fps" : 23.975148751312389,
+      "frames_enqueued" : 1398,
+      "renderer_status" : 1,
+      "t" : 58.103042792004999,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 59.057926958000003,
+      "cpu_percent_of_one_core" : 102.62550280506856,
+      "footprint_mb" : 278.51681518554688,
+      "fps" : 23.977384339346447,
+      "frames_enqueued" : 1422,
+      "renderer_status" : 1,
+      "t" : 59.103986000001896,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 60.058964166999999,
+      "cpu_percent_of_one_core" : 92.406178826436189,
+      "footprint_mb" : 278.61056518554688,
+      "fps" : 23.975190664770473,
+      "frames_enqueued" : 1446,
+      "renderer_status" : 1,
+      "t" : 60.105020791990682,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 61.064403417000001,
+      "cpu_percent_of_one_core" : 92.971630425221292,
+      "footprint_mb" : 278.68869018554688,
+      "fps" : 23.870145406326024,
+      "frames_enqueued" : 1470,
+      "renderer_status" : 1,
+      "t" : 61.110460833995603,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 62.065447542000001,
+      "cpu_percent_of_one_core" : 93.979922371623942,
+      "footprint_mb" : 278.75119018554688,
+      "fps" : 23.97495418082411,
+      "frames_enqueued" : 1494,
+      "renderer_status" : 1,
+      "t" : 62.111505499982741,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 63.066485542000002,
+      "cpu_percent_of_one_core" : 103.75635763569282,
+      "footprint_mb" : 278.79806518554688,
+      "fps" : 23.975103844895539,
+      "frames_enqueued" : 1518,
+      "renderer_status" : 1,
+      "t" : 63.112543916970026,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 64.067537874999999,
+      "cpu_percent_of_one_core" : 78.892433360740782,
+      "footprint_mb" : 278.84494018554688,
+      "fps" : 23.97481745125102,
+      "frames_enqueued" : 1542,
+      "renderer_status" : 1,
+      "t" : 64.113594291964546,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 65.067768375,
+      "cpu_percent_of_one_core" : 98.630708088191284,
+      "footprint_mb" : 278.87621307373047,
+      "fps" : 23.994601214121225,
+      "frames_enqueued" : 1566,
+      "renderer_status" : 1,
+      "t" : 65.113819291989785,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 66.075939542,
+      "cpu_percent_of_one_core" : 93.483543380582944,
+      "footprint_mb" : 278.98558807373047,
+      "fps" : 23.805509984201048,
+      "frames_enqueued" : 1590,
+      "renderer_status" : 1,
+      "t" : 66.121989249950275,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 67.077029374999995,
+      "cpu_percent_of_one_core" : 95.135488918832365,
+      "footprint_mb" : 279.01683807373047,
+      "fps" : 23.974016145260261,
+      "frames_enqueued" : 1614,
+      "renderer_status" : 1,
+      "t" : 67.123073083988857,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 68.078170458000002,
+      "cpu_percent_of_one_core" : 92.403000586554413,
+      "footprint_mb" : 279.06371307373047,
+      "fps" : 23.973044325096879,
+      "frames_enqueued" : 1638,
+      "renderer_status" : 1,
+      "t" : 68.124197500001173,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 69.079265792000001,
+      "cpu_percent_of_one_core" : 94.736608126893287,
+      "footprint_mb" : 279.11058807373047,
+      "fps" : 23.973355605965853,
+      "frames_enqueued" : 1662,
+      "renderer_status" : 1,
+      "t" : 69.12530891696224,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 70.080178583000006,
+      "cpu_percent_of_one_core" : 95.475270673872586,
+      "footprint_mb" : 279.17308807373047,
+      "fps" : 23.977942282878356,
+      "frames_enqueued" : 1686,
+      "renderer_status" : 1,
+      "t" : 70.12622883397853,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 71.089224666999996,
+      "cpu_percent_of_one_core" : 94.48357093361443,
+      "footprint_mb" : 279.29811096191406,
+      "fps" : 24.775921413793228,
+      "frames_enqueued" : 1711,
+      "renderer_status" : 1,
+      "t" : 71.135273041960318,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 72.090336042000004,
+      "cpu_percent_of_one_core" : 92.644622368695096,
+      "footprint_mb" : 279.34498596191406,
+      "fps" : 22.974512649195329,
+      "frames_enqueued" : 1734,
+      "renderer_status" : 1,
+      "t" : 72.136382416996639,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 73.090739083000003,
+      "cpu_percent_of_one_core" : 94.196946116404305,
+      "footprint_mb" : 279.40748596191406,
+      "fps" : 24.98982496909473,
+      "frames_enqueued" : 1759,
+      "renderer_status" : 1,
+      "t" : 73.136789583950303,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 74.091747749999996,
+      "cpu_percent_of_one_core" : 93.150456683556442,
+      "footprint_mb" : 279.43873596191406,
+      "fps" : 22.976901527515114,
+      "frames_enqueued" : 1782,
+      "renderer_status" : 1,
+      "t" : 74.137794874957763,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 75.092914625000006,
+      "cpu_percent_of_one_core" : 91.832831082586125,
+      "footprint_mb" : 279.50123596191406,
+      "fps" : 23.972024646313645,
+      "frames_enqueued" : 1806,
+      "renderer_status" : 1,
+      "t" : 75.138961874996312,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 76.101071292,
+      "cpu_percent_of_one_core" : 93.606391030827993,
+      "footprint_mb" : 279.62623596191406,
+      "fps" : 24.797577376094001,
+      "frames_enqueued" : 1831,
+      "renderer_status" : 1,
+      "t" : 76.147124874987639,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 77.102127542000005,
+      "cpu_percent_of_one_core" : 93.266627732994877,
+      "footprint_mb" : 279.70438385009766,
+      "fps" : 23.974635818573869,
+      "frames_enqueued" : 1855,
+      "renderer_status" : 1,
+      "t" : 77.148182833974715,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 78.103200041999997,
+      "cpu_percent_of_one_core" : 90.936235509930313,
+      "footprint_mb" : 279.78250885009766,
+      "fps" : 22.975501429460948,
+      "frames_enqueued" : 1878,
+      "renderer_status" : 1,
+      "t" : 78.149249124980997,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 79.103502958000007,
+      "cpu_percent_of_one_core" : 94.725607399609103,
+      "footprint_mb" : 279.73563385009766,
+      "fps" : 24.992324232890056,
+      "frames_enqueued" : 1903,
+      "renderer_status" : 1,
+      "t" : 79.149556249962188,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 80.104597666999993,
+      "cpu_percent_of_one_core" : 93.550708188340906,
+      "footprint_mb" : 279.75125885009766,
+      "fps" : 23.974195757032739,
+      "frames_enqueued" : 1927,
+      "renderer_status" : 1,
+      "t" : 80.150632584001869,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 81.113652958000003,
+      "cpu_percent_of_one_core" : 92.161522381181101,
+      "footprint_mb" : 279.81375885009766,
+      "fps" : 23.784206890582535,
+      "frames_enqueued" : 1951,
+      "renderer_status" : 1,
+      "t" : 81.159705541969743,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 82.113753458000005,
+      "cpu_percent_of_one_core" : 93.191041107819473,
+      "footprint_mb" : 279.86063385009766,
+      "fps" : 23.99756424684087,
+      "frames_enqueued" : 1975,
+      "renderer_status" : 1,
+      "t" : 82.159807041985914,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 83.114829458000003,
+      "cpu_percent_of_one_core" : 91.707717328625364,
+      "footprint_mb" : 279.95438385009766,
+      "fps" : 23.974411320083153,
+      "frames_enqueued" : 1999,
+      "renderer_status" : 1,
+      "t" : 83.160874374967534,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 84.115953750000003,
+      "cpu_percent_of_one_core" : 92.660402228542011,
+      "footprint_mb" : 280.03253173828125,
+      "fps" : 23.972964488561605,
+      "frames_enqueued" : 2023,
+      "renderer_status" : 1,
+      "t" : 84.162002124998253,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 85.117038582999996,
+      "cpu_percent_of_one_core" : 92.920425810636019,
+      "footprint_mb" : 280.07940673828125,
+      "fps" : 23.973922366929031,
+      "frames_enqueued" : 2047,
+      "renderer_status" : 1,
+      "t" : 85.163089874957222,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 86.124534957999998,
+      "cpu_percent_of_one_core" : 90.146521256489493,
+      "footprint_mb" : 280.22003173828125,
+      "fps" : 23.821371468036489,
+      "frames_enqueued" : 2071,
+      "renderer_status" : 1,
+      "t" : 86.170588541950565,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 87.125615207999999,
+      "cpu_percent_of_one_core" : 94.424867394467881,
+      "footprint_mb" : 280.25128173828125,
+      "fps" : 23.974195780730422,
+      "frames_enqueued" : 2095,
+      "renderer_status" : 1,
+      "t" : 87.171664875000715,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 88.126700208000003,
+      "cpu_percent_of_one_core" : 91.737860571594396,
+      "footprint_mb" : 280.31378173828125,
+      "fps" : 23.973987217825197,
+      "frames_enqueued" : 2119,
+      "renderer_status" : 1,
+      "t" : 88.172749916964676,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 89.127795582999994,
+      "cpu_percent_of_one_core" : 96.719714281091811,
+      "footprint_mb" : 280.29815673828125,
+      "fps" : 23.973828562846624,
+      "frames_enqueued" : 2143,
+      "renderer_status" : 1,
+      "t" : 89.173841583949979,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 90.128911583000004,
+      "cpu_percent_of_one_core" : 78.567396202479287,
+      "footprint_mb" : 280.36067962646484,
+      "fps" : 23.973178016732174,
+      "frames_enqueued" : 2167,
+      "renderer_status" : 1,
+      "t" : 90.1749604169745,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 91.137775417,
+      "cpu_percent_of_one_core" : 82.76845076280739,
+      "footprint_mb" : 280.45442962646484,
+      "fps" : 23.789050593844024,
+      "frames_enqueued" : 2191,
+      "renderer_status" : 1,
+      "t" : 91.183827916975133,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 92.138873082999993,
+      "cpu_percent_of_one_core" : 103.9309208533822,
+      "footprint_mb" : 280.48567962646484,
+      "fps" : 23.973547180094041,
+      "frames_enqueued" : 2215,
+      "renderer_status" : 1,
+      "t" : 92.184931333991699,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 93.139934582999999,
+      "cpu_percent_of_one_core" : 96.023187494861517,
+      "footprint_mb" : 280.54817962646484,
+      "fps" : 23.974629854903707,
+      "frames_enqueued" : 2239,
+      "renderer_status" : 1,
+      "t" : 93.185989541991148,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 94.140981499999995,
+      "cpu_percent_of_one_core" : 100.01921731017143,
+      "footprint_mb" : 280.53255462646484,
+      "fps" : 23.974811463791596,
+      "frames_enqueued" : 2263,
+      "renderer_status" : 1,
+      "t" : 94.187040166987572,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 95.141193749999999,
+      "cpu_percent_of_one_core" : 96.405141604133988,
+      "footprint_mb" : 280.54817962646484,
+      "fps" : 23.994883091325317,
+      "frames_enqueued" : 2287,
+      "renderer_status" : 1,
+      "t" : 95.187253416981548,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 96.146864375000007,
+      "cpu_percent_of_one_core" : 99.096546999777019,
+      "footprint_mb" : 280.67320251464844,
+      "fps" : 23.864812804550926,
+      "frames_enqueued" : 2311,
+      "renderer_status" : 1,
+      "t" : 96.192918124957941,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 97.147929125000005,
+      "cpu_percent_of_one_core" : 96.53880170510692,
+      "footprint_mb" : 280.76695251464844,
+      "fps" : 23.974446237209708,
+      "frames_enqueued" : 2335,
+      "renderer_status" : 1,
+      "t" : 97.193983999954071,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 98.148986582999996,
+      "cpu_percent_of_one_core" : 97.856928880782363,
+      "footprint_mb" : 280.89195251464844,
+      "fps" : 23.974551995684124,
+      "frames_enqueued" : 2359,
+      "renderer_status" : 1,
+      "t" : 98.195045458967797,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 99.150014916999993,
+      "cpu_percent_of_one_core" : 104.07682717923086,
+      "footprint_mb" : 281.17320251464844,
+      "fps" : 23.975288477815024,
+      "frames_enqueued" : 2383,
+      "renderer_status" : 1,
+      "t" : 99.196076166990679,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 100.15104004200001,
+      "cpu_percent_of_one_core" : 91.696829825042698,
+      "footprint_mb" : 281.25132751464844,
+      "fps" : 23.975430171662428,
+      "frames_enqueued" : 2407,
+      "renderer_status" : 1,
+      "t" : 100.19710095896153,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 101.15502695799999,
+      "cpu_percent_of_one_core" : 89.108155542657045,
+      "footprint_mb" : 281.01695251464844,
+      "fps" : 23.904699944600559,
+      "frames_enqueued" : 2431,
+      "renderer_status" : 1,
+      "t" : 101.20108762499876,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 102.156054083,
+      "cpu_percent_of_one_core" : 91.67185363738858,
+      "footprint_mb" : 281.07947540283203,
+      "fps" : 23.975351325787003,
+      "frames_enqueued" : 2455,
+      "renderer_status" : 1,
+      "t" : 102.20211570896208,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 103.157074333,
+      "cpu_percent_of_one_core" : 90.809350195455991,
+      "footprint_mb" : 281.14197540283203,
+      "fps" : 23.975564918785441,
+      "frames_enqueued" : 2479,
+      "renderer_status" : 1,
+      "t" : 103.20313487498788,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 104.15809975000001,
+      "cpu_percent_of_one_core" : 90.033764103227227,
+      "footprint_mb" : 281.18885040283203,
+      "fps" : 23.97543814745433,
+      "frames_enqueued" : 2503,
+      "renderer_status" : 1,
+      "t" : 104.2041593339527,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 105.15912225,
+      "cpu_percent_of_one_core" : 97.09836321675175,
+      "footprint_mb" : 281.22010040283203,
+      "fps" : 23.975447152117219,
+      "frames_enqueued" : 2527,
+      "renderer_status" : 1,
+      "t" : 105.20518341695424,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 106.162981625,
+      "cpu_percent_of_one_core" : 94.838945375524332,
+      "footprint_mb" : 281.22010040283203,
+      "fps" : 24.903877258422444,
+      "frames_enqueued" : 2552,
+      "renderer_status" : 1,
+      "t" : 106.20904316700762,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 107.163426958,
+      "cpu_percent_of_one_core" : 74.893840922134217,
+      "footprint_mb" : 281.26697540283203,
+      "fps" : 22.989790625942682,
+      "frames_enqueued" : 2575,
+      "renderer_status" : 1,
+      "t" : 107.20948724995833,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 108.164757917,
+      "cpu_percent_of_one_core" : 87.52961181786884,
+      "footprint_mb" : 281.32949829101562,
+      "fps" : 24.97004944903869,
+      "frames_enqueued" : 2600,
+      "renderer_status" : 1,
+      "t" : 108.21068670897512,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 109.165963125,
+      "cpu_percent_of_one_core" : 93.288705252708823,
+      "footprint_mb" : 281.37637329101562,
+      "fps" : 22.969593059710594,
+      "frames_enqueued" : 2623,
+      "renderer_status" : 1,
+      "t" : 109.21201049996307,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 110.16704,
+      "cpu_percent_of_one_core" : 94.651623807266262,
+      "footprint_mb" : 281.34512329101562,
+      "fps" : 23.974044092808519,
+      "frames_enqueued" : 2647,
+      "renderer_status" : 1,
+      "t" : 110.21309316699626,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 111.174236542,
+      "cpu_percent_of_one_core" : 91.468400982237043,
+      "footprint_mb" : 281.50137329101562,
+      "fps" : 23.828531863475721,
+      "frames_enqueued" : 2671,
+      "renderer_status" : 1,
+      "t" : 111.22028908395441,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 112.175321083,
+      "cpu_percent_of_one_core" : 95.992412281853291,
+      "footprint_mb" : 281.56387329101562,
+      "fps" : 23.97402914952557,
+      "frames_enqueued" : 2695,
+      "renderer_status" : 1,
+      "t" : 112.22137237497373,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 113.176429458,
+      "cpu_percent_of_one_core" : 93.715900583643489,
+      "footprint_mb" : 281.56387329101562,
+      "fps" : 24.972660131968389,
+      "frames_enqueued" : 2720,
+      "renderer_status" : 1,
+      "t" : 113.22246716695372,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 114.177537375,
+      "cpu_percent_of_one_core" : 90.68692885197963,
+      "footprint_mb" : 281.62639617919922,
+      "fps" : 22.974293671830036,
+      "frames_enqueued" : 2743,
+      "renderer_status" : 1,
+      "t" : 114.2235860839719,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 115.178612833,
+      "cpu_percent_of_one_core" : 91.791656304316334,
+      "footprint_mb" : 281.65764617919922,
+      "fps" : 24.973081116108627,
+      "frames_enqueued" : 2768,
+      "renderer_status" : 1,
+      "t" : 115.22466399997938,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 116.18724304200001,
+      "cpu_percent_of_one_core" : 91.078455123317895,
+      "footprint_mb" : 281.76702117919922,
+      "fps" : 23.794564653268917,
+      "frames_enqueued" : 2792,
+      "renderer_status" : 1,
+      "t" : 116.23329770896817,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 117.18821325,
+      "cpu_percent_of_one_core" : 94.437351268930541,
+      "footprint_mb" : 281.81389617919922,
+      "fps" : 23.976934189526013,
+      "frames_enqueued" : 2816,
+      "renderer_status" : 1,
+      "t" : 117.23425970895914,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 118.189279208,
+      "cpu_percent_of_one_core" : 89.707176916365611,
+      "footprint_mb" : 281.87639617919922,
+      "fps" : 23.974257640211764,
+      "frames_enqueued" : 2840,
+      "renderer_status" : 1,
+      "t" : 118.23533345898613,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 119.189728667,
+      "cpu_percent_of_one_core" : 92.697366027618983,
+      "footprint_mb" : 281.90764617919922,
+      "fps" : 23.989380716756823,
+      "frames_enqueued" : 2864,
+      "renderer_status" : 1,
+      "t" : 119.23577612498775,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 120.190841042,
+      "cpu_percent_of_one_core" : 93.313618114583235,
+      "footprint_mb" : 281.97014617919922,
+      "fps" : 23.973208932655975,
+      "frames_enqueued" : 2888,
+      "renderer_status" : 1,
+      "t" : 120.23689366696635,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 121.199668125,
+      "cpu_percent_of_one_core" : 93.515311840258107,
+      "footprint_mb" : 282.23577117919922,
+      "fps" : 23.790200171361416,
+      "frames_enqueued" : 2912,
+      "renderer_status" : 1,
+      "t" : 121.24571241700323,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 122.199829167,
+      "cpu_percent_of_one_core" : 91.736566022355731,
+      "footprint_mb" : 282.28264617919922,
+      "fps" : 23.996093628295089,
+      "frames_enqueued" : 2936,
+      "renderer_status" : 1,
+      "t" : 122.24587520898785,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 123.20092079200001,
+      "cpu_percent_of_one_core" : 94.729607992358851,
+      "footprint_mb" : 282.32952117919922,
+      "fps" : 23.973732796848012,
+      "frames_enqueued" : 2960,
+      "renderer_status" : 1,
+      "t" : 123.24697087495588,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 124.202055792,
+      "cpu_percent_of_one_core" : 93.575731432629212,
+      "footprint_mb" : 282.11077117919922,
+      "fps" : 23.972673142266824,
+      "frames_enqueued" : 2984,
+      "renderer_status" : 1,
+      "t" : 124.24811079195933,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 125.20291495799999,
+      "cpu_percent_of_one_core" : 67.482520536920788,
+      "footprint_mb" : 211.70447540283203,
+      "fps" : 23.979539457094585,
+      "frames_enqueued" : 3008,
+      "renderer_status" : 1,
+      "t" : 125.24896404199535,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 126.21405358299999,
+      "cpu_percent_of_one_core" : 67.836064503268631,
+      "footprint_mb" : 245.47012329101562,
+      "fps" : 23.735640341943228,
+      "frames_enqueued" : 3032,
+      "renderer_status" : 1,
+      "t" : 126.26010170899099,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 127.215149625,
+      "cpu_percent_of_one_core" : 85.117322806424852,
+      "footprint_mb" : 252.59512329101562,
+      "fps" : 23.973699868140827,
+      "frames_enqueued" : 3056,
+      "renderer_status" : 1,
+      "t" : 127.26119874999858,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 128.216239917,
+      "cpu_percent_of_one_core" : 82.86063616198237,
+      "footprint_mb" : 254.64199829101562,
+      "fps" : 23.973652955727097,
+      "frames_enqueued" : 3080,
+      "renderer_status" : 1,
+      "t" : 128.26229774998501,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 129.217029083,
+      "cpu_percent_of_one_core" : 90.145994017000405,
+      "footprint_mb" : 254.67324829101562,
+      "fps" : 23.981163778897081,
+      "frames_enqueued" : 3104,
+      "renderer_status" : 1,
+      "t" : 129.26308320899261,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 130.218066042,
+      "cpu_percent_of_one_core" : 59.24337089621288,
+      "footprint_mb" : 254.72012329101562,
+      "fps" : 23.975019037302637,
+      "frames_enqueued" : 3128,
+      "renderer_status" : 1,
+      "t" : 130.26412516698474,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 131.22452150000001,
+      "cpu_percent_of_one_core" : 78.927688005813735,
+      "footprint_mb" : 254.76699829101562,
+      "fps" : 23.846303610681321,
+      "frames_enqueued" : 3152,
+      "renderer_status" : 1,
+      "t" : 131.27057045896072,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 132.2256185,
+      "cpu_percent_of_one_core" : 94.966434827621143,
+      "footprint_mb" : 254.79824829101562,
+      "fps" : 23.973678913302638,
+      "frames_enqueued" : 3176,
+      "renderer_status" : 1,
+      "t" : 132.27166837500408,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 133.22674649999999,
+      "cpu_percent_of_one_core" : 85.045049905515128,
+      "footprint_mb" : 254.84512329101562,
+      "fps" : 23.973009388358435,
+      "frames_enqueued" : 3200,
+      "renderer_status" : 1,
+      "t" : 133.27279424999142,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 134.227166375,
+      "cpu_percent_of_one_core" : 85.280264468574202,
+      "footprint_mb" : 254.89199829101562,
+      "fps" : 23.989919220941662,
+      "frames_enqueued" : 3224,
+      "renderer_status" : 1,
+      "t" : 134.27321445895359,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 135.22754875000001,
+      "cpu_percent_of_one_core" : 96.892816516483492,
+      "footprint_mb" : 254.93887329101562,
+      "fps" : 23.990768568232159,
+      "frames_enqueued" : 3248,
+      "renderer_status" : 1,
+      "t" : 135.27359924995108,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 136.239226667,
+      "cpu_percent_of_one_core" : 108.55894302691928,
+      "footprint_mb" : 255.09512329101562,
+      "fps" : 24.711261266978671,
+      "frames_enqueued" : 3273,
+      "renderer_status" : 1,
+      "t" : 136.28528374998132,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 137.239717208,
+      "cpu_percent_of_one_core" : 107.13300658481101,
+      "footprint_mb" : 255.12637329101562,
+      "fps" : 23.98822377292694,
+      "frames_enqueued" : 3297,
+      "renderer_status" : 1,
+      "t" : 137.28577466699062,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 138.24001737500001,
+      "cpu_percent_of_one_core" : 99.807536404974968,
+      "footprint_mb" : 255.17324829101562,
+      "fps" : 22.993166247795905,
+      "frames_enqueued" : 3320,
+      "renderer_status" : 1,
+      "t" : 138.286071874958,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 139.24074279199999,
+      "cpu_percent_of_one_core" : 105.82715782765884,
+      "footprint_mb" : 255.22012329101562,
+      "fps" : 24.981813239621218,
+      "frames_enqueued" : 3345,
+      "renderer_status" : 1,
+      "t" : 139.28679987497162,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 140.24181787500001,
+      "cpu_percent_of_one_core" : 59.074104851443721,
+      "footprint_mb" : 255.25137329101562,
+      "fps" : 22.975499501720307,
+      "frames_enqueued" : 3368,
+      "renderer_status" : 1,
+      "t" : 140.28786624997156,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 141.25314533299999,
+      "cpu_percent_of_one_core" : 96.475543621542656,
+      "footprint_mb" : 255.29824829101562,
+      "fps" : 24.719900854869923,
+      "frames_enqueued" : 3393,
+      "renderer_status" : 1,
+      "t" : 141.2991971669835,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 142.25422595800001,
+      "cpu_percent_of_one_core" : 93.20952497784873,
+      "footprint_mb" : 255.34512329101562,
+      "fps" : 23.973977255217108,
+      "frames_enqueued" : 3417,
+      "renderer_status" : 1,
+      "t" : 142.30028262495762,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 143.25531362500001,
+      "cpu_percent_of_one_core" : 98.923885857452163,
+      "footprint_mb" : 255.56387329101562,
+      "fps" : 23.974137898577577,
+      "frames_enqueued" : 3441,
+      "renderer_status" : 1,
+      "t" : 143.30136137496447,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 144.255955417,
+      "cpu_percent_of_one_core" : 91.505466071233144,
+      "footprint_mb" : 255.61074829101562,
+      "fps" : 23.984683764120994,
+      "frames_enqueued" : 3465,
+      "renderer_status" : 1,
+      "t" : 144.30199995898874,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 145.25704712500001,
+      "cpu_percent_of_one_core" : 87.212406189655781,
+      "footprint_mb" : 255.43887329101562,
+      "fps" : 22.974790911290615,
+      "frames_enqueued" : 3488,
+      "renderer_status" : 1,
+      "t" : 145.30309720896184,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 146.268170333,
+      "cpu_percent_of_one_core" : 96.886427678679894,
+      "footprint_mb" : 255.48574829101562,
+      "fps" : 24.724856651963986,
+      "frames_enqueued" : 3513,
+      "renderer_status" : 1,
+      "t" : 146.31422541697975,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 147.26909108300001,
+      "cpu_percent_of_one_core" : 96.669099947631253,
+      "footprint_mb" : 255.51699829101562,
+      "fps" : 23.977924315826382,
+      "frames_enqueued" : 3537,
+      "renderer_status" : 1,
+      "t" : 147.31514608400175,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 148.27013349999999,
+      "cpu_percent_of_one_core" : 96.649966570951506,
+      "footprint_mb" : 255.57949829101562,
+      "fps" : 23.974863363105655,
+      "frames_enqueued" : 3561,
+      "renderer_status" : 1,
+      "t" : 148.31619454198517,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 149.27116016700001,
+      "cpu_percent_of_one_core" : 92.932123859805429,
+      "footprint_mb" : 255.62637329101562,
+      "fps" : 23.975368306130107,
+      "frames_enqueued" : 3585,
+      "renderer_status" : 1,
+      "t" : 149.31722191697918,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 150.27222841700001,
+      "cpu_percent_of_one_core" : 49.428524299605918,
+      "footprint_mb" : 255.65762329101562,
+      "fps" : 23.97459591863797,
+      "frames_enqueued" : 3609,
+      "renderer_status" : 1,
+      "t" : 150.31828154198593,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 151.28233516700001,
+      "cpu_percent_of_one_core" : 79.503473306740716,
+      "footprint_mb" : 255.82949829101562,
+      "fps" : 23.760100208473947,
+      "frames_enqueued" : 3633,
+      "renderer_status" : 1,
+      "t" : 151.32837829197524,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 152.28342641699999,
+      "cpu_percent_of_one_core" : 72.484563933875421,
+      "footprint_mb" : 255.86074829101562,
+      "fps" : 23.973628001826842,
+      "frames_enqueued" : 3657,
+      "renderer_status" : 1,
+      "t" : 152.32947833399521,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 153.284030083,
+      "cpu_percent_of_one_core" : 75.777752366725196,
+      "footprint_mb" : 255.89199829101562,
+      "fps" : 23.985519750492141,
+      "frames_enqueued" : 3681,
+      "renderer_status" : 1,
+      "t" : 153.33008204196813,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 154.28411295800001,
+      "cpu_percent_of_one_core" : 77.047106533225758,
+      "footprint_mb" : 255.92324829101562,
+      "fps" : 23.997915181307704,
+      "frames_enqueued" : 3705,
+      "renderer_status" : 1,
+      "t" : 154.33016891696025,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 155.285195208,
+      "cpu_percent_of_one_core" : 80.289711640979661,
+      "footprint_mb" : 255.97012329101562,
+      "fps" : 23.974204762156401,
+      "frames_enqueued" : 3729,
+      "renderer_status" : 1,
+      "t" : 155.33124487497844,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 156.29839004199999,
+      "cpu_percent_of_one_core" : 87.30908768781336,
+      "footprint_mb" : 255.95449829101562,
+      "fps" : 23.687586388827057,
+      "frames_enqueued" : 3753,
+      "renderer_status" : 1,
+      "t" : 156.34443379199365,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 157.29940920799999,
+      "cpu_percent_of_one_core" : 89.193671027870906,
+      "footprint_mb" : 255.98574829101562,
+      "fps" : 24.97425985485582,
+      "frames_enqueued" : 3778,
+      "renderer_status" : 1,
+      "t" : 157.34546445898013,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 158.30009899999999,
+      "cpu_percent_of_one_core" : 94.733298539160245,
+      "footprint_mb" : 256.04824829101562,
+      "fps" : 22.984277811483075,
+      "frames_enqueued" : 3801,
+      "renderer_status" : 1,
+      "t" : 158.34614849998616,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 159.301223792,
+      "cpu_percent_of_one_core" : 92.864533867978565,
+      "footprint_mb" : 256.09512329101562,
+      "fps" : 24.971854621739471,
+      "frames_enqueued" : 3826,
+      "renderer_status" : 1,
+      "t" : 159.34727558400482,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 160.301892458,
+      "cpu_percent_of_one_core" : 82.667967274550008,
+      "footprint_mb" : 256.17324829101562,
+      "fps" : 22.984698902537595,
+      "frames_enqueued" : 3849,
+      "renderer_status" : 1,
+      "t" : 160.34794129198417,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 161.314515,
+      "cpu_percent_of_one_core" : 87.877556368254986,
+      "footprint_mb" : 256.23574829101562,
+      "fps" : 24.688146541837369,
+      "frames_enqueued" : 3874,
+      "renderer_status" : 1,
+      "t" : 161.36057299998356,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 162.315570417,
+      "cpu_percent_of_one_core" : 78.61010217425752,
+      "footprint_mb" : 256.28262329101562,
+      "fps" : 23.974778533515227,
+      "frames_enqueued" : 3898,
+      "renderer_status" : 1,
+      "t" : 162.36162499996135,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 163.31580662499999,
+      "cpu_percent_of_one_core" : 86.497657658566524,
+      "footprint_mb" : 286.09514617919922,
+      "fps" : 23.994329323061653,
+      "frames_enqueued" : 3922,
+      "renderer_status" : 1,
+      "t" : 163.3618613340077,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 164.31687408299999,
+      "cpu_percent_of_one_core" : 44.650474689950045,
+      "footprint_mb" : 288.14202117919922,
+      "fps" : 23.974428276790643,
+      "frames_enqueued" : 3946,
+      "renderer_status" : 1,
+      "t" : 164.36292795895133,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 165.31794400000001,
+      "cpu_percent_of_one_core" : 75.143006374056426,
+      "footprint_mb" : 288.12639617919922,
+      "fps" : 23.974350441184324,
+      "frames_enqueued" : 3970,
+      "renderer_status" : 1,
+      "t" : 165.36399783397792,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 166.32811983299999,
+      "cpu_percent_of_one_core" : 79.351361124400412,
+      "footprint_mb" : 288.15764617919922,
+      "fps" : 23.758337131877084,
+      "frames_enqueued" : 3994,
+      "renderer_status" : 1,
+      "t" : 166.37416954198852,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 167.32934175,
+      "cpu_percent_of_one_core" : 81.370145333131362,
+      "footprint_mb" : 288.20452117919922,
+      "fps" : 23.970642962118109,
+      "frames_enqueued" : 4018,
+      "renderer_status" : 1,
+      "t" : 167.37539424997522,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 168.33041445800001,
+      "cpu_percent_of_one_core" : 93.900522187594149,
+      "footprint_mb" : 288.25139617919922,
+      "fps" : 23.974167834222481,
+      "frames_enqueued" : 4042,
+      "renderer_status" : 1,
+      "t" : 168.37647174997255,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 169.33138904200001,
+      "cpu_percent_of_one_core" : 87.051950792513608,
+      "footprint_mb" : 288.31389617919922,
+      "fps" : 23.976712617793154,
+      "frames_enqueued" : 4066,
+      "renderer_status" : 1,
+      "t" : 169.37744299997576,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 170.332428333,
+      "cpu_percent_of_one_core" : 82.756119856183048,
+      "footprint_mb" : 288.42327117919922,
+      "fps" : 23.974946181655032,
+      "frames_enqueued" : 4090,
+      "renderer_status" : 1,
+      "t" : 170.37848799995845,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 171.337411833,
+      "cpu_percent_of_one_core" : 106.69262392919785,
+      "footprint_mb" : 288.47014617919922,
+      "fps" : 23.880950475877491,
+      "frames_enqueued" : 4114,
+      "renderer_status" : 1,
+      "t" : 171.38347312499536,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 172.33843191700001,
+      "cpu_percent_of_one_core" : 88.054306623894192,
+      "footprint_mb" : 288.56389617919922,
+      "fps" : 23.975550932774176,
+      "frames_enqueued" : 4138,
+      "renderer_status" : 1,
+      "t" : 172.38449287496042,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 173.33898795799999,
+      "cpu_percent_of_one_core" : 84.444512181486004,
+      "footprint_mb" : 288.48577117919922,
+      "fps" : 23.986681394268423,
+      "frames_enqueued" : 4162,
+      "renderer_status" : 1,
+      "t" : 173.38504812499741,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 174.34002187499999,
+      "cpu_percent_of_one_core" : 103.30454436305179,
+      "footprint_mb" : 288.56389617919922,
+      "fps" : 23.975200652086745,
+      "frames_enqueued" : 4186,
+      "renderer_status" : 1,
+      "t" : 174.38608249998651,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 175.34039237499999,
+      "cpu_percent_of_one_core" : 86.927251345609903,
+      "footprint_mb" : 288.67327117919922,
+      "fps" : 23.991127265075679,
+      "frames_enqueued" : 4210,
+      "renderer_status" : 1,
+      "t" : 175.38645233400166,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 176.34583670800001,
+      "cpu_percent_of_one_core" : 99.253920704736231,
+      "footprint_mb" : 288.73577117919922,
+      "fps" : 23.870161241616795,
+      "frames_enqueued" : 4234,
+      "renderer_status" : 1,
+      "t" : 176.39189170900499,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 177.346874208,
+      "cpu_percent_of_one_core" : 82.21813284123256,
+      "footprint_mb" : 288.76702117919922,
+      "fps" : 23.974990106053237,
+      "frames_enqueued" : 4258,
+      "renderer_status" : 1,
+      "t" : 177.39293487498071,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 178.34789466699999,
+      "cpu_percent_of_one_core" : 102.50023694609189,
+      "footprint_mb" : 288.92327117919922,
+      "fps" : 23.97554195033954,
+      "frames_enqueued" : 4282,
+      "renderer_status" : 1,
+      "t" : 178.39395499997772,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 179.34872562499999,
+      "cpu_percent_of_one_core" : 89.482624996747688,
+      "footprint_mb" : 289.00139617919922,
+      "fps" : 23.980068558816875,
+      "frames_enqueued" : 4306,
+      "renderer_status" : 1,
+      "t" : 179.39478616695851,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 180.349807333,
+      "cpu_percent_of_one_core" : 36.435851604101416,
+      "footprint_mb" : 289.04827117919922,
+      "fps" : 23.974372402271868,
+      "frames_enqueued" : 4330,
+      "renderer_status" : 1,
+      "t" : 180.39585512498161,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 181.36164316700001,
+      "cpu_percent_of_one_core" : 93.02659837409972,
+      "footprint_mb" : 288.89202117919922,
+      "fps" : 24.707419873666876,
+      "frames_enqueued" : 4355,
+      "renderer_status" : 1,
+      "t" : 181.40769691695459,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 182.362714208,
+      "cpu_percent_of_one_core" : 96.806226243085376,
+      "footprint_mb" : 288.95452117919922,
+      "fps" : 22.975442123863942,
+      "frames_enqueued" : 4378,
+      "renderer_status" : 1,
+      "t" : 182.40876579197356,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 183.36394433300001,
+      "cpu_percent_of_one_core" : 95.314334854959085,
+      "footprint_mb" : 288.98577117919922,
+      "fps" : 23.970534221080023,
+      "frames_enqueued" : 4402,
+      "renderer_status" : 1,
+      "t" : 183.40999504196225,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 184.36425533299999,
+      "cpu_percent_of_one_core" : 93.505814462402483,
+      "footprint_mb" : 289.01702117919922,
+      "fps" : 23.992588281115374,
+      "frames_enqueued" : 4426,
+      "renderer_status" : 1,
+      "t" : 184.41030395898269,
+      "thermal_state" : "nominal"
+    },
+    {
+      "clock" : 185.36524833300001,
+      "cpu_percent_of_one_core" : 93.292090358444824,
+      "footprint_mb" : 289.07952117919922,
+      "fps" : 23.976250540536146,
+      "frames_enqueued" : 4450,
+      "renderer_status" : 1,
+      "t" : 185.41129449999426,
+      "thermal_state" : "nominal"
+    }
+  ],
+  "schema" : 1,
+  "seconds_playing" : 185.36534749995917,
+  "seconds_since_launch" : 185.41189387498889,
+  "thermal_states_seen" : [
+    "nominal"
+  ]
+}
