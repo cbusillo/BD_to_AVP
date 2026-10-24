@@ -88,7 +88,7 @@ GitHub prerelease flag; every later production tag must agree with that flag.
 `[tool.uv].required-version` sets the minimum uv. Land any lock normalization
 from a newer uv in its own change, not during release preparation.
 
-## Dispatch, Watch, And Approve
+## Dispatch And Watch
 
 Follow the [overall release rule](https://github.com/cbusillo/direction/blob/HEAD/DIRECTION.md#stop-boundaries).
 
@@ -107,19 +107,10 @@ uv run python -m scripts.github_release_run watch \
   --run-id "$RUN_ID" --workflow "$WORKFLOW" --head-sha "$MAIN_SHA"
 ```
 
-Exit code `20` means the run is waiting for `macos-signing` approval and prints
-an approval fingerprint. Use the guarded command as `cbusillo`:
-
-```sh
-uv run python -m scripts.github_release_run approve \
-  --run-id "$RUN_ID" --workflow "$WORKFLOW" --head-sha "$MAIN_SHA" \
-  --confirm-sha "$MAIN_SHA" --approval-fingerprint "$APPROVAL_FINGERPRINT" \
-  --comment "Approved release run for $MAIN_SHA."
-```
-
-Watch again until the run finishes, and keep other pull requests unmerged
-meanwhile: the engine rejects a release when `main` moves. Exit code `21` is a
-safety failure; stop or cancel the run instead of retrying.
+Releases have no per-release approval. If a run waits on an environment
+approval, `watch` stops with a safety error. Keep other pull requests unmerged
+until the run finishes: the engine rejects a release when `main` moves. Exit
+code `21` is a safety failure; stop or cancel the run instead of retrying.
 
 ## What The Release Engine Does
 
