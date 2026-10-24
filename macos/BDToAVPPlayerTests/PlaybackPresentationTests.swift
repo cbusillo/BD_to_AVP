@@ -395,6 +395,38 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: false, isLookedAt: true), 1)
     }
 
+    func testLookingAtControlsRevealsThemAtOnceAndLookingAwayWaitsBeforeASlowerFade() {
+        let reveal = PlaybackHUDPresentation.lookTransition(isLookedAt: true)
+        let fadeOut = PlaybackHUDPresentation.lookTransition(isLookedAt: false)
+
+        XCTAssertEqual(reveal.delay, 0)
+        XCTAssertGreaterThan(fadeOut.delay, 0)
+        XCTAssertGreaterThan(fadeOut.duration, reveal.duration)
+    }
+
+    func testShortTrackListsShowEveryEntryWithoutScrolling() {
+        let rowCount = 3
+
+        XCTAssertFalse(PlaybackTrackListLayout.scrolls(rowCount: rowCount))
+        XCTAssertEqual(
+            PlaybackTrackListLayout.listHeight(rowCount: rowCount),
+            CGFloat(rowCount) * PlaybackTrackListLayout.rowHeight
+        )
+    }
+
+    func testTrackListsWithManyEntriesStopAtAFixedHeightAndScroll() {
+        let manyTracks = 14
+        let cappedHeight = PlaybackTrackListLayout.listHeight(rowCount: manyTracks)
+
+        XCTAssertTrue(PlaybackTrackListLayout.scrolls(rowCount: manyTracks))
+        XCTAssertLessThan(cappedHeight, CGFloat(manyTracks) * PlaybackTrackListLayout.rowHeight)
+        XCTAssertEqual(cappedHeight, PlaybackTrackListLayout.listHeight(rowCount: 40))
+        XCTAssertEqual(
+            cappedHeight,
+            PlaybackTrackListLayout.listHeight(rowCount: PlaybackTrackListLayout.maximumVisibleRows)
+        )
+    }
+
     func testHUDStaysVisibleForAsLongAsTheControlsAreHovered() {
         var visibility = PlaybackHUDVisibilityState()
         visibility.reconcile(isPlaying: true)

@@ -5,6 +5,11 @@ import SwiftUI
 struct PlayerView: View {
     private static let playerScaleInset: Float = 0.86
     private static let playerDepthOffset: Float = -0.14
+    private static let trackListAttachmentID = "player-track-list"
+    /// Meters between the bottom edge of the video and the open track list.
+    private static let trackListBottomInset: Float = 0.02
+    /// Meters the open track list sits in front of the video.
+    private static let trackListDepthAboveVideo: Float = 0.02
 
     @ObservedObject private var session: MVHEVCPlayerSession
     private let onRetry: () -> Void
@@ -14,6 +19,7 @@ struct PlayerView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var isVoiceOverEnabled
     @Environment(\.accessibilitySwitchControlEnabled) private var isSwitchControlEnabled
     @State private var hudVisibility = PlaybackHUDVisibilityState()
+    @State private var trackPicker = PlaybackTrackPickerState()
 
     init(
         session: MVHEVCPlayerSession,
@@ -44,7 +50,9 @@ struct PlayerView: View {
         }
         .background(.black)
         .overlay {
-            if !isPackedStereoMedia {
+            // While a track list is open it sits over the video, so the surface steps aside
+            // rather than catching the pinches meant for the list.
+            if !isPackedStereoMedia, !trackPicker.isOpen {
                 Button {
                     hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
                 } label: {
@@ -74,8 +82,14 @@ struct PlayerView: View {
                 )
             )
         }
-        .onChange(of: session.state) { _, _ in
+        .onChange(of: session.state) { _, state in
+            if state != .ready {
+                trackPicker.close()
+            }
             hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
+        }
+        .onChange(of: trackPicker.isOpen) { _, isOpen in
+            hudVisibility.setHold(.trackPicker, isActive: isOpen, isPlaying: isAutomaticHidingAllowed)
         }
         .onChange(of: isVoiceOverEnabled) { _, _ in
             hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
@@ -113,6 +127,7 @@ struct PlayerView: View {
                     PlayerOrnamentView(
                         session: session,
                         isFaded: hudVisibility.isFaded,
+                        trackPicker: $trackPicker,
                         onRetry: onRetry,
                         onLocate: onLocate,
                         onDone: done,
@@ -131,6 +146,8 @@ struct PlayerView: View {
             }
         }
         .onDisappear {
+            trackPicker.close()
+            hudVisibility.setHold(.trackPicker, isActive: false, isPlaying: isAutomaticHidingAllowed)
             session.finish()
         }
     }
@@ -145,12 +162,28 @@ struct PlayerView: View {
         case .failed:
             Color.clear
         case .ready:
-            RealityView { content in
+            RealityView { content, attachments in
                 session.installPlayerComponent()
                 content.add(session.playerEntity)
                 fitPlayerEntity(proxy: geometry, content: content)
-            } update: { content in
+                placeTrackList(content: content, attachments: attachments)
+            } update: { content, attachments in
                 fitPlayerEntity(proxy: geometry, content: content)
+                placeTrackList(content: content, attachments: attachments)
+            } attachments: {
+                if let picker = trackPicker.openPicker {
+                    Attachment(id: Self.trackListAttachmentID) {
+                        PlayerTrackListView(
+                            session: session,
+                            picker: picker,
+                            onSelect: {
+                                hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                                trackPicker.close()
+                            },
+                            onClose: { trackPicker.close() }
+                        )
+                    }
+                }
             }
         }
     }
@@ -190,6 +223,34 @@ struct PlayerView: View {
         }
         session.playerEntity.scale = SIMD3<Float>(repeating: scale)
         session.playerEntity.position = SIMD3<Float>(0, 0, Self.playerDepthOffset)
+    }
+
+    /// Places the open track list on the bottom edge of the video and just in front of it, so it
+    /// reads as part of the controls panel below. Growing the controls ornament pushed the lists
+    /// below the window, a second ornament or a SwiftUI view in the window is hidden behind the
+    /// window's surface or floats out in front of the controls, and system menus presented from
+    /// an ornament open behind the video. A RealityView attachment shares the video's space.
+    private func placeTrackList(content: RealityViewContent, attachments: RealityViewAttachments) {
+        let placed = content.entities.first { $0.name == Self.trackListAttachmentID }
+        guard let list = attachments.entity(for: Self.trackListAttachmentID) else {
+            placed?.removeFromParent()
+            return
+        }
+        if placed !== list {
+            placed?.removeFromParent()
+            list.name = Self.trackListAttachmentID
+            content.add(list)
+        }
+
+        let video = session.playerEntity
+        let screenHeight = video.components[VideoPlayerComponent.self]?.playerScreenSize.y ?? 0
+        let videoBottom = video.position.y - screenHeight * video.scale.y / 2
+        let listHeight = list.visualBounds(relativeTo: list.parent).extents.y
+        list.position = SIMD3<Float>(
+            0,
+            videoBottom + Self.trackListBottomInset + listHeight / 2,
+            video.position.z + Self.trackListDepthAboveVideo
+        )
     }
 }
 
@@ -365,6 +426,7 @@ private struct PlayerOrnamentView: View {
     @ObservedObject var session: MVHEVCPlayerSession
     /// Faded controls stay mounted and interactive; looking at them brings them back.
     let isFaded: Bool
+    @Binding var trackPicker: PlaybackTrackPickerState
     let onRetry: () -> Void
     let onLocate: () -> Void
     let onDone: () -> Void
@@ -372,7 +434,6 @@ private struct PlayerOrnamentView: View {
     let onInteraction: () -> Void
 
     @State private var scrubState = PlaybackScrubState()
-    @State private var trackPicker = PlaybackTrackPickerState()
 
     var body: some View {
         Group {
@@ -413,7 +474,8 @@ private struct PlayerOrnamentView: View {
         .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: Self.cornerRadius))
         .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: Self.cornerRadius))
         .hoverEffect { [isFaded] effect, isActive, _ in
-            effect.animation(.easeInOut(duration: 0.3)) {
+            let transition = PlaybackHUDPresentation.lookTransition(isLookedAt: isActive)
+            return effect.animation(.easeInOut(duration: transition.duration).delay(transition.delay)) {
                 $0.opacity(PlaybackHUDPresentation.opacity(isFaded: isFaded, isLookedAt: isActive))
             }
         }
@@ -421,17 +483,8 @@ private struct PlayerOrnamentView: View {
         .onHover { isHovered in
             onHoldChanged(.hover, isHovered)
         }
-        .onChange(of: trackPicker.isOpen) { _, isOpen in
-            onHoldChanged(.trackPicker, isOpen)
-        }
-        .onChange(of: session.state) { _, state in
-            if state != .ready {
-                trackPicker.close()
-            }
-        }
         .onDisappear {
             onHoldChanged(.hover, false)
-            onHoldChanged(.trackPicker, false)
         }
         .accessibilityElement(children: .contain)
     }
@@ -439,10 +492,6 @@ private struct PlayerOrnamentView: View {
     private var readyControls: some View {
         VStack(spacing: 14) {
             controlBar
-
-            if let picker = trackPicker.openPicker {
-                trackList(for: picker)
-            }
 
             if let warning = session.failureMessage {
                 Label(warning, systemImage: "exclamationmark.triangle")
@@ -691,8 +740,8 @@ private struct PlayerOrnamentView: View {
         return "\(summary), loaded through \(PlaybackTimeFormatter.string(for: timeline.loadedEnd))"
     }
 
-    // The track lists render inside this ornament rather than as system
-    // menus, because a menu presented from the ornament opens behind the video.
+    // These buttons open app-owned track lists rather than system menus, because a menu
+    // presented from the ornament opens behind the video.
     private var audioMenu: some View {
         trackPickerButton(
             .audio,
@@ -740,9 +789,20 @@ private struct PlayerOrnamentView: View {
         .accessibilityValue(selectedName ?? "None selected")
         .accessibilityAddTraits(isOpen ? .isSelected : [])
     }
+}
 
-    @ViewBuilder
-    private func trackList(for picker: PlaybackTrackPicker) -> some View {
+/// The audio or subtitle list, shown over the bottom of the video directly above the controls.
+/// A long list stops at a fixed height and scrolls, starting at the current selection.
+private struct PlayerTrackListView: View {
+    private static let cornerRadius: CGFloat = 28
+    private static let width: CGFloat = 420
+
+    @ObservedObject var session: MVHEVCPlayerSession
+    let picker: PlaybackTrackPicker
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
         switch picker {
         case .audio:
             trackList(
@@ -778,43 +838,32 @@ private struct PlayerOrnamentView: View {
                 Text(title)
                     .font(.headline)
                 Spacer()
-                Button {
-                    trackPicker.close()
-                } label: {
+                Button(action: onClose) {
                     Label("Close \(title)", systemImage: "xmark")
                         .labelStyle(.iconOnly)
-                        .frame(minWidth: 44, minHeight: 44)
                 }
-                .buttonStyle(.borderless)
+                .buttonBorderShape(.circle)
+                .accessibilityIdentifier("\(identifier)-close")
             }
 
-            ScrollView {
-                VStack(spacing: 4) {
-                    ForEach(options) { option in
-                        Button {
-                            onInteraction()
-                            select(option.id)
-                            trackPicker.close()
-                        } label: {
-                            HStack {
-                                Text(option.displayName)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                if option.id == selectedID {
-                                    Image(systemName: "checkmark")
-                                        .accessibilityHidden(true)
-                                }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(options) { option in
+                            trackRow(option, isSelected: option.id == selectedID) {
+                                select(option.id)
+                                onSelect()
                             }
-                            .padding(.horizontal, 12)
-                            .frame(height: 44)
-                            .contentShape(Rectangle())
+                            .id(option.id)
                         }
-                        .buttonStyle(.plain)
-                        .hoverEffect()
-                        .accessibilityAddTraits(option.id == selectedID ? .isSelected : [])
                     }
                 }
+                .scrollIndicators(PlaybackTrackListLayout.scrolls(rowCount: options.count) ? .visible : .hidden)
+                .frame(height: PlaybackTrackListLayout.listHeight(rowCount: options.count))
+                .onAppear {
+                    proxy.scrollTo(selectedID, anchor: .center)
+                }
             }
-            .frame(height: min(260, CGFloat(options.count) * 48))
 
             if let note {
                 Text(note)
@@ -823,10 +872,37 @@ private struct PlayerOrnamentView: View {
                     .accessibilityIdentifier("\(identifier)-note")
             }
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .padding(16)
+        .frame(width: Self.width)
+        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: Self.cornerRadius))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
+    }
+
+    private func trackRow(
+        _ option: PlaybackMediaOption,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(option.displayName)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: PlaybackTrackListLayout.rowHeight - 4)
+            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverEffect(.highlight)
+        .padding(.vertical, 2)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
