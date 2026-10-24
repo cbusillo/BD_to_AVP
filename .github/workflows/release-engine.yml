@@ -634,7 +634,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
-            echo "Protected main moved after signing approval." >&2
+            echo "Protected main moved before signing." >&2
             exit 1
           fi
           test "$(uname -m)" = "arm64"

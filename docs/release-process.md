@@ -71,12 +71,7 @@ GitHub prerelease flag; every later production tag must agree with that flag.
 
 ## Prepare A Release
 
-1. Dispatch `Production Preflight` from `main` with the exact full current
-   `main` SHA. It builds the production package with ad-hoc signing, runs the
-   release-app smoke (including the embedded worker version), installs a
-   production-shaped DMG, and runs the installed-UI check. It has no secrets or
-   write access. If `main` moves, run it again.
-2. Prepare the version and build in a pull request:
+1. Prepare the version and build in a pull request:
 
    ```sh
    uv run python -m scripts.release prepare \
@@ -87,13 +82,13 @@ GitHub prerelease flag; every later production tag must agree with that flag.
    It refreshes `uv.lock` and updates `pyproject.toml`, `uv.lock`, and the Xcode
    Release version and build together, only after every check passes. An
    interrupted run is recovered from its transaction journal on the next run.
-3. Merge it through the merge train. CI runs `scripts.release validate`, the
+2. Merge it through the merge train. CI runs `scripts.release validate`, the
    unit suite, the package builds, and the native package smoke.
 
 `[tool.uv].required-version` sets the minimum uv. Land any lock normalization
 from a newer uv in its own change, not during release preparation.
 
-## Dispatch, Watch, And Approve
+## Dispatch And Watch
 
 Follow the [overall release rule](https://github.com/cbusillo/direction/blob/HEAD/DIRECTION.md#stop-boundaries).
 
@@ -112,27 +107,22 @@ uv run python -m scripts.github_release_run watch \
   --run-id "$RUN_ID" --workflow "$WORKFLOW" --head-sha "$MAIN_SHA"
 ```
 
-Exit code `20` means the run is waiting for `macos-signing` approval and prints
-an approval fingerprint. Use the guarded command as `cbusillo`:
-
-```sh
-uv run python -m scripts.github_release_run approve \
-  --run-id "$RUN_ID" --workflow "$WORKFLOW" --head-sha "$MAIN_SHA" \
-  --confirm-sha "$MAIN_SHA" --approval-fingerprint "$APPROVAL_FINGERPRINT" \
-  --comment "Approved release run for $MAIN_SHA."
-```
-
-Watch again until the run finishes, and keep other pull requests unmerged
-meanwhile: the engine rejects a release when `main` moves. Exit code `21` is a
-safety failure; stop or cancel the run instead of retrying.
+Releases have no per-release approval. If a run waits on an environment
+approval, `watch` stops with a safety error. Keep other pull requests unmerged
+until the run finishes: the engine rejects a release when `main` moves. Exit
+code `21` is a safety failure; stop or cancel the run instead of retrying.
 
 ## What The Release Engine Does
 
 1. Confirm `github.sha` is the protected `main` head, validate the committed
    version, build and lock, and reject a conflicting tag, release, Sparkle build,
    or Stable PyPI version. A matching draft may resume.
-2. Run the production preflight again for this exact SHA. Signing cannot be
-   requested until it passes.
+2. Run the production preflight for this exact SHA. It builds the production
+   package with ad-hoc signing, runs the release-app smoke (including the
+   embedded worker version), installs a production-shaped DMG, and runs the
+   installed-UI check, with no secrets or write access. Signing cannot be
+   requested until it passes. `Production Preflight` runs the same check from
+   `main` on demand.
 3. Build, sign, notarize and Gatekeeper-check the app
    and DMG without a write-capable token, and attest the package.
 4. Check the notarized DMG again on a fresh macOS 26 runner: checksum,
