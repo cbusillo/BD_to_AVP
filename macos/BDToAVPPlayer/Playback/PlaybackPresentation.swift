@@ -145,7 +145,9 @@ struct PlaybackIntentState: Equatable {
         isSceneActive = true
     }
 
-    mutating func sceneBecameInactive() {
+    /// Only leaving the app takes away permission to play. An inactive scene, which on
+    /// visionOS includes Control Center or looking at another window, keeps playing.
+    mutating func sceneEnteredBackground() {
         isSceneActive = false
         wantsPlayback = false
     }

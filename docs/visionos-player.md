@@ -609,15 +609,17 @@ unique names unchanged and adds role and stable track-number details only when
 labels collide.
 
 The app saves in-progress playback positions and restores them when the same
-library item is opened again. Any non-active scene phase cancels pending
-autoplay and pauses playback, saving current progress when a player item is
-available. Initial preparation and eye-order replacement remain paused if they
-complete while the scene is inactive. Returning active restores scene
-permission but never infers a new play request; playback remains paused until
-the user starts it. Loading or failed preparations never overwrite an existing
-resume point because resume writes begin only after a player item has reached
-ready state. Completed or near-completed playback is cleared instead of resuming
-at the end.
+library item is opened again. An inactive scene keeps playing: on visionOS that
+phase covers Control Center, looking at another window, and other ordinary focus
+changes, so the player only saves current progress then. Moving to the background
+cancels pending autoplay and pauses playback, saving current progress when a
+player item is available. Initial preparation and eye-order replacement remain
+paused if they complete while the app is in the background. Returning active
+restores scene permission but never infers a new play request; playback remains
+paused until the user starts it. Loading or failed preparations never overwrite
+an existing resume point because resume writes begin only after a player item
+has reached ready state. Completed or near-completed playback is cleared instead
+of resuming at the end.
 
 Packed stereo playback uses a visionOS 26 custom video composition with one
 stable two-buffer output contract: output zero is always tagged as the left eye
