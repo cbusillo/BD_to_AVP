@@ -469,25 +469,26 @@ private struct PlayerOrnamentView: View {
             }
 
             VStack(spacing: 8) {
-                Slider(
-                    value: Binding(
-                        get: { max(session.earliestSeekTime, scrubState.value ?? session.currentTime) },
-                        set: {
-                            scrubState.update(requestedTime: $0, duration: session.duration)
-                            onInteraction()
-                        }
-                    ),
-                    in: session.earliestSeekTime ... max(session.earliestSeekTime + 1, session.duration),
-                    onEditingChanged: handleScrubbing
+                PlaybackScrubBar(
+                    timeline: session.timeline,
+                    position: displayedTime,
+                    isEnabled: session.canSeek,
+                    accessibilityValue: displayedTimeSummary,
+                    onScrubbingChanged: handleScrubbing,
+                    onScrub: { requestedTime in
+                        scrubState.update(requestedTime: requestedTime, duration: session.timeline.duration)
+                        onInteraction()
+                    },
+                    onAdjust: { step in
+                        onInteraction()
+                        session.seek(to: session.currentTime + step)
+                    }
                 )
-                .disabled(!session.canSeek)
-                .accessibilityLabel("Playback position")
-                .accessibilityValue(displayedTimeSummary)
 
                 HStack {
-                    Text(PlaybackTimeFormatter.string(for: max(session.earliestSeekTime, scrubState.value ?? session.currentTime)))
+                    Text(PlaybackTimeFormatter.string(for: displayedTime))
                     Spacer()
-                    Text(PlaybackTimeFormatter.string(for: session.duration))
+                    Text(PlaybackTimeFormatter.string(for: session.timeline.duration))
                 }
                 .font(.system(.subheadline, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -675,15 +676,23 @@ private struct PlayerOrnamentView: View {
     private func handleScrubbing(_ isEditing: Bool) {
         onHoldChanged(.scrubbing, isEditing)
         if isEditing {
-            scrubState.begin(currentTime: max(session.earliestSeekTime, session.currentTime))
+            scrubState.begin(currentTime: session.currentTime)
         } else if let scrubbedTime = scrubState.finish() {
             session.seek(to: scrubbedTime)
         }
     }
 
+    private var displayedTime: TimeInterval {
+        scrubState.value ?? session.currentTime
+    }
+
     private var displayedTimeSummary: String {
-        let displayedTime = max(session.earliestSeekTime, scrubState.value ?? session.currentTime)
-        return "\(PlaybackTimeFormatter.string(for: displayedTime)) / \(PlaybackTimeFormatter.string(for: session.duration))"
+        let timeline = session.timeline
+        let summary = "\(PlaybackTimeFormatter.string(for: displayedTime)) / \(PlaybackTimeFormatter.string(for: timeline.duration))"
+        guard timeline.loadedEnd < timeline.duration else {
+            return summary
+        }
+        return "\(summary), loaded through \(PlaybackTimeFormatter.string(for: timeline.loadedEnd))"
     }
 
     // The track lists render inside this ornament rather than as system
@@ -812,5 +821,86 @@ private struct PlayerOrnamentView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
+    }
+}
+
+/// A streaming-style scrub bar: the track spans the title's full length, a lighter band shows
+/// the range that can be played right now, and the filled part shows the playhead.
+private struct PlaybackScrubBar: View {
+    private static let trackHeight: CGFloat = 8
+    private static let thumbSize: CGFloat = 22
+    private static let adjustmentStep: TimeInterval = 10
+
+    let timeline: PlaybackTimeline
+    let position: TimeInterval
+    let isEnabled: Bool
+    let accessibilityValue: String
+    let onScrubbingChanged: (Bool) -> Void
+    let onScrub: (TimeInterval) -> Void
+    let onAdjust: (TimeInterval) -> Void
+
+    @State private var isScrubbing = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = max(1, geometry.size.width)
+            let playheadX = CGFloat(timeline.fraction(of: position)) * width
+            let loadedX = CGFloat(timeline.loadedStartFraction) * width
+            let loadedWidth = CGFloat(timeline.loadedEndFraction - timeline.loadedStartFraction) * width
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.quaternary)
+                    .frame(height: Self.trackHeight)
+                Capsule()
+                    .fill(.secondary)
+                    .frame(width: loadedWidth, height: Self.trackHeight)
+                    .offset(x: loadedX)
+                Capsule()
+                    .fill(.tint)
+                    .frame(width: playheadX, height: Self.trackHeight)
+                Circle()
+                    .fill(.white)
+                    .frame(width: Self.thumbSize, height: Self.thumbSize)
+                    .offset(x: playheadX - Self.thumbSize / 2)
+                    .opacity(isEnabled ? 1 : 0)
+            }
+            .frame(width: width, height: geometry.size.height)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !isScrubbing {
+                            isScrubbing = true
+                            onScrubbingChanged(true)
+                        }
+                        onScrub(timeline.time(atFraction: Double(value.location.x / width)))
+                    }
+                    .onEnded { _ in
+                        isScrubbing = false
+                        onScrubbingChanged(false)
+                    }
+            )
+        }
+        .frame(minWidth: 600, maxWidth: .infinity)
+        .frame(height: 44)
+        .hoverEffect(.highlight)
+        .allowsHitTesting(isEnabled)
+        .opacity(isEnabled ? 1 : 0.5)
+        .accessibilityElement()
+        .accessibilityIdentifier("player-scrub-bar")
+        .accessibilityLabel("Playback position")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAdjustableAction { direction in
+            guard isEnabled else { return }
+            switch direction {
+            case .increment:
+                onAdjust(Self.adjustmentStep)
+            case .decrement:
+                onAdjust(-Self.adjustmentStep)
+            @unknown default:
+                break
+            }
+        }
     }
 }

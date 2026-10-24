@@ -12,6 +12,7 @@ final class LivePlaybackSessionTests: XCTestCase {
     private func install(
         _ session: MVHEVCPlayerSession,
         status: LiveStreamStatus?,
+        titleDuration: TimeInterval? = nil,
         respond: @escaping @Sendable (URLRequest, RelayEstablishedSession) throws -> (Data, HTTPURLResponse)
     ) async throws -> UUID {
         let parent = try await makePairedSessions(now: Date())
@@ -31,7 +32,7 @@ final class LivePlaybackSessionTests: XCTestCase {
             mediaItem: MediaItem(id: "relay:\(client.sessionID.rawValue)", title: "Rainforest", fileName: "live.m3u8", format: .mvHEVC),
             observeItemStatus: false,
             startRefreshLoop: false,
-            live: RelayLivePlaybackContext(title: "Rainforest", streamID: streamID) { status }
+            live: RelayLivePlaybackContext(title: "Rainforest", streamID: streamID, durationSeconds: titleDuration) { status }
         )
         return streamID
     }
@@ -84,5 +85,25 @@ final class LivePlaybackSessionTests: XCTestCase {
         session.handleRelayCoordinatorState(.sessionExpired)
         XCTAssertNotEqual(session.state, .failed)
         XCTAssertNotEqual(session.state, .idle)
+    }
+
+    func testLiveScrubBarSpansTheTitleLengthWhileTheStreamLoads() async throws {
+        let session = MVHEVCPlayerSession()
+        _ = try await install(session, status: nil, titleDuration: 5_400) { request, server in
+            let snapshot = try RelayPlaylistSnapshot(
+                earliestPlayableTimeMilliseconds: 0, totalDurationMilliseconds: 4_000, isFinalized: false,
+                segments: [try RelayPlaylistSegment(
+                    sequenceNumber: 0, startTimeMilliseconds: 0, durationMilliseconds: 4_000,
+                    resourceIdentifier: "segment-000000000.m4s"
+                )]
+            )
+            let body = try JSONEncoder().encode(snapshot)
+            return (body, try makeAuthenticatedHTTPResponse(request, body: body, serverSession: server, statusCode: 200))
+        }
+        await session.refreshRelayWindowNow()
+
+        XCTAssertEqual(session.timeline.duration, 5_400)
+        XCTAssertEqual(session.timeline.loadedStart, 0)
+        XCTAssertEqual(session.timeline.loadedEnd, 4)
     }
 }

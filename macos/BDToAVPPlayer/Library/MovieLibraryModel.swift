@@ -232,6 +232,7 @@ final class MovieLibraryModel: ObservableObject {
                 let context = RelayLivePlaybackContext(
                     title: title.title,
                     streamID: ready.streamID,
+                    durationSeconds: title.durationSeconds,
                     status: { try? await connection.liveStatus(streamID: ready.streamID) },
                     ended: { [weak self] in self?.installedLivePlaybackEnded(owner) }
                 )

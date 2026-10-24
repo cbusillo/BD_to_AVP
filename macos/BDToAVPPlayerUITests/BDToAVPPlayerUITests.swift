@@ -51,6 +51,18 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(playPauseButton.waitForExistence(timeout: 30))
         attachScreenshot(named: "player-controls-visible")
 
+        // The scrub bar spans the movie's full length from the start.
+        let scrubBar = app.descendants(matching: .any)["player-scrub-bar"]
+        XCTAssertTrue(scrubBar.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(scrubBar.frame.width, 400)
+        XCTAssertTrue((scrubBar.value as? String)?.contains("/ 0:24") == true, String(describing: scrubBar.value))
+        scrubBar.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        let seekedExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value BEGINSWITH '0:1' OR value BEGINSWITH '0:2'"),
+            object: scrubBar
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [seekedExpectation], timeout: 5), .completed, String(describing: scrubBar.value))
+
         let doneButton = app.buttons["player-done"]
         XCTAssertTrue(doneButton.exists)
         doneButton.tap()
