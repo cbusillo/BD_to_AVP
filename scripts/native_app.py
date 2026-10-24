@@ -85,6 +85,7 @@ CURRENT_POINTER_LINK_NAME = ".3D Blu-ray to Vision Pro Current"
 CURRENT_PUBLISH_LOCK_NAME = ".3D Blu-ray to Vision Pro Current.lock"
 MV_HEVC_ENCODER_NAME = "mv-hevc-encoder"
 PACKAGED_MV_HEVC_ENCODER = PACKAGE_ROOT / "native-tools" / MV_HEVC_ENCODER_NAME
+DEVELOPMENT_MV_HEVC_ENCODER = REPO_ROOT / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 WORKER_PROTOCOL_VERSION = PROTOCOL_VERSION
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
@@ -199,7 +200,10 @@ def verify_product_source_copy() -> None:
 
 def xcodebuild(action: str, configuration: str) -> None:
     generate_project()
-    build_settings = native_build_settings(configuration, os.environ)
+    # A team-signed Debug app keeps its keychain trust, Vision Pro pairing and folder
+    # approvals across rebuilds; an ad hoc one looks like a new app each time.
+    allow_signing = action == "build" and configuration == "Debug" and development_signing_available(os.environ)
+    build_settings = native_build_settings(configuration, os.environ, allow_signing=allow_signing)
     with native_test_home(action) as test_home:
         if test_home is not None:
             build_settings.append(f"{TEST_HOME_BUILD_SETTING}={test_home}")
@@ -320,8 +324,25 @@ def verify_support_diagnostics_endpoint(
     return endpoint
 
 
-def native_build_settings(configuration: str, environment: Mapping[str, str]) -> list[str]:
-    build_settings = ["CODE_SIGNING_ALLOWED=NO"]
+def development_signing_available(environment: Mapping[str, str]) -> bool:
+    if environment.get("CI"):
+        return False
+    identities = subprocess.run(
+        ["security", "find-identity", "-v", "-p", "codesigning"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return identities.returncode == 0 and "Apple Development:" in identities.stdout
+
+
+def native_build_settings(
+    configuration: str,
+    environment: Mapping[str, str],
+    *,
+    allow_signing: bool = False,
+) -> list[str]:
+    build_settings = [] if allow_signing else ["CODE_SIGNING_ALLOWED=NO"]
     deployment_target = environment.get(DEPLOYMENT_TARGET_OVERRIDE_ENV, "").strip()
     if deployment_target:
         if re.fullmatch(r"\d+(?:\.\d+)+", deployment_target) is None:
@@ -1347,6 +1368,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "test":
         xcodebuild("test", "Debug")
     elif args.command == "build":
+        # A Debug worker resolves tools from the checkout, so live playback needs the encoder there.
+        build_packaged_mv_hevc_encoder(DEVELOPMENT_MV_HEVC_ENCODER)
         xcodebuild("build", "Debug")
     elif args.command == "publish-current":
         publish_current()

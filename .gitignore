@@ -157,6 +157,7 @@ celerybeat.pid
 .vendor/
 bd_to_avp/bin/ffmpeg
 bd_to_avp/bin/ffprobe
+bd_to_avp/bin/mv-hevc-encoder
 env/
 venv/
 ENV/

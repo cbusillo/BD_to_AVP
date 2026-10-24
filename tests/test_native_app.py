@@ -41,6 +41,7 @@ from scripts.native_app import (
     MACOS_ROOT,
     REPO_ROOT,
     build_packaged_mv_hevc_encoder,
+    development_signing_available,
     ensure_clean_worktree,
     install_mv_hevc_encoder,
     native_build_settings,
@@ -333,6 +334,15 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn(f"CURRENT_PROJECT_VERSION={NATIVE_BUILD_VERSION}", release_settings)
         self.assertIn(f"MARKETING_VERSION={NATIVE_SHORT_VERSION}", release_settings)
         self.assertIn(f"PRODUCT_BUNDLE_IDENTIFIER={NATIVE_BUNDLE_IDENTIFIER}", release_settings)
+
+    def test_native_build_settings_disable_signing_unless_allowed(self) -> None:
+        self.assertIn("CODE_SIGNING_ALLOWED=NO", native_build_settings("Debug", {}))
+        self.assertNotIn("CODE_SIGNING_ALLOWED=NO", native_build_settings("Debug", {}, allow_signing=True))
+
+    def test_development_signing_is_unavailable_in_ci(self) -> None:
+        with patch("scripts.native_app.subprocess.run") as run:
+            self.assertFalse(development_signing_available({"CI": "true"}))
+        run.assert_not_called()
 
     def test_native_build_settings_reject_invalid_deployment_override(self) -> None:
         with self.assertRaisesRegex(ValueError, "Invalid macOS deployment target override"):
