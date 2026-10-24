@@ -27,6 +27,7 @@ final class MovieSharingController: ObservableObject {
     private var monitor: Task<Void, Never>?
     private var preparation: Task<Void, Never>?
     private var epoch = UUID()
+    private var peersRefresh = 0
     private var hasRestored = false
     private static let foldersKey = "movieSharing.approvedFolders.v1"
     private static let enabledKey = "movieSharing.enabled.v1"
@@ -64,7 +65,7 @@ final class MovieSharingController: ObservableObject {
     func restoreIfNeeded() async {
         guard !hasRestored else { return }
         hasRestored = true
-        refreshPeers()
+        await refreshPeers()
         if defaults.bool(forKey: Self.enabledKey), errorMessage == nil { await setSharing(true) }
     }
 
@@ -154,7 +155,8 @@ final class MovieSharingController: ObservableObject {
             guard epoch == attempt else { await catalog.stop(); return }
             // Live ISO playback is optional: without a worker, sharing still serves movies.
             let live = try? makeLiveServices(isBusyConverting)
-            let host = try MovieLibraryHost(catalog: catalog, trust: trust, live: live)
+            let trust = trust
+            let host = try await Self.offMainActor { try MovieLibraryHost(catalog: catalog, trust: trust, live: live) }
             let server = try await RelayNetworkServer.start(host: host)
             guard epoch == attempt else { await server.stop(); return }
             self.host = host
@@ -181,7 +183,7 @@ final class MovieSharingController: ObservableObject {
                     let activity = await host.liveActivity()
                     let unreadable = await host.unreadableFolderIDs()
                     guard let self, self.host === host, !Task.isCancelled else { return }
-                    if self.pairingCandidate?.candidateID != candidate?.candidateID { self.refreshPeers() }
+                    if self.pairingCandidate?.candidateID != candidate?.candidateID { await self.refreshPeers() }
                     self.pairingCandidate = candidate
                     if self.liveActivity != activity { self.liveActivity = activity }
                     if self.unreadableFolderIDs != unreadable { self.unreadableFolderIDs = unreadable }
@@ -245,13 +247,31 @@ final class MovieSharingController: ObservableObject {
     func forget(_ peer: MovieTrustedPeer) async {
         do {
             if let host { try await host.forget(peer.id) }
-            else { try trust.forgetClient(id: peer.id) }
-            refreshPeers()
+            else {
+                let trust = trust, id = peer.id
+                try await Self.offMainActor { try trust.forgetClient(id: id) }
+            }
+            await refreshPeers()
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func refreshPeers() {
-        do { peers = try trust.trustedClients() }
-        catch { errorMessage = error.localizedDescription }
+    private func refreshPeers() async {
+        peersRefresh += 1
+        let refresh = peersRefresh
+        let trust = trust
+        do {
+            let clients = try await Self.offMainActor { try trust.trustedClients() }
+            // A later refresh may have finished first; keep the newest list.
+            guard refresh == peersRefresh else { return }
+            peers = clients
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Runs a trust store call away from the main actor. A Keychain read can wait on a macOS
+    /// access prompt, and the window must keep responding while it does.
+    private nonisolated static func offMainActor<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await Task.detached(operation: work).value
     }
 }
