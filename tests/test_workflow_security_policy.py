@@ -20,7 +20,7 @@ import yaml
 
 from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
 from scripts.release_workflow_policy import (
-    APPROVAL_ENVIRONMENT,
+    SIGNING_ENVIRONMENT,
     ENGINE_WORKFLOW_PATH,
     RECEIPT_ACTORS,
     REPOSITORY,
@@ -149,7 +149,7 @@ class WorkflowSecurityPolicyTests(unittest.TestCase):
                     self.assertNotIn("environment", job)
                 self.assertLessEqual(granted, {"security-events", "issues"})
 
-    def test_a_job_that_reads_a_secret_is_approval_gated_and_cannot_write(self) -> None:
+    def test_a_job_that_reads_a_secret_is_environment_scoped_and_cannot_write(self) -> None:
         readers = 0
         for workflow_name, _, job_name, job in self.jobs():
             if "uses" in job or not secrets_read_by(job):
@@ -408,7 +408,7 @@ class SigningCredentialMainGuardTests(unittest.TestCase):
         steps = [
             (f"{job_name}: {step.get('name')}", step)
             for job_name, job in jobs.items()
-            if job.get("environment") == APPROVAL_ENVIRONMENT
+            if job.get("environment") == SIGNING_ENVIRONMENT
             for step in job.get("steps", [])
             if "run" in step and secrets_read_by(step)
         ]

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -19,7 +18,6 @@ from scripts.release_workflow_policy import ENGINE_WORKFLOW_PATH, OPERATOR_WORKF
 
 EXIT_SUCCESS = 0
 EXIT_FAILED = 1
-EXIT_APPROVAL_REQUIRED = 20
 EXIT_SAFETY_ERROR = 21
 EXIT_TIMEOUT = 22
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -34,8 +32,6 @@ ALLOWED_RUN_NAMES = {
 }
 REQUIRED_BRANCH = "main"
 REQUIRED_EVENT = "workflow_dispatch"
-REQUIRED_ENVIRONMENT = "macos-signing"
-APPROVAL_ACTOR = "cbusillo"
 
 
 class ReleaseRunError(RuntimeError):
@@ -43,23 +39,13 @@ class ReleaseRunError(RuntimeError):
 
 
 class GitHubAPI(Protocol):
-    def get_json(self, endpoint: str, *, active_auth: bool = False) -> object:
-        raise NotImplementedError
-
-    def post_json(
-        self,
-        endpoint: str,
-        payload: Mapping[str, object],
-        *,
-        active_auth: bool = False,
-    ) -> object:
+    def get_json(self, endpoint: str) -> object:
         raise NotImplementedError
 
     def get_bytes(
         self,
         endpoint: str,
         *,
-        active_auth: bool = False,
         max_bytes: int,
         timeout_seconds: float,
     ) -> bytes:
@@ -79,39 +65,21 @@ class GhAPIClient:
         self.hostname = hostname
         self.request_timeout_seconds = request_timeout_seconds
 
-    def _environment(self, *, active_auth: bool) -> dict[str, str]:
+    def _environment(self) -> dict[str, str]:
         environment = os.environ.copy()
-        if active_auth:
-            for name in (
-                "GH_TOKEN",
-                "GITHUB_TOKEN",
-                "CODEX_GITHUB_TOKEN",
-                "GH_ENTERPRISE_TOKEN",
-                "GITHUB_ENTERPRISE_TOKEN",
-                "GH_HOST",
-                "GH_REPO",
-            ):
-                environment.pop(name, None)
-        elif "GH_TOKEN" not in environment:
+        if "GH_TOKEN" not in environment:
             token = environment.get("CODEX_GITHUB_TOKEN") or environment.get("GITHUB_TOKEN")
             if token:
                 environment["GH_TOKEN"] = token
         return environment
 
-    def _run_json(
-        self,
-        arguments: Sequence[str],
-        *,
-        active_auth: bool,
-        input_payload: Mapping[str, object] | None = None,
-    ) -> object:
+    def _run_json(self, arguments: Sequence[str]) -> object:
         try:
             result = subprocess.run(
                 [self.executable, *arguments],
-                input=json.dumps(input_payload) if input_payload is not None else None,
                 text=True,
                 capture_output=True,
-                env=self._environment(active_auth=active_auth),
+                env=self._environment(),
                 timeout=self.request_timeout_seconds,
                 check=False,
             )
@@ -126,7 +94,7 @@ class GhAPIClient:
         except json.JSONDecodeError as error:
             raise ReleaseRunError("GitHub CLI returned invalid JSON.") from error
 
-    def get_json(self, endpoint: str, *, active_auth: bool = False) -> object:
+    def get_json(self, endpoint: str) -> object:
         return self._run_json(
             [
                 "api",
@@ -137,15 +105,13 @@ class GhAPIClient:
                 "-H",
                 "X-GitHub-Api-Version: 2022-11-28",
                 endpoint,
-            ],
-            active_auth=active_auth,
+            ]
         )
 
     def get_bytes(
         self,
         endpoint: str,
         *,
-        active_auth: bool = False,
         max_bytes: int,
         timeout_seconds: float,
     ) -> bytes:
@@ -169,7 +135,7 @@ class GhAPIClient:
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                env=self._environment(active_auth=active_auth),
+                env=self._environment(),
             )
         except OSError as error:
             raise ReleaseRunError("GitHub CLI byte request could not start.") from error
@@ -237,26 +203,6 @@ class GhAPIClient:
             raise ReleaseRunError("GitHub CLI byte request returned an empty response.")
         return bytes(content)
 
-    def post_json(self, endpoint: str, payload: Mapping[str, object], *, active_auth: bool = False) -> object:
-        return self._run_json(
-            [
-                "api",
-                "--hostname",
-                self.hostname,
-                "-H",
-                "Accept: application/vnd.github+json",
-                "-H",
-                "X-GitHub-Api-Version: 2022-11-28",
-                "--method",
-                "POST",
-                endpoint,
-                "--input",
-                "-",
-            ],
-            active_auth=active_auth,
-            input_payload=payload,
-        )
-
 
 @dataclass(frozen=True)
 class RunExpectation:
@@ -266,16 +212,11 @@ class RunExpectation:
     repository: str = REPOSITORY
     branch: str = REQUIRED_BRANCH
     event: str = REQUIRED_EVENT
-    environment: str = REQUIRED_ENVIRONMENT
     engine_workflow_path: str = ENGINE_WORKFLOW_PATH
 
     @property
     def run_endpoint(self) -> str:
         return f"repos/{self.repository}/actions/runs/{self.run_id}"
-
-    @property
-    def pending_deployments_endpoint(self) -> str:
-        return f"{self.run_endpoint}/pending_deployments"
 
     @property
     def branch_endpoint(self) -> str:
@@ -321,12 +262,6 @@ def _mapping(value: object, description: str) -> Mapping[str, Any]:
     return cast(Mapping[str, Any], value)
 
 
-def _sequence(value: object, description: str) -> Sequence[object]:
-    if not isinstance(value, list):
-        raise ReleaseRunError(f"{description} must be a JSON array.")
-    return value
-
-
 def _string(record: Mapping[str, Any], key: str, description: str) -> str:
     value = record.get(key)
     if not isinstance(value, str):
@@ -349,8 +284,6 @@ def validate_expectation(expectation: RunExpectation) -> None:
         raise ReleaseRunError(f"Release guard requires branch {REQUIRED_BRANCH!r}.")
     if expectation.event != REQUIRED_EVENT:
         raise ReleaseRunError(f"Release guard requires event {REQUIRED_EVENT!r}.")
-    if expectation.environment != REQUIRED_ENVIRONMENT:
-        raise ReleaseRunError(f"Release guard requires environment {REQUIRED_ENVIRONMENT!r}.")
     if expectation.engine_workflow_path != ENGINE_WORKFLOW_PATH:
         raise ReleaseRunError(f"Release guard requires engine workflow path {ENGINE_WORKFLOW_PATH!r}.")
 
@@ -413,87 +346,10 @@ def validate_run_identity(run: Mapping[str, Any], expectation: RunExpectation) -
     )
 
 
-def build_approval_fingerprint(
-    expectation: RunExpectation,
-    *,
-    workflow_id: int,
-    environment_id: int,
-    run_attempt: int,
-    run_actor: str,
-    triggering_actor: str,
-    reviewer: str = APPROVAL_ACTOR,
-) -> str:
-    if isinstance(workflow_id, bool) or not isinstance(workflow_id, int) or workflow_id <= 0:
-        raise ReleaseRunError("Workflow ID must be a positive integer returned by GitHub.")
-    payload = json.dumps(
-        {
-            "repository": expectation.repository,
-            "run_id": expectation.run_id,
-            "workflow": expectation.workflow,
-            "workflow_path": expectation.workflow_path,
-            "workflow_id": workflow_id,
-            "release_route": expectation.route,
-            "operator_workflow_ref": expectation.operator_workflow_ref,
-            "operator_workflow_sha": expectation.head_sha,
-            "engine_workflow_path": expectation.engine_workflow_path,
-            "engine_workflow_ref": expectation.engine_workflow_ref,
-            "engine_workflow_sha": expectation.head_sha,
-            "head_sha": expectation.head_sha,
-            "branch": expectation.branch,
-            "event": expectation.event,
-            "environment": expectation.environment,
-            "environment_id": environment_id,
-            "run_attempt": run_attempt,
-            "run_actor": run_actor,
-            "triggering_actor": triggering_actor,
-            "reviewer": reviewer,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def current_branch_sha(client: GitHubAPI, expectation: RunExpectation, *, active_auth: bool = False) -> str:
-    reference = _mapping(client.get_json(expectation.branch_endpoint, active_auth=active_auth), "Git reference")
+def current_branch_sha(client: GitHubAPI, expectation: RunExpectation) -> str:
+    reference = _mapping(client.get_json(expectation.branch_endpoint), "Git reference")
     git_object = _mapping(reference.get("object"), "Git reference object")
     return _string(git_object, "sha", "Git reference object")
-
-
-def expected_pending_deployment(pending: object, expectation: RunExpectation) -> Mapping[str, Any]:
-    deployments = _sequence(pending, "Pending deployments")
-    if len(deployments) != 1:
-        raise ReleaseRunError(f"Expected exactly one pending deployment; found {len(deployments)}.")
-    matches: list[Mapping[str, Any]] = []
-    found_environments: list[str] = []
-    for item in deployments:
-        deployment = _mapping(item, "Pending deployment")
-        environment = _mapping(deployment.get("environment"), "Pending deployment environment")
-        name = _string(environment, "name", "Pending deployment environment")
-        found_environments.append(name)
-        if name == expectation.environment:
-            matches.append(deployment)
-    if len(matches) != 1:
-        raise ReleaseRunError(
-            f"Expected exactly one pending deployment for {expectation.environment!r}; found {len(matches)} "
-            f"among {found_environments!r}."
-        )
-    return matches[0]
-
-
-def pending_reviewer_logins(deployment: Mapping[str, Any]) -> list[str]:
-    reviewers_value = deployment.get("reviewers", [])
-    reviewers = _sequence(reviewers_value, "Pending deployment reviewers")
-    if len(reviewers) != 1:
-        raise ReleaseRunError(f"Expected exactly one pending deployment reviewer; found {len(reviewers)}.")
-    reviewer = _mapping(reviewers[0], "Pending deployment reviewer")
-    if reviewer.get("type") != "User":
-        raise ReleaseRunError("Pending deployment reviewer must be a User.")
-    user = _mapping(reviewer.get("reviewer"), "Pending deployment reviewer user")
-    login = _string(user, "login", "Pending deployment reviewer user")
-    if login != APPROVAL_ACTOR:
-        raise ReleaseRunError(f"Pending deployment reviewer must be {APPROVAL_ACTOR!r}, not {login!r}.")
-    return [login]
 
 
 def watch_release_run(
@@ -550,54 +406,10 @@ def watch_release_run(
             return EXIT_SAFETY_ERROR
 
         if identity.status == "waiting":
-            deployment = expected_pending_deployment(
-                client.get_json(expectation.pending_deployments_endpoint), expectation
+            raise ReleaseRunError(
+                "Release run is waiting for an environment approval; no release environment should require one. "
+                "Check the release environments' protection rules."
             )
-            environment = _mapping(deployment.get("environment"), "Pending deployment environment")
-            environment_id = environment.get("id")
-            if not isinstance(environment_id, int) or environment_id <= 0:
-                raise ReleaseRunError("Pending deployment environment ID must be a positive integer.")
-            can_approve = deployment.get("current_user_can_approve")
-            if not isinstance(can_approve, bool):
-                raise ReleaseRunError("Pending deployment approval capability must be boolean.")
-            reviewers = pending_reviewer_logins(deployment)
-            if APPROVAL_ACTOR not in reviewers:
-                raise ReleaseRunError(
-                    f"Required approval actor {APPROVAL_ACTOR!r} is not a reviewer for {expectation.environment!r}."
-                )
-            fingerprint = build_approval_fingerprint(
-                expectation,
-                workflow_id=identity.workflow_id,
-                environment_id=environment_id,
-                run_attempt=identity.run_attempt,
-                run_actor=identity.run_actor,
-                triggering_actor=identity.triggering_actor,
-            )
-            emit(
-                {
-                    "event": "approval_required",
-                    "run_id": expectation.run_id,
-                    "workflow": expectation.workflow,
-                    "workflow_id": identity.workflow_id,
-                    "workflow_path": expectation.workflow_path,
-                    "release_route": expectation.route,
-                    "head_sha": expectation.head_sha,
-                    "branch": expectation.branch,
-                    "environment": expectation.environment,
-                    "environment_id": environment_id,
-                    "operator_workflow_ref": expectation.operator_workflow_ref,
-                    "operator_workflow_sha": expectation.head_sha,
-                    "engine_workflow_ref": expectation.engine_workflow_ref,
-                    "engine_workflow_sha": expectation.head_sha,
-                    "reviewers": reviewers,
-                    "current_user_can_approve": can_approve,
-                    "run_actor": identity.run_actor,
-                    "triggering_actor": identity.triggering_actor,
-                    "run_attempt": identity.run_attempt,
-                    "approval_fingerprint": fingerprint,
-                }
-            )
-            return EXIT_APPROVAL_REQUIRED
 
         if identity.status not in NONTERMINAL_STATUSES:
             raise ReleaseRunError(f"Unexpected workflow run status: {identity.status!r}.")
@@ -631,101 +443,6 @@ def watch_release_run(
         sleeper(poll_seconds)
 
 
-def approve_release_run(
-    expectation: RunExpectation,
-    client: GitHubAPI,
-    *,
-    confirm_sha: str,
-    approval_fingerprint: str,
-    comment: str,
-    emit: Emitter = _emit_json,
-) -> int:
-    validate_expectation(expectation)
-    if confirm_sha != expectation.head_sha:
-        raise ReleaseRunError("Confirmation SHA does not match the expected workflow head SHA.")
-    if not comment.strip():
-        raise ReleaseRunError("Approval comment must not be empty.")
-
-    user = _mapping(client.get_json("user", active_auth=True), "Active GitHub user")
-    login = _string(user, "login", "Active GitHub user")
-    if login != APPROVAL_ACTOR:
-        raise ReleaseRunError(
-            f"Active GitHub login {login!r} does not match required approval actor {APPROVAL_ACTOR!r}."
-        )
-
-    run = _mapping(client.get_json(expectation.run_endpoint, active_auth=True), "Workflow run")
-    identity = validate_run_identity(run, expectation)
-    if identity.status != "waiting":
-        raise ReleaseRunError(f"Workflow run must be waiting for approval, not {identity.status!r}.")
-    if identity.run_actor == APPROVAL_ACTOR or identity.triggering_actor == APPROVAL_ACTOR:
-        raise ReleaseRunError("Approval actor must not approve a workflow run dispatched by the same account.")
-    branch_sha = current_branch_sha(client, expectation, active_auth=True)
-    if branch_sha != expectation.head_sha:
-        raise ReleaseRunError(
-            f"Protected {expectation.branch} moved to {branch_sha}; refusing to approve stale run {expectation.run_id}."
-        )
-
-    deployment = expected_pending_deployment(
-        client.get_json(expectation.pending_deployments_endpoint, active_auth=True),
-        expectation,
-    )
-    reviewers = pending_reviewer_logins(deployment)
-    if APPROVAL_ACTOR not in reviewers:
-        raise ReleaseRunError(
-            f"Approval actor {APPROVAL_ACTOR!r} is not a required reviewer for {expectation.environment!r}."
-        )
-    if deployment.get("current_user_can_approve") is not True:
-        raise ReleaseRunError(f"Active GitHub user {APPROVAL_ACTOR!r} cannot approve this deployment.")
-    environment = _mapping(deployment.get("environment"), "Pending deployment environment")
-    environment_id = environment.get("id")
-    if not isinstance(environment_id, int) or environment_id <= 0:
-        raise ReleaseRunError("Pending deployment environment ID must be a positive integer.")
-    expected_fingerprint = build_approval_fingerprint(
-        expectation,
-        workflow_id=identity.workflow_id,
-        environment_id=environment_id,
-        run_attempt=identity.run_attempt,
-        run_actor=identity.run_actor,
-        triggering_actor=identity.triggering_actor,
-    )
-    if approval_fingerprint != expected_fingerprint:
-        raise ReleaseRunError("Approval fingerprint does not match the pending deployment.")
-
-    client.post_json(
-        expectation.pending_deployments_endpoint,
-        {
-            "environment_ids": [environment_id],
-            "state": "approved",
-            "comment": comment,
-        },
-        active_auth=True,
-    )
-    emit(
-        {
-            "event": "approved",
-            "run_id": expectation.run_id,
-            "workflow": expectation.workflow,
-            "workflow_id": identity.workflow_id,
-            "workflow_path": expectation.workflow_path,
-            "release_route": expectation.route,
-            "head_sha": expectation.head_sha,
-            "branch": expectation.branch,
-            "environment": expectation.environment,
-            "environment_id": environment_id,
-            "operator_workflow_ref": expectation.operator_workflow_ref,
-            "operator_workflow_sha": expectation.head_sha,
-            "engine_workflow_ref": expectation.engine_workflow_ref,
-            "engine_workflow_sha": expectation.head_sha,
-            "actor": APPROVAL_ACTOR,
-            "run_actor": identity.run_actor,
-            "triggering_actor": identity.triggering_actor,
-            "run_attempt": identity.run_attempt,
-            "approval_fingerprint": expected_fingerprint,
-        }
-    )
-    return EXIT_SUCCESS
-
-
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
@@ -741,24 +458,16 @@ def _positive_float(value: str) -> float:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Watch and approve guarded GitHub release workflow runs.")
+    parser = argparse.ArgumentParser(description="Watch guarded GitHub release workflow runs.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    def add_expectation_arguments(command: argparse.ArgumentParser) -> None:
-        command.add_argument("--run-id", required=True, type=_positive_int, help="GitHub Actions run ID.")
-        command.add_argument("--workflow", required=True, choices=ALLOWED_WORKFLOWS)
-        command.add_argument("--head-sha", required=True, help="Expected full Git commit SHA.")
-
-    watch = subparsers.add_parser("watch", help="Watch a release run until approval or completion.")
-    add_expectation_arguments(watch)
+    watch = subparsers.add_parser("watch", help="Watch a release run until it completes.")
+    watch.add_argument("--run-id", required=True, type=_positive_int, help="GitHub Actions run ID.")
+    watch.add_argument("--workflow", required=True, choices=ALLOWED_WORKFLOWS)
+    watch.add_argument("--head-sha", required=True, help="Expected full Git commit SHA.")
     watch.add_argument("--poll-seconds", type=_positive_float, default=10.0)
     watch.add_argument("--timeout-seconds", type=_positive_float, default=14_400.0)
 
-    approve = subparsers.add_parser("approve", help="Approve an exact pending release deployment.")
-    add_expectation_arguments(approve)
-    approve.add_argument("--confirm-sha", required=True, help="Explicit confirmation of the expected head SHA.")
-    approve.add_argument("--approval-fingerprint", required=True, help="Fingerprint emitted by the watch command.")
-    approve.add_argument("--comment", required=True, help="Audit comment recorded with the deployment review.")
     return parser.parse_args(argv)
 
 
@@ -782,22 +491,13 @@ def main(
     expectation = _expectation_from_args(args)
     github = client or GhAPIClient()
     try:
-        if args.command == "watch":
-            return watch_release_run(
-                expectation,
-                github,
-                poll_seconds=args.poll_seconds,
-                timeout_seconds=args.timeout_seconds,
-                sleeper=sleeper,
-                clock=clock,
-                emit=emit,
-            )
-        return approve_release_run(
+        return watch_release_run(
             expectation,
             github,
-            confirm_sha=args.confirm_sha,
-            approval_fingerprint=args.approval_fingerprint,
-            comment=args.comment,
+            poll_seconds=args.poll_seconds,
+            timeout_seconds=args.timeout_seconds,
+            sleeper=sleeper,
+            clock=clock,
             emit=emit,
         )
     except ReleaseRunError as error:
