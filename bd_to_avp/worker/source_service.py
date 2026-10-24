@@ -101,6 +101,7 @@ class ServiceFrameReader:
         self._cancellation_event = cancellation_event
         self._read_timeout_seconds = read_timeout_seconds
         self._expected_sequence = 0
+        self.ended = False
 
     def read(self) -> ServiceRecord | None:
         header = self._read_exact(SERVICE_FRAME_HEADER.size, allow_eof=True)
@@ -150,6 +151,7 @@ class ServiceFrameReader:
         while len(data) < size:
             chunk = self._read_chunk(size - len(data))
             if not chunk:
+                self.ended = True
                 if allow_eof and not data:
                     return None
                 raise SourceServiceError("truncated_source_stream", "The source helper ended inside a media record.")

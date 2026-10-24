@@ -65,6 +65,7 @@ HOLD_POLL_SECONDS = 0.02
 # Completed segments allowed to wait in staging, and so the media the worker lets run
 # ahead of publication (source records not yet published as segments).
 STAGING_SEGMENT_CAP = 2
+SOURCE_EXIT_GRACE_SECONDS = 5
 NO_PROGRESS_TIMEOUT_SECONDS = SOURCE_FRAME_TIMEOUT_SECONDS
 STARTUP_RECORD_LIMIT = 4_096
 STARTUP_BYTE_LIMIT = 64 * 1_024 * 1_024
@@ -769,6 +770,7 @@ class SSIFLiveHLSService(SSIFSourceHelper):
         )
         primary_error: BaseException | None = None
         publisher_thread: threading.Thread | None = None
+        reader: ServiceFrameReader | None = None
         try:
             self._verify_source_identity()
             self._start(source, close_after_start=(source_write,))
@@ -787,6 +789,10 @@ class SSIFLiveHLSService(SSIFSourceHelper):
             self._await_media_pipeline(publisher_thread)
         except (Exception, KeyboardInterrupt, SystemExit) as error:
             primary_error = error
+            if reader is not None and reader.ended:
+                # The source closed its output, so it is exiting. Let it finish before cancelling,
+                # so its own error outranks the truncation it caused.
+                source.done.wait(SOURCE_EXIT_GRACE_SECONDS)
             self.internal_cancellation.set()
         finally:
             source_read.close()

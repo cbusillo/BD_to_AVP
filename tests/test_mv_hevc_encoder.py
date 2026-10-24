@@ -19,6 +19,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MP4BOX = REPOSITORY_ROOT / "bd_to_avp/bin/MP4Box"
 FFMPEG = shutil.which("ffmpeg")
 FFPROBE = shutil.which("ffprobe")
+# Readiness follows writer and MetalFX setup, which a cold hosted runner can take
+# well over five seconds to finish. Nothing bounds that time; this only stops a hang.
+READINESS_TIMEOUT_SECONDS = 60
 
 
 def y4m_header(
@@ -579,11 +582,11 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         assert process.stderr is not None
         process.stdin.write(y4m_header())
         process.stdin.flush()
-        readable, _, _ = select.select([process.stderr], [], [], 5)
+        readable, _, _ = select.select([process.stderr], [], [], READINESS_TIMEOUT_SECONDS)
         if not readable:
             process.kill()
             process.wait(timeout=5)
-            self.fail("encoder did not emit readiness within five seconds")
+            self.fail(f"encoder did not emit readiness within {READINESS_TIMEOUT_SECONDS} seconds")
         ready_line = process.stderr.readline()
         self.assertEqual(json.loads(ready_line)["event"], "encoder.ready")
         process.send_signal(signal.SIGTERM)
@@ -846,11 +849,11 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         else:
             process.stdin.write(y4m_header(width=3_840, height=1_080))
         process.stdin.flush()
-        readable, _, _ = select.select([process.stderr], [], [], 5)
+        readable, _, _ = select.select([process.stderr], [], [], READINESS_TIMEOUT_SECONDS)
         if not readable:
             process.kill()
             process.wait(timeout=5)
-            self.fail("encoder did not emit readiness within five seconds")
+            self.fail(f"encoder did not emit readiness within {READINESS_TIMEOUT_SECONDS} seconds")
         ready_line = process.stderr.readline()
         self.assertEqual(json.loads(ready_line)["event"], "encoder.ready")
         process.send_signal(signal.SIGTERM)
