@@ -567,7 +567,7 @@ class SSIFLiveHLSServiceTests(unittest.TestCase):
         self.assertEqual(rendition["source_language"], "deu")
         published = {path.name for path in destination.iterdir()}
         self.assertIn(rendition["initialization"], published)
-        self.assertTrue({segment["uri"] for segment in rendition["segments"]} <= published)
+        self.assertLessEqual({segment["uri"] for segment in rendition["segments"]}, published)
         events = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(len([event for event in events if event["type"] == "artifact.ready"]), 1)
         warnings = [event["payload"] for event in events if event["type"] == "warning"]
