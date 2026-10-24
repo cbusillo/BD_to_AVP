@@ -325,6 +325,66 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertTrue(visibility.isAutoHideScheduled)
     }
 
+    func testHUDFadesRatherThanHidingAfterTheAutoHideDelay() {
+        var visibility = PlaybackHUDVisibilityState()
+        visibility.reconcile(isPlaying: true)
+
+        visibility.autoHideTimerFired(generation: visibility.autoHideGeneration)
+
+        XCTAssertTrue(visibility.isFaded)
+        XCTAssertFalse(visibility.isAutoHideScheduled)
+    }
+
+    func testFadedHUDComesBackFullyOnInteractionAndFadesAgainAfterTheDelay() {
+        var visibility = PlaybackHUDVisibilityState()
+        visibility.reconcile(isPlaying: true)
+        visibility.autoHideTimerFired(generation: visibility.autoHideGeneration)
+
+        visibility.reveal(isPlaying: true)
+        XCTAssertFalse(visibility.isFaded)
+        XCTAssertTrue(visibility.isAutoHideScheduled)
+
+        visibility.autoHideTimerFired(generation: visibility.autoHideGeneration)
+        XCTAssertTrue(visibility.isFaded)
+    }
+
+    func testFadedHUDBecomesFullyVisibleWhenPlaybackPausesOrAssistiveTechnologyStarts() {
+        var visibility = PlaybackHUDVisibilityState()
+        visibility.reconcile(isPlaying: true)
+        visibility.autoHideTimerFired(generation: visibility.autoHideGeneration)
+
+        visibility.reconcile(
+            isPlaying: PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                isPlaying: true,
+                isVoiceOverEnabled: true,
+                isSwitchControlEnabled: false
+            )
+        )
+        XCTAssertFalse(visibility.isFaded)
+        XCTAssertFalse(visibility.isAutoHideScheduled)
+
+        visibility.reconcile(isPlaying: true)
+        visibility.autoHideTimerFired(generation: visibility.autoHideGeneration)
+        visibility.reconcile(
+            isPlaying: PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
+                isPlaying: true,
+                isVoiceOverEnabled: false,
+                isSwitchControlEnabled: true
+            )
+        )
+        XCTAssertFalse(visibility.isFaded)
+    }
+
+    func testFadedControlsAreNearlyInvisibleUntilLookedAt() {
+        let fadedOpacity = PlaybackHUDPresentation.opacity(isFaded: true, isLookedAt: false)
+
+        XCTAssertGreaterThan(fadedOpacity, 0)
+        XCTAssertLessThan(fadedOpacity, 0.2)
+        XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: true, isLookedAt: true), 1)
+        XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: false, isLookedAt: false), 1)
+        XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: false, isLookedAt: true), 1)
+    }
+
     func testHUDStaysVisibleForAsLongAsTheControlsAreHovered() {
         var visibility = PlaybackHUDVisibilityState()
         visibility.reconcile(isPlaying: true)

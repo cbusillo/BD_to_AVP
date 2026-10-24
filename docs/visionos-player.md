@@ -566,13 +566,17 @@ Together the controls provide:
 - retry and locate recovery when Files-backed preparation fails; and
 - Done, which persists progress and releases the session.
 
-The MV-HEVC ornament remains visible while playback is paused, loading, failed,
-or being scrubbed, while a pointer hovers over it, and while its audio or
-subtitle list is open. Automatic hiding is disabled while VoiceOver or Switch
-Control is active. During uninterrupted playback it hides three seconds after
-the last of those ends. visionOS does not report eye gaze to apps, so looking at
-the controls without a pointer does not hold them. Pinching the video surface or
-the downward **Show controls** chevron reveals the controls again.
+The MV-HEVC ornament remains fully visible while playback is paused, loading,
+failed, or being scrubbed, while a pointer hovers over it, and while its audio
+or subtitle list is open. Automatic fading is disabled while VoiceOver or Switch
+Control is active. During uninterrupted playback the ornament fades to nearly
+invisible three seconds after the last of those ends; it is never removed. The
+faded controls stay in place and interactive, and a system hover effect brings
+them back to full opacity while the wearer looks at them, so a look and pinch
+works without a separate show-controls button. visionOS renders that effect out
+of process and never reports where the wearer looks, so the app's own state
+stays faded until an interaction or pinching the video surface reveals the
+controls again.
 
 The MV-HEVC scrub bar spans the title's full length from the first frame and
 shows the range that can be played right now as a lighter band. A completed

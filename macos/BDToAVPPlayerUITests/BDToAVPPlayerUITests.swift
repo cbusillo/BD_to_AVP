@@ -56,9 +56,10 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(scrubBar.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(scrubBar.frame.width, 400)
         XCTAssertTrue((scrubBar.value as? String)?.contains("/ 0:24") == true, String(describing: scrubBar.value))
-        scrubBar.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        scrubBar.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).tap()
+        // Seeks land on a nearby sync sample, so accept anything well past natural progress.
         let seekedExpectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value BEGINSWITH '0:1' OR value BEGINSWITH '0:2'"),
+            predicate: NSPredicate(format: "value MATCHES '^0:(1[2-9]|2[0-4]) .*'"),
             object: scrubBar
         )
         XCTAssertEqual(XCTWaiter.wait(for: [seekedExpectation], timeout: 5), .completed, String(describing: scrubBar.value))
@@ -71,18 +72,24 @@ final class BDToAVPPlayerUITests: XCTestCase {
         playButton.tap()
         XCTAssertTrue(playPauseButton.waitForExistence(timeout: 30))
 
-        let hiddenExpectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == false"),
+        // Past the auto-hide delay the controls fade but stay in place and interactive, so a
+        // look and pinch still works; there is no separate show-controls button.
+        // Start near the beginning so playback is still running once the controls fade.
+        let replayScrubBar = app.descendants(matching: .any)["player-scrub-bar"]
+        XCTAssertTrue(replayScrubBar.waitForExistence(timeout: 5))
+        replayScrubBar.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+        XCTAssertEqual(playPauseButton.label, "Pause playback")
+        sleep(UInt32(5))
+        attachScreenshot(named: "player-controls-faded")
+        XCTAssertTrue(app.buttons["player-surface"].exists)
+        XCTAssertFalse(app.buttons["player-show-controls"].exists)
+        XCTAssertTrue(playPauseButton.isHittable)
+        playPauseButton.tap()
+        let pausedExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == 'Play movie'"),
             object: playPauseButton
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [hiddenExpectation], timeout: 6), .completed)
-        attachScreenshot(named: "player-controls-hidden")
-        XCTAssertTrue(app.buttons["player-surface"].exists)
-
-        let showControlsButton = app.buttons["player-show-controls"]
-        XCTAssertTrue(waitForHittable(showControlsButton, timeout: 5))
-        showControlsButton.tap()
-        XCTAssertTrue(playPauseButton.waitForExistence(timeout: 5))
+        XCTAssertEqual(XCTWaiter.wait(for: [pausedExpectation], timeout: 5), .completed)
     }
 
     func testTrackListsOpenInsideTheControlsAndHoldThemUp() throws {
@@ -150,8 +157,6 @@ final class BDToAVPPlayerUITests: XCTestCase {
             return
         }
         XCTAssertFalse(app.buttons["player-play-pause"].exists)
-        XCTAssertFalse(app.buttons["player-show-controls"].exists)
-
         sleep(5)
 
         XCTAssertNotNil(firstHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 5))
