@@ -21,6 +21,12 @@ uv run python scripts/native_app.py test
 uv run python scripts/native_app.py build
 ```
 
+On a Mac with an Apple Development certificate, `build` signs the Debug app with the
+team, so keychain trust, Vision Pro pairing and Movie Sharing folder approvals survive
+rebuilds. CI and Macs without that certificate get an unsigned build. `build` also
+compiles `mv-hevc-encoder` into `bd_to_avp/bin/`, where the Debug worker finds it for
+live playback.
+
 The source-agnostic Mac-to-Vision-Pro relay advertises protocol version 3. It
 uses X25519 and transcript-bound HKDF to show both devices the same six-digit
 numeric-comparison code. The Mac commits its nonce before Vision Pro contributes
