@@ -39,12 +39,6 @@
       "branches": [
         "main"
       ],
-      "requiredReview": true,
-      "reviewers": [
-        "cbusillo"
-      ],
-      "preventSelfReview": true,
-      "canAdminsBypass": false,
       "secrets": [
         "APPLE_ID",
         "CERTIFICATE",
@@ -58,7 +52,6 @@
       "branches": [
         "main"
       ],
-      "requiredReview": false,
       "secrets": [
         "SPARKLE_EDDSA_PRIVATE_KEY"
       ]
@@ -67,35 +60,28 @@
       "branches": [
         "main"
       ],
-      "requiredReview": true,
       "secrets": []
     },
     "pypi": {
       "branches": [
         "main"
       ],
-      "requiredReview": false,
       "secrets": []
     },
     "github-pages": {
       "branches": [
         "main"
       ],
-      "requiredReview": false,
       "secrets": []
     }
   },
   "releaseOperations": {
     "watchCommand": "uv run python -m scripts.github_release_run watch",
-    "approveCommand": "uv run python -m scripts.github_release_run approve",
-    "approvalRequiredExitCode": 20,
     "safetyErrorExitCode": 21,
     "repository": "cbusillo/BD_to_AVP",
     "releaseActor": "shiny-code-app[bot]",
-    "approvalActor": "cbusillo",
     "requiredBranch": "main",
     "requiredEvent": "workflow_dispatch",
-    "approvalEnvironment": "macos-signing",
     "engineWorkflowPath": ".github/workflows/release-engine.yml",
     "productionPreflightWorkflowPath": ".github/workflows/production-preflight.yml",
     "productionPreflightEngineWorkflowPath": ".github/workflows/production-preflight-engine.yml",
