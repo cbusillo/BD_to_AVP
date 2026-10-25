@@ -1,0 +1,4 @@
+framework module Edge264MVC {
+    umbrella header "BDAVPMVCDecoder.h"
+    export *
+}

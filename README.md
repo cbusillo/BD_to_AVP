@@ -584,6 +584,9 @@ Big thanks to:
   The workflow pushes the result as the
   `automation/update-edge264` branch; open the pull request from it, and CI rebuilds the decoder byte for byte. That CI rebuild compiles the pinned binary
   without rerunning upstream's checks; the matching checksum ties it to the build that passed them. A weekly watch opens an issue when upstream tags a release newer than the pin.
+  Shiny 3D Cinema decodes Blu-ray 3D on Vision Pro with the same pinned revision, linked as the separate dynamic
+  framework `macos/Vendor/Edge264MVC.xcframework`; `scripts/build_edge264_visionos.py` rebuilds it from that pin.
+  After moving the pin, rebuild the framework too.
 
 [MakeMKV]: https://www.makemkv.com/
 

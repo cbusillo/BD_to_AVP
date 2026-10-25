@@ -203,7 +203,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var titleDuration: TimeInterval?
     /// The player's buffered range around the playhead, for file and shared-movie playback.
     @Published private(set) var bufferedRange: ClosedRange<TimeInterval>?
-    @Published private(set) var relaySeekNotice: String?
+    @Published private(set) var seekNotice: String?
     @Published private(set) var audioOptions: [PlaybackMediaOption] = []
     @Published private(set) var subtitleOptions: [PlaybackMediaOption] = []
     @Published private(set) var selectedAudioID = ""
@@ -215,6 +215,12 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var liveNotice: String?
     /// Says why a title the wearer watched before starts from the beginning.
     @Published private(set) var resumeNotice: String?
+    /// Native Blu-ray 3D playback is waiting for more of the title to load.
+    @Published private(set) var isBuffering = false
+    /// Replaces the subtitle list's note, for a title whose subtitles cannot show yet.
+    @Published private(set) var subtitleListNote: String?
+    /// Why the chosen Blu-ray 3D audio is not playing while the video plays on.
+    @Published private(set) var audioWarning: String?
 
     static let liveBusyNotice = "The Mac is busy converting; playback may pause."
     static let liveForwardBufferDuration: TimeInterval = 20
@@ -222,6 +228,9 @@ final class MVHEVCPlayerSession: ObservableObject {
     private(set) var playerItem: AVPlayerItem?
 
     private var resourceLease: SecurityScopedResourceLease?
+    /// Blu-ray 3D playback decoded on the headset, used instead of `player`.
+    private var nativePlayback: NativeBlurayPlayback?
+    private var nativeStatusTask: Task<Void, Never>?
     private var remotePlaybackSource: RelayRemotePlaybackSource?
     private var relayTransport: (any RelayTransport)?
     private var relayWindowRefreshTask: Task<Void, Never>?
@@ -317,7 +326,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         playbackIntent.isSceneActive
             && isReady
             && !isChangingEyeOrder
-            && playerItem?.status == .readyToPlay
+            && (nativePlayback != nil || playerItem?.status == .readyToPlay)
     }
 
     var canSeek: Bool {
@@ -327,6 +336,9 @@ final class MVHEVCPlayerSession: ObservableObject {
         if let remotePlaybackSource {
             return remotePlaybackSource.retainedSeekPolicy.latestAvailableTime
                 > remotePlaybackSource.retainedSeekPolicy.earliestPlayableTime
+        }
+        if nativePlayback != nil {
+            return bufferedRange.map { $0.upperBound > $0.lowerBound } ?? false
         }
         return duration.isFinite && duration > 0
     }
@@ -385,7 +397,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         failureMessage = nil
         failurePresentation = nil
         relayTerminationEvent = nil
-        relaySeekNotice = nil
+        seekNotice = nil
         preparationPhase = .openingSource
         currentTime = 0
         duration = 0
@@ -405,6 +417,10 @@ final class MVHEVCPlayerSession: ObservableObject {
 
         guard sharedMovie != nil || mediaItem.format != .unsupported else {
             presentFailure(.unsupported)
+            return
+        }
+        if sharedMovie == nil, mediaItem.format == .bluray3D {
+            await prepareNativeBluray(mediaItem, bookmarkStore: bookmarkStore, resumeStore: resumeStore, generation: generation)
             return
         }
 
@@ -567,7 +583,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         failureMessage = nil
         failurePresentation = nil
         relayTerminationEvent = nil
-        relaySeekNotice = nil
+        seekNotice = nil
         preparationPhase = .preparingMedia
         currentTime = 0
         duration = 0
@@ -697,6 +713,13 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func installPlayerComponent() {
+        if let nativePlayback {
+            guard playerEntity.components[VideoPlayerComponent.self] == nil else { return }
+            var component = VideoPlayerComponent(videoRenderer: nativePlayback.renderer)
+            component.desiredViewingMode = .stereo
+            playerEntity.components.set(component)
+            return
+        }
         guard mediaItem?.format == .mvHEVC else {
             playerEntity.components.remove(VideoPlayerComponent.self)
             return
@@ -710,6 +733,12 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     func play() {
         playbackIntent.requestPlayback()
+        if let nativePlayback {
+            guard canControlPlayback, playbackIntent.shouldPlay else { return }
+            nativePlayback.setPlaying(true)
+            isPlaying = nativePlayback.status.wantsPlayback
+            return
+        }
         guard canControlPlayback,
               playbackIntent.shouldPlay,
               player.timeControlStatus != .playing
@@ -724,6 +753,12 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     func pause() {
         playbackIntent.pause()
+        if let nativePlayback {
+            nativePlayback.setPlaying(false)
+            isPlaying = false
+            persistResume()
+            return
+        }
         guard playerItem != nil else {
             return
         }
@@ -745,6 +780,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func seek(to requestedTime: TimeInterval) {
+        if nativePlayback != nil {
+            seekNative(to: requestedTime)
+            return
+        }
         seek(to: requestedTime, origin: .user, completion: nil)
     }
 
@@ -762,16 +801,16 @@ final class MVHEVCPlayerSession: ObservableObject {
         if origin == .user, let remotePlaybackSource {
             switch remotePlaybackSource.retainedSeekPolicy.validateSeek(to: requestedTime) {
             case .playable:
-                relaySeekNotice = nil
+                seekNotice = nil
                 adjustedRequestedTime = requestedTime
             case let .beforeRetainedHistory(earliestPlayableTime):
-                relaySeekNotice = "That part of the live relay is no longer retained. Continuing at \(PlaybackTimeFormatter.string(for: earliestPlayableTime))."
+                seekNotice = "That part of the live relay is no longer retained. Continuing at \(PlaybackTimeFormatter.string(for: earliestPlayableTime))."
                 adjustedRequestedTime = earliestPlayableTime
             case let .notYetAvailable(latestAvailableTime):
-                relaySeekNotice = "The live relay is available through \(PlaybackTimeFormatter.string(for: latestAvailableTime))."
+                seekNotice = "The live relay is available through \(PlaybackTimeFormatter.string(for: latestAvailableTime))."
                 adjustedRequestedTime = max(earliestSeekTime, latestAvailableTime - 0.001)
             case let .ended(finalDuration):
-                relaySeekNotice = nil
+                seekNotice = nil
                 adjustedRequestedTime = min(requestedTime, finalDuration)
             case .invalidTime:
                 return
@@ -836,6 +875,12 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func selectAudio(id: String) {
+        if let nativePlayback {
+            guard let track = nativePlayback.audioTracks.first(where: { $0.mediaOption.id == id }) else { return }
+            nativePlayback.selectAudio(trackID: track.id)
+            selectedAudioID = id
+            return
+        }
         guard let audioGroup,
               let selection = audioSelectionByID[id],
               let playerItem
@@ -847,6 +892,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func selectSubtitle(id: String) {
+        if nativePlayback != nil {
+            // Blu-ray subtitles are not drawn yet (#1114), so Off is the only choice.
+            return
+        }
         guard let subtitleGroup, let playerItem else {
             return
         }
@@ -972,7 +1021,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func applicationBecameInactive() {
-        guard playerItem != nil else {
+        guard playerItem != nil || nativePlayback != nil else {
             return
         }
         persistResume()
@@ -985,6 +1034,12 @@ final class MVHEVCPlayerSession: ObservableObject {
         qualificationNativePausePlayerTime = nil
         qualificationRecorder?.recordSceneInactive(player: player)
 #endif
+        if let nativePlayback {
+            nativePlayback.setPlaying(false)
+            isPlaying = false
+            persistResume()
+            return
+        }
         guard playerItem != nil else {
             return
         }
@@ -1012,6 +1067,123 @@ final class MVHEVCPlayerSession: ObservableObject {
         relayTerminationEvent = nil
         preparationPhase = .openingSource
     }
+
+    // MARK: Native Blu-ray 3D
+
+    /// Opens a Blu-ray 3D source and plays its title with `NativeBlurayPlayback` (#1111).
+    private func prepareNativeBluray(
+        _ mediaItem: MediaItem,
+        bookmarkStore: BookmarkStore,
+        resumeStore: ResumeStore,
+        generation: Int
+    ) async {
+        let openedLease: SecurityScopedResourceLease
+        do {
+            openedLease = try await bookmarkStore.open(id: mediaItem.id)
+        } catch {
+            guard generation == preparationGeneration, !Task.isCancelled else { return }
+            presentFailure(Self.sourceFailurePresentation(for: error))
+            return
+        }
+        guard generation == preparationGeneration, !Task.isCancelled else {
+            openedLease.close()
+            return
+        }
+        resourceLease = openedLease
+        preparationPhase = .preparingMedia
+
+        let url = openedLease.url
+        let source: Bluray3DSource
+        do {
+            source = try await Task.detached(priority: .userInitiated) { try Bluray3DSourceOpener.open(url) }.value
+        } catch {
+            guard generation == preparationGeneration, !Task.isCancelled else { return }
+            presentFailure(.preparationFailed(
+                (error as? LocalizedError)?.errorDescription ?? Bluray3DSourceError.openFailed.localizedDescription
+            ))
+            return
+        }
+        guard generation == preparationGeneration, !Task.isCancelled else { return }
+        let title = source.info.titles.first { $0.id == mediaItem.bluray3DTitle?.id } ?? source.info.mainTitle
+        guard let title, title.isPlayable else {
+            presentFailure(.preparationFailed(
+                title?.unsupportedReason?.message ?? Bluray3DSourceError.titleUnavailable.localizedDescription
+            ))
+            return
+        }
+
+        let playback = NativeBlurayPlayback(source: source, title: title)
+        nativePlayback = playback
+        resumeID = mediaItem.id
+        resumeNotice = resumeStore.resumeTime(for: mediaItem.id).flatMap(ResumeWritePolicy.blurayResumeNotice(savedPosition:))
+        duration = title.durationSeconds
+        audioOptions = playback.audioTracks.map(\.mediaOption)
+        selectedAudioID = playback.audioTracks.first { $0.id == playback.selectedAudioTrackID }?.mediaOption.id ?? ""
+        subtitleOptions = [PlaybackMediaOption(id: "off", displayName: "Off")]
+        subtitleListNote = title.subtitleTracks.isEmpty ? nil : PlaybackTrackListNote.bluraySubtitlesLater
+        isBuffering = true
+        state = .ready
+        playback.start()
+        playback.setPlaying(playbackIntent.shouldPlay)
+        isPlaying = playbackIntent.shouldPlay
+        nativeStatusTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.refreshNativeStatus(generation: generation)
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+    }
+
+    private func refreshNativeStatus(generation: Int) {
+        guard generation == preparationGeneration, let nativePlayback else { return }
+        let status = nativePlayback.status
+        if let failure = status.failure {
+            nativeStatusTask?.cancel()
+            nativeStatusTask = nil
+            persistResume()
+            presentFailure(.preparationFailed(failure))
+            return
+        }
+        currentTime = status.currentTime
+        bufferedRange = status.loadedRange
+        if isBuffering != status.isBuffering {
+            isBuffering = status.isBuffering
+        }
+        if audioWarning != status.audioFailure {
+            audioWarning = status.audioFailure
+        }
+        if isPlaying != status.wantsPlayback {
+            isPlaying = status.wantsPlayback
+            if !status.wantsPlayback {
+                playbackIntent.pause()
+                persistResume()
+            }
+        }
+        // The resume position is kept once the title is actually playing, not while it loads.
+        if !status.isBuffering {
+            hasEstablishedPlayback = true
+        }
+        if isPlaying, ResumeWritePolicy.isPeriodicSaveDue(lastSaveUptime: lastResumeSaveUptime, now: ProcessInfo.processInfo.systemUptime) {
+            persistResume()
+        }
+    }
+
+    private func seekNative(to requestedTime: TimeInterval) {
+        guard let nativePlayback, canSeek else { return }
+        let target = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
+        switch nativePlayback.seek(to: target) {
+        case .seeking:
+            seekNotice = nil
+            currentTime = target
+        case let .outside(loaded):
+            seekNotice = PlaybackSeekPolicy.blurayOutsideLoadedNotice(target: target, loaded: loaded)
+        }
+    }
+
+#if BD_TO_AVP_QUALIFICATION
+    /// The native Blu-ray 3D engine, for the on-device qualification driver.
+    var qualificationNativePlayback: NativeBlurayPlayback? { nativePlayback }
+#endif
 
     private func observe(_ item: AVPlayerItem, generation: Int) {
         itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
@@ -1471,6 +1643,16 @@ final class MVHEVCPlayerSession: ObservableObject {
 #endif
         player.pause()
         player.replaceCurrentItem(with: nil)
+        nativeStatusTask?.cancel()
+        nativeStatusTask = nil
+        if let nativePlayback {
+            nativePlayback.stop()
+            self.nativePlayback = nil
+            playerEntity.components.remove(VideoPlayerComponent.self)
+        }
+        isBuffering = false
+        subtitleListNote = nil
+        audioWarning = nil
         itemStatusObservation = nil
         playerItem = nil
         if let timeObserver {
@@ -1489,7 +1671,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         relayWindowRefreshTask?.cancel()
         relayWindowRefreshTask = nil
         consecutiveRelayRefreshFailures = 0
-        relaySeekNotice = nil
+        seekNotice = nil
         liveNotice = nil
         resumeNotice = nil
         liveStatusRefreshCount = 0

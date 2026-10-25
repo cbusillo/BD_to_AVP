@@ -1,0 +1,29 @@
+schema_version = 1
+framework = "Edge264MVC"
+bundle_identifier = "com.shinycomputers.edge264-mvc"
+minimum_visionos = "26.0"
+output = "macos/Vendor/Edge264MVC.xcframework"
+notices = "macos/Vendor/Edge264MVC-notices"
+# The revision and repository come from the Mac's pin, so both apps decode with the same edge264.
+pin = "bd_to_avp/resources/notices/edge264-mvc-build.json"
+wrapper_sources = ["native/edge264_mvc/BDAVPMVCDecoder.c"]
+wrapper_header = "native/edge264_mvc/BDAVPMVCDecoder.h"
+# The framework exports only the wrapper; edge264 itself is linked in and stays hidden.
+exported_symbol_prefix = "_bdavp_mvc_"
+license = "BSD-3-Clause"
+license_file = "LICENSE_BSD.txt"
+# edge264's whole decoder is one translation unit. These are its Makefile's required flags.
+decoder_source = "src/edge264mvc.c"
+compile_flags = ["-std=gnu11", "-O3", "-fwrapv", "-flax-vector-conversions", "-Wno-override-init", "-fvisibility=hidden"]
+
+[[slices]]
+sdk = "xros"
+platform = "XROS"
+targets = ["arm64-apple-xros26.0"]
+
+# The simulator slice is universal: CI builds the generic visionOS Simulator destination,
+# which includes x86_64.
+[[slices]]
+sdk = "xrsimulator"
+platform = "XRSimulator"
+targets = ["arm64-apple-xros26.0-simulator", "x86_64-apple-xros26.0-simulator"]
