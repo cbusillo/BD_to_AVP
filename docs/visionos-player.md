@@ -687,6 +687,57 @@ provider-specific progress percentages, raw MVC playback, or source-side live
 conversion. Live Relay is limited to the authenticated EVENT-HLS contract; disc
 reading and just-in-time source production remain separate Mac-side work.
 
+## Native Blu-ray Audio
+
+Native Blu-ray playback (#711) decodes the disc's own audio on the headset. The
+components live in `macos/BDToAVPPlayer/NativeAudio`. The player UI does not use
+them yet; #1111 wires them into native playback. No licensing fees are paid, so
+lossless Dolby and DTS layers are not decoded
+([decision](https://github.com/cbusillo/BD_to_AVP/issues/1112#issuecomment-6391365574)).
+The audio list names what actually plays, for example **English (DTS core)**.
+
+| Disc format | What plays | Decoder | List label |
+|---|---|---|---|
+| LPCM | All channels | Built in | PCM |
+| Dolby Digital (AC-3) | All channels | Apple AudioToolbox | Dolby Digital |
+| Dolby Digital Plus (E-AC-3) | Independent and dependent substreams, up to 7.1 | Apple AudioToolbox | Dolby Digital Plus |
+| Dolby TrueHD | The AC-3 core every Blu-ray TrueHD track carries; the lossless layer is skipped | Apple AudioToolbox | Dolby Digital core |
+| DTS | The DTS core | FFmpeg `dca` | DTS |
+| DTS-HD High Resolution, DTS-HD Master Audio | The DTS core; the extension substream is skipped | FFmpeg `dca` with `core_only` | DTS core |
+| DTS-HD secondary (DTS Express) | Not listed: it has no core | None | None |
+
+FFmpeg is linked as `macos/Vendor/FFmpegDCA.xcframework`, a dynamic framework
+holding FFmpeg 9.0.2's `libavcodec` and `libavutil` with only the `dca` decoder,
+plus the wrapper in `native/ffmpeg_dca`. It is built without `--enable-gpl`,
+`--enable-version3` or `--enable-nonfree`, so it is LGPL-2.1-or-later; the build
+script checks FFmpeg's own license string, and its license text ships inside the
+framework and in `macos/Vendor/FFmpegDCA-notices`. Rebuild it from the pinned
+source in `vendor/ffmpeg-dca-visionos.toml` with:
+
+```sh
+uv run python scripts/build_ffmpeg_dca_visionos.py
+```
+
+The source reader hands audio to `HeadsetAudioPlayer` as complete PES packets
+(`BluRayPESPacket`: PID, stream ID, `stream_id_extension`, 33-bit PTS, payload),
+through `BluRayPESPacketSink`, with the title's audio streams described by
+`BluRayAudioStreamDescriptor` (PID, coding type and language from the playlist).
+`TransportStreamPESReader` builds those packets from M2TS bytes. On Blu-ray the
+DTS core and the AC-3 part of E-AC-3 use PES extension 0x71, DTS-HD and E-AC-3
+extension data use 0x72, and a TrueHD track's AC-3 core uses 0x76.
+
+`HeadsetAudioPlayer` decodes the selected track to 32-bit float PCM and enqueues
+it to an `AVSampleBufferAudioRenderer` that it adds to the caller's
+`AVSampleBufferRenderSynchronizer`; the native video renderer joins the same
+synchronizer. `BluRayPresentationTimeline` maps PTS to synchronizer time with the
+title's first video PTS as zero, unwrapping the 33-bit counter, and both
+renderers use it. AudioToolbox trims its decoder delay from its first output, so
+Dolby output is timed by its own sample count rather than by each input frame.
+The player keeps about a second of every other audio track behind the playhead.
+Selecting another track flushes the renderer from about 100 ms ahead and
+continues with the new track on the next frame boundary, without stopping the
+clock. `wantsMoreData` tells the reader when about two seconds are queued.
+
 ## Build And Test
 
 Generate the Xcode project from the checked-in specification:

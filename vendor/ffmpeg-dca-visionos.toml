@@ -1,0 +1,64 @@
+schema_version = 1
+framework = "FFmpegDCA"
+bundle_identifier = "com.shinycomputers.ffmpeg-dca"
+minimum_visionos = "26.0"
+output = "macos/Vendor/FFmpegDCA.xcframework"
+notices = "macos/Vendor/FFmpegDCA-notices"
+wrapper_sources = ["native/ffmpeg_dca/FFmpegDCA.c"]
+wrapper_header = "native/ffmpeg_dca/FFmpegDCA.h"
+# The framework exports only the wrapper. FFmpeg is linked into it statically, so replacing
+# the framework with a rebuild from source replaces every FFmpeg line in the app.
+exported_symbol_prefix = "_bdavp_dca_"
+expected_license = "LGPL version 2.1 or later"
+
+[ffmpeg]
+version = "9.0.2"
+source = "ffmpeg-9.0.2.tar.xz"
+url = "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz"
+sha256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
+license = "LGPL-2.1-or-later"
+license_file = "COPYING.LGPLv2.1"
+source_directory = "ffmpeg-9.0.2"
+# Only the DTS decoder. No --enable-gpl, --enable-version3 or --enable-nonfree, so the
+# build stays LGPL-2.1-or-later; the build script checks FFmpeg's own license string.
+configure_flags = [
+    "--disable-everything",
+    "--disable-autodetect",
+    "--disable-programs",
+    "--disable-doc",
+    "--disable-avdevice",
+    "--disable-avformat",
+    "--disable-avfilter",
+    "--disable-swscale",
+    "--disable-swresample",
+    "--disable-network",
+    "--disable-debug",
+    "--enable-static",
+    "--disable-shared",
+    "--enable-pic",
+    "--enable-decoder=dca",
+]
+
+[[slices]]
+sdk = "xros"
+platform = "XROS"
+
+[[slices.architectures]]
+arch = "aarch64"
+target = "arm64-apple-xros26.0"
+
+# The simulator slice is universal: CI builds the generic visionOS Simulator destination,
+# which includes x86_64.
+[[slices]]
+sdk = "xrsimulator"
+platform = "XRSimulator"
+
+[[slices.architectures]]
+arch = "aarch64"
+target = "arm64-apple-xros26.0-simulator"
+
+[[slices.architectures]]
+arch = "x86_64"
+target = "x86_64-apple-xros26.0-simulator"
+# FFmpeg's x86 assembly needs nasm; the C code is enough for one DTS core per frame.
+configure_flags = ["--disable-x86asm"]

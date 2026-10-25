@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "framework": "FFmpegDCA",
+  "ffmpeg_version": "9.0.2",
+  "ffmpeg_url": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+  "ffmpeg_sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+  "ffmpeg_license": "LGPL-2.1-or-later",
+  "configure_flags": [
+    "--disable-everything",
+    "--disable-autodetect",
+    "--disable-programs",
+    "--disable-doc",
+    "--disable-avdevice",
+    "--disable-avformat",
+    "--disable-avfilter",
+    "--disable-swscale",
+    "--disable-swresample",
+    "--disable-network",
+    "--disable-debug",
+    "--enable-static",
+    "--disable-shared",
+    "--enable-pic",
+    "--enable-decoder=dca"
+  ],
+  "xcode": [
+    "Xcode 27.0",
+    "Build version 27A266a"
+  ],
+  "sdks": {
+    "xros": "27.0",
+    "xrsimulator": "27.0"
+  },
+  "binaries": {
+    "xros-arm64/FFmpegDCA.framework/FFmpegDCA": "faa68d46203963acc282f194ab1be3ce81fd48f4bc69361a8453b9a0a2a5bbf3",
+    "xros-arm64_x86_64-simulator/FFmpegDCA.framework/FFmpegDCA": "8a391c8e47e87a3380b03aad1dc1124fe7aa14c56bd861419c2d2f0765896025"
+  }
+}

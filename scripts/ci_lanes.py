@@ -45,6 +45,10 @@ def player_source_prefixes(project: Mapping[str, object]) -> tuple[str, ...]:
         for source in target.get("sources", []):
             path = source if isinstance(source, str) else source["path"]
             prefixes.append(str(PurePosixPath("macos") / path))
+        # Prebuilt frameworks the player links, such as FFmpegDCA.xcframework.
+        for dependency in target.get("dependencies", []):
+            if isinstance(dependency, Mapping) and "framework" in dependency:
+                prefixes.append(str(PurePosixPath("macos") / dependency["framework"]))
     return tuple(prefixes)
 
 
