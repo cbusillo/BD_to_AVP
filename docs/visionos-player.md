@@ -748,6 +748,28 @@ with `BD_TO_AVP_SOURCE_READ_ITEM` set to a library item's file name. It reads th
 title as fast as the source allows for `BD_TO_AVP_SOURCE_READ_SECONDS` (default 120),
 prints `SOURCE_READ` lines, and writes `source-read-<file name>.json` to Documents.
 
+## Native Blu-ray Video
+
+Shiny 3D Cinema decodes Blu-ray 3D video (H.264 MVC) on the headset with
+[edge264-mvc](https://github.com/jens-duttke/edge264-mvc), BSD-3-Clause, at the
+revision the Mac app pins in `bd_to_avp/resources/notices/edge264-mvc-build.json`.
+It is linked as the separate dynamic framework `macos/Vendor/Edge264MVC.xcframework`,
+which also holds the small wrapper in `native/edge264_mvc` and exports only the
+wrapper's `bdavp_mvc_*` functions. The license text ships inside the framework and
+in `macos/Vendor/Edge264MVC-notices`, next to the build's provenance. Rebuild it
+from the pin, byte for byte, with:
+
+```sh
+uv run python scripts/build_edge264_visionos.py
+```
+
+`MVCDecoder` feeds each `MVCAccessUnit` to the decoder with its timeline ticks, and
+frames come back in display order carrying those ticks. `StereoSampleBufferFactory`
+copies each view into an NV12 pixel buffer, tags them `.stereoView(.leftEye)` and
+`.stereoView(.rightEye)` (the base view is the left eye unless the title says
+otherwise), and wraps both in one sample buffer for `AVSampleBufferVideoRenderer`,
+the display path proven in #1103.
+
 ## Native Blu-ray Audio
 
 Native Blu-ray playback (#711) decodes the disc's own audio on the headset. The
