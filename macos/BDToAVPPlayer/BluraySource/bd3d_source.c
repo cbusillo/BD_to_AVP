@@ -178,6 +178,7 @@ bool bd3d_disc_title(bd3d_disc *disc, uint32_t index, bd3d_title *title) {
     if (info->clip_count >= 1) {
         const BLURAY_CLIP_INFO *clip = &info->clips[0];
         snprintf(title->clip_id, sizeof(title->clip_id), "%s", clip->clip_id);
+        title->video_count = copy_streams(&title->video, clip->video_streams, clip->video_stream_count > 0 ? 1 : 0);
         title->audio_count = copy_streams(title->audio, clip->audio_streams, clip->audio_stream_count);
         title->subtitle_count = copy_streams(title->subtitles, clip->pg_streams, clip->pg_stream_count);
     }

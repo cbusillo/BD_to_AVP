@@ -27,6 +27,7 @@ from scripts.artifact_identity import app_tree_sha256
 from scripts.build_mv_hevc_encoder_macos import build_encoder as build_mv_hevc_encoder
 from scripts.build_ssif_probe_macos import (
     MANIFEST_PATH as SSIF_MANIFEST_PATH,
+    READER_VERSION_OUTPUT,
     SsifProbeManifest,
     artifact_paths as ssif_artifact_paths,
     load_manifest as load_ssif_manifest,
@@ -760,22 +761,26 @@ def smoke_packaged_mv_hevc_encoder(app_path: Path) -> None:
         print("Packaged MV-HEVC encoder is valid but unavailable on this build host.")
 
 
-def smoke_packaged_ssif_probe(app_path: Path) -> None:
+PACKAGED_BLURAY_HELPERS = {"ssif_probe": "ssif_probe contract 2\n", "bd3d_reader": READER_VERSION_OUTPUT}
+
+
+def smoke_packaged_bluray_helpers(app_path: Path) -> None:
     app_path = app_path.resolve()
-    probe = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ssif_probe"
-    completed = subprocess.run(
-        [str(probe), "--version"],
-        cwd=app_path,
-        capture_output=True,
-        env=smoke_environment(),
-        text=True,
-        timeout=30,
-    )
-    if completed.returncode != 0 or completed.stdout != "ssif_probe contract 2\n" or completed.stderr:
-        raise RuntimeError(
-            "Packaged SSIF probe smoke failed.\n"
-            f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    for name, expected_output in PACKAGED_BLURAY_HELPERS.items():
+        helper = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / name
+        completed = subprocess.run(
+            [str(helper), "--version"],
+            cwd=app_path,
+            capture_output=True,
+            env=smoke_environment(),
+            text=True,
+            timeout=30,
         )
+        if completed.returncode != 0 or completed.stdout != expected_output or completed.stderr:
+            raise RuntimeError(
+                f"Packaged {name} smoke failed.\n"
+                f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+            )
 
 
 def validate_mv_hevc_capability_probe(
@@ -959,7 +964,7 @@ def package(identity: str, keychain: str | None = None) -> Path:
     app_path = assemble_package(mv_hevc_encoder_path)
     sign_package(app_path, identity, keychain)
     smoke_packaged_native_app(app_path)
-    smoke_packaged_ssif_probe(app_path)
+    smoke_packaged_bluray_helpers(app_path)
     smoke_packaged_mv_hevc_encoder(app_path)
     smoke_packaged_worker(app_path)
     verify_codesign(app_path)
