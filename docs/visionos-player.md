@@ -747,11 +747,14 @@ own MakeMKV.
 
 The code is in `macos/BDToAVPPlayer/BluraySource`:
 
-- **Disc images and folders** open through libbluray. The title rules match the Mac's
-  `ssif_probe titles`: a title must be at least 60 seconds, have one angle and one
-  clip that it plays completely, and have the clip's SSIF stereo file. Playable
-  titles come first, then the longest, then the disc's main feature, then the lower
-  playlist number. The first playable title is the one the player uses.
+- **Disc images and folders** open through libbluray. A title must be at least 60
+  seconds, have one angle, and have the SSIF stereo file of every clip it plays. Each
+  clip must start where the clip does or at an entry point, and end where it does or at
+  an entry point, so the reader can join it to the next. Playable titles come first, then
+  the disc's main feature, then the longest, then the lower playlist number. The main
+  feature comes before length because a disc can hold a longer playlist of looping
+  extras: Ocean Dreams has a 3.6-hour slideshow beside its 94-minute feature. The first
+  playable title is the one the player uses.
 - **The SSIF demuxer** (`bd3d_source.c`, adapted from `native/ssif_probe`) pairs each
   base-view access unit (PID 0x1011) with the dependent view (0x1012) that has the
   same DTS. It delivers whole PES packets for the chosen audio and PG subtitle PIDs.
@@ -773,9 +776,24 @@ and the sink paces it by blocking. All timestamps are raw 33-bit 90 kHz values;
 `BluRayPresentationTimeline` maps them to playback time with the title's first video
 PTS as zero.
 
-Titles made of several clips are not played yet. When they are, the reader will
-rewrite each clip's timestamps onto one playlist timeline, so audio and video keep a
-single clock. `discontinuity()` stays reserved for seeks.
+A title plays its clips in playlist order (#1142). The reader rewrites every timestamp,
+including those in audio and subtitle PES headers, onto the playlist's own timeline,
+which starts at zero, so audio and video keep one clock across a clip boundary and
+`discontinuity()` stays reserved for seeks. Each clip is read as a segment: its video
+starts at the first random access unit of the part the playlist plays, views whose pair
+was read before that are dropped, and audio and subtitles outside that part are dropped.
+A random access unit is an IDR or an I picture; many discs, Ocean Dreams among them, have
+a single IDR and an I picture at every entry point. When a playlist item starts inside
+its clip, as Fast X's feature starts a second into its clip, the reader finds the entry
+point in the clip information (CLPI) file's EP map and starts at the SSIF extent pair
+that holds it. Base and dependent extents sit together in the SSIF, so that pair starts
+after every earlier extent of both views; the dependent clip comes from the playlist's
+stereo sub-path. The same mapping starts playback anywhere in a title (#1113).
+
+The tests read fixtures cut from the Ocean Dreams and Fast X discs at their clip
+boundaries, read through libudfread and libbluray (disc images are never mounted).
+`BD_TO_AVP_OCEAN_DREAMS_ISO` and `BD_TO_AVP_FAST_X_ISO`, passed to the simulator with
+the `TEST_RUNNER_` prefix, also read the real discs across their boundaries.
 
 libbluray 1.4.1 and libudfread 1.2.0, both LGPL-2.1-or-later, are linked as separate
 dynamic frameworks in `macos/Vendor/libbluray.xcframework` and

@@ -5,6 +5,8 @@ final class CollectingPacketSink: Bluray3DPacketSink {
     var packets: [Bluray3DPacket] = []
     /// Stops the reader once this many video access units have arrived.
     var videoLimit = Int.max
+    /// Stops the reader at the first video access unit timed after this.
+    var stopAfterPTS = UInt64.max
 
     var video: [MVCAccessUnit] {
         packets.compactMap { if case let .video(unit) = $0 { return unit } else { return nil } }
@@ -19,6 +21,7 @@ final class CollectingPacketSink: Bluray3DPacketSink {
     }
 
     func receive(_ packet: Bluray3DPacket) -> Bool {
+        if case let .video(unit) = packet, unit.pts > stopAfterPTS { return false }
         packets.append(packet)
         return video.count < videoLimit
     }

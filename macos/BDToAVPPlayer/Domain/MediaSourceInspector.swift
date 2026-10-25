@@ -2,8 +2,20 @@ import Foundation
 
 /// What a source file or disc folder holds: its format, and for Blu-ray 3D the title it plays.
 struct MediaSourceInspection: Codable, Equatable, Sendable {
+    /// Bumped when the readers learn to play sources they refused before, so Locations inspect
+    /// their files again instead of keeping an old answer. 2: titles made of several clips.
+    static let currentReaderVersion = 2
+
     let format: StereoFormat
     let bluray3DTitle: Bluray3DTitle?
+    /// The reader version that made this inspection; nil before versions were recorded.
+    let readerVersion: Int?
+
+    init(format: StereoFormat, bluray3DTitle: Bluray3DTitle?, readerVersion: Int? = Self.currentReaderVersion) {
+        self.format = format
+        self.bluray3DTitle = bluray3DTitle
+        self.readerVersion = readerVersion
+    }
 
     /// Why the player cannot play this source, or nil when it can.
     var unplayableReason: String? {

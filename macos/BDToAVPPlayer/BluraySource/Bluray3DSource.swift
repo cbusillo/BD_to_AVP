@@ -37,6 +37,8 @@ enum Bluray3DUnsupportedReason: String, Codable, Hashable, Sendable {
     case encrypted
     case notStereo3D = "not-3d"
     case multipleAngles = "multiple-angles"
+    /// Only in records saved before titles made of several clips could play (#1142); kept so
+    /// those records still load, and Locations inspect such files again.
     case multipleClips = "multiple-clips"
     case partialClip = "partial-clip"
     case stereoStreamMissing = "ssif-missing"
@@ -52,7 +54,7 @@ enum Bluray3DUnsupportedReason: String, Codable, Hashable, Sendable {
         case .multipleClips:
             return "Titles made of several clips are not supported yet."
         case .partialClip:
-            return "Titles that play part of a clip are not supported yet."
+            return "This title starts or ends partway through a clip where playback can't join it yet."
         case .stereoStreamMissing:
             return "This title's 3D stream is missing from the disc."
         }
