@@ -1,0 +1,14 @@
+[
+  {
+    "id": "disc-face",
+    "prompt": "Create one standalone Blu-ray optical disc DATA SIDE as a TRANSPARENT FOREGROUND asset for a macOS app icon. Input image is STYLE REFERENCE ONLY: match its premium crisp semi-flat illustrated shapes, restrained gradients and smooth highlights; DO NOT include any headset, play button or glasses. Face-on perfect circular silver optical disc, small clearly transparent center hole, clean concentric pale-gray hub ring, thin bright perimeter. Disc surface simplified to broad silver/pearl sectors with subtle cyan and crimson iridescent reflection accents, dominant cool silver, not a rainbow pie chart. The disc should clearly read at 16 and 32 pixels, simple large forms, no grooves, grid, letters, text, numbers, logos, Blu-ray trademark, background, floor, drop shadow or photographic texture. This is a drawn app-icon illustration, not hardware photography. 1024x1024 genuinely transparent square, disc centered at about 75% canvas width. No other object. Keep centre hole open and dark through transparency."
+  },
+  {
+    "id": "disc-tilt",
+    "prompt": "Create a standalone optical Blu-ray disc data-side foreground for a premium macOS icon. Match the supplied headset illustration's broad clean shapes and restrained gradients, but include NO headset or other object. Disc tilted in three-quarter perspective: a wide ellipse angled diagonally about 15 degrees, thin visible silver edge below, clearly visible elliptical center hole with TRANSPARENT opening. Silver/pearl reflective data surface with restrained crimson and cyan iridescent bands; smooth illustrated sectors and a clean concentric hub. Premium semi-flat drawing, no product photograph, no photographic texture, no tiny grooves, no letters, logo, numbers or grid. Genuine alpha transparency around disc and THROUGH CENTER HOLE. No debris or speckles inside hole, no reflection object in hole. No baked shadow, floor, background or circle. 1024 square, centered within middle 75%, entire disc visible. Broad enough ellipse to recognize a disc even at tiny sizes."
+  },
+  {
+    "id": "disc-face-clean-hole",
+    "prompt": "Fix only the central hole of this illustrated silver optical disc: make its opening a perfectly clean circular fully transparent cutout. Remove the white floating blob, debris and ragged speckles within the center hole. Preserve the disc's outer shape, iridescent silver surface, concentric hub, colors, lighting and premium semi-flat illustration. Keep no text or logos. Genuine alpha transparency around disc AND through clean center hole. 1024 square. Everything else unchanged."
+  }
+]
