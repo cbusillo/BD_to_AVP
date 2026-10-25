@@ -1,0 +1,57 @@
+{
+  "builder": "scripts/build_bluray_visionos.py",
+  "cross_host_system": "visionos",
+  "library_compile_flags": [
+    "-O2",
+    "-g0"
+  ],
+  "meson_options": [
+    "--prefix",
+    "prefix",
+    "--libdir",
+    "lib",
+    "--buildtype",
+    "release",
+    "--wrap-mode",
+    "forcefallback",
+    "-Ddefault_library=shared",
+    "-Dembed_udfread=false",
+    "-Denable_docs=false",
+    "-Denable_tools=false",
+    "-Denable_examples=false",
+    "-Dbdj_jar=disabled",
+    "-Dfreetype=disabled",
+    "-Dfontconfig=disabled",
+    "-Dlibxml2=disabled"
+  ],
+  "minimum_visionos": "26.0",
+  "schema_version": 1,
+  "source_archives": [
+    {
+      "filename": "libudfread-1.2.0.tar.xz",
+      "install_name": "@rpath/libudfread.framework/libudfread",
+      "license": "LGPL-2.1-or-later",
+      "sha256": "bb477cbd4cfbfc7787d9d05b71ee5e70430f5cfebf1297497f7e83547958050f",
+      "version": "1.2.0"
+    },
+    {
+      "filename": "libbluray-1.4.1.tar.xz",
+      "install_name": "@rpath/libbluray.framework/libbluray",
+      "license": "LGPL-2.1-or-later",
+      "sha256": "76b5dc40097f28dca4ebb009c98ed51321b2927453f75cc72cf74acd09b9f449",
+      "version": "1.4.1"
+    }
+  ],
+  "source_manifest": "vendor/ssif-probe-macos-arm64.toml",
+  "targets": [
+    "arm64-apple-xros26.0",
+    "arm64-apple-xros26.0-simulator",
+    "x86_64-apple-xros26.0-simulator"
+  ],
+  "unsigned_checksums": {
+    "macos/Vendor/libbluray.xcframework/xros-arm64/libbluray.framework/libbluray": "e0d8048b0ad7e2bd68e3a491e212c897c90e97513bebc3438b6fd3d2d11ac7b5",
+    "macos/Vendor/libbluray.xcframework/xros-arm64_x86_64-simulator/libbluray.framework/libbluray": "f092209848b64287a9db135292083996c3472bfe3c3da2e5e526117562bc56fe",
+    "macos/Vendor/libudfread.xcframework/xros-arm64/libudfread.framework/libudfread": "b930bad2b74a858d83f221d4f4aba86e0742051345e3021f30ce9281bd7e3d4d",
+    "macos/Vendor/libudfread.xcframework/xros-arm64_x86_64-simulator/libudfread.framework/libudfread": "c4f06c228983b03b0ef00e3fdd78a29846a0758726dd5d71bb7f6eceaa8fc1d3"
+  }
+}
