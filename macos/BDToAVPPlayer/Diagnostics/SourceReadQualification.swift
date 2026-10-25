@@ -70,8 +70,8 @@ enum SourceReadQualification {
         var frames = 0
         var totalBytes = 0
         var totalFrames: UInt64 = 0
-        var firstPTS: UInt64?
-        var lastPTS: UInt64 = 0
+        var timeline: BluRayPresentationTimeline?
+        var latestTicks: Int64 = 0
 
         init(seconds: Double) { limit = .seconds(seconds) }
 
@@ -82,8 +82,9 @@ enum SourceReadQualification {
                 totalBytes += unit.data.count
                 frames += 1
                 totalFrames += 1
-                firstPTS = firstPTS ?? unit.pts
-                lastPTS = max(lastPTS, unit.pts)
+                let timeline = timeline ?? BluRayPresentationTimeline(originPTS: unit.pts)
+                self.timeline = timeline
+                latestTicks = max(latestTicks, timeline.ticks(for: unit.pts, near: latestTicks))
             case let .audio(pes), let .subtitle(pes):
                 bytes += pes.payload.count
                 totalBytes += pes.payload.count
@@ -127,7 +128,7 @@ enum SourceReadQualification {
             failure = String(describing: error)
         }
         let readSeconds = elapsedSeconds(sink.started.duration(to: .now))
-        let contentSeconds = sink.firstPTS.map { Double(sink.lastPTS - $0) / 90_000 } ?? 0
+        let contentSeconds = Double(sink.latestTicks) / Double(BluRayPresentationTimeline.ticksPerSecond)
         return Report(
             fileName: fileName,
             container: source.info.container.rawValue,
