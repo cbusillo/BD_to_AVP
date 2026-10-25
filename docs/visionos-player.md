@@ -932,7 +932,8 @@ comfort, long-session thermals, or headset-visible interaction. The accepted
 physical layout keeps the RealityKit video surface at the playback probe's
 conservative scale and depth offset so foreground stereo content remains behind
 the native ornament; changes to that geometry still require physical Vision Pro
-validation. The visionOS Simulator can expose the AVKit surface and contextual
+validation. Nothing is drawn behind the video, so where the window's shape and
+the video's differ the room shows through instead of a black frame (#1132). The visionOS Simulator can expose the AVKit surface and contextual
 actions but displays an unsupported-content placeholder for tagged stereo
 output. The automated suite therefore also prepares each bundled fixture through
 the real `AVPlayer` composition path and exercises the production rendering core
