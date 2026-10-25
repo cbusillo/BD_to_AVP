@@ -398,22 +398,32 @@ final class PlayerAppModelTests: XCTestCase {
         try FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
         let movieURL = documentsURL.appendingPathComponent("Example.mov")
         let ignoredURL = documentsURL.appendingPathComponent("Notes.txt")
+        let discFolder = documentsURL.appendingPathComponent("Disc", isDirectory: true)
+        let otherFolder = documentsURL.appendingPathComponent("Other", isDirectory: true)
         try Data().write(to: movieURL)
         try Data().write(to: ignoredURL)
+        try FileManager.default.createDirectory(at: discFolder.appendingPathComponent("BDMV"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
+        try Data().write(to: discFolder.appendingPathComponent("BDMV/index.bdmv"))
+        let disc = Bluray3DTitle(
+            id: "playlist:00005", playlist: 5, durationSeconds: 60, isMainFeature: true,
+            baseViewIsRightEye: false, unsupportedReason: nil, audioTracks: [], subtitleTracks: []
+        )
 
         let model = PlayerAppModel(
             libraryStore: LibraryStore(storageURL: temporaryURL()),
             bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
             documentsURL: documentsURL,
             formatInspector: { _ in .mvHEVC },
+            blurayInspector: { _ in Bluray3DSourceInfo(container: .discFolder, titles: [disc]) },
             stereoCheckInstaller: { [] }
         )
 
         await model.bootstrap()
 
-        XCTAssertEqual(model.library.items.map(\.fileName), ["Example.mov"])
+        XCTAssertEqual(model.library.items.map(\.fileName).sorted(), ["Disc", "Example.mov"])
         XCTAssertEqual(model.sourceTitle(for: model.library.items[0]), "On My Vision Pro")
-        XCTAssertEqual(model.sourceStatuses.values.first, .available)
+        XCTAssertEqual(Set(model.sourceStatuses.values), [.available])
         XCTAssertFalse(model.isShowingDetails)
         XCTAssertTrue(model.hasBootstrapped)
     }
@@ -465,6 +475,51 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertEqual(model.library.items.count, 1)
         XCTAssertNotEqual(model.library.items[0].id, "documents:example.mov")
         XCTAssertFalse(model.library.items[0].id.hasPrefix("documents:"))
+    }
+
+    func testAddingBluraySourcesStoresTheirTitleAndWaitsForHeadsetPlayback() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let disc = directory.appendingPathComponent("Rainforest.iso")
+        let encrypted = directory.appendingPathComponent("Encrypted.iso")
+        try Data().write(to: disc)
+        try Data().write(to: encrypted)
+        func title(_ reason: Bluray3DUnsupportedReason?) -> Bluray3DTitle {
+            Bluray3DTitle(
+                id: "playlist:00005", playlist: 5, durationSeconds: 2_400, isMainFeature: true,
+                baseViewIsRightEye: false, unsupportedReason: reason, audioTracks: [], subtitleTracks: []
+            )
+        }
+        let model = PlayerAppModel(
+            libraryStore: LibraryStore(storageURL: temporaryURL()),
+            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
+            documentsURL: directory.appendingPathComponent("Documents"),
+            formatInspector: { _ in XCTFail("Blu-ray sources are not AVFoundation movies"); return .unsupported },
+            blurayInspector: { url in
+                Bluray3DSourceInfo(
+                    container: .discImage,
+                    titles: [title(url.lastPathComponent == "Encrypted.iso" ? .encrypted : nil)]
+                )
+            },
+            stereoCheckInstaller: { [] }
+        )
+
+        await model.importMovie(from: disc)
+        await model.importMovie(from: encrypted)
+
+        let items = Dictionary(uniqueKeysWithValues: model.library.items.map { ($0.fileName, $0) })
+        let playable = try XCTUnwrap(items["Rainforest.iso"])
+        XCTAssertEqual(playable.format, .bluray3D)
+        XCTAssertEqual(playable.bluray3DTitle, title(nil))
+        guard case .planned = model.playbackAvailability(for: playable) else {
+            return XCTFail("A playable Blu-ray 3D title waits for headset playback")
+        }
+        XCTAssertEqual(
+            model.playbackAvailability(for: try XCTUnwrap(items["Encrypted.iso"])),
+            .unavailable(Bluray3DUnsupportedReason.encrypted.message)
+        )
+        model.formatFilter = .bluray3D
+        XCTAssertEqual(Set(model.visibleItems.map(\.fileName)), ["Rainforest.iso", "Encrypted.iso"])
     }
 
     func testBootstrapInstallsBuiltInStereoChecksAsPlayableSources() async throws {

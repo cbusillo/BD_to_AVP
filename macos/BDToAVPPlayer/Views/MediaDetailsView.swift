@@ -30,7 +30,7 @@ struct MediaDetailsView: View {
         }
         .fileImporter(
             isPresented: $isLocatorPresented,
-            allowedContentTypes: [.movie],
+            allowedContentTypes: PlayerAppModel.importableContentTypes,
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result, let url = urls.first else { return }
@@ -73,6 +73,9 @@ struct MediaDetailsView: View {
                 }
 
                 metadataSection(for: item)
+                if let title = item.bluray3DTitle {
+                    Bluray3DTitleSection(title: title)
+                }
             }
             .padding(30)
         }
@@ -205,5 +208,47 @@ struct FormatPill: View {
             .padding(.vertical, 6)
             .background(.thinMaterial, in: Capsule())
             .accessibilityLabel("Format \(format.displayName)")
+    }
+}
+
+/// The Blu-ray 3D title a source plays and the tracks it offers.
+struct Bluray3DTitleSection: View {
+    let title: Bluray3DTitle
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Blu-ray 3D Title")
+                .font(.title2.weight(.semibold))
+            LabeledContent("Title", value: title.playlist.map { String(format: "Playlist %05u", $0) } ?? "Main video")
+            LabeledContent(
+                "Length",
+                value: Duration.seconds(title.durationSeconds).formatted(.time(pattern: .hourMinuteSecond))
+            )
+            trackList("Audio", tracks: title.audioTracks)
+            trackList("Subtitles", tracks: title.subtitleTracks)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .accessibilityIdentifier("bluray3d-title-section")
+    }
+
+    private func trackList(_ heading: String, tracks: [Bluray3DTrack]) -> some View {
+        LabeledContent(heading) {
+            if tracks.isEmpty {
+                Text("None")
+            } else {
+                VStack(alignment: .trailing, spacing: 4) {
+                    ForEach(tracks) { track in
+                        Text(Self.describe(track))
+                    }
+                }
+            }
+        }
+    }
+
+    static func describe(_ track: Bluray3DTrack) -> String {
+        let language = track.language.flatMap { Locale.current.localizedString(forLanguageCode: $0) } ?? "Unknown language"
+        return [language, track.codecName, track.name].compactMap { $0 }.joined(separator: " · ")
     }
 }
