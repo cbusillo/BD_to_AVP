@@ -498,7 +498,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                     duration: preparedDuration,
                     spatialMetadataFallback: spatialMetadataFallback
                 )
-            case .mvHEVC, .unsupported:
+            case .mvHEVC, .bluray3D, .unsupported:
                 preparedPackedStereo = nil
             }
 

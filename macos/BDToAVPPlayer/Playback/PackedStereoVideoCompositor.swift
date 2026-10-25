@@ -45,7 +45,7 @@ struct PackedStereoGeometry: Equatable, Sendable {
             }
             eyeWidth = sourceWidth
             eyeHeight = sourceHeight / 2
-        case .mvHEVC, .unsupported:
+        case .mvHEVC, .bluray3D, .unsupported:
             return nil
         }
 
@@ -66,7 +66,7 @@ struct PackedStereoGeometry: Equatable, Sendable {
             secondRegion = PackedStereoRegion(x: eyeWidth, y: 0, width: eyeWidth, height: eyeHeight)
         case .overUnder:
             secondRegion = PackedStereoRegion(x: 0, y: eyeHeight, width: eyeWidth, height: eyeHeight)
-        case .mvHEVC, .unsupported:
+        case .mvHEVC, .bluray3D, .unsupported:
             preconditionFailure("Packed stereo geometry cannot use a non-packed format.")
         }
 
