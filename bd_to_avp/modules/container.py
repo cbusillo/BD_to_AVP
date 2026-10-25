@@ -367,6 +367,11 @@ def audio_handler_metadata_options(
         title = audio_track_title(stream)
         if title is not None:
             options[f"metadata:s:a:{output_index}"] = f"handler_name={title}"
+        language = stream.get("tags", {}).get("language")
+        if isinstance(language, str) and language:
+            # These outputs hold only audio, so stream N is audio stream N. A language
+            # inherited from a shared PID is not in the source metadata FFmpeg maps.
+            options[f"metadata:s:{output_index}"] = f"language={language}"
         options[f"disposition:a:{output_index}"] = audio_disposition_value(stream)
     return options
 
@@ -419,4 +424,21 @@ def get_audio_stream_data(
     if not probe or "streams" not in probe:
         return []
     audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]
+    inherit_shared_pid_language(audio_streams)
     return audio_streams
+
+
+def inherit_shared_pid_language(streams: list[dict[str, Any]]) -> None:
+    """Give a Blu-ray TrueHD stream's AC-3 core, which FFmpeg reads as a second stream on the
+    same PID without the PMT language, the language of its TrueHD stream, as MakeMKV labels it."""
+    languages: dict[object, str] = {}
+    for stream in streams:
+        stream_id = stream.get("id")
+        tags = stream.setdefault("tags", {})
+        if stream_id is None or not isinstance(tags, dict):
+            continue
+        language = tags.get("language")
+        if isinstance(language, str) and language:
+            languages.setdefault(stream_id, language)
+        elif stream_id in languages:
+            tags["language"] = languages[stream_id]

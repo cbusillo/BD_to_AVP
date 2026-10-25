@@ -11,6 +11,14 @@ from wakepy.modes import keep
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.audio import create_transcoded_audio_file
+from bd_to_avp.modules.bluray import (
+    READER_TOOL_ID,
+    create_excerpt,
+    create_sidecar,
+    direct_bluray_disc,
+    mvc_stream_command,
+    sidecar_path,
+)
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
 from bd_to_avp.modules.disc import (
@@ -35,6 +43,7 @@ from bd_to_avp.modules.sub import create_srt_from_mkv, SRTCreationError
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video import (
     Edge264DamageCollector,
+    MvcProducer,
     build_damaged_source_warning,
     create_av1_sbs_file,
     create_av1_stereo_file,
@@ -209,13 +218,19 @@ def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
     )
 
 
-def conversion_stage_plan(video_route: ResolvedVideoRoute | None = None) -> tuple[str, ...]:
+def conversion_stage_plan(
+    video_route: ResolvedVideoRoute | None = None,
+    selected_title_id: str | None = None,
+) -> tuple[str, ...]:
     video_route = video_route or legacy_video_route()
     stages = ["configure"]
     if config.start_stage is Stage.MOVE_FILES:
         return (*stages, "move_files")
     stages.extend(["preflight", "inspect_source"])
-    if config.start_stage.value <= Stage.CREATE_MKV.value:
+    # A title read directly from the Blu-ray has no MKV; its audio and subtitles come from the
+    # sidecar the video pass writes, so their stages follow the video stages.
+    reads_bluray = direct_bluray_disc(selected_title_id) is not None
+    if config.start_stage.value <= Stage.CREATE_MKV.value and not reads_bluray:
         stages.append("create_mkv")
     if config.preview_range is not None:
         stages.append("prepare_preview_range")
@@ -225,10 +240,13 @@ def conversion_stage_plan(video_route: ResolvedVideoRoute | None = None) -> tupl
             "detect_crop",
         ]
     )
+    source_stages = []
     if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
-        stages.append("extract_mvc_and_audio")
+        source_stages.append("extract_mvc_and_audio")
     if not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
-        stages.append("extract_subtitles")
+        source_stages.append("extract_subtitles")
+    if not reads_bluray:
+        stages.extend(source_stages)
     if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
         stages.append(
             "encode_av1_stereo" if video_route.output_mode is VideoMode.AV1_SBS else "create_left_right_files"
@@ -238,6 +256,8 @@ def conversion_stage_plan(video_route: ResolvedVideoRoute | None = None) -> tupl
             stages.append("finalize_av1_stereo")
         elif video_route.selected is not VideoRouteKind.DIRECT_MV_HEVC:
             stages.append("combine_to_mv_hevc")
+    if reads_bluray:
+        stages.extend(source_stages)
     if (
         config.fx_upscale
         and not video_route.uses_in_process_upscale
@@ -435,6 +455,7 @@ def _process_each(
         activity.stage_started("preflight", "Checking required conversion tools")
     preflight.verify_runtime_ready(
         video_route=video_route,
+        selected_title_id=selected_title_id,
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=stage_observability_context("preflight"),
@@ -477,35 +498,66 @@ def _process_each(
         activity.log("Temporary workspace ready", stage="inspect_source", path=os.environ["TMPDIR"])
 
     raise_if_cancelled(cancellation_event)
-    if activity and config.start_stage.value <= Stage.CREATE_MKV.value:
-        activity.stage_started("create_mkv", "Preparing source video")
-    mkv_output_path = create_mkv_file(
-        output_folder,
-        disc_info,
-        progress_callback=activity.stage_progress if activity else None,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        observability_context=stage_observability_context("create_mkv"),
-    )
-    if config.preview_range is not None:
-        raise_if_cancelled(cancellation_event)
-        if activity:
-            activity.stage_started("prepare_preview_range", "Preparing selected preview range")
-        mkv_output_path, aligned_preview_range = create_bounded_preview_source(
-            mkv_output_path,
+    bluray_title = disc_info.bluray_title
+    mvc_producer: MvcProducer | None = None
+    excerpt_path: Path | None = None
+    if bluray_title is None or config.source_path is None:
+        if activity and config.start_stage.value <= Stage.CREATE_MKV.value:
+            activity.stage_started("create_mkv", "Preparing source video")
+        source_media_path = create_mkv_file(
             output_folder,
-            config.preview_range,
-            owns_source=True,
+            disc_info,
+            progress_callback=activity.stage_progress if activity else None,
             run_context=run_context,
             cancellation_event=cancellation_event,
-            observability_context=stage_observability_context("prepare_preview_range"),
+            observability_context=stage_observability_context("create_mkv"),
         )
-        config.preview_range = aligned_preview_range
+        if config.preview_range is not None:
+            raise_if_cancelled(cancellation_event)
+            if activity:
+                activity.stage_started("prepare_preview_range", "Preparing selected preview range")
+            source_media_path, aligned_preview_range = create_bounded_preview_source(
+                source_media_path,
+                output_folder,
+                config.preview_range,
+                owns_source=True,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=stage_observability_context("prepare_preview_range"),
+            )
+            config.preview_range = aligned_preview_range
+        video_probe_path = source_media_path
+        reference_video_path: Path | None = source_media_path
+        crop_start_seconds = (
+            min(600, max(0, int(config.preview_range.duration_seconds / 2)))
+            if config.preview_range is not None
+            else 600
+        )
+    else:
+        # The reader streams the video and writes the audio and subtitles to a sidecar as it goes.
+        source_media_path = sidecar_path(output_folder, disc_info.name)
+        mvc_producer = MvcProducer(
+            tuple(mvc_stream_command(config.source_path, bluray_title, source_media_path)), READER_TOOL_ID
+        )
+        reference_video_path = None
+        excerpt_path = output_folder / f"{disc_info.name}_excerpt.m2ts"
+        video_probe_path = excerpt_path
+        crop_start_seconds = 0
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("probe_color", "Reading video color depth")
+    if excerpt_path is not None and bluray_title is not None and config.source_path is not None:
+        create_excerpt(
+            config.source_path,
+            bluray_title,
+            excerpt_path,
+            min(600, int(bluray_title.duration_seconds / 2)),
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("probe_color"),
+        )
     disc_info.color_depth = get_video_color_depth(
-        mkv_output_path,
+        video_probe_path,
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=stage_observability_context("probe_color"),
@@ -513,42 +565,59 @@ def _process_each(
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("detect_crop", "Checking frame crop parameters")
-    crop_start_seconds = (
-        min(600, max(0, int(config.preview_range.duration_seconds / 2))) if config.preview_range is not None else 600
-    )
     crop_params = detect_crop_parameters(
-        mkv_output_path,
+        video_probe_path,
         start_seconds=crop_start_seconds,
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=stage_observability_context("detect_crop"),
     )
-    raise_if_cancelled(cancellation_event)
-    if activity and config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
-        activity.stage_started("extract_mvc_and_audio", "Extracting MVC video and audio")
-    audio_output_path, video_output_path = create_mvc_and_audio(
-        disc_info.name,
-        mkv_output_path,
-        output_folder,
-        activity=activity,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        observability_context=stage_observability_context("extract_mvc_and_audio"),
-    )
-    raise_if_cancelled(cancellation_event)
-    if activity and not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
-        activity.stage_started("extract_subtitles", "Extracting subtitles")
-    subtitle_warning_handler = (
-        (lambda message: activity.warning(message, stage="extract_subtitles")) if activity else None
-    )
-    create_srt_from_mkv(
-        mkv_output_path,
-        output_folder,
-        subtitle_warning_handler,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        observability_context=stage_observability_context("extract_subtitles"),
-    )
+    if excerpt_path is not None and not config.keep_files:
+        excerpt_path.unlink(missing_ok=True)
+
+    def extract_audio_and_subtitles() -> tuple[Path, Path]:
+        raise_if_cancelled(cancellation_event)
+        if bluray_title is not None and config.source_path is not None and not source_media_path.is_file():
+            # A conversion resumed after the video stages reads the audio and subtitles again.
+            create_sidecar(
+                config.source_path,
+                bluray_title,
+                source_media_path,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=stage_observability_context("extract_mvc_and_audio"),
+            )
+        if activity and config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
+            activity.stage_started("extract_mvc_and_audio", "Extracting MVC video and audio")
+        extracted_audio_path, extracted_video_path = create_mvc_and_audio(
+            disc_info.name,
+            source_media_path,
+            output_folder,
+            activity=activity,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("extract_mvc_and_audio"),
+        )
+        raise_if_cancelled(cancellation_event)
+        if activity and not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
+            activity.stage_started("extract_subtitles", "Extracting subtitles")
+        subtitle_warning_handler = (
+            (lambda warning_message: activity.warning(warning_message, stage="extract_subtitles")) if activity else None
+        )
+        create_srt_from_mkv(
+            source_media_path,
+            output_folder,
+            subtitle_warning_handler,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("extract_subtitles"),
+        )
+        return extracted_audio_path, extracted_video_path
+
+    if mvc_producer is None:
+        audio_output_path, video_output_path = extract_audio_and_subtitles()
+    else:
+        video_output_path = source_media_path
     raise_if_cancelled(cancellation_event)
     generated_mv_hevc_expectations: tuple[tuple[int, int], float] | None = None
     damage_collector = Edge264DamageCollector()
@@ -564,6 +633,7 @@ def _process_each(
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("encode_av1_stereo"),
             damage_collector=damage_collector,
+            mvc_producer=mvc_producer,
         )
         report_damaged_source(activity, damage_collector, disc_info, "encode_av1_stereo")
         raise_if_cancelled(cancellation_event)
@@ -597,6 +667,7 @@ def _process_each(
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("create_left_right_files"),
             damage_collector=damage_collector,
+            mvc_producer=mvc_producer,
         )
         report_damaged_source(activity, damage_collector, disc_info, "create_left_right_files")
     else:
@@ -611,6 +682,7 @@ def _process_each(
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("create_left_right_files"),
             damage_collector=damage_collector,
+            mvc_producer=mvc_producer,
         )
         report_damaged_source(activity, damage_collector, disc_info, "create_left_right_files")
         raise_if_cancelled(cancellation_event)
@@ -619,7 +691,7 @@ def _process_each(
         mv_hevc_path = output_folder / f"{disc_info.name}_MV-HEVC.mov"
         generated_mv_hevc_expectations = resolve_generated_mv_hevc_expectations(
             left_output_path,
-            mkv_output_path,
+            reference_video_path,
             mv_hevc_path,
             disc_info,
             crop_params,
@@ -633,13 +705,15 @@ def _process_each(
             output_folder,
             disc_info,
             crop_params=crop_params,
-            reference_video_path=mkv_output_path,
+            reference_video_path=reference_video_path,
             expected_dimensions=generated_mv_hevc_expectations[0],
             expected_duration_seconds=generated_mv_hevc_expectations[1],
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("combine_to_mv_hevc"),
         )
+    if mvc_producer is not None:
+        audio_output_path, _ = extract_audio_and_subtitles()
     raise_if_cancelled(cancellation_event)
     if not video_route.uses_in_process_upscale:
         if activity and config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:

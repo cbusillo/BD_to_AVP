@@ -17,6 +17,8 @@ named restartable file.
 - Input: disc, ISO/image, MKV, MTS, or M2TS source plus selected title metadata.
 - Output: the selected MKV/MTS/M2TS source in default mode; a copy in the
   per-title output folder with `--keep-files`; MakeMKV output for disc/images.
+  An unencrypted Blu-ray image or folder read directly skips this stage; see
+  [Direct Blu-ray Reads](#direct-blu-ray-reads).
 - Restart/debug value: high. This is the common resume point and MakeMKV
   boundary.
 
@@ -209,6 +211,38 @@ Left/right HEVC outputs remain the external-upscaler boundary. AV1 does not use
 FX Upscale in its initial contract; its packed intermediate is retained after
 completion only with `--keep-files`.
 
+### Direct Blu-ray Reads
+
+An ISO, disc image, or Blu-ray folder converts without MakeMKV and without the
+title-sized MKV when `bd_to_avp/bin/bd3d_reader` can read it. The reader
+compiles the headset player's 3D demuxer
+(`macos/BDToAVPPlayer/BluraySource/bd3d_source.c`) against the bundled
+libbluray and libudfread, so the Mac and the headset share one reader. It never
+decrypts: a source with an `AACS` or `BDSVM` folder is refused before libbluray
+opens it.
+
+The direct route applies when the disc's main feature is one angle and one clip
+that the playlist plays completely, with the clip's SSIF stereo file. Its title
+list holds each readable 3D clip once, with `bluray:<clip>` IDs. Everything
+else keeps MakeMKV: encrypted sources, physical discs, main features that span
+several clips, previews, and a title ID from an earlier MakeMKV analysis
+(`makemkv:<n>`). A preview of a `bluray:` title uses the MakeMKV title whose
+segment map starts with that clip.
+
+One read of the SSIF feeds the conversion. `bd3d_reader stream` writes Annex B
+MVC to `edge264_test`, as source FFmpeg does for an MKV, and writes every audio
+and presentation-graphics stream of the title to
+`<name>_audio_subtitles.ts`. That sidecar's PMT carries each stream's playlist
+language. Each DTS-HD stream is followed by its DTS core, and FFmpeg exposes a
+TrueHD stream's AC-3 core, so the audio tracks match a MakeMKV rip. The sidecar
+also holds the first base-view access unit, so audio keeps its offset from the
+first video frame. Because the sidecar comes from the video pass, Extract MVC
+and Audio and Extract Subtitles run after the video stages for a direct read. A
+resume after the video stages rewrites a missing sidecar with a read that
+discards the video. Color depth and crop detection read a 15-second 2D excerpt
+from `bd3d_reader excerpt`, taken from the middle of the title or ten minutes
+in, whichever is earlier.
+
 ### Extracted Audio To Transcoded Audio
 
 When `automatic` or `convert_aac` is selected, the Prepare Audio stage reads
@@ -258,8 +292,9 @@ remain outside the Python pipeline.
 
 The MKV remains the shared source for color-depth probing, crop detection,
 MVC/audio extraction, subtitle OCR, and restart. Existing MKV/MTS/M2TS inputs
-are reused in place by default, while disc/image inputs retain MakeMKV output as
-a seekable source boundary.
+are reused in place by default, while encrypted or multi-clip disc/image inputs
+retain MakeMKV output as a seekable source boundary. Direct Blu-ray reads
+replace it with the audio and subtitle sidecar and the video excerpt.
 
 ### MVC And PCM Extraction
 
