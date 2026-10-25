@@ -98,7 +98,7 @@ struct AppShellView: View {
         }
                 .fileImporter(
             isPresented: $isPlayerLocatorPresented,
-            allowedContentTypes: [.movie],
+            allowedContentTypes: PlayerAppModel.importableContentTypes,
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result,
@@ -157,6 +157,7 @@ struct AppShellView: View {
                     coordinator: relayCoordinator, player: playerSession
                 )
                 await RelayQualificationDriver.runLiveIfRequested(library: movieLibrary, player: playerSession)
+                await SourceReadQualification.runIfRequested(model: model)
             }
             #endif
         }

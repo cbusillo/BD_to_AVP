@@ -37,7 +37,7 @@ struct LibraryView: View {
         }
         .fileImporter(
             isPresented: $isImporterPresented,
-            allowedContentTypes: [.movie],
+            allowedContentTypes: PlayerAppModel.importableContentTypes,
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result, let url = urls.first else { return }

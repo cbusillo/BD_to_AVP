@@ -687,6 +687,67 @@ provider-specific progress percentages, raw MVC playback, or source-side live
 conversion. Live Relay is limited to the authenticated EVENT-HLS contract; disc
 reading and just-in-time source production remain separate Mac-side work.
 
+## Blu-ray 3D Sources
+
+Native Blu-ray playback (#711) reads Blu-ray 3D sources on the headset itself, with
+no Mac (#1110). **Add Movie** accepts an unencrypted 3D ISO, a disc folder (the folder
+that holds `BDMV`, or `BDMV` itself), or an MKV that keeps the MVC 3D track, such as
+a MakeMKV rip, from the headset or a Files share such as SMB. ISOs, MKVs and disc
+folders copied into the app's Documents folder are listed on launch. Adding a source
+opens it, chooses its title and stores that title with the library item; the
+details view shows the title's length, audio and subtitles. Play stays unavailable
+until #1111 adds native playback. Encrypted discs still need the Mac and the user's
+own MakeMKV.
+
+The code is in `macos/BDToAVPPlayer/BluraySource`:
+
+- **Disc images and folders** open through libbluray. The title rules match the Mac's
+  `ssif_probe titles`: a title must be at least 60 seconds, have one angle and one
+  clip that it plays completely, and have the clip's SSIF stereo file. Playable
+  titles come first, then the longest, then the disc's main feature, then the lower
+  playlist number. The first playable title is the one the player uses.
+- **The SSIF demuxer** (`bd3d_source.c`, adapted from `native/ssif_probe`) pairs each
+  base-view access unit (PID 0x1011) with the dependent view (0x1012) that has the
+  same DTS. It delivers whole PES packets for the chosen audio and PG subtitle PIDs.
+  `TransportStreamPESReader.parse` builds the `BluRayPESPacket` values, so every
+  source reads PES headers the same way.
+- **Matroska** is read by a small EBML parser. The video track must be
+  `V_MPEG4/ISO/AVC` with an `mvcC` block addition mapping. Each block already holds a
+  frame's base and dependent NAL units, so the reader only converts them to Annex B
+  and puts the `mvcC` parameter sets (SPS, subset SPS and both PPS) before the first
+  frame. Audio and subtitle blocks become `BluRayPESPacket` values with stream ID
+  0xBD and the block's PTS. Matroska TrueHD has no AC-3 core and Matroska PCM has no
+  Blu-ray LPCM header, so neither is offered to the audio player.
+
+Every source delivers, in stream order, to a `Bluray3DPacketSink`:
+`MVCAccessUnit` values (one stereo frame as Annex B for edge264, with its 33-bit PTS
+and DTS) and `BluRayPESPacket` values for audio and subtitles. `Bluray3DPacketRouter`
+sends audio to `HeadsetAudioPlayer`. Returning false from the sink stops the reader,
+and the sink paces it by blocking. All timestamps are raw 33-bit 90 kHz values;
+`BluRayPresentationTimeline` maps them to playback time with the title's first video
+PTS as zero.
+
+Titles made of several clips are not played yet. When they are, the reader will
+rewrite each clip's timestamps onto one playlist timeline, so audio and video keep a
+single clock. `discontinuity()` stays reserved for seeks.
+
+libbluray 1.4.1 and libudfread 1.2.0, both LGPL-2.1-or-later, are linked as separate
+dynamic frameworks in `macos/Vendor/libbluray.xcframework` and
+`macos/Vendor/libudfread.xcframework`. Each framework carries its `COPYING` text. They
+are built from the same pinned source archives as the Mac's `ssif_probe`, recorded in
+`vendor/ssif-probe-macos-arm64.toml` and kept in `bd_to_avp/resources/notices/ssif-probe`.
+Rebuild or verify them with:
+
+```sh
+uv run python -m scripts.build_bluray_visionos
+uv run python -m scripts.build_bluray_visionos --verify-only
+```
+
+A qualification build (`BD_TO_AVP_QUALIFICATION`) measures read speed when launched
+with `BD_TO_AVP_SOURCE_READ_ITEM` set to a library item's file name. It reads the
+title as fast as the source allows for `BD_TO_AVP_SOURCE_READ_SECONDS` (default 120),
+prints `SOURCE_READ` lines, and writes `source-read-<file name>.json` to Documents.
+
 ## Native Blu-ray Audio
 
 Native Blu-ray playback (#711) decodes the disc's own audio on the headset. The

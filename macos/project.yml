@@ -169,9 +169,15 @@ targets:
       # FFmpeg's LGPL DTS decoder, linked dynamically; scripts/build_ffmpeg_dca_visionos.py.
       - framework: Vendor/FFmpegDCA.xcframework
         embed: true
+      # LGPL-2.1-or-later, linked dynamically; see scripts/build_bluray_visionos.py.
+      - framework: Vendor/libbluray.xcframework
+        embed: true
+      - framework: Vendor/libudfread.xcframework
+        embed: true
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: BDToAVPPlayer/BluraySource/BDToAVPPlayer-Bridging-Header.h
         CODE_SIGN_STYLE: Automatic
         CURRENT_PROJECT_VERSION: 4
         DEVELOPMENT_TEAM: MM5YXC7T6E
