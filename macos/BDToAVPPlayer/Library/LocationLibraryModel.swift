@@ -39,6 +39,8 @@ final class LocationLibraryModel: ObservableObject {
     private let inspectionTimeout: Duration
     private var refreshGenerations: [UUID: Int] = [:]
     private var refreshesInFlight: Set<UUID> = []
+    /// Share operations still running per Location, including ones a timeout gave up on.
+    private var outstandingOperations: [UUID: Int] = [:]
 
     init(
         store: LocationStore,
@@ -119,7 +121,7 @@ final class LocationLibraryModel: ObservableObject {
     /// keeping its name and what was already inspected.
     func reconnect(_ locationID: UUID, folderURL: URL) async {
         guard location(id: locationID) != nil, saveBookmark(for: folderURL, locationID: locationID) else { return }
-        await refresh(locationID, restart: true)
+        await refresh(locationID)
     }
 
     func remove(_ locationID: UUID) {
@@ -156,9 +158,14 @@ final class LocationLibraryModel: ObservableObject {
 
     /// Lists the Location's folder and inspects files that are new or changed since last time.
     /// A refresh already under way is left to finish, so a slow first look at a large share is
-    /// not restarted by the next periodic refresh; `restart` replaces it, as after reconnecting.
-    func refresh(_ locationID: UUID, restart: Bool = false) async {
-        guard location(id: locationID) != nil, restart || !refreshesInFlight.contains(locationID) else { return }
+    /// not restarted by the next periodic refresh. While a share operation that timed out is
+    /// still running, no new one starts, so retries against a stalled share cannot pile up.
+    func refresh(_ locationID: UUID) async {
+        guard location(id: locationID) != nil, !refreshesInFlight.contains(locationID) else { return }
+        guard (outstandingOperations[locationID] ?? 0) == 0 else {
+            markUnreachable(locationID)
+            return
+        }
         refreshGenerations[locationID, default: 0] += 1
         let generation = refreshGenerations[locationID]!
         func isCurrent() -> Bool { refreshGenerations[locationID] == generation && !Task.isCancelled }
@@ -175,7 +182,7 @@ final class LocationLibraryModel: ObservableObject {
         let bookmarkID = Self.bookmarkID(for: locationID)
         let listed: (SecurityScopedResourceLease, LocationListing)
         do {
-            listed = try await Self.withTimeout(openTimeout) { @MainActor in
+            listed = try await tracked(locationID, timeout: openTimeout) { @MainActor in
                 let lease = try await bookmarkStore.open(id: bookmarkID)
                 let root = lease.url
                 let listing = try await Task.detached(priority: .userInitiated) {
@@ -187,8 +194,10 @@ final class LocationLibraryModel: ObservableObject {
             if isCurrent() { markUnreachable(locationID) }
             return
         }
-        let (lease, listing) = listed
-        defer { lease.close() }
+        let (openedLease, listing) = listed
+        // Inspections that outlive a timeout keep the folder open until they really finish.
+        let lease = SharedLease(openedLease)
+        defer { lease.release() }
         guard isCurrent() else { return }
 
         var inspected: [InspectedFile] = []
@@ -210,8 +219,12 @@ final class LocationLibraryModel: ObservableObject {
             } else {
                 let url = candidate.relativePath.isEmpty ? lease.url : lease.url.appendingPathComponent(candidate.relativePath)
                 let inspector = inspector
+                lease.retain()
                 do {
-                    inspection = try await Self.withTimeout(inspectionTimeout) { try await inspector.inspect(url) }
+                    inspection = try await tracked(locationID, timeout: inspectionTimeout) {
+                        defer { lease.release() }
+                        return try await inspector.inspect(url)
+                    }
                 } catch let error as Bluray3DSourceError where error.isAboutTheSource {
                     // The file was read and is not something the player can play.
                     inspection = MediaSourceInspection(format: .unsupported, bluray3DTitle: nil)
@@ -226,7 +239,7 @@ final class LocationLibraryModel: ObservableObject {
             if let inspection {
                 inspected.append(InspectedFile(
                     relativePath: candidate.relativePath, size: candidate.size,
-                    modified: candidate.modified, inspection: inspection
+                    modified: candidate.modified, fingerprint: candidate.fingerprint, inspection: inspection
                 ))
                 if let reason = inspection.unplayableReason {
                     unplayable.append(UnplayableLocationFile(relativePath: candidate.relativePath, reason: reason))
@@ -265,6 +278,31 @@ final class LocationLibraryModel: ObservableObject {
         guard let index = locations.firstIndex(where: { $0.id == locationID }) else { return }
         locations[index].inspectedFiles = files
         persist()
+    }
+
+    /// Runs a share operation under `timeout`, counting it as outstanding until it really ends.
+    private func tracked<T: Sendable>(
+        _ locationID: UUID,
+        timeout: Duration,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        outstandingOperations[locationID, default: 0] += 1
+        return try await Self.withTimeout(timeout) { [weak self] in
+            let result: Result<T, Error>
+            do { result = .success(try await operation()) } catch { result = .failure(error) }
+            await self?.operationEnded(locationID)
+            return try result.get()
+        }
+    }
+
+    private func operationEnded(_ locationID: UUID) {
+        let remaining = (outstandingOperations[locationID] ?? 1) - 1
+        outstandingOperations[locationID] = remaining > 0 ? remaining : nil
+    }
+
+    /// Whether a share operation for the Location is still running, even one a timeout gave up on.
+    func hasOutstandingOperations(_ locationID: UUID) -> Bool {
+        (outstandingOperations[locationID] ?? 0) > 0
     }
 
     private func markUnreachable(_ locationID: UUID) {
@@ -326,6 +364,31 @@ final class LocationLibraryModel: ObservableObject {
 }
 
 struct LocationTimeoutError: Error {}
+
+/// A folder lease shared by a refresh and the inspections it starts; it closes on the last release.
+private final class SharedLease: @unchecked Sendable {
+    let url: URL
+    private let lease: SecurityScopedResourceLease
+    private let lock = NSLock()
+    private var holders = 1
+
+    init(_ lease: SecurityScopedResourceLease) {
+        self.lease = lease
+        url = lease.url
+    }
+
+    func retain() {
+        lock.withLock { holders += 1 }
+    }
+
+    func release() {
+        let isLast = lock.withLock {
+            holders -= 1
+            return holders == 0
+        }
+        if isLast { lease.close() }
+    }
+}
 
 private final class TimeoutGate<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()

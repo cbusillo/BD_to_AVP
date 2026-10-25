@@ -13,10 +13,13 @@ struct InspectedFile: Codable, Equatable, Sendable {
     let relativePath: String
     let size: Int64?
     let modified: Date?
+    /// A disc folder's BDMV digest; see `LocationScanner.discFingerprint`.
+    let fingerprint: String?
     let inspection: MediaSourceInspection
 
     func matches(_ candidate: LocationCandidate) -> Bool {
         relativePath == candidate.relativePath && size == candidate.size && modified == candidate.modified
+            && fingerprint == candidate.fingerprint
     }
 }
 

@@ -116,7 +116,7 @@ struct LocationLibraryView: View {
         if status == .available {
             if locations.truncatedLocations.contains(locationID) {
                 Label(
-                    "This location has more folders than Shiny 3D Cinema reads. Add a folder closer to your movies to see the rest.",
+                    "Shiny 3D Cinema stopped looking before it reached every folder here. Add a folder closer to your movies to see the rest.",
                     systemImage: "info.circle"
                 )
                 .font(.callout)

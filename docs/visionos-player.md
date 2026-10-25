@@ -553,9 +553,13 @@ Location**. iOS-family bookmarks to network volumes can stop resolving after the
 is unmounted and remounted (Apple bug r.102995804, discussed on the
 [developer forums](https://developer.apple.com/forums/thread/774114)); choosing the
 folder again replaces the bookmark and keeps the Location. A share that stops answering
-is reported unreachable after 45 seconds instead of hanging the library. A large
-share is read for up to 15 seconds; the Location then says it has more folders than
-it reads and suggests adding a folder closer to the movies.
+is reported unreachable after 45 seconds instead of hanging the library; a request it
+gave up on keeps its folder access until it really ends, and no new request starts for
+that Location until then, so retries cannot pile up on a stalled share. A large share
+is read for up to 15 seconds or 1,000 titles, checked before every entry; the Location
+then says it stopped looking before reaching every folder and suggests adding a folder
+closer to the movies. A disc folder counts as changed when any file in `BDMV`, its
+`PLAYLIST`, `CLIPINF`, `STREAM` or `STREAM/SSIF` folders changes name, size or date.
 
 ## Source Access
 

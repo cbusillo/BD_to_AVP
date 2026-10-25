@@ -138,22 +138,93 @@ final class LocationLibraryModelTests: XCTestCase {
         XCTAssertNotNil(model.item(id: itemID))
     }
 
-    func testAShareThatStopsAnsweringIsReportedUnreachable() async throws {
+    func testAStalledInspectionKeepsFolderAccessUntilItEndsAndBlocksNewScans() async throws {
         let share = try makeShare()
         let fixture = makeFixture()
+        let access = AccessProbe()
+        let bookmarkStore = BookmarkStore(storageURL: fixture.bookmarksURL, makeLease: { url in
+            SecurityScopedResourceLease(url: url, startAccessing: { access.started() }, stopAccessing: { access.stopped() })
+        })
         let locations = LocationLibraryModel(
             store: fixture.locationStore,
-            bookmarkStore: fixture.bookmarkStore,
+            bookmarkStore: bookmarkStore,
             inspector: MediaSourceInspector(
-                formatInspector: { _ in try await Task.sleep(for: .seconds(30)); return .mvHEVC },
-                blurayInspector: { _ in try await Task.sleep(for: .seconds(30)); throw Bluray3DSourceError.openFailed }
+                formatInspector: { _ in
+                    // The first read stalls past the timeout, then the share answers again.
+                    if access.recordInspection() == 1 {
+                        try await Task.sleep(for: .milliseconds(600))
+                        access.recordStalledReadFinished()
+                    }
+                    return .mvHEVC
+                },
+                blurayInspector: { _ in throw Bluray3DSourceError.unrecognized }
             ),
-            inspectionTimeout: .milliseconds(200)
+            inspectionTimeout: .milliseconds(100)
         )
 
         let locationID = try await XCTUnwrapAsync(await locations.add(folderURL: share))
-
         XCTAssertEqual(locations.statuses[locationID], .unreachable)
+        XCTAssertTrue(locations.hasOutstandingOperations(locationID))
+
+        await locations.refresh(locationID)
+        XCTAssertEqual(access.inspections, 1, "A new scan started while the stalled read was still running")
+
+        try await waitUntil { !locations.hasOutstandingOperations(locationID) }
+        XCTAssertEqual(access.activeAtStalledReadEnd, true, "Folder access closed before the stalled read ended")
+        XCTAssertEqual(access.active, 0)
+
+        await locations.refresh(locationID)
+        XCTAssertEqual(locations.statuses[locationID], .available)
+        XCTAssertEqual(access.active, 0)
+    }
+
+    func testChangingAFileInsideADiscFolderInspectsItAgain() async throws {
+        let share = try makeDirectory()
+        let disc = share.appendingPathComponent("Avatar", isDirectory: true)
+        try makeDisc(at: disc)
+        let playlists = disc.appendingPathComponent("BDMV/PLAYLIST", isDirectory: true)
+        try FileManager.default.createDirectory(at: playlists, withIntermediateDirectories: true)
+        try Data([1]).write(to: playlists.appendingPathComponent("00001.mpls"))
+        let fixture = makeFixture()
+        let counter = AccessProbe()
+        let inspector = MediaSourceInspector(
+            formatInspector: { _ in .unsupported },
+            blurayInspector: { url in
+                _ = counter.recordInspection()
+                return try await Self.shareInspector.blurayInspector(url)
+            }
+        )
+        let locations = fixture.locations(inspector: inspector)
+        let locationID = try await XCTUnwrapAsync(await locations.add(folderURL: share))
+        XCTAssertEqual(counter.inspections, 1)
+
+        // Rewriting a playlist leaves the disc folder's own date unchanged.
+        let folderDate = try disc.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        try Data([1, 2, 3]).write(to: playlists.appendingPathComponent("00001.mpls"))
+        XCTAssertEqual(try disc.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, folderDate)
+        let relaunched = LocationLibraryModel(
+            store: fixture.locationStore,
+            bookmarkStore: BookmarkStore(storageURL: fixture.bookmarksURL),
+            inspector: inspector
+        )
+        await relaunched.refresh(locationID)
+
+        XCTAssertEqual(counter.inspections, 2, "A changed playlist reused the old inspection")
+    }
+
+    func testScannerStopsWithinOneWideFolderAtItsBudgetAndLimit() throws {
+        let root = try makeDirectory()
+        for index in 0..<20 {
+            try Data().write(to: root.appendingPathComponent("Movie \(index).mov"))
+        }
+
+        let outOfTime = try LocationScanner.scan(root: root, budget: .zero)
+        XCTAssertTrue(outOfTime.candidates.isEmpty)
+        XCTAssertTrue(outOfTime.isTruncated)
+
+        let limited = try LocationScanner.scan(root: root, limit: 5)
+        XCTAssertEqual(limited.candidates.count, 5)
+        XCTAssertTrue(limited.isTruncated)
     }
 
     func testRemovingALocationForgetsItsAccess() async throws {
@@ -199,7 +270,7 @@ final class LocationLibraryModelTests: XCTestCase {
     // MARK: Fixtures
 
     /// Formats by file name, standing in for AVFoundation and libbluray.
-    private static let shareInspector = MediaSourceInspector(
+    nonisolated private static let shareInspector = MediaSourceInspector(
         formatInspector: { url in
             url.pathExtension == "mov" ? .mvHEVC : .unsupported
         },
@@ -274,7 +345,47 @@ final class LocationLibraryModelTests: XCTestCase {
         return directory
     }
 
+    private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return XCTFail("Timed out waiting") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     private func XCTUnwrapAsync<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) async throws -> T {
         try XCTUnwrap(value, file: file, line: line)
+    }
+}
+
+/// Counts folder access and inspections from any thread.
+private final class AccessProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeCount = 0
+    private var inspectionCount = 0
+    private var stalledReadSawAccess: Bool?
+
+    var active: Int { lock.withLock { activeCount } }
+    var inspections: Int { lock.withLock { inspectionCount } }
+    var activeAtStalledReadEnd: Bool? { lock.withLock { stalledReadSawAccess } }
+
+    func started() -> Bool {
+        lock.withLock { activeCount += 1 }
+        return true
+    }
+
+    func stopped() {
+        lock.withLock { activeCount -= 1 }
+    }
+
+    func recordInspection() -> Int {
+        lock.withLock {
+            inspectionCount += 1
+            return inspectionCount
+        }
+    }
+
+    func recordStalledReadFinished() {
+        lock.withLock { stalledReadSawAccess = activeCount > 0 }
     }
 }
