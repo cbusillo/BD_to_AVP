@@ -219,6 +219,8 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var isBuffering = false
     /// Replaces the subtitle list's note, for a title whose subtitles cannot show yet.
     @Published private(set) var subtitleListNote: String?
+    /// Why the chosen Blu-ray 3D audio is not playing while the video plays on.
+    @Published private(set) var audioWarning: String?
 
     static let liveBusyNotice = "The Mac is busy converting; playback may pause."
     static let liveForwardBufferDuration: TimeInterval = 20
@@ -1147,6 +1149,9 @@ final class MVHEVCPlayerSession: ObservableObject {
         if isBuffering != status.isBuffering {
             isBuffering = status.isBuffering
         }
+        if audioWarning != status.audioFailure {
+            audioWarning = status.audioFailure
+        }
         if isPlaying != status.wantsPlayback {
             isPlaying = status.wantsPlayback
             if !status.wantsPlayback {
@@ -1647,6 +1652,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
         isBuffering = false
         subtitleListNote = nil
+        audioWarning = nil
         itemStatusObservation = nil
         playerItem = nil
         if let timeObserver {

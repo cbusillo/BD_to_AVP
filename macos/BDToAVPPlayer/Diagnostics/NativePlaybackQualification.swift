@@ -149,7 +149,7 @@ enum NativePlaybackQualification {
             report.samples.append(sample)
             report.framesWithoutDependentView = status.statistics.framesWithoutDependentView
             report.corruptUnits = status.statistics.corruptUnits
-            report.audioError = engine.audioPlayer?.lastError
+            report.audioError = status.audioFailure ?? engine.audioPlayer?.lastError
             report.averageCPUPercentOfOneCore = cpuTotal / Double(second)
             report.thermalStatesSeen = thermal.sorted()
             emit(

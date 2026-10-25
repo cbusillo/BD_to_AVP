@@ -527,6 +527,13 @@ private struct PlayerOrnamentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if let warning = session.audioWarning {
+                Label(warning, systemImage: "speaker.slash")
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("player-audio-warning")
+            }
+
             if session.isBuffering {
                 HStack(spacing: 10) {
                     ProgressView()
