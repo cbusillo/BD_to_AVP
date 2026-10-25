@@ -73,6 +73,27 @@ final class BlurayTransportStreamTests: XCTestCase {
         XCTAssertEqual(sink.video.count, 2)
     }
 
+    func testDecodeTimesMayWrapPastThe33BitLimit() throws {
+        let sink = CollectingPacketSink()
+
+        _ = try BlurayTransportStream.demux(frames(decodeTimes: [8_589_934_000, 3_162]), into: sink)
+
+        XCTAssertEqual(sink.video.map(\.dts), [8_589_934_000, 3_162])
+    }
+
+    func testDecodeTimesThatGoBackwardAreAnError() {
+        XCTAssertThrowsError(try BlurayTransportStream.demux(frames(decodeTimes: [9_000, 3_000]), into: CollectingPacketSink())) {
+            XCTAssertEqual($0 as? Bluray3DSourceError, .invalidStream("video decode times go backward"))
+        }
+    }
+
+    private func frames(decodeTimes: [UInt64]) -> Data {
+        decodeTimes.reduce(Data()) { stream, time in
+            stream + M2TS.pes(pid: 0x1011, pts: time, dts: time, payload: slice)
+                + M2TS.pes(pid: 0x1012, pts: time, dts: time, payload: dependent)
+        }
+    }
+
     func testABaseViewWithoutDependentViewIsAnError() {
         let stream = M2TS.pes(pid: 0x1011, pts: 9000, dts: 9000, payload: idr)
 
