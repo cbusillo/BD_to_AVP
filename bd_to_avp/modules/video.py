@@ -7,6 +7,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
@@ -178,6 +179,22 @@ def generate_native_mvc_splitter_command(video_input_path: Path, *, single_threa
         video_input_path,
         options,
     ]
+
+
+@dataclass(frozen=True)
+class MvcProducer:
+    """A process that writes the MVC video as Annex B to stdout, such as the Blu-ray reader."""
+
+    command: tuple[str | Path, ...]
+    tool_id: str
+
+
+def resolve_mvc_producer(video_input_path: Path, mvc_producer: MvcProducer | None) -> MvcProducer | None:
+    if mvc_producer is not None:
+        return mvc_producer
+    if should_stream_mvc_from_container(video_input_path):
+        return MvcProducer(tuple(generate_mvc_annex_b_stream_command(video_input_path)), "ffmpeg")
+    return None
 
 
 def should_stream_mvc_from_container(video_input_path: Path) -> bool:
@@ -412,6 +429,7 @@ def split_mvc_to_stereo_native(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> tuple[Path, Path]:
     ffmpeg_command = generate_native_mvc_ffmpeg_command(left_output_path, right_output_path, disc_info, crop_params)
     run_native_mvc_encoding(
@@ -422,6 +440,7 @@ def split_mvc_to_stereo_native(
         cancellation_event=cancellation_event,
         observability_context=observability_context,
         damage_collector=damage_collector,
+        mvc_producer=mvc_producer,
     )
     return left_output_path, right_output_path
 
@@ -436,6 +455,7 @@ def encode_mvc_to_av1_sbs_native(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> Path:
     ffmpeg_command = generate_native_mvc_av1_command(output_path, disc_info, crop_params)
     run_native_mvc_encoding(
@@ -446,6 +466,7 @@ def encode_mvc_to_av1_sbs_native(
         cancellation_event=cancellation_event,
         observability_context=observability_context,
         damage_collector=damage_collector,
+        mvc_producer=mvc_producer,
     )
     return output_path
 
@@ -459,10 +480,12 @@ def run_native_mvc_encoding(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> None:
-    stream_from_container = should_stream_mvc_from_container(video_input_path)
-    producer_command = generate_mvc_annex_b_stream_command(video_input_path) if stream_from_container else None
-    native_input_path = Path("-") if stream_from_container else prepare_native_mvc_input(video_input_path)
+    producer = resolve_mvc_producer(video_input_path, mvc_producer)
+    producer_command = list(producer.command) if producer is not None else None
+    producer_tool_id = producer.tool_id if producer is not None else "ffmpeg"
+    native_input_path = Path("-") if producer is not None else prepare_native_mvc_input(video_input_path)
     try:
         single_threaded = False
         try:
@@ -471,6 +494,7 @@ def run_native_mvc_encoding(
                 ffmpeg_command,
                 output_paths,
                 producer_command=producer_command,
+                producer_tool_id=producer_tool_id,
                 single_threaded=single_threaded,
                 run_context=run_context,
                 cancellation_event=cancellation_event,
@@ -500,6 +524,7 @@ def run_native_mvc_encoding(
                 ffmpeg_command,
                 output_paths,
                 producer_command=producer_command,
+                producer_tool_id=producer_tool_id,
                 single_threaded=True,
                 run_context=run_context,
                 cancellation_event=cancellation_event,
@@ -513,7 +538,7 @@ def run_native_mvc_encoding(
             raise NativeMvcSplitError(build_native_splitter_failure_message(error)) from error
         raise
     finally:
-        if not stream_from_container and native_input_path != video_input_path:
+        if producer is None and native_input_path != video_input_path:
             native_input_path.unlink(missing_ok=True)
 
 
@@ -527,10 +552,12 @@ def run_direct_mv_hevc_encoding(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> None:
-    stream_from_container = should_stream_mvc_from_container(video_input_path)
-    producer_command = generate_mvc_annex_b_stream_command(video_input_path) if stream_from_container else None
-    native_input_path = Path("-") if stream_from_container else prepare_native_mvc_input(video_input_path)
+    producer = resolve_mvc_producer(video_input_path, mvc_producer)
+    producer_command = list(producer.command) if producer is not None else None
+    producer_tool_id = producer.tool_id if producer is not None else "ffmpeg"
+    native_input_path = Path("-") if producer is not None else prepare_native_mvc_input(video_input_path)
 
     try:
         try:
@@ -540,6 +567,7 @@ def run_direct_mv_hevc_encoding(
                 normalizer_command,
                 encoder_command,
                 producer_command=producer_command,
+                producer_tool_id=producer_tool_id,
                 single_threaded=False,
                 run_context=run_context,
                 cancellation_event=cancellation_event,
@@ -565,6 +593,7 @@ def run_direct_mv_hevc_encoding(
                 normalizer_command,
                 encoder_command,
                 producer_command=producer_command,
+                producer_tool_id=producer_tool_id,
                 single_threaded=True,
                 run_context=run_context,
                 cancellation_event=cancellation_event,
@@ -578,7 +607,7 @@ def run_direct_mv_hevc_encoding(
             raise NativeMvcSplitError(build_native_splitter_failure_message(error)) from error
         raise
     finally:
-        if not stream_from_container and native_input_path != video_input_path:
+        if producer is None and native_input_path != video_input_path:
             native_input_path.unlink(missing_ok=True)
 
 
@@ -589,6 +618,7 @@ def run_direct_mv_hevc_attempt(
     encoder_command: list[str | Path],
     *,
     producer_command: list[str | Path] | None,
+    producer_tool_id: str = "ffmpeg",
     single_threaded: bool,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
@@ -616,7 +646,7 @@ def run_direct_mv_hevc_attempt(
             ProcessPipelineStage(
                 ProcessSpec(
                     argv=tuple(producer_command),
-                    tool_id="ffmpeg",
+                    tool_id=producer_tool_id,
                     display_name=f"Extract MVC stream ({attempt_name})",
                     env=os.environ.copy(),
                     event_context=event_context,
@@ -737,6 +767,7 @@ def run_native_mvc_split_attempt(
     output_paths: tuple[Path, ...],
     *,
     producer_command: list[str | Path] | None = None,
+    producer_tool_id: str = "ffmpeg",
     single_threaded: bool,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
@@ -765,7 +796,7 @@ def run_native_mvc_split_attempt(
             ProcessPipelineStage(
                 ProcessSpec(
                     argv=tuple(producer_command),
-                    tool_id="ffmpeg",
+                    tool_id=producer_tool_id,
                     display_name=f"Extract MVC stream ({attempt_name})",
                     env=os.environ.copy(),
                     event_context=event_context,
@@ -923,6 +954,7 @@ def split_mvc_to_stereo(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> tuple[Path, Path]:
     if can_use_native_mvc_splitter(disc_info):
         result = split_mvc_to_stereo_native(
@@ -935,9 +967,10 @@ def split_mvc_to_stereo(
             cancellation_event=cancellation_event,
             observability_context=observability_context,
             damage_collector=damage_collector,
+            mvc_producer=mvc_producer,
         )
         if not config.keep_files:
-            if not should_stream_mvc_from_container(video_input_path):
+            if resolve_mvc_producer(video_input_path, mvc_producer) is None:
                 video_input_path.unlink(missing_ok=True)
         return result
 
@@ -954,6 +987,7 @@ def encode_mvc_to_av1_sbs(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> Path:
     if can_use_native_mvc_splitter(disc_info):
         result = encode_mvc_to_av1_sbs_native(
@@ -965,9 +999,10 @@ def encode_mvc_to_av1_sbs(
             cancellation_event=cancellation_event,
             observability_context=observability_context,
             damage_collector=damage_collector,
+            mvc_producer=mvc_producer,
         )
         if not config.keep_files:
-            if not should_stream_mvc_from_container(video_input_path):
+            if resolve_mvc_producer(video_input_path, mvc_producer) is None:
                 video_input_path.unlink(missing_ok=True)
         return result
 
@@ -1491,6 +1526,7 @@ def create_left_right_files(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> tuple[Path, Path]:
     left_eye_output_path = output_folder / f"{disc_info.name}_left_movie.mov"
     right_eye_output_path = output_folder / f"{disc_info.name}_right_movie.mov"
@@ -1505,6 +1541,7 @@ def create_left_right_files(
             cancellation_event=cancellation_event,
             observability_context=observability_context,
             damage_collector=damage_collector,
+            mvc_producer=mvc_producer,
         )
 
     return left_eye_output_path, right_eye_output_path
@@ -1520,6 +1557,7 @@ def create_av1_sbs_file(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> Path:
     output_path = output_folder / f"{disc_info.name}_AV1-SBS-unmarked.mp4"
     if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
@@ -1532,6 +1570,7 @@ def create_av1_sbs_file(
             cancellation_event=cancellation_event,
             observability_context=observability_context,
             damage_collector=damage_collector,
+            mvc_producer=mvc_producer,
         )
     return output_path
 
@@ -1636,6 +1675,7 @@ def create_direct_mv_hevc_file(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
+    mvc_producer: MvcProducer | None = None,
 ) -> Path:
     output_stem = f"{disc_info.name}_MV-HEVC"
     if upscale_mode is not None:
@@ -1662,8 +1702,9 @@ def create_direct_mv_hevc_file(
             cancellation_event=cancellation_event,
             observability_context=observability_context,
             damage_collector=damage_collector,
+            mvc_producer=mvc_producer,
         )
-        if not config.keep_files and not should_stream_mvc_from_container(mvc_video):
+        if not config.keep_files and resolve_mvc_producer(mvc_video, mvc_producer) is None:
             mvc_video.unlink(missing_ok=True)
     return mv_hevc_path
 

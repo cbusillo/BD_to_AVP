@@ -1,8 +1,8 @@
-# SSIF Probe Relinking Notice
+# Blu-ray Helpers Relinking Notice
 
-The bundled `ssif_probe` helper dynamically links `libbluray.3.dylib` and
-`libudfread.3.dylib` from the adjacent `bd_to_avp/lib` directory. Both
-libraries are distributed under LGPL-2.1-or-later.
+The bundled `ssif_probe` and `bd3d_reader` helpers dynamically link
+`libbluray.3.dylib` and `libudfread.3.dylib` from the adjacent `bd_to_avp/lib`
+directory. Both libraries are distributed under LGPL-2.1-or-later.
 
 The exact corresponding source archives, their upstream `COPYING` texts, and
 build provenance are provided in this directory. You may replace either shared
@@ -11,7 +11,7 @@ library with a compatible build that keeps its documented install name:
 - `@rpath/libbluray.3.dylib`
 - `@rpath/libudfread.3.dylib`
 
-The helper resolves those install names through `@loader_path/../lib`.
+The helpers resolve those install names through `@loader_path/../lib`.
 
 ## Rebuild And Replace
 

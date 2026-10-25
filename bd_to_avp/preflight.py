@@ -5,6 +5,7 @@ from subprocess import SubprocessError
 from threading import Event
 
 from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrError
+from bd_to_avp.modules.bluray import direct_bluray_disc
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
@@ -21,12 +22,13 @@ class DependencyPreflightError(RuntimeError):
 def verify_runtime_ready(
     *,
     video_route: ResolvedVideoRoute | None = None,
+    selected_title_id: str | None = None,
     run_context: RunContext | None = None,
     cancellation_event: Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> None:
     video_route = video_route or legacy_video_route()
-    missing_binaries = get_missing_dependency_binaries_for_current_job(video_route)
+    missing_binaries = get_missing_dependency_binaries_for_current_job(video_route, selected_title_id)
     if not missing_binaries:
         verify_av1_encoder_ready(
             run_context=run_context,
@@ -42,9 +44,10 @@ def verify_runtime_ready(
 
 def get_missing_dependency_binaries_for_current_job(
     video_route: ResolvedVideoRoute | None = None,
+    selected_title_id: str | None = None,
 ) -> list[Path]:
     video_route = video_route or legacy_video_route()
-    required_paths = get_required_dependency_binaries_for_current_job(video_route)
+    required_paths = get_required_dependency_binaries_for_current_job(video_route, selected_title_id)
     missing_binaries = [path for path in required_paths if not path.exists()]
     if (
         needs_native_mvc_splitter()
@@ -63,11 +66,12 @@ def get_missing_dependency_binaries_for_current_job(
 
 def get_required_dependency_binaries_for_current_job(
     video_route: ResolvedVideoRoute | None = None,
+    selected_title_id: str | None = None,
 ) -> list[Path]:
     video_route = video_route or legacy_video_route()
     required_paths = [config.FFMPEG_PATH, config.FFPROBE_PATH]
 
-    if needs_makemkv():
+    if needs_makemkv(selected_title_id):
         required_paths.append(config.MAKEMKVCON_PATH)
     if needs_native_mvc_splitter():
         required_paths.append(config.EDGE264_TEST_PATH)
@@ -95,11 +99,11 @@ def dedupe_paths(paths: list[Path]) -> list[Path]:
     return deduped_paths
 
 
-def needs_makemkv() -> bool:
+def needs_makemkv(selected_title_id: str | None = None) -> bool:
     source_path = config.source_path
     if source_path and source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]:
         return False
-    return True
+    return direct_bluray_disc(selected_title_id) is None
 
 
 def needs_subtitle_extraction() -> bool:
