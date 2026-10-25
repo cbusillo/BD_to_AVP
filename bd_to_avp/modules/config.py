@@ -179,6 +179,7 @@ class Config:
     MAKEMKVCON_PATH = resolve_makemkvcon_path()
     MP4BOX_PATH = resolve_tool_path("MP4Box")
     EDGE264_TEST_PATH = SCRIPT_PATH_BIN / "edge264_test"
+    BD3D_READER_PATH = SCRIPT_PATH_BIN / "bd3d_reader"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
     FX_UPSCALE_PATH = SCRIPT_PATH_BIN / "fx-upscale"
     MV_HEVC_ENCODER_PATH = SCRIPT_PATH_BIN / "mv-hevc-encoder"

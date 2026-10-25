@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from scripts import build_ssif_probe_macos
+from tests.test_bluray_direct_read import RAINFOREST_FIRST_100_FRAME_LINES_SHA256, framemd5_frame_lines_sha256
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -21,17 +22,7 @@ RAINFOREST_CLIP = "00007"
 # Issue #1041: `titles` lists at most 64 playlists, each at least 60 seconds long.
 TITLES_MINIMUM_SECONDS = 60
 TITLES_MAXIMUM_LISTED = 64
-RAINFOREST_FIRST_100_FRAME_LINES_SHA256 = "186a33d0a66c39619b94d354f77fbe364ee24c2e441ee25d90a8902b75199166"
 SERVICE_FRAME_HEADER = struct.Struct(">4sBBHQQQII")
-
-
-def framemd5_frame_lines_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for line in handle:
-            if not line.startswith(b"#"):
-                digest.update(line)
-    return digest.hexdigest()
 
 
 @unittest.skipUnless(os.environ.get(RAINFOREST_ISO_ENV), f"Set {RAINFOREST_ISO_ENV} to run real-media tests")
