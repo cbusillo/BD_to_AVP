@@ -428,63 +428,14 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertTrue(model.hasBootstrapped)
     }
 
-    func testAddingBootstrappedDocumentMovieUpdatesItsExistingLibraryEntry() async throws {
-        let documentsURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("BDToAVPPlayerDocuments")
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
-        let movieURL = documentsURL.appendingPathComponent("Example.mov")
-        try Data().write(to: movieURL)
-
-        let model = PlayerAppModel(
-            libraryStore: LibraryStore(storageURL: temporaryURL()),
-            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
-            documentsURL: documentsURL,
-            formatInspector: { _ in .mvHEVC },
-            stereoCheckInstaller: { [] }
-        )
-
-        await model.bootstrap()
-        await model.importMovie(from: movieURL)
-
-        XCTAssertEqual(model.library.items.map(\.id), ["documents:example.mov"])
-        XCTAssertEqual(model.library.items.count, 1)
-    }
-
-    func testAddingMovieOutsideDocumentsUsesUUIDIdentity() async throws {
-        let documentsURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("BDToAVPPlayerDocuments")
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
-        let externalDirectory = documentsURL.deletingLastPathComponent()
-            .appendingPathComponent("\(documentsURL.lastPathComponent)-copy", isDirectory: true)
-        try FileManager.default.createDirectory(at: externalDirectory, withIntermediateDirectories: true)
-        let movieURL = externalDirectory.appendingPathComponent("Example.mov")
-        try Data().write(to: movieURL)
-
-        let model = PlayerAppModel(
-            libraryStore: LibraryStore(storageURL: temporaryURL()),
-            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
-            documentsURL: documentsURL,
-            formatInspector: { _ in .mvHEVC },
-            stereoCheckInstaller: { [] }
-        )
-
-        await model.importMovie(from: movieURL)
-
-        XCTAssertEqual(model.library.items.count, 1)
-        XCTAssertNotEqual(model.library.items[0].id, "documents:example.mov")
-        XCTAssertFalse(model.library.items[0].id.hasPrefix("documents:"))
-    }
-
-    func testAddingBluraySourcesStoresTheirTitleAndWaitsForHeadsetPlayback() async throws {
+    func testBluraySourcesInDocumentsStoreTheirTitleAndWaitForHeadsetPlayback() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let disc = directory.appendingPathComponent("Rainforest.iso")
         let encrypted = directory.appendingPathComponent("Encrypted.iso")
         try Data().write(to: disc)
         try Data().write(to: encrypted)
-        func title(_ reason: Bluray3DUnsupportedReason?) -> Bluray3DTitle {
+        @Sendable func title(_ reason: Bluray3DUnsupportedReason?) -> Bluray3DTitle {
             Bluray3DTitle(
                 id: "playlist:00005", playlist: 5, durationSeconds: 2_400, isMainFeature: true,
                 baseViewIsRightEye: false, unsupportedReason: reason, audioTracks: [], subtitleTracks: []
@@ -493,7 +444,7 @@ final class PlayerAppModelTests: XCTestCase {
         let model = PlayerAppModel(
             libraryStore: LibraryStore(storageURL: temporaryURL()),
             bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
-            documentsURL: directory.appendingPathComponent("Documents"),
+            documentsURL: directory,
             formatInspector: { _ in XCTFail("Blu-ray sources are not AVFoundation movies"); return .unsupported },
             blurayInspector: { url in
                 Bluray3DSourceInfo(
@@ -504,8 +455,7 @@ final class PlayerAppModelTests: XCTestCase {
             stereoCheckInstaller: { [] }
         )
 
-        await model.importMovie(from: disc)
-        await model.importMovie(from: encrypted)
+        await model.bootstrap()
 
         let items = Dictionary(uniqueKeysWithValues: model.library.items.map { ($0.fileName, $0) })
         let playable = try XCTUnwrap(items["Rainforest.iso"])

@@ -17,6 +17,10 @@ locally so it can reopen your movies and resume playback. It reads file metadata
 to detect unavailable or changed sources. The system file picker and any file
 provider you choose control access to files outside the app.
 
+For each Location you add, such as a network share, the app stores the folder's
+name, saved access to that folder, and the names, sizes and formats of the movie
+files it finds there, locally, so it does not have to read every file again.
+
 ## Sharing from your Mac
 
 When you choose Find Macs, the app discovers compatible Macs on your local
@@ -39,7 +43,8 @@ your Mac's movie library to the internet.
 Library records and saved playback positions remain on your device. Live discs
 have no saved playback position. Removing a movie
 from the library removes its library entry and saved file access; it does not
-delete the original video. Playback positions are stored in a bounded local
+delete the original video. Removing a Location removes its saved folder access
+and file list; it does not change the share. Playback positions are stored in a bounded local
 history and may remain until overwritten, removed when that history reaches its
 limit, or the app's local data is erased.
 

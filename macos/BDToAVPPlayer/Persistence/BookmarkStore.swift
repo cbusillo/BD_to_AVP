@@ -50,9 +50,17 @@ final class BookmarkStore {
         var bookmarks: [String: Data]
     }
 
+    /// A file inside a bookmarked folder, such as a title in a Location. It has no bookmark of
+    /// its own: opening it opens the folder's bookmark and reaches the file by its relative path.
+    private struct FolderChild {
+        let folderID: String
+        let relativePath: String
+    }
+
     private let storageURL: URL
     private let fileManager: FileManager
     private var bookmarks: [String: Data]
+    private var folderChildren: [String: FolderChild] = [:]
     private let access: BookmarkAccess
 
     init(
@@ -114,16 +122,27 @@ final class BookmarkStore {
         try persist()
     }
 
+    /// The bookmark that grants access to `id`; for a folder child, its folder's bookmark.
     func bookmarkData(for id: String) -> Data? {
-        bookmarks[id]
+        bookmarks[id] ?? folderChildren[id].flatMap { bookmarks[$0.folderID] }
     }
 
     func remove(id: String) throws {
         bookmarks.removeValue(forKey: id)
+        folderChildren = folderChildren.filter { $0.value.folderID != id }
         try persist()
     }
 
+    /// Makes `id` open as `relativePath` inside the folder bookmarked as `folderID`. Children
+    /// live only in memory; a Location registers them each time it lists its folder.
+    func registerFolderChild(id: String, folderID: String, relativePath: String) {
+        folderChildren[id] = FolderChild(folderID: folderID, relativePath: relativePath)
+    }
+
     func open(id: String) async throws -> SecurityScopedResourceLease {
+        if bookmarks[id] == nil, let child = folderChildren[id] {
+            return try await openFolderChild(child, id: id)
+        }
         guard let bookmarkData = bookmarks[id] else {
             throw BookmarkStoreError.missingBookmark(id)
         }
@@ -167,6 +186,21 @@ final class BookmarkStore {
             }
         }
         return opened.lease
+    }
+
+    private func openFolderChild(_ child: FolderChild, id: String) async throws -> SecurityScopedResourceLease {
+        let folderLease = try await open(id: child.folderID)
+        let url = child.relativePath.isEmpty
+            ? folderLease.url
+            : folderLease.url.appendingPathComponent(child.relativePath)
+        let exists = await Task.detached(priority: .userInitiated) {
+            FileManager.default.fileExists(atPath: url.path)
+        }.value
+        guard exists else {
+            folderLease.close()
+            throw BookmarkStoreError.missingResource(url)
+        }
+        return SecurityScopedResourceLease(url: url, startAccessing: { true }, stopAccessing: { folderLease.close() })
     }
 
     private func persist() throws {

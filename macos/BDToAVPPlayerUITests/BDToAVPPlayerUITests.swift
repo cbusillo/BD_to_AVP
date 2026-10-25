@@ -5,6 +5,19 @@ final class BDToAVPPlayerUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testLocationsReplaceAddMovieInTheSidebar() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let addLocation = app.buttons["add-location"]
+        XCTAssertTrue(addLocation.waitForExistence(timeout: 30))
+        XCTAssertTrue(addLocation.isHittable)
+        app.buttons["source-on-my-vision-pro"].tap()
+        XCTAssertTrue(app.staticTexts["built-in-stereo-checks-title"].waitForExistence(timeout: 30))
+        XCTAssertFalse(app.buttons["Add Movie"].exists)
+        attachScreenshot(named: "locations-sidebar")
+    }
+
     func testSeededMovieDetailsAndPlaybackFlow() throws {
         let app = XCUIApplication()
         app.launch()

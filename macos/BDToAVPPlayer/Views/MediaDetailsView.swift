@@ -46,7 +46,7 @@ struct MediaDetailsView: View {
                     MediaThumbnailView(
                         item: item,
                         bookmarkStore: model.bookmarkStore,
-                        sourceStatus: model.sourceStatuses[item.id]
+                        sourceStatus: model.sourceStatus(for: item.id)
                     )
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .frame(width: 250)
@@ -108,7 +108,7 @@ struct MediaDetailsView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            let status = model.sourceStatuses[item.id] ?? .missing
+            let status = model.sourceStatus(for: item.id) ?? .missing
             if status != .available && status != .checking {
                 HStack(spacing: 12) {
                     if status == .unavailable || status == .stale {
@@ -133,22 +133,25 @@ struct MediaDetailsView: View {
                         .accessibilityIdentifier("details-retry-source")
                     }
 
-                    Button {
-                        isLocatorPresented = true
-                    } label: {
-                        Text("Locate")
-                            .frame(minWidth: 60, minHeight: 60)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("details-locate-source")
+                    // A Location's title is recovered from its Location, not one file at a time.
+                    if !model.isLocationItem(item.id) {
+                        Button {
+                            isLocatorPresented = true
+                        } label: {
+                            Text("Locate")
+                                .frame(minWidth: 60, minHeight: 60)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("details-locate-source")
 
-                    Button(role: .destructive) {
-                        model.remove(itemID: item.id)
-                    } label: {
-                        Text("Remove")
-                            .frame(minWidth: 60, minHeight: 60)
+                        Button(role: .destructive) {
+                            model.remove(itemID: item.id)
+                        } label: {
+                            Text("Remove")
+                                .frame(minWidth: 60, minHeight: 60)
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
                 }
             }
         }
@@ -158,7 +161,7 @@ struct MediaDetailsView: View {
     }
 
     private func sourceStatusLabel(for item: MediaItem) -> some View {
-        let status = model.sourceStatuses[item.id] ?? .missing
+        let status = model.sourceStatus(for: item.id) ?? .missing
         let systemImage: String
         let color: Color
         switch status {
@@ -181,7 +184,7 @@ struct MediaDetailsView: View {
     }
 
     private func metadataSection(for item: MediaItem) -> some View {
-        let status = model.sourceStatuses[item.id] ?? .missing
+        let status = model.sourceStatus(for: item.id) ?? .missing
         return VStack(alignment: .leading, spacing: 14) {
             Text("File & Technical")
                 .font(.title2.weight(.semibold))
