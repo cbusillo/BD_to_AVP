@@ -9,8 +9,10 @@ which remains the qualification-only validator.
 
 - One plain SwiftUI window contains a split-view library, modal movie details,
   and the player.
-- The library opens **Mac Movies**, where the wearer chooses a Mac and a completed
-  movie. **On My Vision Pro** opens the local **Your movies** collection with
+- The sidebar's **Library** section holds **On My Vision Pro** and **Mac Movies**;
+  its **Locations** section holds the network shares the wearer added (see
+  [Locations](#locations)). **Mac Movies** is where the wearer chooses a Mac and a
+  completed movie. **On My Vision Pro** opens the local **Your movies** collection with
   Posters and Files modes, format filtering, title or
   filename sorting, 16:9 source-frame thumbnails, and a typography-first
   fallback when a frame cannot be generated.
@@ -18,9 +20,8 @@ which remains the qualification-only validator.
   Selecting the movie content opens a compact modal Details view with source
   status, missing-source recovery, removal, technical metadata, and one
   prominent Play action that remains visible without scrolling.
-- **Add Movie** imports one movie through the system Files picker.
-- Supported `.mov`, `.mp4`, and `.m4v` files already present in the app's
-  Documents directory are indexed on launch. File Sharing and opening documents
+- Supported `.mov`, `.mp4`, and `.m4v` files, ISOs, MKVs and disc folders
+  already present in the app's Documents directory are indexed on launch. File Sharing and opening documents
   in place are enabled for this source path.
 - Library metadata and resume positions are stored as bounded JSON under the
   app's Application Support directory. Library media records omit source
@@ -295,8 +296,8 @@ status, group access and the final invitation mechanism with the exact build.
 Reviewers can test the standalone player without an account, Mac, or downloaded
 movie: choose **On My Vision Pro** in the sidebar, then **Start SBS Check** and
 **Start Over-Under Check**. Both bundled synthetic samples are 45 seconds long and
-silent. **Add Movie** opens the system file picker for the reviewer's own supported
-completed movies. **Mac Movies** requires the full **3D Blu-ray to Vision Pro**
+silent. **Add Location** in the sidebar opens the system folder picker for a
+folder or network share holding the reviewer's own supported movies. **Mac Movies** requires the full **3D Blu-ray to Vision Pro**
 Mac app with Movie Sharing, one-time folder approval and pairing on the same
 trusted LAN. The [Movie Sharing quick start](movie-sharing-beta.md) explains installation,
 the Stable and optional Beta updater routes and the initial stereo checks. Include the matching
@@ -514,9 +515,55 @@ quits, bounded reconnect attempts end with an honest failure. A session or
 authentication rejection requires pairing again. Failed relay playback keeps its
 relay identity so Retry cannot accidentally enter the local-file flow.
 
+## Locations
+
+**Locations** in the sidebar replace adding movies one at a time (Director decision on
+[#711](https://github.com/cbusillo/BD_to_AVP/issues/711#issuecomment-6402562984)).
+The wearer adds a network share once, such as a NAS or a Mac running macOS File
+Sharing, and it becomes its own library.
+
+visionOS apps cannot mount SMB shares themselves. The supported route is the system's:
+
+1. In the Files app, tap **More**, choose **Connect to Server**, enter the server's
+   name or address (for example `nas.local`, or the Mac's name), and sign in as a
+   guest or registered user. The server then appears in the Files sidebar and under
+   **Recent Servers** for reconnecting
+   ([Apple Vision Pro User Guide](https://support.apple.com/guide/apple-vision-pro/tan7acdaa0e3/visionos)).
+2. In Shiny 3D Cinema, choose **Add Location** and pick the share, or a folder in it,
+   in the system folder picker.
+
+The app keeps a bookmark of that folder, so the Location and its access survive
+relaunches. Each title in a Location is reached through the folder's bookmark and its
+path inside the folder; titles have no bookmarks of their own. Location records and
+what each file held when last inspected are stored in `locations.json` under
+Application Support, so reopening a Location reads only new or changed files.
+
+A Location lists, from up to four folder levels, Blu-ray 3D ISOs, disc folders that
+hold `BDMV`, MKVs that keep the MVC 3D track, and MV-HEVC (or side-by-side and
+over-under HEVC) movies. Each file is inspected the same way as a local source; files
+the player cannot play, such as encrypted or 2D discs and MKVs without MVC, are listed
+under a collapsed "can't play here" note with the reason. Titles play through the
+same players: Blu-ray 3D on the headset (see [Native Blu-ray Video](#native-blu-ray-video)),
+everything else through the MV-HEVC player. An open Location looks again every minute,
+and **Refresh** looks right away.
+
+When the share cannot be reached, because the server is off or Files disconnected it,
+the Location says so and offers **Try Again**, **Choose Folder Again** and **Remove
+Location**. iOS-family bookmarks to network volumes can stop resolving after the volume
+is unmounted and remounted (Apple bug r.102995804, discussed on the
+[developer forums](https://developer.apple.com/forums/thread/774114)); choosing the
+folder again replaces the bookmark and keeps the Location. A share that stops answering
+is reported unreachable after 45 seconds instead of hanging the library; a request it
+gave up on keeps its folder access until it really ends, and no new request starts for
+that Location until then, so retries cannot pile up on a stalled share. A large share
+is read for up to 15 seconds or 1,000 titles, checked before every entry; the Location
+then says it stopped looking before reaching every folder and suggests adding a folder
+closer to the movies. A disc folder counts as changed when any file in `BDMV`, its
+`PLAYLIST`, `CLIPINF`, `STREAM` or `STREAM/SSIF` folders changes name, size or date.
+
 ## Source Access
 
-Imported files receive persistent bookmark data. Playback resolves the bookmark
+Local files receive persistent bookmark data. Playback resolves the bookmark
 and keeps one balanced security-scoped access lease open for the complete player
 session. The lease closes when playback finishes, preparation is replaced, or
 the session is destroyed. Bookmark resolution, provider access, and existence
@@ -524,7 +571,7 @@ probing run outside the main actor, so a slow Files or SMB-backed provider canno
 freeze the window before playback's loading state appears.
 
 Files in the app's Documents directory use the same library and bookmark path as
-Files-picker imports. If a source moves or disappears, the details view reports
+movies added before Locations existed. If a source moves or disappears, the details view reports
 that state and offers retry or locate recovery instead of treating a temporary
 provider outage as deletion. A successful locate preserves the stable library
 identity while refreshing its filename, detected format, and bookmark only after
@@ -690,11 +737,10 @@ reading and just-in-time source production remain separate Mac-side work.
 ## Blu-ray 3D Sources
 
 Native Blu-ray playback (#711) reads Blu-ray 3D sources on the headset itself, with
-no Mac (#1110). **Add Movie** accepts an unencrypted 3D ISO, a disc folder (the folder
-that holds `BDMV`, or `BDMV` itself), or an MKV that keeps the MVC 3D track, such as
-a MakeMKV rip, from the headset or a Files share such as SMB. ISOs, MKVs and disc
-folders copied into the app's Documents folder are listed on launch. Adding a source
-opens it, chooses its title and stores that title with the library item; the
+no Mac (#1110). It plays an unencrypted 3D ISO, a disc folder (the folder that holds
+`BDMV`, or `BDMV` itself), or an MKV that keeps the MVC 3D track, such as a MakeMKV
+rip, from a [Location](#locations) or the app's Documents folder. Listing a source
+opens it, chooses its title and stores that title with the item; the
 details view shows the title's length, audio and subtitles, and **Play** plays it on
 the headset (see [Native Blu-ray Video](#native-blu-ray-video)). Encrypted discs still need the Mac and the user's
 own MakeMKV.
