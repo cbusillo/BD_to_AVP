@@ -13,6 +13,7 @@
 #define MAX_PES_BYTES (16 * 1024 * 1024)
 #define MAX_PENDING_BYTES (256 * 1024 * 1024)
 #define TITLES_MINIMUM_SECONDS 60
+#define TIMESTAMP_MASK ((UINT64_C(1) << 33) - 1)
 
 struct bd3d_disc {
     BLURAY *bluray;
@@ -285,8 +286,14 @@ static bd3d_result emit(Demux *demux, const bd3d_packet *packet) {
     return demux->emit(demux->emit_context, packet) != 0 ? BD3D_STOPPED : BD3D_OK;
 }
 
+/// Whether `dts` comes before `previous` on the 33-bit 90 kHz clock. A forward step of less than
+/// half the range is forward even when it wraps past zero; an equal value is not backward.
+static bool dts_before(uint64_t dts, uint64_t previous) {
+    return ((dts - previous) & TIMESTAMP_MASK) >= (UINT64_C(1) << 32);
+}
+
 static bd3d_result emit_pair(Demux *demux, PesItem *base, PesItem *dependent) {
-    if (demux->stats.video_pairs > 0 && base->dts < demux->last_dts) {
+    if (demux->stats.video_pairs > 0 && dts_before(base->dts, demux->last_dts)) {
         return BD3D_NON_MONOTONIC;
     }
     bd3d_packet packet = {
