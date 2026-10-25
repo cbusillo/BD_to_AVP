@@ -4,9 +4,9 @@
 //
 //   bd3d_reader titles <source>
 //       Prints the disc and its titles of at least 60 seconds as JSON.
-//   bd3d_reader stream <source> <clip-id> [--sidecar <path>] [--audio <pid,...>]
+//   bd3d_reader stream <source> <playlist> [--sidecar <path>] [--audio <pid,...>]
 //                      [--subtitles <pid,...>] [--maximum-pairs <count>]
-//       Writes the title's MVC video to stdout as Annex B, each base-view access unit followed
+//       Writes the playlist's MVC video to stdout as Annex B, each base-view access unit followed
 //       by its dependent view. With --sidecar it also writes the selected audio and
 //       presentation-graphics streams to an MPEG transport stream whose PMT carries the stream
 //       languages; each DTS-HD stream is followed by its DTS core as its own stream. The
@@ -578,10 +578,12 @@ static const bd3d_stream *title_stream(const bd3d_title *title, uint16_t pid, bo
     return NULL;
 }
 
-static bool find_clip_title(bd3d_disc *disc, const char *clip_id, bd3d_title *found) {
+/// Finds the listed title for a playlist. Several playlists can share a clip with different
+/// streams or coverage, so the caller names the exact playlist that `titles` reported.
+static bool find_playlist_title(bd3d_disc *disc, uint32_t playlist, bd3d_title *found) {
     bd3d_disc_info info = bd3d_disc_get_info(disc);
     for (uint32_t index = 0; index < info.title_count; index++) {
-        if (bd3d_disc_title(disc, index, found) && strcmp(found->clip_id, clip_id) == 0) {
+        if (bd3d_disc_title(disc, index, found) && found->playlist == playlist) {
             return true;
         }
     }
@@ -613,7 +615,7 @@ static bool add_sidecar_stream(Sidecar *sidecar, const bd3d_stream *source, bool
 
 static int stream_title(
     const char *path,
-    const char *clip_id,
+    uint32_t playlist,
     const char *sidecar_path,
     const uint16_t *audio_pids,
     size_t audio_count,
@@ -630,7 +632,7 @@ static int stream_title(
         return print_error("open_failed", "libbluray could not open the source.");
     }
     bd3d_title title;
-    if (!find_clip_title(disc, clip_id, &title) || !title.ssif_available || !title.complete_clip) {
+    if (!find_playlist_title(disc, playlist, &title) || !title.ssif_available || !title.complete_clip) {
         bd3d_disc_close(disc);
         return print_error("title_unreadable", "The title is not a single complete 3D clip.");
     }
@@ -667,7 +669,7 @@ static int stream_title(
     bd3d_stats stats = {0};
     bd3d_result result = bd3d_disc_stream(
         disc,
-        clip_id,
+        title.clip_id,
         sidecar_path != NULL ? audio_pids : NULL,
         sidecar_path != NULL ? audio_count : 0,
         sidecar_path != NULL ? subtitle_pids : NULL,
@@ -741,7 +743,7 @@ static int print_usage(void) {
     fputs(
         "Usage:\n"
         "  bd3d_reader titles <source>\n"
-        "  bd3d_reader stream <source> <clip-id> [--sidecar <path>] [--audio <pid,...>] [--subtitles <pid,...>]"
+        "  bd3d_reader stream <source> <playlist> [--sidecar <path>] [--audio <pid,...>] [--subtitles <pid,...>]"
         " [--maximum-pairs <count>]\n"
         "  bd3d_reader excerpt <source> <playlist> <start-seconds> <seconds>\n"
         "  bd3d_reader --version\n",
@@ -786,8 +788,12 @@ int main(int argc, char **argv) {
         if (audio_count + subtitle_count > BD3D_MAX_SELECTED_PIDS) {
             return print_error("too_many_pids", "Too many audio and subtitle streams were selected.");
         }
+        uint64_t playlist = 0;
+        if (!parse_unsigned(argv[3], 99999, &playlist)) {
+            return print_usage();
+        }
         return stream_title(
-            argv[2], argv[3], sidecar_path, audio_pids, audio_count, subtitle_pids, subtitle_count, maximum_pairs
+            argv[2], (uint32_t)playlist, sidecar_path, audio_pids, audio_count, subtitle_pids, subtitle_count, maximum_pairs
         );
     }
     if (argc == 6 && strcmp(argv[1], "excerpt") == 0) {
