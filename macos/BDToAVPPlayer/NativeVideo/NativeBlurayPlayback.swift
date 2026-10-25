@@ -39,6 +39,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         var loadedRange: ClosedRange<TimeInterval>?
         var hasEnded = false
         var failure: String?
+        /// Why the chosen audio is not playing while the video goes on, from the audio player.
+        var audioFailure: String?
         var statistics = Statistics()
     }
 
@@ -58,11 +60,18 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     let synchronizer = AVSampleBufferRenderSynchronizer()
     let title: Bluray3DTitle
     let audioTracks: [HeadsetAudioTrack]
+    /// Called just before the clock's rate changes, with the new rate. Tests set it before
+    /// `start()` to act at that moment.
+    var willChangeClockRate: (@Sendable (Float) -> Void)?
 
     private let source: Bluray3DSource
     private let configuration: Configuration
     private let buffer: ReadAheadBuffer
     private let state: OSAllocatedUnfairLock<SharedState>
+    /// Held for every clock change, from the state it depends on to the synchronizer write, so
+    /// a pause, seek or stop can never be undone by a rate or start time computed before it.
+    /// Taken before `state`, never inside it.
+    private let clockLock = NSLock()
     /// Held while the feeder hands audio over and while a seek moves the audio cursor, so no
     /// packet from before a seek reaches the audio player after its flush.
     private let audioFeed = NSLock()
@@ -115,10 +124,14 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         status.currentTime = max(0, Self.seconds(clockTicks()))
         status.loadedRange = buffer.loadedTicks.map { Self.seconds($0.lowerBound)...Self.seconds($0.upperBound) }
         status.statistics.secondsAhead = buffer.secondsAhead
+        status.audioFailure = audioPlayer?.failure
         return status
     }
 
     var selectedAudioTrackID: UInt16? { state.withLock { $0.selectedAudioTrackID } }
+
+    /// The audio player, once the first video unit has set the timeline; for diagnostics.
+    var audioPlayer: HeadsetAudioPlayer? { state.withLock { $0.audioPlayer } }
 
     /// Starts reading and decoding. Playback begins once the first seconds are buffered.
     func start() {
@@ -137,19 +150,22 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     /// Stops playback and flushes the renderers. The threads end on their own without blocking
     /// the caller: a reader inside a slow share read finishes that read first.
     func stop() {
-        state.withLock { $0.cancelled = true }
+        clockLock.withLock {
+            state.withLock { $0.cancelled = true }
+            synchronizer.rate = 0
+        }
         buffer.cancel()
-        synchronizer.rate = 0
         renderer.flush()
         state.withLock { $0.audioPlayer }?.discontinuity()
     }
 
     func setPlaying(_ playing: Bool) {
-        state.withLock { shared in
-            shared.status.wantsPlayback = playing
-            if playing, shared.status.hasEnded { shared.status.wantsPlayback = false }
+        clockLock.withLock {
+            state.withLock { shared in
+                shared.status.wantsPlayback = playing && !shared.status.hasEnded
+            }
+            applyRateLocked()
         }
-        applyRate()
     }
 
     enum SeekOutcome: Equatable {
@@ -158,23 +174,27 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         case outside(loaded: ClosedRange<TimeInterval>?)
     }
 
+    /// Accepting a seek reserves its random access unit in the buffer, so the video thread can
+    /// always carry it out even if history is trimmed in between.
     func seek(to seconds: TimeInterval) -> SeekOutcome {
         let ticks = Int64((max(0, seconds) * Double(BluRayPresentationTimeline.ticksPerSecond)).rounded())
-        guard let loaded = buffer.loadedTicks, loaded.contains(ticks) else {
-            return .outside(loaded: buffer.loadedTicks.map { Self.seconds($0.lowerBound)...Self.seconds($0.upperBound) })
+        return clockLock.withLock {
+            if case let .outside(loaded) = buffer.reserveSeek(to: ticks) {
+                return .outside(loaded: loaded.map { Self.seconds($0.lowerBound)...Self.seconds($0.upperBound) })
+            }
+            state.withLock { shared in
+                shared.seekGeneration += 1
+                shared.seekTarget = ticks
+                shared.clockStarted = false
+                shared.clockOrigin = ticks
+                shared.lastQueuedEnd = nil
+                shared.videoEnded = false
+                shared.status.hasEnded = false
+                shared.status.isBuffering = true
+            }
+            synchronizer.setRate(0, time: Self.time(ticks))
+            return .seeking
         }
-        state.withLock { shared in
-            shared.seekGeneration += 1
-            shared.seekTarget = ticks
-            shared.clockStarted = false
-            shared.clockOrigin = ticks
-            shared.lastQueuedEnd = nil
-            shared.videoEnded = false
-            shared.status.hasEnded = false
-            shared.status.isBuffering = true
-        }
-        synchronizer.setRate(0, time: Self.time(ticks))
-        return .seeking
     }
 
     func selectAudio(trackID: UInt16) {
@@ -221,11 +241,18 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                 decoder.flush()
                 renderer.flush()
                 audioFeed.lock()
-                if let target, case .moved = buffer.seek(to: target) {
-                    skipBefore = target
+                var moved = true
+                if let target {
+                    if case .moved = buffer.seek(to: target) { skipBefore = target } else { moved = false }
                 }
                 state.withLock { $0.audioPlayer }?.discontinuity()
                 audioFeed.unlock()
+                // The reservation made when the seek was accepted keeps its unit; losing it
+                // would leave the clock at the target with nothing to show, so say so.
+                guard moved else {
+                    fail("The seek could not be completed.")
+                    return
+                }
             }
             switch buffer.nextVideo(timeout: 0.05) {
             case let .unit(entry):
@@ -301,14 +328,16 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             updateClock()
             let end = state.withLock { $0.lastQueuedEnd } ?? 0
             if clockTicks() >= end || !state.withLock({ $0.clockStarted }) && end == 0 {
-                state.withLock { shared in
-                    if let error {
-                        shared.status.failure = "Playback stopped: \(error)"
+                clockLock.withLock {
+                    state.withLock { shared in
+                        if let error {
+                            shared.status.failure = "Playback stopped: \(error)"
+                        }
+                        shared.status.hasEnded = true
+                        shared.status.wantsPlayback = false
                     }
-                    shared.status.hasEnded = true
-                    shared.status.wantsPlayback = false
+                    applyRateLocked()
                 }
-                applyRate()
                 break
             }
             usleep(20_000)
@@ -353,6 +382,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         let secondsAhead = buffer.secondsAhead
         let finished = buffer.isFinished
         let rendererIsFull = !renderer.isReadyForMoreMediaData
+        clockLock.lock()
+        defer { clockLock.unlock() }
         let now = clockTicks()
         let decision = state.withLock { shared -> (start: Int64?, changed: Bool) in
             let queuedSeconds = Self.seconds((shared.lastQueuedEnd ?? shared.clockOrigin) - now)
@@ -382,15 +413,17 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             synchronizer.setRate(0, time: Self.time(origin))
         }
         if decision.changed {
-            applyRate()
+            applyRateLocked()
         }
     }
 
-    private func applyRate() {
+    /// Sets the clock's rate from the current state. Call with `clockLock` held.
+    private func applyRateLocked() {
         let rate: Float = state.withLock { shared in
             shared.clockStarted && shared.status.wantsPlayback && !shared.status.isBuffering && !shared.cancelled ? 1 : 0
         }
         if synchronizer.rate != rate {
+            willChangeClockRate?(rate)
             synchronizer.rate = rate
         }
     }
@@ -411,13 +444,15 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     }
 
     private func fail(_ message: String) {
-        state.withLock { shared in
-            shared.status.failure = message
-            shared.status.wantsPlayback = false
-            shared.cancelled = true
+        clockLock.withLock {
+            state.withLock { shared in
+                shared.status.failure = message
+                shared.status.wantsPlayback = false
+                shared.cancelled = true
+            }
+            synchronizer.rate = 0
         }
         buffer.cancel()
-        synchronizer.rate = 0
     }
 
     private func clockTicks() -> Int64 {

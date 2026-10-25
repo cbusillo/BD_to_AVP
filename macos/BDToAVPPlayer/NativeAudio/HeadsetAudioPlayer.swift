@@ -121,6 +121,12 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
     static let targetLeadTicks: Int64 = 180_000 // 2 s
     /// How long other tracks' packets are kept behind the playhead.
     static let historyTicks: Int64 = 90_000
+    /// Packets of the selected track that fail to decode in a row before the track counts as
+    /// failed; a single damaged packet only skips its own audio.
+    static let decodeFailureLimit = 20
+    /// Decoded chunks waiting for the renderer. The feeder stays a few seconds ahead of the
+    /// clock, so this is only reached when the renderer stops taking audio.
+    static let maximumPendingChunks = 1_024
 
     let renderer = AVSampleBufferAudioRenderer()
     let tracks: [HeadsetAudioTrack]
@@ -140,12 +146,17 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
     private var lastTicks: Int64 = 0
     private var awaitingFlush = false
     private var generation = 0
+    private var decoderFailure: String?
+    private var rendererFailure: String?
+    private var consecutiveDecodeFailures = 0
 
     private struct SharedState {
         var selectedTrackID: UInt16?
         var queuedEndTicks: Int64?
         var enqueued: [EnqueuedRange] = []
         var lastError: String?
+        var failure: String?
+        var pendingCount = 0
     }
 
     init(
@@ -175,6 +186,11 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
 
     var selectedTrackID: UInt16? { state.withLock { $0.selectedTrackID } }
     var lastError: String? { state.withLock { $0.lastError } }
+    /// Why the selected track is not playing, in words for the wearer, or nil while it plays:
+    /// its decoder could not start, its packets keep failing to decode, or the renderer failed.
+    var failure: String? { state.withLock { $0.failure } }
+    /// Decoded chunks waiting for the renderer, for diagnostics and tests.
+    var pendingCount: Int { state.withLock { $0.pendingCount } }
 
     /// The ranges handed to the renderer, oldest first, for diagnostics and tests.
     var enqueuedRanges: [EnqueuedRange] { state.withLock { $0.enqueued } }
@@ -213,12 +229,15 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
     func discontinuity() {
         queue.async { [self] in
             generation += 1
+            // A flush also clears a failed renderer, so audio can come back after a seek.
             renderer.flush()
+            rendererFailure = nil
             history.removeAll()
             pending.removeAll()
             decoder?.reset()
             awaitingFlush = false
             state.withLock { $0.queuedEndTicks = nil }
+            publishFailure()
         }
     }
 
@@ -230,6 +249,10 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
             }
             generation += 1
             let switchGeneration = generation
+            if rendererFailure != nil {
+                renderer.flush()
+                rendererFailure = nil
+            }
             install(track)
             pending.removeAll()
             let boundary = clockTicks() + Self.switchLeadTicks
@@ -271,37 +294,67 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
     private func install(_ track: HeadsetAudioTrack?) {
         selected = track
         factory = PCMSampleBufferFactory()
+        consecutiveDecodeFailures = 0
         do {
             decoder = try track?.playback.makeDecoder()
+            decoderFailure = nil
         } catch {
             decoder = nil
             record(error: "\(error)")
+            decoderFailure = "\(track?.label ?? "This audio track") can't play on this device."
         }
         state.withLock {
             $0.selectedTrackID = track?.id
             $0.queuedEndTicks = nil
         }
+        publishFailure()
     }
 
     private func decodeAndQueue(_ packet: BluRayPESPacket, ticks: Int64?, notBefore: Int64?) {
-        guard let decoder else {
+        guard let decoder, rendererFailure == nil else {
             return
         }
         do {
-            for chunk in try decoder.decode(packet, ticks: ticks) {
+            let chunks = try decoder.decode(packet, ticks: ticks)
+            for chunk in chunks {
                 if let notBefore, chunk.startTicks < notBefore {
                     continue
                 }
                 let range = EnqueuedRange(pid: packet.pid, startTicks: chunk.startTicks, endTicks: chunk.endTicks)
                 pending.append((range, try factory.sampleBuffer(for: chunk)))
             }
+            // Packets that carry no audio for this decoder, such as DTS-HD extension data,
+            // say nothing about whether decoding works.
+            if chunks.isEmpty {
+                return
+            }
+            let hadFailed = consecutiveDecodeFailures >= Self.decodeFailureLimit
+            consecutiveDecodeFailures = 0
+            if hadFailed {
+                publishFailure()
+            }
         } catch {
             record(error: "\(error)")
+            consecutiveDecodeFailures += 1
+            if consecutiveDecodeFailures == Self.decodeFailureLimit {
+                publishFailure()
+            }
+        }
+        if pending.count > Self.maximumPendingChunks {
+            pending.removeFirst(pending.count - Self.maximumPendingChunks)
+            record(error: "audio queue full; oldest audio dropped")
         }
     }
 
     private func drain() {
-        guard !awaitingFlush else {
+        defer { state.withLock { $0.pendingCount = pending.count } }
+        if rendererFailure == nil, renderer.status == .failed {
+            rendererFailure = renderer.error.map { "\($0.localizedDescription)" } ?? "renderer failed"
+            record(error: rendererFailure ?? "renderer failed")
+            pending.removeAll()
+            publishFailure()
+        }
+        guard !awaitingFlush, rendererFailure == nil else {
             return
         }
         var enqueued: [EnqueuedRange] = []
@@ -322,8 +375,26 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
             shared.queuedEndTicks = ranges.last?.endTicks
         }
         if renderer.status == .failed {
-            record(error: renderer.error.map { "\($0)" } ?? "renderer failed")
+            rendererFailure = renderer.error.map { "\($0.localizedDescription)" } ?? "renderer failed"
+            record(error: rendererFailure ?? "renderer failed")
+            pending.removeAll()
+            publishFailure()
         }
+    }
+
+    private func publishFailure() {
+        let label = selected?.label ?? "This audio track"
+        let failure: String?
+        if let decoderFailure {
+            failure = decoderFailure
+        } else if rendererFailure != nil {
+            failure = "Audio stopped playing. Seeking or choosing another track tries again."
+        } else if consecutiveDecodeFailures >= Self.decodeFailureLimit {
+            failure = "\(label) could not be decoded."
+        } else {
+            failure = nil
+        }
+        state.withLock { $0.failure = failure }
     }
 
     private func record(error: String) {

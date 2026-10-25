@@ -55,6 +55,9 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
     private var lastAudioTicks: Int64 = 0
     private var finished = false
     private var finishError: String?
+    /// The random access unit an accepted seek starts at; history from it on is kept until
+    /// the seek is carried out.
+    private var reservedSeekTicks: Int64?
     private var cancelled = false
 
     init(limits: Limits = Limits()) {
@@ -173,8 +176,7 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
     var loadedTicks: ClosedRange<Int64>? {
         condition.lock()
         defer { condition.unlock() }
-        guard let first = video.first?.ticks, let latestVideoTicks else { return nil }
-        return min(first, latestVideoTicks)...latestVideoTicks
+        return loadedTicksLocked
     }
 
     enum SeekResult: Equatable {
@@ -185,17 +187,23 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         case outside(loaded: ClosedRange<Int64>?)
     }
 
+    /// Accepts a seek to `ticks` without moving yet: the random access unit it starts at, and
+    /// everything after it, stay until `seek(to:)` carries it out, however the decoder moves.
+    func reserveSeek(to ticks: Int64) -> SeekResult {
+        condition.lock()
+        defer { condition.unlock() }
+        guard let start = seekStart(ticks) else { return .outside(loaded: loadedTicksLocked) }
+        reservedSeekTicks = video[start].ticks
+        return .moved(startTicks: video[start].ticks)
+    }
+
     /// Moves both cursors so decoding restarts at the last random access unit at or before
-    /// `ticks`, and audio at the target.
+    /// `ticks`, and audio at the target, and releases a reservation.
     func seek(to ticks: Int64) -> SeekResult {
         condition.lock()
         defer { condition.unlock() }
-        guard let first = video.first?.ticks, let latestVideoTicks, ticks >= first, ticks <= latestVideoTicks,
-              let start = video.lastIndex(where: { $0.isRandomAccess && $0.ticks <= ticks })
-        else {
-            let loaded = video.first.flatMap { first in latestVideoTicks.map { min(first.ticks, $0)...$0 } }
-            return .outside(loaded: loaded)
-        }
+        reservedSeekTicks = nil
+        guard let start = seekStart(ticks) else { return .outside(loaded: loadedTicksLocked) }
         videoCursor = start
         audioCursor = audio.firstIndex { ($0.ticks ?? .min) >= ticks } ?? audio.count
         // Back up to include the packet that covers the target.
@@ -211,6 +219,18 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
     private static let audioPacketSlackTicks: Int64 = 9_000
 
     // MARK: Internals
+
+    private func seekStart(_ ticks: Int64) -> Int? {
+        guard let first = video.first?.ticks, let latestVideoTicks, ticks >= first, ticks <= latestVideoTicks else {
+            return nil
+        }
+        return video.lastIndex { $0.isRandomAccess && $0.ticks <= ticks }
+    }
+
+    private var loadedTicksLocked: ClosedRange<Int64>? {
+        guard let first = video.first?.ticks, let latestVideoTicks else { return nil }
+        return min(first, latestVideoTicks)...latestVideoTicks
+    }
 
     private var secondsAheadLocked: Double {
         guard let latestVideoTicks else { return 0 }
@@ -238,6 +258,9 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         var keep = video[..<videoCursor].lastIndex { $0.isRandomAccess && $0.ticks <= cutoff } ?? 0
         if force, bytes >= limits.maximumBytes {
             keep = video[..<videoCursor].lastIndex(where: \.isRandomAccess) ?? keep
+        }
+        if let reservedSeekTicks, let reserved = video.firstIndex(where: { $0.isRandomAccess && $0.ticks == reservedSeekTicks }) {
+            keep = min(keep, reserved)
         }
         guard keep > 0 else { return }
         bytes -= video[..<keep].reduce(0) { $0 + $1.data.count }

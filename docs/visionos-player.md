@@ -785,8 +785,17 @@ renderer is about to run dry before the title ends, the clock stops, the player
 shows that it is loading, and playback continues once four seconds are buffered
 again. The buffer keeps 20 seconds behind the decoder, so a seek inside that
 history or the loaded part ahead restarts at the nearest earlier IDR and shows
-frames from the target on. A seek outside the loaded part is refused until #1113
-adds seeking anywhere.
+frames from the target on. Accepting a seek reserves that IDR, so trimming history
+cannot drop it before the video thread gets there. A seek outside the loaded part is
+refused until #1113 adds seeking anywhere. Every clock change (start, pause, buffering,
+seek, stop) takes one lock from the state it depends on through the synchronizer
+write, so a pause can never be undone by a rate computed just before it.
+
+If the chosen audio cannot play, because its decoder cannot start, 20 packets in a
+row fail to decode, or the audio renderer fails, `HeadsetAudioPlayer.failure` says so
+in plain words and the engine reports it while the video plays on. A failed renderer
+stops queuing audio (decoded audio waiting for it is capped at 1,024 chunks anyway),
+and a seek or another track tries again.
 
 ## Native Blu-ray Audio
 

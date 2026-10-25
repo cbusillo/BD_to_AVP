@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 import XCTest
 @testable import BDToAVPPlayer
 
@@ -12,19 +13,25 @@ final class NativeBlurayPlaybackTests: XCTestCase {
         let stallAfter: Int?
         let stall: TimeInterval
         private let units: [Data]
+        /// Audio PES packets, delivered in PTS order between the video units.
+        private let audio: [BluRayPESPacket]
 
-        init(repetitions: Int, stallAfter: Int? = nil, stall: TimeInterval = 0) throws {
+        init(repetitions: Int, stallAfter: Int? = nil, stall: TimeInterval = 0, audio: [BluRayPESPacket] = []) throws {
             units = try MVCDecoderTests.accessUnits()
             self.repetitions = repetitions
             self.stallAfter = stallAfter
             self.stall = stall
-            info = Bluray3DSourceInfo(container: .discImage, titles: [Self.title(seconds: Double(repetitions * 8) / 23.976)])
+            self.audio = audio
+            let tracks = Set(audio.map(\.pid)).sorted().map {
+                Bluray3DTrack(id: Int($0), kind: .audio, codingType: 0x86, language: $0 == 0x1100 ? "deu" : "eng", name: nil)
+            }
+            info = Bluray3DSourceInfo(container: .discImage, titles: [Self.title(seconds: Double(repetitions * 8) / 23.976, audio: tracks)])
         }
 
-        static func title(seconds: Double) -> Bluray3DTitle {
+        static func title(seconds: Double, audio: [Bluray3DTrack]) -> Bluray3DTitle {
             Bluray3DTitle(
                 id: "playlist:00001", playlist: 1, durationSeconds: seconds, isMainFeature: true,
-                baseViewIsRightEye: false, unsupportedReason: nil, audioTracks: [], subtitleTracks: []
+                baseViewIsRightEye: false, unsupportedReason: nil, audioTracks: audio, subtitleTracks: []
             )
         }
 
@@ -37,11 +44,17 @@ final class NativeBlurayPlaybackTests: XCTestCase {
             // The fixture's base view is coded POC 0, 2, 6, 4 in each IDR sequence of four.
             let displayIndex = [0, 1, 3, 2]
             var statistics = Bluray3DReadStatistics()
+            var pendingAudio = audio[...]
             for repetition in 0..<repetitions {
                 for (index, unit) in units.enumerated() {
                     // The first unit carries the parameter sets; later repetitions resend it whole.
                     let frame = repetition * 8 + (index / 4) * 4 + displayIndex[index % 4]
-                    let pts = UInt64(1_000 + (Double(frame) * 3_753.75).rounded())
+                    // The Rainforest audio fixture starts at PTS 48,754, the title's first video PTS.
+                    let pts = UInt64(NativeBlurayPlaybackTests.originPTS + (Double(frame) * 3_753.75).rounded())
+                    while let next = pendingAudio.first, (next.pts ?? 0) <= pts {
+                        pendingAudio.removeFirst()
+                        if !sink.receive(.audio(next)) { return statistics }
+                    }
                     if let stallAfter, statistics.videoAccessUnits == UInt64(stallAfter) {
                         Thread.sleep(forTimeInterval: stall)
                     }
@@ -51,6 +64,24 @@ final class NativeBlurayPlaybackTests: XCTestCase {
                 }
             }
             return statistics
+        }
+    }
+
+    static let originPTS: Double = 48_754
+
+    /// Rainforest's German and English DTS-HD MA tracks: 24 core frames of 960 ticks each per
+    /// track, repeated back to back so the audio spans the whole test title.
+    private func rainforestAudio(repeats: Int = 12) throws -> [BluRayPESPacket] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "rainforest-dts-hd-ma-deu-eng", withExtension: "m2ts"))
+        var reader = TransportStreamPESReader(pids: [0x1100, 0x1101])
+        let packets = reader.append(try Data(contentsOf: url)) + reader.finish()
+        return (0..<repeats).flatMap { repeatIndex in
+            packets.map { packet in
+                BluRayPESPacket(
+                    pid: packet.pid, streamID: packet.streamID, streamIDExtension: packet.streamIDExtension,
+                    pts: packet.pts.map { $0 + UInt64(repeatIndex * 24 * 960) }, payload: packet.payload
+                )
+            }
         }
     }
 
@@ -102,6 +133,66 @@ final class NativeBlurayPlaybackTests: XCTestCase {
         playback.setPlaying(true)
         XCTAssertTrue(waitUntil(5) { playback.status.currentTime > paused + 0.3 })
         XCTAssertEqual(playback.status.statistics.lateFrames, 0)
+    }
+
+    func testAPauseWhileTheClockStartsIsNotUndone() throws {
+        let playback = makePlayback(try FixtureSource(repetitions: 30))
+        let paused = DispatchSemaphore(value: 0)
+        let once = OSAllocatedUnfairLock(initialState: false)
+        // As the video thread starts the clock, the wearer pauses from another thread.
+        playback.willChangeClockRate = { rate in
+            guard rate == 1, once.withLock({ first in defer { first = true }; return !first }) else { return }
+            Thread { playback.setPlaying(false); paused.signal() }.start()
+            _ = paused.wait(timeout: .now() + 0.2)
+        }
+        playback.start()
+        XCTAssertTrue(waitUntil(10) { once.withLock { $0 } })
+        XCTAssertTrue(waitUntil(2) { !playback.status.wantsPlayback })
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(playback.synchronizer.rate, 0, "the pause must win over the clock start")
+        let position = playback.status.currentTime
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(playback.status.currentTime, position, accuracy: 0.001)
+    }
+
+    func testPlaysARealAudioTrackOnTheVideoClock() throws {
+        let playback = makePlayback(try FixtureSource(repetitions: 9, audio: try rainforestAudio()))
+        XCTAssertEqual(playback.audioTracks.map(\.id), [0x1100, 0x1101])
+        playback.start()
+        XCTAssertTrue(waitUntil(15) { playback.status.hasEnded }, "status \(playback.status)")
+        let player = try XCTUnwrap(playback.audioPlayer)
+        XCTAssertNil(playback.status.audioFailure)
+        XCTAssertNil(player.lastError)
+        let ranges = player.enqueuedRanges.filter { $0.pid == player.selectedTrackID }
+        // Audio and video share time zero, the first video PTS, so the track starts at 0.
+        XCTAssertEqual(try XCTUnwrap(ranges.first).startTicks, 0)
+        // The source delivers audio up to the last video frame, at 71 frames of 3,753.75 ticks.
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(ranges.last).endTicks, 266_516)
+        for (previous, next) in zip(ranges, ranges.dropFirst()) {
+            XCTAssertEqual(next.startTicks, previous.endTicks, "the audio is continuous")
+        }
+        XCTAssertEqual(playback.status.statistics.lateFrames, 0)
+    }
+
+    func testAudioThatCannotBeDecodedIsReportedWhileVideoPlaysOn() throws {
+        // Keep each DTS core frame's sync word and header, so it is parsed and sent to the
+        // decoder, but damage everything after the header.
+        let damaged = try rainforestAudio().map { packet -> BluRayPESPacket in
+            guard packet.streamIDExtension == 0x71 else { return packet }
+            var bytes = [UInt8](packet.payload)
+            for frame in DTSCoreFrameParser.frames(in: packet.payload) {
+                guard let start = bytes.indices.first(where: { bytes[$0...].starts(with: frame.bytes.prefix(16)) }) else { continue }
+                for index in (start + 16)..<(start + frame.bytes.count) { bytes[index] = 0xFF }
+            }
+            return BluRayPESPacket(pid: packet.pid, streamID: packet.streamID, streamIDExtension: packet.streamIDExtension, pts: packet.pts, payload: Data(bytes))
+        }
+        let playback = makePlayback(try FixtureSource(repetitions: 9, audio: damaged))
+        playback.start()
+        XCTAssertTrue(waitUntil(15) { playback.status.hasEnded }, "status \(playback.status)")
+        XCTAssertNotNil(playback.status.audioFailure, "lastError \(String(describing: playback.audioPlayer?.lastError))")
+        XCTAssertNil(playback.status.failure, "the video plays on")
+        XCTAssertEqual(playback.status.statistics.framesQueued, 72)
+        XCTAssertLessThanOrEqual(playback.audioPlayer?.pendingCount ?? 0, HeadsetAudioPlayer.maximumPendingChunks)
     }
 
     func testSeeksInsideTheLoadedPartAndRefusesOtherTargets() throws {
