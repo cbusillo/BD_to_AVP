@@ -166,6 +166,9 @@ targets:
     dependencies:
       - sdk: AVFoundation.framework
       - sdk: AVKit.framework
+      # FFmpeg's LGPL DTS decoder, linked dynamically; scripts/build_ffmpeg_dca_visionos.py.
+      - framework: Vendor/FFmpegDCA.xcframework
+        embed: true
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

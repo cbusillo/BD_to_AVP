@@ -1,0 +1,4 @@
+framework module FFmpegDCA {
+    umbrella header "FFmpegDCA.h"
+    export *
+}
