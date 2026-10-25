@@ -5,12 +5,12 @@ import XCTest
 /// Plays the bundled side-by-side check movie through `ShareFileResourceLoader` with a real
 /// `AVPlayer`, from a share that goes away mid-movie, as when Wi-Fi goes off.
 final class ShareFileResourceLoaderTests: XCTestCase {
-    /// Serves the movie at about three times its bitrate, like a share over Wi-Fi, until
-    /// `begin()`; then, until `end()`, every read either hangs (a stalled share) or fails (a
-    /// dropped one).
+    /// Serves the movie a little faster than its average bitrate of about 53 KB/s, so the player
+    /// never gets far ahead of the playhead, until `begin()`; then, until `end()`, every read
+    /// either hangs (a stalled share) or fails (a dropped one).
     private final class Share: @unchecked Sendable {
         static let bytesPerRead = 16_384
-        static let secondsPerRead = 0.1
+        static let secondsPerRead = 0.25
 
         let data: Data
         let drops: Bool
@@ -75,7 +75,7 @@ final class ShareFileResourceLoaderTests: XCTestCase {
 
         player.play()
         XCTAssertTrue(
-            waitUntil(20) { player.timeControlStatus == .playing && player.currentTime().seconds > 1 },
+            waitUntil(40) { player.timeControlStatus == .playing && player.currentTime().seconds > 1 },
             "status \(player.timeControlStatus.rawValue) at \(player.currentTime().seconds) s, item \(String(describing: player.currentItem?.error))"
         )
 
@@ -83,7 +83,7 @@ final class ShareFileResourceLoaderTests: XCTestCase {
         share.begin()
         XCTAssertTrue(waitUntil(3) { connection.isConnectionLost })
         XCTAssertTrue(
-            waitUntil(30) { PlayerTimeControl(player).isWaitingForData },
+            waitUntil(60) { PlayerTimeControl(player).isWaitingForData },
             "status \(player.timeControlStatus.rawValue) at \(player.currentTime().seconds) s"
         )
         XCTAssertTrue(PlayerTimeControl(player).wantsPlayback)
