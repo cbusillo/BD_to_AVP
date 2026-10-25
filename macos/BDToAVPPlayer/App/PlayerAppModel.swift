@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import UniformTypeIdentifiers
 
 enum LibraryViewMode: String, CaseIterable, Sendable {
     case posters
@@ -16,6 +17,7 @@ enum MediaFormatFilter: String, CaseIterable, Sendable {
     case mvHEVC
     case sideBySide
     case overUnder
+    case bluray3D
     case unsupported
 
     var title: String {
@@ -28,6 +30,8 @@ enum MediaFormatFilter: String, CaseIterable, Sendable {
             return "SBS"
         case .overUnder:
             return "OVER-UNDER"
+        case .bluray3D:
+            return "Blu-ray 3D"
         case .unsupported:
             return "Unsupported"
         }
@@ -43,6 +47,8 @@ enum MediaFormatFilter: String, CaseIterable, Sendable {
             return item.format == .sideBySide
         case .overUnder:
             return item.format == .overUnder
+        case .bluray3D:
+            return item.format == .bluray3D
         case .unsupported:
             return item.format == .unsupported
         }
@@ -99,6 +105,7 @@ enum PlaybackAvailability: Equatable, Sendable {
 @MainActor
 final class PlayerAppModel: ObservableObject {
     typealias FormatInspector = (URL) async throws -> StereoFormat
+    typealias BlurayInspector = (URL) async throws -> Bluray3DSourceInfo
     typealias StereoCheckInstaller = @Sendable () throws -> [InstalledStereoCheck]
 
     @Published private(set) var library: MediaLibraryModel
@@ -119,6 +126,7 @@ final class PlayerAppModel: ObservableObject {
     private let libraryStore: LibraryStore
     let bookmarkStore: BookmarkStore
     private let formatInspector: FormatInspector
+    private let blurayInspector: BlurayInspector
     private let stereoCheckInstaller: StereoCheckInstaller
     private let documentsURL: URL
     private var isRefreshingSourceStatuses = false
@@ -130,6 +138,9 @@ final class PlayerAppModel: ObservableObject {
         bookmarkStore: BookmarkStore? = nil,
         documentsURL: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0],
         formatInspector: @escaping FormatInspector = MediaFormatInspector.inspect,
+        blurayInspector: @escaping BlurayInspector = { url in
+            try await Task.detached(priority: .userInitiated) { try Bluray3DSourceOpener.open(url).info }.value
+        },
         stereoCheckInstaller: @escaping StereoCheckInstaller = { try BuiltInStereoChecks.install() }
     ) {
         let resolvedBookmarkStore = bookmarkStore ?? BookmarkStore()
@@ -137,6 +148,7 @@ final class PlayerAppModel: ObservableObject {
         self.bookmarkStore = resolvedBookmarkStore
         self.documentsURL = documentsURL
         self.formatInspector = formatInspector
+        self.blurayInspector = blurayInspector
         self.stereoCheckInstaller = stereoCheckInstaller
         let loadedLibrary = MediaLibraryModel(items: libraryStore.load())
         self.library = loadedLibrary
@@ -214,6 +226,14 @@ final class PlayerAppModel: ObservableObject {
         switch item.format {
         case .mvHEVC, .sideBySide, .overUnder:
             return .playable
+        case .bluray3D:
+            guard let title = item.bluray3DTitle else {
+                return .unavailable(Bluray3DUnsupportedReason.notStereo3D.message)
+            }
+            if let reason = title.unsupportedReason {
+                return .unavailable(reason.message)
+            }
+            return .planned("Blu-ray 3D will play here once headset playback is ready.")
         case .unsupported:
             return .unavailable("This media format is not supported for playback.")
         }
@@ -289,7 +309,9 @@ final class PlayerAppModel: ObservableObject {
             return
         }
 
-        for url in urls where Self.supportedMovieExtensions.contains(url.pathExtension.lowercased()) {
+        // Movie files, Blu-ray 3D images, and copied disc folders that hold BDMV.
+        for url in urls where Self.supportedMovieExtensions.contains(url.pathExtension.lowercased())
+            || Self.isDiscFolder(url) {
             let itemID = "documents:\(url.lastPathComponent.lowercased())"
             _ = await importMovie(from: url, replacing: itemID, shouldShowDetails: false, reportErrors: false)
         }
@@ -335,14 +357,26 @@ final class PlayerAppModel: ObservableObject {
 
         do {
             let bookmarkData = try url.bookmarkData(options: [])
-            let format = try await formatInspector(url)
+            let format: StereoFormat
+            var bluray3DTitle: Bluray3DTitle?
+            if Bluray3DSourceOpener.kind(of: url) != nil {
+                let info = try await blurayInspector(url)
+                guard let title = info.mainTitle ?? info.titles.first else {
+                    throw Bluray3DSourceError.titleUnavailable
+                }
+                format = .bluray3D
+                bluray3DTitle = title
+            } else {
+                format = try await formatInspector(url)
+            }
             let importedItemID = itemID ?? documentsItemID(for: url)
             let existingItem = importedItemID.flatMap(item(id:))
             let importedItem = MediaItem(
                 id: importedItemID ?? UUID().uuidString,
                 title: existingItem?.title ?? url.deletingPathExtension().lastPathComponent,
                 fileName: url.lastPathComponent,
-                format: format
+                format: format,
+                bluray3DTitle: bluray3DTitle
             )
 
             try bookmarkStore.save(bookmarkData: bookmarkData, for: importedItem.id)
@@ -363,7 +397,20 @@ final class PlayerAppModel: ObservableObject {
         }
     }
 
-    private static let supportedMovieExtensions = Set(["mov", "mp4", "m4v"])
+    private static func isDiscFolder(_ url: URL) -> Bool {
+        if case .discFolder = Bluray3DSourceOpener.kind(of: url) { return true }
+        return false
+    }
+
+    private static let supportedMovieExtensions = Set(["mov", "mp4", "m4v", "iso", "mkv"])
+
+    /// What Add Movie and Locate accept: movies, Blu-ray 3D ISOs and MKVs, and disc folders.
+    static let importableContentTypes: [UTType] = [
+        .movie,
+        UTType("public.iso-image") ?? UTType(filenameExtension: "iso"),
+        UTType(filenameExtension: "mkv"),
+        .folder,
+    ].compactMap { $0 }
 
     private func documentsItemID(for url: URL) -> String? {
         let documentsDirectory = documentsURL.standardizedFileURL.resolvingSymlinksInPath()
