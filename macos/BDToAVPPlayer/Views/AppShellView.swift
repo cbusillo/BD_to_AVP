@@ -158,6 +158,7 @@ struct AppShellView: View {
                 )
                 await RelayQualificationDriver.runLiveIfRequested(library: movieLibrary, player: playerSession)
                 await SourceReadQualification.runIfRequested(model: model)
+                await NativePlaybackQualification.runIfRequested(model: model, player: playerSession)
             }
             #endif
         }
