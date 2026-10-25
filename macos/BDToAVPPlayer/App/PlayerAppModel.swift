@@ -103,8 +103,8 @@ enum PlaybackAvailability: Equatable, Sendable {
 
 @MainActor
 final class PlayerAppModel: ObservableObject {
-    typealias FormatInspector = (URL) async throws -> StereoFormat
-    typealias BlurayInspector = (URL) async throws -> Bluray3DSourceInfo
+    typealias FormatInspector = MediaSourceInspector.FormatInspector
+    typealias BlurayInspector = MediaSourceInspector.BlurayInspector
     typealias StereoCheckInstaller = @Sendable () throws -> [InstalledStereoCheck]
 
     @Published private(set) var library: MediaLibraryModel
@@ -114,7 +114,6 @@ final class PlayerAppModel: ObservableObject {
     @Published var sortOrder: MediaSortOrder = .title
     @Published var selectedItemID: String?
     @Published var isShowingDetails = false
-    @Published var isImporting = false
     @Published var errorMessage: String?
     @Published private(set) var stereoCheckErrorMessage: String?
     @Published private(set) var playbackRequest: PlaybackRequest?
@@ -124,30 +123,36 @@ final class PlayerAppModel: ObservableObject {
 
     private let libraryStore: LibraryStore
     let bookmarkStore: BookmarkStore
-    private let formatInspector: FormatInspector
-    private let blurayInspector: BlurayInspector
+    /// Network shares the wearer added; each is its own library.
+    let locations: LocationLibraryModel
+    private let sourceInspector: MediaSourceInspector
     private let stereoCheckInstaller: StereoCheckInstaller
     private let documentsURL: URL
     private var isRefreshingSourceStatuses = false
     private var needsSourceStatusRefresh = false
     private var sourceStatusProbeGenerations: [String: Int] = [:]
+    private var locationsChange: AnyCancellable?
 
     init(
         libraryStore: LibraryStore = LibraryStore(),
         bookmarkStore: BookmarkStore? = nil,
+        locationStore: LocationStore = LocationStore(),
         documentsURL: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0],
-        formatInspector: @escaping FormatInspector = MediaFormatInspector.inspect,
-        blurayInspector: @escaping BlurayInspector = { url in
-            try await Task.detached(priority: .userInitiated) { try Bluray3DSourceOpener.open(url).info }.value
-        },
+        formatInspector: @escaping FormatInspector = { try await MediaFormatInspector.inspect(url: $0) },
+        blurayInspector: @escaping BlurayInspector = MediaSourceInspector().blurayInspector,
         stereoCheckInstaller: @escaping StereoCheckInstaller = { try BuiltInStereoChecks.install() }
     ) {
         let resolvedBookmarkStore = bookmarkStore ?? BookmarkStore()
+        let sourceInspector = MediaSourceInspector(formatInspector: formatInspector, blurayInspector: blurayInspector)
         self.libraryStore = libraryStore
         self.bookmarkStore = resolvedBookmarkStore
+        self.sourceInspector = sourceInspector
+        self.locations = LocationLibraryModel(
+            store: locationStore,
+            bookmarkStore: resolvedBookmarkStore,
+            inspector: sourceInspector
+        )
         self.documentsURL = documentsURL
-        self.formatInspector = formatInspector
-        self.blurayInspector = blurayInspector
         self.stereoCheckInstaller = stereoCheckInstaller
         let loadedLibrary = MediaLibraryModel(items: libraryStore.load())
         self.library = loadedLibrary
@@ -159,6 +164,10 @@ final class PlayerAppModel: ObservableObject {
                 )
             }
         )
+        // Views watch this model; a Location's listing changing is a change here too.
+        locationsChange = locations.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     var visibleItems: [MediaItem] {
@@ -192,12 +201,24 @@ final class PlayerAppModel: ObservableObject {
     }
 
     func item(id: String) -> MediaItem? {
-        library.items.first { $0.id == id }
+        library.items.first { $0.id == id } ?? locations.item(id: id)
+    }
+
+    /// Whether an item's source can be reached right now. A Location's titles share its status.
+    func sourceStatus(for itemID: String) -> MediaSourceStatus? {
+        locations.sourceStatus(forItemID: itemID) ?? sourceStatuses[itemID]
+    }
+
+    func isLocationItem(_ itemID: String) -> Bool {
+        LocationLibraryModel.locationID(forItemID: itemID) != nil
     }
 
     func sourceTitle(for item: MediaItem) -> String {
         if BuiltInStereoChecks.contains(item) {
             return "Built-in Stereo Check"
+        }
+        if let name = locations.locationName(forItemID: item.id) {
+            return name
         }
         return item.id.hasPrefix("documents:") ? "On My Vision Pro" : "Files"
     }
@@ -214,7 +235,7 @@ final class PlayerAppModel: ObservableObject {
     }
 
     func playbackAvailability(for item: MediaItem) -> PlaybackAvailability {
-        let sourceStatus = sourceStatuses[item.id] ?? .missing
+        let sourceStatus = self.sourceStatus(for: item.id) ?? .missing
         guard sourceStatus == .available || sourceStatus == .checking else {
             if sourceStatus == .unavailable {
                 return .unavailable("Try the source again or locate it before playing.")
@@ -249,10 +270,6 @@ final class PlayerAppModel: ObservableObject {
 
     func clearPlaybackRequest() {
         playbackRequest = nil
-    }
-
-    func importMovie(from url: URL) async {
-        _ = await importMovie(from: url, replacing: nil)
     }
 
     @discardableResult
@@ -338,44 +355,26 @@ final class PlayerAppModel: ObservableObject {
         }
     }
 
-    private func importMovie(from url: URL, replacing itemID: String?) async -> Bool {
-        await importMovie(from: url, replacing: itemID, shouldShowDetails: true, reportErrors: true)
-    }
-
+    /// Inspects `url` and stores it as the library item `itemID`: a Documents file found on
+    /// launch, or an existing item the wearer located again.
     private func importMovie(
         from url: URL,
-        replacing itemID: String?,
+        replacing itemID: String,
         shouldShowDetails: Bool,
         reportErrors: Bool
     ) async -> Bool {
-        isImporting = true
-        defer { isImporting = false }
-
         let lease = SecurityScopedResourceLease(url: url)
         defer { lease.close() }
 
         do {
             let bookmarkData = try url.bookmarkData(options: [])
-            let format: StereoFormat
-            var bluray3DTitle: Bluray3DTitle?
-            if Bluray3DSourceOpener.kind(of: url) != nil {
-                let info = try await blurayInspector(url)
-                guard let title = info.mainTitle ?? info.titles.first else {
-                    throw Bluray3DSourceError.titleUnavailable
-                }
-                format = .bluray3D
-                bluray3DTitle = title
-            } else {
-                format = try await formatInspector(url)
-            }
-            let importedItemID = itemID ?? documentsItemID(for: url)
-            let existingItem = importedItemID.flatMap(item(id:))
+            let inspection = try await sourceInspector.inspect(url)
             let importedItem = MediaItem(
-                id: importedItemID ?? UUID().uuidString,
-                title: existingItem?.title ?? url.deletingPathExtension().lastPathComponent,
+                id: itemID,
+                title: item(id: itemID)?.title ?? url.deletingPathExtension().lastPathComponent,
                 fileName: url.lastPathComponent,
-                format: format,
-                bluray3DTitle: bluray3DTitle
+                format: inspection.format,
+                bluray3DTitle: inspection.bluray3DTitle
             )
 
             try bookmarkStore.save(bookmarkData: bookmarkData, for: importedItem.id)
@@ -390,7 +389,7 @@ final class PlayerAppModel: ObservableObject {
             return true
         } catch {
             if reportErrors {
-                errorMessage = "Could not inspect or add this movie."
+                errorMessage = "Could not inspect this movie."
             }
             return false
         }
@@ -403,22 +402,13 @@ final class PlayerAppModel: ObservableObject {
 
     private static let supportedMovieExtensions = Set(["mov", "mp4", "m4v", "iso", "mkv"])
 
-    /// What Add Movie and Locate accept: movies, Blu-ray 3D ISOs and MKVs, and disc folders.
-    static let importableContentTypes: [UTType] = [
+    /// What Locate accepts: movies, Blu-ray 3D ISOs and MKVs, and disc folders.
+    nonisolated static let importableContentTypes: [UTType] = [
         .movie,
         UTType("public.iso-image") ?? UTType(filenameExtension: "iso"),
         UTType(filenameExtension: "mkv"),
         .folder,
     ].compactMap { $0 }
-
-    private func documentsItemID(for url: URL) -> String? {
-        let documentsDirectory = documentsURL.standardizedFileURL.resolvingSymlinksInPath()
-        let fileURL = url.standardizedFileURL.resolvingSymlinksInPath()
-        guard fileURL.deletingLastPathComponent() == documentsDirectory else {
-            return nil
-        }
-        return "documents:\(fileURL.lastPathComponent.lowercased())"
-    }
 
     func refreshSourceStatuses() async {
         guard !isRefreshingSourceStatuses else {
@@ -448,6 +438,10 @@ final class PlayerAppModel: ObservableObject {
     }
 
     func refreshSourceStatus(for itemID: String) async {
+        if let locationID = LocationLibraryModel.locationID(forItemID: itemID) {
+            await locations.refresh(locationID)
+            return
+        }
         guard item(id: itemID) != nil else {
             return
         }

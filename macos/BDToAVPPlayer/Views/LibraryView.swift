@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @ObservedObject var model: PlayerAppModel
-    @State private var isImporterPresented = false
+    let addLocation: () -> Void
 
     var body: some View {
         ScrollView {
@@ -32,16 +32,7 @@ struct LibraryView: View {
                 viewControls
                 filterMenu
                 sortMenu
-                addMovieButton
             }
-        }
-        .fileImporter(
-            isPresented: $isImporterPresented,
-            allowedContentTypes: PlayerAppModel.importableContentTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            guard case let .success(urls) = result, let url = urls.first else { return }
-            Task { await model.importMovie(from: url) }
         }
     }
 
@@ -56,11 +47,15 @@ struct LibraryView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No movies yet", systemImage: "film.stack")
+            Label("No movies on this Vision Pro", systemImage: "film.stack")
         } description: {
-            Text("Add a movie file to start building your library.")
+            Text("Copy movies into Shiny 3D Cinema's folder in the Files app, or add a Location to watch movies from a network share.")
         } actions: {
-            addMovieButton
+            Button(action: addLocation) {
+                Label("Add Location", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("library-add-location")
         }
         .frame(maxWidth: .infinity, minHeight: 360)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
@@ -89,7 +84,7 @@ struct LibraryView: View {
             ForEach(model.visibleImportedItems) { item in
                 MediaPosterCard(
                     item: item,
-                    sourceStatus: model.sourceStatuses[item.id],
+                    sourceStatus: model.sourceStatus(for: item.id),
                     sourceTitle: model.sourceTitle(for: item),
                     bookmarkStore: model.bookmarkStore,
                     showDetails: { model.showDetails(for: item.id) },
@@ -110,7 +105,7 @@ struct LibraryView: View {
                     } label: {
                         MediaFileRow(
                             item: item,
-                            sourceStatus: model.sourceStatuses[item.id],
+                            sourceStatus: model.sourceStatus(for: item.id),
                             sourceTitle: model.sourceTitle(for: item),
                             bookmarkStore: model.bookmarkStore
                         )
@@ -236,17 +231,6 @@ struct LibraryView: View {
             Label("Sort", systemImage: "arrow.up.arrow.down")
         }
         .accessibilityLabel("Sort movies")
-    }
-
-    private var addMovieButton: some View {
-        Button {
-            isImporterPresented = true
-        } label: {
-            Label("Add Movie", systemImage: "plus")
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(model.isImporting)
-        .accessibilityHint("Choose one movie file from Files.")
     }
 }
 
