@@ -11,18 +11,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bd_to_avp import preflight
-from bd_to_avp.modules import container, disc, process
+from bd_to_avp.modules import container, disc, process, sub
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.bluray import READER_TOOL_ID, parse_titles_output
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind
+from bd_to_avp.worker.protocol import VideoRouteIntent
 from bd_to_avp.process_runner import ProcessOutputSnapshot, ProcessResult
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"
 RAINFOREST_MAIN_CLIP = "00007"
+RAINFOREST_MAIN_PLAYLIST = "1005"
 RAINFOREST_SHORT_TITLE_ID = "bluray:5"
 # Decoded frames of the first 100 Rainforest stereo pairs, shared with the ssif_probe test.
 RAINFOREST_FIRST_100_FRAME_LINES_SHA256 = "186a33d0a66c39619b94d354f77fbe364ee24c2e441ee25d90a8902b75199166"
@@ -200,6 +203,86 @@ class DirectBlurayRoutingTests(unittest.TestCase):
 
 
 class DirectBlurayProcessTests(unittest.TestCase):
+    def test_resume_after_the_video_stages_still_extracts_audio_and_subtitles(self) -> None:
+        # The direct read extracts audio and subtitles after the video stages, so a run that
+        # failed while combining has neither; resuming there must extract both, on every route.
+        direct_route = ResolvedVideoRoute(
+            intent=VideoRouteIntent.AUTOMATIC,
+            selected=VideoRouteKind.DIRECT_MV_HEVC,
+            reason="test",
+            output_mode=VideoMode.MV_HEVC,
+            direct_quality=0.7,
+        )
+        for name, video_mode, route in (
+            ("generated MV-HEVC", VideoMode.MV_HEVC, None),
+            ("direct MV-HEVC", VideoMode.MV_HEVC, direct_route),
+            ("AV1", VideoMode.AV1_SBS, None),
+        ):
+            with self.subTest(route=name), tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as stack:
+                root = Path(temporary_directory)
+                source = root / "Movie.iso"
+                source.write_bytes(b"")
+                output_folder = root / "Movie"
+                output_folder.mkdir()
+                bluray_disc = parse_titles_output(json.dumps(titles_listing()), source)
+                disc_info = disc.direct_disc_info(bluray_disc, None)
+                sidecar = output_folder / "Rain Forest 3D_audio_subtitles.ts"
+                sidecar.write_bytes(b"sidecar")
+                stack.enter_context(patch.object(process, "direct_bluray_disc", return_value=bluray_disc))
+                for setting, value in (
+                    ("source_path", source),
+                    ("source_str", None),
+                    ("output_root_path", root),
+                    ("overwrite", True),
+                    ("keep_files", False),
+                    ("audio_mode", AudioMode.PCM),
+                    ("video_mode", video_mode),
+                    ("fx_upscale", False),
+                    ("skip_subtitles", False),
+                    ("start_stage", Stage.COMBINE_TO_MV_HEVC),
+                    ("preview_range", None),
+                    ("remove_original", False),
+                ):
+                    stack.enter_context(patch.object(process.config, setting, value))
+                stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
+                stack.enter_context(patch.object(process, "get_disc_and_mvc_video_info", return_value=disc_info))
+                stack.enter_context(
+                    patch.object(process, "prepare_output_folder_for_source", return_value=output_folder)
+                )
+                stack.enter_context(patch.object(process, "file_exists_normalized", return_value=False))
+                stack.enter_context(patch.object(process, "create_excerpt"))
+                stack.enter_context(patch.object(process, "get_video_color_depth", return_value=8))
+                stack.enter_context(patch.object(process, "detect_crop_parameters", return_value=""))
+                stack.enter_context(
+                    patch.object(process, "create_left_right_files", return_value=(root / "l.mov", root / "r.mov"))
+                )
+                stack.enter_context(
+                    patch.object(process, "resolve_generated_mv_hevc_expectations", return_value=((1920, 1080), 3240.0))
+                )
+                stack.enter_context(patch.object(process, "create_mv_hevc_file", return_value=root / "mv.mov"))
+                stack.enter_context(patch.object(process, "create_direct_mv_hevc_file", return_value=root / "mv.mov"))
+                stack.enter_context(patch.object(process, "create_av1_sbs_file", return_value=root / "sbs.mp4"))
+                stack.enter_context(patch.object(process, "create_av1_stereo_file", return_value=root / "av1.mp4"))
+                stack.enter_context(patch.object(process, "create_upscaled_file", return_value=root / "mv.mov"))
+                stack.enter_context(patch.object(process, "create_transcoded_audio_file", return_value=root / "a.mov"))
+                stack.enter_context(patch.object(process, "create_muxed_file", return_value=root / "Movie_AVP.mov"))
+                stack.enter_context(patch.object(process, "move_completed_conversion", return_value=root / "o.mov"))
+                stack.enter_context(
+                    patch.object(container, "get_audio_stream_data", return_value=[{"index": 1, "tags": {}}])
+                )
+                extract_audio = stack.enter_context(patch.object(container, "extract_mvc_and_audio"))
+                extract_subtitles = stack.enter_context(patch.object(sub, "extract_subtitle_to_srt"))
+                plan = process.conversion_stage_plan(route)
+                if route is None:
+                    process.process_each()
+                else:
+                    process.process_each(video_route=route)
+
+                self.assertEqual(extract_audio.call_args.args[0], sidecar)
+                self.assertEqual(extract_subtitles.call_args.args[0], sidecar)
+                self.assertIn("extract_mvc_and_audio", plan)
+                self.assertIn("extract_subtitles", plan)
+
     def test_video_pass_streams_from_the_reader_and_audio_and_subtitles_use_its_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -223,7 +306,7 @@ class DirectBlurayProcessTests(unittest.TestCase):
                             [
                                 "stream",
                                 str(source),
-                                "00007",
+                                "1005",
                                 "--sidecar",
                                 str(sidecar),
                                 "--audio",
@@ -338,7 +421,7 @@ class RainforestDirectReadTests(unittest.TestCase):
                     str(self.reader),
                     "stream",
                     str(self.source_path),
-                    RAINFOREST_MAIN_CLIP,
+                    RAINFOREST_MAIN_PLAYLIST,
                     "--sidecar",
                     str(sidecar),
                     "--audio",

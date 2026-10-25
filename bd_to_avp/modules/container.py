@@ -173,7 +173,9 @@ def create_mvc_and_audio(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    extract: bool | None = None,
 ) -> tuple[Path, Path]:
+    """``extract`` overrides the stage check for a direct Blu-ray read, which extracts later."""
     video_output_path = output_folder / f"{disc_name}_mvc.h264"
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
     m4a_audio_preparation = is_audio_m4a_preparation_enabled()
@@ -188,7 +190,7 @@ def create_mvc_and_audio(
         )
     audio_source_path = mkv_output_path if m4a_audio_preparation or not source_audio_streams else audio_output_path
 
-    if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
+    if extract if extract is not None else config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
         extract_mvc_and_audio(
             mkv_output_path,
             None if direct_mvc_stream else video_output_path,

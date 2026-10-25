@@ -231,12 +231,16 @@ def sidecar_stream_arguments(title: BlurayTitle) -> list[str]:
 
 
 def mvc_stream_command(source_path: Path, title: BlurayTitle, sidecar: Path) -> list[str | Path]:
-    """Streams the title's MVC video to stdout while writing its audio and subtitles to ``sidecar``."""
+    """Streams the title's MVC video to stdout while writing its audio and subtitles to ``sidecar``.
+
+    The reader is given the playlist, not the clip: playlists that share a clip can differ in
+    coverage and streams, and only this playlist was checked as readable.
+    """
     return [
         reader_path(),
         "stream",
         source_path,
-        title.clip_id,
+        str(title.playlist),
         "--sidecar",
         sidecar,
         *sidecar_stream_arguments(title),

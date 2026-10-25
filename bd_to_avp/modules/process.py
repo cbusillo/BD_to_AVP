@@ -218,6 +218,13 @@ def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
     )
 
 
+def source_extraction_runs(stage: Stage, reads_bluray: bool) -> bool:
+    """Whether this run extracts audio or subtitles. A direct Blu-ray read extracts them after the
+    video stages, so a run resumed at any stage up to combining has not extracted them yet."""
+    last_stage = Stage.COMBINE_TO_MV_HEVC if reads_bluray else stage
+    return config.start_stage.value <= last_stage.value
+
+
 def conversion_stage_plan(
     video_route: ResolvedVideoRoute | None = None,
     selected_title_id: str | None = None,
@@ -241,9 +248,9 @@ def conversion_stage_plan(
         ]
     )
     source_stages = []
-    if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
+    if source_extraction_runs(Stage.EXTRACT_MVC_AND_AUDIO, reads_bluray):
         source_stages.append("extract_mvc_and_audio")
-    if not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
+    if not config.skip_subtitles and source_extraction_runs(Stage.EXTRACT_SUBTITLES, reads_bluray):
         source_stages.append("extract_subtitles")
     if not reads_bluray:
         stages.extend(source_stages)
@@ -587,7 +594,9 @@ def _process_each(
                 cancellation_event=cancellation_event,
                 observability_context=stage_observability_context("extract_mvc_and_audio"),
             )
-        if activity and config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
+        extract_audio = source_extraction_runs(Stage.EXTRACT_MVC_AND_AUDIO, mvc_producer is not None)
+        extract_subtitles = source_extraction_runs(Stage.EXTRACT_SUBTITLES, mvc_producer is not None)
+        if activity and extract_audio:
             activity.stage_started("extract_mvc_and_audio", "Extracting MVC video and audio")
         extracted_audio_path, extracted_video_path = create_mvc_and_audio(
             disc_info.name,
@@ -597,9 +606,10 @@ def _process_each(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("extract_mvc_and_audio"),
+            extract=extract_audio,
         )
         raise_if_cancelled(cancellation_event)
-        if activity and not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
+        if activity and not config.skip_subtitles and extract_subtitles:
             activity.stage_started("extract_subtitles", "Extracting subtitles")
         subtitle_warning_handler = (
             (lambda warning_message: activity.warning(warning_message, stage="extract_subtitles")) if activity else None
@@ -611,6 +621,7 @@ def _process_each(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("extract_subtitles"),
+            extract=extract_subtitles,
         )
         return extracted_audio_path, extracted_video_path
 

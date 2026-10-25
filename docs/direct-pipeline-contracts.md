@@ -237,9 +237,11 @@ language. Each DTS-HD stream is followed by its DTS core, and FFmpeg exposes a
 TrueHD stream's AC-3 core, so the audio tracks match a MakeMKV rip. The sidecar
 also holds the first base-view access unit, so audio keeps its offset from the
 first video frame. Because the sidecar comes from the video pass, Extract MVC
-and Audio and Extract Subtitles run after the video stages for a direct read. A
-resume after the video stages rewrites a missing sidecar with a read that
-discards the video. Color depth and crop detection read a 15-second 2D excerpt
+and Audio and Extract Subtitles run after the video stages for a direct read, so
+a resume at any stage up to Combine to MV HEVC still runs them. A resume after
+the video stages rewrites a missing sidecar with a read that discards the
+video. The reader streams the exact playlist the title list named, because
+playlists that share a clip can differ in coverage and streams. Color depth and crop detection read a 15-second 2D excerpt
 from `bd3d_reader excerpt`, taken from the middle of the title or ten minutes
 in, whichever is earlier.
 
