@@ -100,7 +100,9 @@ final class MatroskaMVCSource: Bluray3DSource {
         var clusterTimestamp: Int64 = 0
 
         func deliver(_ block: MatroskaBlock) throws -> Bool {
-            let pts = Self.pts(clusterTimestamp + Int64(block.relativeTimestamp), scale: timestampScale)
+            let (timestamp, overflow) = clusterTimestamp.addingReportingOverflow(Int64(block.relativeTimestamp))
+            guard !overflow else { throw Bluray3DSourceError.invalidStream("block timestamp out of range") }
+            let pts = try Self.pts(timestamp, scale: timestampScale)
             let packet: Bluray3DPacket
             if block.track == video.number {
                 guard let frame = block.frames.first else { return true }
@@ -110,10 +112,13 @@ final class MatroskaMVCSource: Bluray3DSource {
                 statistics.videoAccessUnits += 1
             } else if audio.contains(block.track) || subtitles.contains(block.track) {
                 let isAudio = audio.contains(block.track)
-                for frame in block.frames {
+                for (index, frame) in block.frames.enumerated() {
                     // Matroska blocks carry bare codec frames; wrap them as private-stream PES packets.
+                    // A laced block has one timestamp, so only its first frame carries it, and the
+                    // decoder times the rest from the frames before them.
                     let pes = BluRayPESPacket(
-                        pid: UInt16(clamping: block.track), streamID: 0xBD, streamIDExtension: nil, pts: pts, payload: frame
+                        pid: UInt16(clamping: block.track), streamID: 0xBD, streamIDExtension: nil,
+                        pts: index == 0 ? pts : nil, payload: frame
                     )
                     if isAudio { statistics.audioPackets += 1 } else { statistics.subtitlePackets += 1 }
                     if !sink.receive(isAudio ? .audio(pes) : .subtitle(pes)) { return false }
@@ -134,9 +139,12 @@ final class MatroskaMVCSource: Bluray3DSource {
             while let child = try reader.nextElement(endingBefore: end, insideUnknownSize: end == .max) {
                 switch child.id {
                 case MatroskaID.timestamp:
-                    clusterTimestamp = Int64(try reader.unsigned(child))
+                    guard let timestamp = Int64(exactly: try reader.unsigned(child)) else {
+                        throw Bluray3DSourceError.invalidStream("cluster timestamp out of range")
+                    }
+                    clusterTimestamp = timestamp
                 case MatroskaID.simpleBlock:
-                    let block = try MatroskaBlock(try reader.payload(child), simple: true)
+                    let block = try MatroskaBlock(try reader.payload(child, limit: EBMLReader.maximumBlockSize), simple: true)
                     if !(try deliver(block)) { return statistics.reading(reader) }
                 case MatroskaID.blockGroup:
                     if let block = try reader.blockGroup(child), !(try deliver(block)) {
@@ -151,8 +159,12 @@ final class MatroskaMVCSource: Bluray3DSource {
     }
 
     /// A Matroska timestamp, scaled to nanoseconds by `scale`, as a 33-bit 90 kHz PTS.
-    static func pts(_ timestamp: Int64, scale: Int64) -> UInt64 {
-        UInt64(truncatingIfNeeded: timestamp * scale * 9 / 100_000) & ((1 << 33) - 1)
+    static func pts(_ timestamp: Int64, scale: Int64) throws -> UInt64 {
+        let (nanoseconds, overflow) = timestamp.multipliedReportingOverflow(by: scale)
+        guard !overflow else { throw Bluray3DSourceError.invalidStream("block timestamp out of range") }
+        // 90 kHz ticks are nanoseconds times 9 / 100,000; split the division so it cannot overflow.
+        let ticks = nanoseconds / 100_000 * 9 + nanoseconds % 100_000 * 9 / 100_000
+        return UInt64(truncatingIfNeeded: ticks) & ((1 << 33) - 1)
     }
 
     static func track(_ track: Track, kind: Bluray3DTrackKind) -> Bluray3DTrack {
@@ -247,7 +259,12 @@ struct MatroskaHeader {
                 return
             case MatroskaID.info:
                 for child in try reader.children(of: element) {
-                    if child.id == MatroskaID.timestampScale { scale = Int64(try reader.unsigned(child)) }
+                    if child.id == MatroskaID.timestampScale {
+                        guard let value = Int64(exactly: try reader.unsigned(child)), value > 0 else {
+                            throw Bluray3DSourceError.invalidStream("invalid timestamp scale")
+                        }
+                        scale = value
+                    }
                     if child.id == MatroskaID.duration { duration = try reader.float(child) }
                 }
                 reader.offset = element.end
@@ -273,8 +290,8 @@ struct MatroskaHeader {
         var mvcConfiguration: Data?
         for child in try reader.children(of: entry) {
             switch child.id {
-            case MatroskaID.trackNumber: number = Int(try reader.unsigned(child))
-            case MatroskaID.trackType: type = Int(try reader.unsigned(child))
+            case MatroskaID.trackNumber: number = try reader.integer(child)
+            case MatroskaID.trackType: type = try reader.integer(child)
             case MatroskaID.codecID: codecID = try reader.string(child)
             case MatroskaID.codecPrivate: codecPrivate = try reader.payload(child)
             case MatroskaID.language:
@@ -313,6 +330,10 @@ final class EBMLReader {
     private var window = Data()
     private var windowStart: Int64 = 0
     private static let windowSize = 4 * 1024 * 1024
+    /// The largest metadata payload, such as CodecPrivate or an MVC configuration, that is read.
+    static let maximumMetadataSize = 1024 * 1024
+    /// The largest block that is read; Blu-ray 3D frames are far smaller.
+    static let maximumBlockSize = 32 * 1024 * 1024
     var offset: Int64
     private(set) var bytesRead: UInt64 = 0
 
@@ -322,6 +343,9 @@ final class EBMLReader {
     }
 
     private func bytes(_ count: Int) throws -> Data {
+        guard count >= 0, Int64(count) <= source.size - offset else {
+            throw Bluray3DSourceError.invalidStream("truncated element")
+        }
         let windowEnd = windowStart + Int64(window.count)
         if offset < windowStart || offset + Int64(count) > windowEnd {
             window = try source.read(at: offset, count: max(count, Self.windowSize))
@@ -337,33 +361,45 @@ final class EBMLReader {
 
     private func byte() throws -> UInt8 { try bytes(1)[0] }
 
-    private func variableLength(stripMarker: Bool) throws -> (value: UInt64, length: Int) {
+    /// An EBML variable-length integer of at most `maximumLength` bytes: 4 for IDs, 8 for sizes.
+    private func variableLength(stripMarker: Bool, maximumLength: Int) throws -> (value: UInt64, length: Int) {
         let first = try byte()
         guard first != 0 else { throw Bluray3DSourceError.invalidStream("invalid EBML length") }
         let length = first.leadingZeroBitCount + 1
+        guard length <= maximumLength else { throw Bluray3DSourceError.invalidStream("EBML number too long") }
         var value = UInt64(stripMarker ? first & (0xFF >> length) : first)
         for extra in try bytes(length - 1) { value = value << 8 | UInt64(extra) }
         return (value, length)
     }
 
     /// The next element header, or nil at the end of the source or of `end`. Inside an element of
-    /// unknown size, a top-level element ID also ends it, and is left unread.
+    /// unknown size, a top-level element ID also ends it, and is left unread. An element must end
+    /// within `end` and the source; only a Segment may run past the end of a truncated file.
     func nextElement(endingBefore end: Int64 = .max, insideUnknownSize: Bool = false) throws -> EBMLElement? {
         guard offset < min(end, source.size) else { return nil }
         let start = offset
-        let id = UInt32(try variableLength(stripMarker: false).value)
+        let id = UInt32(try variableLength(stripMarker: false, maximumLength: 4).value)
         if insideUnknownSize, MatroskaID.topLevel.contains(id) {
             offset = start
             return nil
         }
-        let (size, length) = try variableLength(stripMarker: true)
+        let (size, length) = try variableLength(stripMarker: true, maximumLength: 8)
         let unknown = size == (UInt64(1) << (7 * length)) - 1
         let dataStart = offset
-        let elementEnd = unknown ? Int64.max : dataStart + Int64(size)
-        if unknown, id != MatroskaID.segment, id != MatroskaID.cluster {
-            throw Bluray3DSourceError.invalidStream("unknown-size element")
+        if unknown {
+            guard id == MatroskaID.segment || id == MatroskaID.cluster else {
+                throw Bluray3DSourceError.invalidStream("unknown-size element")
+            }
+            return EBMLElement(id: id, start: start, dataStart: dataStart, end: .max)
         }
-        return EBMLElement(id: id, start: start, dataStart: dataStart, end: elementEnd)
+        let available = min(end, source.size) - dataStart
+        guard size <= UInt64(max(0, available)) else {
+            if id == MatroskaID.segment, end == .max {
+                return EBMLElement(id: id, start: start, dataStart: dataStart, end: source.size)
+            }
+            throw Bluray3DSourceError.invalidStream("element extends past its parent or the file")
+        }
+        return EBMLElement(id: id, start: start, dataStart: dataStart, end: dataStart + Int64(size))
     }
 
     func skip(_ element: EBMLElement) throws {
@@ -381,14 +417,26 @@ final class EBMLReader {
         return children
     }
 
-    func payload(_ element: EBMLElement) throws -> Data {
+    /// The element's bytes, refused before reading when they exceed `limit`.
+    func payload(_ element: EBMLElement, limit: Int = EBMLReader.maximumMetadataSize) throws -> Data {
         guard element.end != .max else { throw Bluray3DSourceError.invalidStream("unknown-size payload") }
+        let size = element.end - element.dataStart
+        guard size <= Int64(limit) else { throw Bluray3DSourceError.invalidStream("element too large") }
         offset = element.dataStart
-        return try bytes(Int(element.end - element.dataStart))
+        return try bytes(Int(size))
     }
 
     func unsigned(_ element: EBMLElement) throws -> UInt64 {
-        try payload(element).reduce(0) { $0 << 8 | UInt64($1) }
+        guard element.end - element.dataStart <= 8 else { throw Bluray3DSourceError.invalidStream("integer too long") }
+        return try payload(element).reduce(0) { $0 << 8 | UInt64($1) }
+    }
+
+    /// An unsigned integer that must fit in `Int`, such as a track number.
+    func integer(_ element: EBMLElement) throws -> Int {
+        guard let value = Int(exactly: try unsigned(element)) else {
+            throw Bluray3DSourceError.invalidStream("integer out of range")
+        }
+        return value
     }
 
     func float(_ element: EBMLElement) throws -> Double {
@@ -408,7 +456,7 @@ final class EBMLReader {
         var block: Data?
         var referenced = false
         for child in try children(of: element) {
-            if child.id == MatroskaID.block { block = try payload(child) }
+            if child.id == MatroskaID.block { block = try payload(child, limit: Self.maximumBlockSize) }
             if child.id == MatroskaID.referenceBlock { referenced = true }
         }
         offset = element.end
@@ -476,7 +524,9 @@ struct MatroskaBlock {
                 var size = try ebmlNumber(signed: false)
                 sizes.append(size)
                 for _ in 0..<(count - 2) {
-                    size += try ebmlNumber(signed: true)
+                    let (next, overflow) = size.addingReportingOverflow(try ebmlNumber(signed: true))
+                    guard !overflow else { throw Bluray3DSourceError.invalidStream("lace sizes exceed block") }
+                    size = next
                     sizes.append(size)
                 }
             }
@@ -485,10 +535,12 @@ struct MatroskaBlock {
             guard total % count == 0 else { throw Bluray3DSourceError.invalidStream("uneven fixed lacing") }
             sizes = Array(repeating: total / count, count: count - 1)
         }
-        let remaining = bytes.count - cursor - sizes.reduce(0, +)
-        guard remaining >= 0, sizes.allSatisfy({ $0 >= 0 }) else {
+        // Each size is checked against the block before summing, so the sum cannot overflow.
+        guard sizes.allSatisfy({ (0...bytes.count).contains($0) }) else {
             throw Bluray3DSourceError.invalidStream("lace sizes exceed block")
         }
+        let remaining = bytes.count - cursor - sizes.reduce(0, +)
+        guard remaining >= 0 else { throw Bluray3DSourceError.invalidStream("lace sizes exceed block") }
         sizes.append(remaining)
         return sizes.map { size in
             defer { cursor += size }
