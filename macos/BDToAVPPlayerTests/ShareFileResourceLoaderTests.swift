@@ -16,6 +16,12 @@ final class ShareFileResourceLoaderTests: XCTestCase {
         let drops: Bool
         private let condition = NSCondition()
         private var isOut = false
+        /// Paces every read together: the player may ask for several ranges at once.
+        private let pace = NSLock()
+        private var served = 0
+
+        /// Bytes handed to the player so far, for failure messages.
+        var servedBytes: Int { condition.withLock { served } }
 
         init(data: Data, drops: Bool) {
             self.data = data
@@ -41,9 +47,11 @@ final class ShareFileResourceLoaderTests: XCTestCase {
                 condition.wait()
             }
             condition.unlock()
-            Thread.sleep(forTimeInterval: Self.secondsPerRead)
+            pace.withLock { Thread.sleep(forTimeInterval: Self.secondsPerRead) }
             let start = Int(offset)
-            return data.subdata(in: start..<min(start + min(count, Self.bytesPerRead), data.count))
+            let chunk = data.subdata(in: start..<min(start + min(count, Self.bytesPerRead), data.count))
+            condition.withLock { served += chunk.count }
+            return chunk
         }
     }
 
@@ -84,7 +92,7 @@ final class ShareFileResourceLoaderTests: XCTestCase {
         XCTAssertTrue(waitUntil(3) { connection.isConnectionLost })
         XCTAssertTrue(
             waitUntil(60) { PlayerTimeControl(player).isWaitingForData },
-            "status \(player.timeControlStatus.rawValue) at \(player.currentTime().seconds) s"
+            "status \(player.timeControlStatus.rawValue) at \(player.currentTime().seconds) s, \(share.servedBytes) of \(share.data.count) bytes served"
         )
         XCTAssertTrue(PlayerTimeControl(player).wantsPlayback)
         let stoppedAt = player.currentTime().seconds
