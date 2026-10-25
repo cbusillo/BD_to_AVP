@@ -369,6 +369,33 @@ enum PlaybackHUDPresentation {
     }
 }
 
+/// The line the controls show while a movie waits for its data, so playback never stops
+/// without saying why (#1131).
+enum PlaybackLoadingPresentation: Equatable {
+    /// The player is waiting for data that is merely slow.
+    case loading
+    /// The share stopped answering. `isPlayingLoadedPart` while the player still has data ahead.
+    case connectionLost(isPlayingLoadedPart: Bool)
+
+    static func state(isConnectionLost: Bool, isBuffering: Bool) -> PlaybackLoadingPresentation? {
+        if isConnectionLost {
+            return .connectionLost(isPlayingLoadedPart: !isBuffering)
+        }
+        return isBuffering ? .loading : nil
+    }
+
+    var message: String {
+        switch self {
+        case .loading:
+            "Loading…"
+        case .connectionLost(isPlayingLoadedPart: true):
+            "Connection lost. Playing what has loaded while it reconnects."
+        case .connectionLost(isPlayingLoadedPart: false):
+            "Connection lost. Playback continues from here when it reconnects."
+        }
+    }
+}
+
 enum PlaybackHUDVisibilityPolicy {
     static func shouldAutoHide(isPlaying: Bool, isInteracting: Bool) -> Bool {
         isPlaying && !isInteracting

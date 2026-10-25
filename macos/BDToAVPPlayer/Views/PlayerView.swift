@@ -82,6 +82,9 @@ struct PlayerView: View {
         .onChange(of: session.isBuffering) { _, _ in
             hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
         }
+        .onChange(of: session.isConnectionLost) { _, _ in
+            hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
+        }
         .onChange(of: session.state) { _, state in
             if state != .ready {
                 trackPicker.close()
@@ -198,10 +201,11 @@ struct PlayerView: View {
         onDone()
     }
 
-    /// While a Blu-ray 3D title loads more, the controls stay up so the wearer sees why.
+    /// While the movie loads more or its share is unreachable, the controls stay up so the
+    /// wearer sees why.
     private var isAutomaticHidingAllowed: Bool {
         PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
-            isPlaying: session.isPlaying && !session.isBuffering,
+            isPlaying: session.isPlaying && !session.isBuffering && !session.isConnectionLost,
             isVoiceOverEnabled: isVoiceOverEnabled,
             isSwitchControlEnabled: isSwitchControlEnabled
         )
@@ -534,16 +538,24 @@ private struct PlayerOrnamentView: View {
                     .accessibilityIdentifier("player-audio-warning")
             }
 
-            if session.isBuffering {
+            if let loading = PlaybackLoadingPresentation.state(
+                isConnectionLost: session.isConnectionLost,
+                isBuffering: session.isBuffering
+            ) {
                 HStack(spacing: 10) {
-                    ProgressView()
-                    Text("Loading…")
+                    if loading == .loading {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "wifi.exclamationmark")
+                            .accessibilityHidden(true)
+                    }
+                    Text(loading.message)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(loading == .loading ? .secondary : .primary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("player-buffering")
+                .accessibilityIdentifier(loading == .loading ? "player-buffering" : "player-connection-lost")
             }
 
             if let notice = session.liveNotice {

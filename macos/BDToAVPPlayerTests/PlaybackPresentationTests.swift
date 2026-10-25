@@ -404,6 +404,33 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertGreaterThan(fadeOut.duration, reveal.duration)
     }
 
+    func testALostConnectionIsNamedWhetherOrNotLoadedVideoIsStillPlaying() {
+        XCTAssertNil(PlaybackLoadingPresentation.state(isConnectionLost: false, isBuffering: false))
+        XCTAssertEqual(PlaybackLoadingPresentation.state(isConnectionLost: false, isBuffering: true), .loading)
+        XCTAssertEqual(
+            PlaybackLoadingPresentation.state(isConnectionLost: true, isBuffering: false),
+            .connectionLost(isPlayingLoadedPart: true)
+        )
+        XCTAssertEqual(
+            PlaybackLoadingPresentation.state(isConnectionLost: true, isBuffering: true),
+            .connectionLost(isPlayingLoadedPart: false)
+        )
+    }
+
+    func testAPlayerWaitingForDataIsBufferingButStillWantsToPlay() {
+        let waiting = PlayerTimeControl(status: .waitingToPlayAtSpecifiedRate, reasonForWaiting: .toMinimizeStalls)
+        XCTAssertTrue(waiting.isWaitingForData)
+        XCTAssertTrue(waiting.wantsPlayback)
+
+        let noItem = PlayerTimeControl(status: .waitingToPlayAtSpecifiedRate, reasonForWaiting: .noItemToPlay)
+        XCTAssertFalse(noItem.isWaitingForData)
+        XCTAssertFalse(noItem.wantsPlayback)
+
+        let paused = PlayerTimeControl(status: .paused, reasonForWaiting: nil)
+        XCTAssertFalse(paused.isWaitingForData)
+        XCTAssertFalse(paused.wantsPlayback)
+    }
+
     func testShortTrackListsShowEveryEntryWithoutScrolling() {
         let rowCount = 3
 
