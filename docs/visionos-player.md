@@ -695,8 +695,8 @@ that holds `BDMV`, or `BDMV` itself), or an MKV that keeps the MVC 3D track, suc
 a MakeMKV rip, from the headset or a Files share such as SMB. ISOs, MKVs and disc
 folders copied into the app's Documents folder are listed on launch. Adding a source
 opens it, chooses its title and stores that title with the library item; the
-details view shows the title's length, audio and subtitles. Play stays unavailable
-until #1111 adds native playback. Encrypted discs still need the Mac and the user's
+details view shows the title's length, audio and subtitles, and **Play** plays it on
+the headset (see [Native Blu-ray Video](#native-blu-ray-video)). Encrypted discs still need the Mac and the user's
 own MakeMKV.
 
 The code is in `macos/BDToAVPPlayer/BluraySource`:
@@ -788,11 +788,36 @@ history or the loaded part ahead restarts at the nearest earlier IDR and shows
 frames from the target on. A seek outside the loaded part is refused until #1113
 adds seeking anywhere.
 
+In the player, `MVHEVCPlayerSession` routes a Blu-ray 3D item to
+`NativeBlurayPlayback` instead of `AVPlayer`, and the existing controls, look to
+reveal and track lists drive it. The scrub bar spans the title's length, and its
+lighter band is the loaded part. While the title loads more, the controls stay up
+with a **Loading…** line. The audio list names what plays, for example
+**English (DTS core)**, and switches without stopping. The subtitle list offers
+only Off and says the title's subtitles come later (#1114). The resume position is
+saved, but a title starts from the beginning and says where the wearer stopped
+until resuming anywhere arrives (#1113).
+
+The video is a RealityKit `VideoPlayerComponent(videoRenderer:)` sized inside the
+window, and the controls are an ornament below the window. Until RealityKit reports
+the video's size, the video is kept tiny, so it can never draw at its natural size
+over the controls, the layout bug #1103 hit.
+
+A qualification build (`BD_TO_AVP_QUALIFICATION`) plays a library item on its own
+when launched with `BD_TO_AVP_NATIVE_PLAY_ITEM` set to its file name, for
+`BD_TO_AVP_NATIVE_PLAY_SECONDS` (default 660). It pauses at
+`BD_TO_AVP_NATIVE_PAUSE_AT` (120) for `BD_TO_AVP_NATIVE_PAUSE_SECONDS` (10),
+switches audio at `BD_TO_AVP_NATIVE_AUDIO_SWITCH_AT` (240) and seeks 10 seconds
+back at `BD_TO_AVP_NATIVE_SEEK_BACK_AT` (300). It prints `NATIVE_PLAY` lines and
+writes `native-playback-<file name>.json` to Documents, with position, buffering,
+frames, CPU, thermal state and memory each second, the renderer's dropped-frame
+count, and the window and video sizes.
+
 ## Native Blu-ray Audio
 
 Native Blu-ray playback (#711) decodes the disc's own audio on the headset. The
-components live in `macos/BDToAVPPlayer/NativeAudio`. The player UI does not use
-them yet; #1111 wires them into native playback. No licensing fees are paid, so
+components live in `macos/BDToAVPPlayer/NativeAudio`, and native playback feeds them
+through `NativeBlurayPlayback`. No licensing fees are paid, so
 lossless Dolby and DTS layers are not decoded
 ([decision](https://github.com/cbusillo/BD_to_AVP/issues/1112#issuecomment-6391365574)).
 The audio list names what actually plays, for example **English (DTS core)**.

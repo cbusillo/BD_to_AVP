@@ -95,8 +95,6 @@ struct MediaDetailsView: View {
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("play-movie-\(item.id)")
             .accessibilityHint("Starts playback for this movie.")
-        case let .planned(message):
-            unavailablePlayback(message: message, label: "Playback coming later", item: item)
         case let .unavailable(message):
             unavailablePlayback(message: message, label: "Play unavailable", item: item)
         }

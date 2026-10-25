@@ -511,9 +511,7 @@ final class PlayerAppModelTests: XCTestCase {
         let playable = try XCTUnwrap(items["Rainforest.iso"])
         XCTAssertEqual(playable.format, .bluray3D)
         XCTAssertEqual(playable.bluray3DTitle, title(nil))
-        guard case .planned = model.playbackAvailability(for: playable) else {
-            return XCTFail("A playable Blu-ray 3D title waits for headset playback")
-        }
+        XCTAssertEqual(model.playbackAvailability(for: playable), .playable)
         XCTAssertEqual(
             model.playbackAvailability(for: try XCTUnwrap(items["Encrypted.iso"])),
             .unavailable(Bluray3DUnsupportedReason.encrypted.message)

@@ -120,6 +120,9 @@ final class NativeBlurayPlayback: @unchecked Sendable {
 
     var selectedAudioTrackID: UInt16? { state.withLock { $0.selectedAudioTrackID } }
 
+    /// The audio player, once the first video unit has set the timeline; for diagnostics.
+    var audioPlayer: HeadsetAudioPlayer? { state.withLock { $0.audioPlayer } }
+
     /// Starts reading and decoding. Playback begins once the first seconds are buffered.
     func start() {
         let shouldStart = state.withLock { shared -> Bool in
