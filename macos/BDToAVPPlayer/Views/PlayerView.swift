@@ -965,8 +965,8 @@ private struct PlayerTrackListView: View {
 /// A streaming-style scrub bar: the track spans the title's full length, a lighter band shows
 /// the range that can be played right now, and the filled part shows the playhead.
 private struct PlaybackScrubBar: View {
-    private static let trackHeight: CGFloat = 8
-    private static let thumbSize: CGFloat = 22
+    private static let trackHeight = PlaybackScrubBarLayout.trackHeight
+    private static let thumbSize = PlaybackScrubBarLayout.thumbSize
     private static let adjustmentStep: TimeInterval = 10
 
     let timeline: PlaybackTimeline
@@ -1021,9 +1021,9 @@ private struct PlaybackScrubBar: View {
             )
         }
         .frame(minWidth: 600, maxWidth: .infinity)
-        .frame(height: 44)
-        // The look highlight follows the bar's rounded shape instead of the view's square frame.
-        .contentShape(.hoverEffect, Capsule())
+        .frame(height: PlaybackScrubBarLayout.hitHeight)
+        // The whole frame takes pinches, but the look highlight hugs the visible track.
+        .contentShape(.hoverEffect, ScrubBarHighlightShape())
         .hoverEffect(.highlight)
         .allowsHitTesting(isEnabled)
         .opacity(isEnabled ? 1 : 0.5)
@@ -1042,6 +1042,13 @@ private struct PlaybackScrubBar: View {
                 break
             }
         }
+    }
+}
+
+/// A capsule around the visible scrub track, centered in the bar's taller hit area.
+private struct ScrubBarHighlightShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        Capsule().path(in: PlaybackScrubBarLayout.highlightRect(in: rect))
     }
 }
 

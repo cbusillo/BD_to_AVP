@@ -319,6 +319,25 @@ enum PlaybackTrackListLayout {
     }
 }
 
+/// The scrub bar's geometry. The bar keeps a tall hit area so it is easy to target, while its
+/// look highlight hugs the visible track with an even margin, tall enough to hold the thumb.
+enum PlaybackScrubBarLayout {
+    static let trackHeight: CGFloat = 8
+    static let thumbSize: CGFloat = 22
+    static let hitHeight: CGFloat = 44
+    static let highlightMargin: CGFloat = 8
+
+    static var highlightHeight: CGFloat {
+        max(trackHeight + 2 * highlightMargin, thumbSize)
+    }
+
+    /// The highlight's frame inside the bar's bounds: full width, centered on the track.
+    static func highlightRect(in bounds: CGRect) -> CGRect {
+        let height = min(highlightHeight, bounds.height)
+        return CGRect(x: bounds.minX, y: bounds.midY - height / 2, width: bounds.width, height: height)
+    }
+}
+
 /// The line a track list shows when it has nothing to choose between, so a single-track or
 /// unsubtitled title says so instead of graying out its button. The subtitle list's own "Off"
 /// entry is not a subtitle.
