@@ -770,6 +770,24 @@ copies each view into an NV12 pixel buffer, tags them `.stereoView(.leftEye)` an
 otherwise), and wraps both in one sample buffer for `AVSampleBufferVideoRenderer`,
 the display path proven in #1103.
 
+`NativeBlurayPlayback` plays a title with three threads. The reader fills a
+`ReadAheadBuffer` up to 15 seconds ahead of the decoder (256 MB at most), because
+SMB reads of the Rainforest ISO averaged 11.9 MB/s but had a slowest second of
+0.81 MB/s against about 5 MB/s needed (#1110). The video thread decodes up to half
+a second ahead of the clock and enqueues to `AVSampleBufferVideoRenderer`; the
+renderer takes frames only once RealityKit shows it, so decoding waits for the
+player view. The audio thread hands `HeadsetAudioPlayer` its packets 2.5 seconds
+ahead of the clock. Both renderers join one `AVSampleBufferRenderSynchronizer`, so
+pause, buffering and seeking move audio and video together.
+
+The clock starts once a few frames are queued and two seconds are buffered. If the
+renderer is about to run dry before the title ends, the clock stops, the player
+shows that it is loading, and playback continues once four seconds are buffered
+again. The buffer keeps 20 seconds behind the decoder, so a seek inside that
+history or the loaded part ahead restarts at the nearest earlier IDR and shows
+frames from the target on. A seek outside the loaded part is refused until #1113
+adds seeking anywhere.
+
 ## Native Blu-ray Audio
 
 Native Blu-ray playback (#711) decodes the disc's own audio on the headset. The

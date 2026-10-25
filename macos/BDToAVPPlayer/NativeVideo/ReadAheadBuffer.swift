@@ -1,0 +1,254 @@
+import Foundation
+
+/// Holds a Blu-ray 3D title's packets between the source reader and the decoders, so short
+/// stalls in a Files or SMB read do not reach the screen. Measured SMB reads of the Rainforest
+/// ISO averaged 11.9 MB/s with a slowest second of 0.81 MB/s against about 5 MB/s needed (#1110),
+/// so the reader runs up to `aheadTarget` seconds past the decoder.
+///
+/// The reader thread calls `receive`, which blocks while the buffer is full. The decode thread
+/// takes video with `nextVideo` and the audio feeder takes audio with `nextAudio`. Packets behind
+/// the decoder are kept for `behindLimit` seconds, so a seek inside that history or the loaded
+/// part ahead needs no new read. Thread-safe.
+final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
+    struct VideoEntry: Equatable {
+        let ticks: Int64
+        let isRandomAccess: Bool
+        let data: Data
+    }
+
+    struct AudioEntry: Equatable {
+        /// Nil for a packet without a PTS; it follows the packet before it.
+        let ticks: Int64?
+        let packet: BluRayPESPacket
+    }
+
+    enum VideoResult: Equatable {
+        case unit(VideoEntry)
+        /// Nothing ready yet; the reader is still going.
+        case waiting
+        /// The reader finished and every unit was taken. `error` says why it stopped early.
+        case ended(error: String?)
+    }
+
+    struct Limits: Equatable {
+        /// Seconds of video the reader may get ahead of the decoder.
+        var aheadTarget: Double = 15
+        /// Seconds of video kept behind the decoder for seeking back.
+        var behindLimit: Double = 20
+        /// Bytes held in all; history is dropped first, then the reader waits.
+        var maximumBytes = 256 << 20
+    }
+
+    let limits: Limits
+
+    private let condition = NSCondition()
+    // Guarded by `condition`.
+    private var timeline: BluRayPresentationTimeline?
+    private var video: [VideoEntry] = []
+    private var audio: [AudioEntry] = []
+    /// Audio that arrived before the first video unit set the timeline.
+    private var untimedAudio: [BluRayPESPacket] = []
+    private var videoCursor = 0
+    private var audioCursor = 0
+    private var bytes = 0
+    private var latestVideoTicks: Int64?
+    private var lastAudioTicks: Int64 = 0
+    private var finished = false
+    private var finishError: String?
+    private var cancelled = false
+
+    init(limits: Limits = Limits()) {
+        self.limits = limits
+    }
+
+    // MARK: Reader side
+
+    func receive(_ packet: Bluray3DPacket) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !cancelled else { return false }
+        switch packet {
+        case let .video(unit):
+            let timeline = timeline ?? BluRayPresentationTimeline(originPTS: unit.pts)
+            if self.timeline == nil {
+                self.timeline = timeline
+                for packet in untimedAudio {
+                    appendAudio(packet, timeline: timeline)
+                }
+                untimedAudio.removeAll()
+            }
+            let ticks = timeline.ticks(for: unit.pts, near: latestVideoTicks ?? 0)
+            video.append(VideoEntry(ticks: ticks, isRandomAccess: unit.isRandomAccess, data: unit.data))
+            bytes += unit.data.count
+            latestVideoTicks = max(latestVideoTicks ?? ticks, ticks)
+        case let .audio(packet):
+            if let timeline {
+                appendAudio(packet, timeline: timeline)
+            } else {
+                untimedAudio.append(packet)
+            }
+            bytes += packet.payload.count
+        case .subtitle:
+            return true
+        }
+        condition.broadcast()
+        while !cancelled, isFull {
+            trimHistory(force: true)
+            guard isFull else { break }
+            condition.wait()
+        }
+        return !cancelled
+    }
+
+    /// The reader stopped: at the end of the title, or with an error.
+    func finish(error: String? = nil) {
+        condition.lock()
+        finished = true
+        finishError = error
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    /// Unblocks every waiter; the reader stops at its next packet.
+    func cancel() {
+        condition.lock()
+        cancelled = true
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    // MARK: Decoder side
+
+    /// The playback timeline, once the first video unit has arrived.
+    var presentationTimeline: BluRayPresentationTimeline? {
+        condition.lock()
+        defer { condition.unlock() }
+        return timeline
+    }
+
+    /// The next video unit in decode order, waiting up to `timeout` seconds for one.
+    func nextVideo(timeout: TimeInterval) -> VideoResult {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !cancelled, videoCursor >= video.count, !finished {
+            if !condition.wait(until: deadline) { return .waiting }
+        }
+        guard !cancelled else { return .ended(error: nil) }
+        guard videoCursor < video.count else { return .ended(error: finishError) }
+        let entry = video[videoCursor]
+        videoCursor += 1
+        trimHistory(force: false)
+        condition.broadcast()
+        return .unit(entry)
+    }
+
+    /// Audio packets, in stream order, up to the first one timed after `ticks`.
+    func nextAudio(through ticks: Int64) -> [AudioEntry] {
+        condition.lock()
+        defer { condition.unlock() }
+        var taken: [AudioEntry] = []
+        while audioCursor < audio.count, (audio[audioCursor].ticks ?? .min) <= ticks {
+            taken.append(audio[audioCursor])
+            audioCursor += 1
+        }
+        return taken
+    }
+
+    /// Seconds of video read past the decoder.
+    var secondsAhead: Double {
+        condition.lock()
+        defer { condition.unlock() }
+        return secondsAheadLocked
+    }
+
+    /// Whether the reader has finished, so no more data is coming.
+    var isFinished: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return finished
+    }
+
+    /// The span of the title the buffer can play without reading again, in timeline ticks.
+    var loadedTicks: ClosedRange<Int64>? {
+        condition.lock()
+        defer { condition.unlock() }
+        guard let first = video.first?.ticks, let latestVideoTicks else { return nil }
+        return min(first, latestVideoTicks)...latestVideoTicks
+    }
+
+    enum SeekResult: Equatable {
+        /// Decoding restarts at the random access unit timed `startTicks`; frames before the
+        /// target are decoded but not shown.
+        case moved(startTicks: Int64)
+        /// The target is outside the loaded part.
+        case outside(loaded: ClosedRange<Int64>?)
+    }
+
+    /// Moves both cursors so decoding restarts at the last random access unit at or before
+    /// `ticks`, and audio at the target.
+    func seek(to ticks: Int64) -> SeekResult {
+        condition.lock()
+        defer { condition.unlock() }
+        guard let first = video.first?.ticks, let latestVideoTicks, ticks >= first, ticks <= latestVideoTicks,
+              let start = video.lastIndex(where: { $0.isRandomAccess && $0.ticks <= ticks })
+        else {
+            let loaded = video.first.flatMap { first in latestVideoTicks.map { min(first.ticks, $0)...$0 } }
+            return .outside(loaded: loaded)
+        }
+        videoCursor = start
+        audioCursor = audio.firstIndex { ($0.ticks ?? .min) >= ticks } ?? audio.count
+        // Back up to include the packet that covers the target.
+        while audioCursor > 0, (audio[audioCursor - 1].ticks ?? .max) > ticks - Self.audioPacketSlackTicks {
+            audioCursor -= 1
+        }
+        condition.broadcast()
+        return .moved(startTicks: video[start].ticks)
+    }
+
+    /// Audio packets on Blu-ray hold at most a few frames; this much before a seek target is
+    /// enough to cover it.
+    private static let audioPacketSlackTicks: Int64 = 9_000
+
+    // MARK: Internals
+
+    private var secondsAheadLocked: Double {
+        guard let latestVideoTicks else { return 0 }
+        let next = videoCursor < video.count ? video[videoCursor].ticks : latestVideoTicks
+        return Double(latestVideoTicks - next) / Double(BluRayPresentationTimeline.ticksPerSecond)
+    }
+
+    private var isFull: Bool {
+        secondsAheadLocked >= limits.aheadTarget || bytes >= limits.maximumBytes
+    }
+
+    private func appendAudio(_ packet: BluRayPESPacket, timeline: BluRayPresentationTimeline) {
+        let ticks = packet.pts.map { timeline.ticks(for: $0, near: lastAudioTicks) }
+        if let ticks { lastAudioTicks = ticks }
+        audio.append(AudioEntry(ticks: ticks, packet: packet))
+    }
+
+    /// Drops history behind the decoder: older than `behindLimit`, or, when `force` and the
+    /// buffer is over its byte limit, everything before the decoder's last random access unit.
+    private func trimHistory(force: Bool) {
+        guard videoCursor > 0 else { return }
+        let current = video[min(videoCursor, video.count) - 1].ticks
+        let cutoff = current - Int64(limits.behindLimit * Double(BluRayPresentationTimeline.ticksPerSecond))
+        // Keep from a random access unit so a seek back can always decode.
+        var keep = video[..<videoCursor].lastIndex { $0.isRandomAccess && $0.ticks <= cutoff } ?? 0
+        if force, bytes >= limits.maximumBytes {
+            keep = video[..<videoCursor].lastIndex(where: \.isRandomAccess) ?? keep
+        }
+        guard keep > 0 else { return }
+        bytes -= video[..<keep].reduce(0) { $0 + $1.data.count }
+        video.removeFirst(keep)
+        videoCursor -= keep
+        let firstTicks = video.first?.ticks ?? current
+        let audioKeep = min(audioCursor, audio.firstIndex { ($0.ticks ?? .max) >= firstTicks - Self.audioPacketSlackTicks } ?? audio.count)
+        if audioKeep > 0 {
+            bytes -= audio[..<audioKeep].reduce(0) { $0 + $1.packet.payload.count }
+            audio.removeFirst(audioKeep)
+            audioCursor -= audioKeep
+        }
+    }
+}
