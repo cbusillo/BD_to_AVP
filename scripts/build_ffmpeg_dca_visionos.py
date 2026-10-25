@@ -70,13 +70,14 @@ def extract_source(archive: Path, destination: Path, source_directory: str) -> P
     return destination / source_directory
 
 
-def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> Path:
-    sdk = slice_spec["sdk"]
-    target = slice_spec["target"]
+def build_architecture(manifest: dict, source: Path, work: Path, sdk: str, architecture: dict) -> Path:
+    """Builds FFmpeg and the wrapper for one architecture and returns the linked dylib."""
+    target = architecture["target"]
     sdk_path = xcrun(sdk, "--show-sdk-path")
     compiler = xcrun(sdk, "--find", "clang")
-    build_directory = work / f"build-{sdk}"
-    prefix = work / f"prefix-{sdk}"
+    name = f"{sdk}-{architecture['arch']}"
+    build_directory = work / f"build-{name}"
+    prefix = work / f"prefix-{name}"
     build_directory.mkdir(parents=True)
     environment = {**os.environ, "ZERO_AR_DATE": "1"}
     run(
@@ -85,12 +86,13 @@ def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> P
             f"--prefix={prefix}",
             "--enable-cross-compile",
             "--target-os=darwin",
-            "--arch=aarch64",
+            f"--arch={architecture['arch']}",
             f"--cc={compiler}",
             f"--sysroot={sdk_path}",
             f"--extra-cflags=-target {target}",
             f"--extra-ldflags=-target {target}",
             *manifest["ffmpeg"]["configure_flags"],
+            *architecture.get("configure_flags", []),
         ],
         cwd=build_directory,
         environment=environment,
@@ -100,24 +102,18 @@ def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> P
         "",
     )
     if f'"{manifest["expected_license"]}"' not in license_line:
-        raise RuntimeError(f"FFmpeg configured with an unexpected license: {license_line!r}")
+        raise RuntimeError(f"FFmpeg configured with an unexpected license for {name}: {license_line!r}")
     config = set((build_directory / "config.h").read_text().splitlines())
     for option in ("CONFIG_GPL", "CONFIG_VERSION3", "CONFIG_NONFREE"):
         if f"#define {option} 0" not in config:
-            raise RuntimeError(f"FFmpeg configuration does not disable {option}")
+            raise RuntimeError(f"FFmpeg configuration for {name} does not disable {option}")
     run(["make", f"-j{os.cpu_count() or 4}", "install"], cwd=build_directory, environment=environment)
 
-    framework_name = manifest["framework"]
-    framework = work / f"frameworks-{sdk}" / f"{framework_name}.framework"
-    (framework / "Headers").mkdir(parents=True)
-    (framework / "Modules").mkdir()
     header = REPOSITORY_ROOT / manifest["wrapper_header"]
-    shutil.copy2(header, framework / "Headers" / header.name)
-    (framework / "Modules/module.modulemap").write_text(
-        f'framework module {framework_name} {{\n    umbrella header "{header.name}"\n    export *\n}}\n'
-    )
-    exported = work / f"exported-{sdk}.txt"
+    exported = work / f"exported-{name}.txt"
     exported.write_text(f"{manifest['exported_symbol_prefix']}*\n")
+    framework_name = manifest["framework"]
+    dylib = work / f"{framework_name}-{name}"
     run(
         [
             compiler,
@@ -137,11 +133,30 @@ def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> P
             "-Wl,-exported_symbols_list," + str(exported),
             "-Wl,-dead_strip",
             "-o",
-            str(framework / framework_name),
+            str(dylib),
         ],
         environment=environment,
     )
-    run(["strip", "-x", str(framework / framework_name)])
+    run(["strip", "-x", str(dylib)])
+    return dylib
+
+
+def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> Path:
+    sdk = slice_spec["sdk"]
+    dylibs = [
+        build_architecture(manifest, source, work, sdk, architecture) for architecture in slice_spec["architectures"]
+    ]
+    framework_name = manifest["framework"]
+    framework = work / f"frameworks-{sdk}" / f"{framework_name}.framework"
+    (framework / "Headers").mkdir(parents=True)
+    (framework / "Modules").mkdir()
+    header = REPOSITORY_ROOT / manifest["wrapper_header"]
+    shutil.copy2(header, framework / "Headers" / header.name)
+    (framework / "Modules/module.modulemap").write_text(
+        f'framework module {framework_name} {{\n    umbrella header "{header.name}"\n    export *\n}}\n'
+    )
+    # One binary per slice; the simulator slice is universal (arm64 and x86_64).
+    run(["lipo", "-create", *[str(dylib) for dylib in dylibs], "-output", str(framework / framework_name)])
     info = {
         "CFBundleDevelopmentRegion": "en",
         "CFBundleExecutable": framework_name,

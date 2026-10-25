@@ -31,7 +31,7 @@
     "xrsimulator": "27.0"
   },
   "binaries": {
-    "xros-arm64/FFmpegDCA.framework/FFmpegDCA": "1928df51945de8c2ec3666bbca2467ac64f6c0a5f36b3787b61e5112ce35cb18",
-    "xros-arm64-simulator/FFmpegDCA.framework/FFmpegDCA": "2750dc2bff64c8731e74ec5fa6398b6a747bb0e98102a1650f41db1edf780293"
+    "xros-arm64/FFmpegDCA.framework/FFmpegDCA": "faa68d46203963acc282f194ab1be3ce81fd48f4bc69361a8453b9a0a2a5bbf3",
+    "xros-arm64_x86_64-simulator/FFmpegDCA.framework/FFmpegDCA": "8a391c8e47e87a3380b03aad1dc1124fe7aa14c56bd861419c2d2f0765896025"
   }
 }

@@ -41,10 +41,24 @@ configure_flags = [
 
 [[slices]]
 sdk = "xros"
-target = "arm64-apple-xros26.0"
 platform = "XROS"
 
+[[slices.architectures]]
+arch = "aarch64"
+target = "arm64-apple-xros26.0"
+
+# The simulator slice is universal: CI builds the generic visionOS Simulator destination,
+# which includes x86_64.
 [[slices]]
 sdk = "xrsimulator"
-target = "arm64-apple-xros26.0-simulator"
 platform = "XRSimulator"
+
+[[slices.architectures]]
+arch = "aarch64"
+target = "arm64-apple-xros26.0-simulator"
+
+[[slices.architectures]]
+arch = "x86_64"
+target = "x86_64-apple-xros26.0-simulator"
+# FFmpeg's x86 assembly needs nasm; the C code is enough for one DTS core per frame.
+configure_flags = ["--disable-x86asm"]
