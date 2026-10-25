@@ -90,6 +90,34 @@ final class ReadAheadBufferTests: XCTestCase {
         XCTAssertEqual(buffer.seek(to: 7 * Self.second), .outside(loaded: (8 * Self.second)...(19 * Self.second)))
     }
 
+    func testAnAcceptedSeekKeepsItsUnitWhileTheDecoderMovesOn() {
+        // Units 0...7 with IDRs at 0 and 4; history beyond 2 s behind the decoder is dropped.
+        func filled() -> ReadAheadBuffer {
+            let buffer = ReadAheadBuffer(limits: .init(aheadTarget: 100, behindLimit: 2, maximumBytes: 1 << 20))
+            for second in 0..<12 {
+                XCTAssertTrue(buffer.receive(Self.unit(Int64(second))))
+            }
+            for _ in 0..<5 { _ = take(buffer) }
+            return buffer
+        }
+        // Without a reservation, the decoder taking two more units trims the IDR at 0 s, so a
+        // seek checked before that can no longer be carried out.
+        let unreserved = filled()
+        XCTAssertEqual(unreserved.loadedTicks?.lowerBound, 0)
+        _ = take(unreserved)
+        _ = take(unreserved)
+        XCTAssertEqual(unreserved.seek(to: 1 * Self.second), .outside(loaded: (4 * Self.second)...(11 * Self.second)))
+
+        // A reserved seek keeps that IDR until it is carried out.
+        let reserved = filled()
+        XCTAssertEqual(reserved.reserveSeek(to: 1 * Self.second), .moved(startTicks: 0))
+        _ = take(reserved)
+        _ = take(reserved)
+        XCTAssertEqual(reserved.loadedTicks?.lowerBound, 0)
+        XCTAssertEqual(reserved.seek(to: 1 * Self.second), .moved(startTicks: 0))
+        XCTAssertEqual(take(reserved), 0)
+    }
+
     func testByteLimitDropsHistoryBeforeMakingTheReaderWait() {
         // Ten bytes per unit and a 100-byte limit: ten units fit.
         let buffer = ReadAheadBuffer(limits: .init(aheadTarget: 100, behindLimit: 100, maximumBytes: 100))
