@@ -1,0 +1,197 @@
+import Foundation
+
+/// A Blu-ray 3D ISO image or disc folder, read through libbluray.
+final class BlurayDiscSource: Bluray3DSource {
+    let info: Bluray3DSourceInfo
+
+    private let disc: OpaquePointer
+    private let clipIDs: [String: String]
+    private let lock = NSLock()
+
+    init(path: String, container: Bluray3DSourceInfo.Container) throws {
+        guard let disc = bd3d_disc_open(path) else { throw Bluray3DSourceError.openFailed }
+        let discInfo = bd3d_disc_get_info(disc)
+        let discFacts = BlurayDiscFacts(
+            isStereo3D: discInfo.content_3d,
+            isEncrypted: discInfo.aacs_detected || discInfo.bdplus_detected
+        )
+        var facts: [BlurayTitleFacts] = []
+        for index in 0..<discInfo.title_count {
+            var title = bd3d_title()
+            if bd3d_disc_title(disc, index, &title) {
+                facts.append(Self.facts(title))
+            }
+        }
+        self.disc = disc
+        clipIDs = Dictionary(
+            facts.map { (String(format: "playlist:%05u", $0.playlist), $0.clipID) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        info = Bluray3DSourceInfo(container: container, titles: BlurayTitleSelection.ordered(facts, disc: discFacts))
+    }
+
+    deinit {
+        bd3d_disc_close(disc)
+    }
+
+    func read(
+        title: Bluray3DTitle,
+        audioTrackIDs: [Int],
+        subtitleTrackIDs: [Int],
+        into sink: Bluray3DPacketSink
+    ) throws -> Bluray3DReadStatistics {
+        if let reason = title.unsupportedReason { throw Bluray3DSourceError.unsupported(reason) }
+        guard let clipID = clipIDs[title.id] else { throw Bluray3DSourceError.titleUnavailable }
+        lock.lock()
+        defer { lock.unlock() }
+        let audio = audioTrackIDs.map { UInt16(clamping: $0) }
+        let subtitles = subtitleTrackIDs.map { UInt16(clamping: $0) }
+        return try BlurayDemuxCallback.run(sink: sink) { emit, context, stats in
+            bd3d_disc_stream(disc, clipID, audio, audio.count, subtitles, subtitles.count, emit, context, stats)
+        }
+    }
+
+    private static func facts(_ title: bd3d_title) -> BlurayTitleFacts {
+        var title = title
+        let audio = withUnsafeBytes(of: &title.audio) { streams(Array($0.bindMemory(to: bd3d_stream.self)), count: title.audio_count) }
+        let subtitles = withUnsafeBytes(of: &title.subtitles) {
+            streams(Array($0.bindMemory(to: bd3d_stream.self)), count: title.subtitle_count)
+        }
+        let clipID = withUnsafeBytes(of: &title.clip_id) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        return BlurayTitleFacts(
+            playlist: title.playlist,
+            durationTicks: title.duration_ticks,
+            angleCount: title.angle_count,
+            clipCount: title.clip_count,
+            isMainFeature: title.main_feature,
+            coversCompleteClip: title.complete_clip,
+            hasStereoStream: title.ssif_available,
+            baseViewIsRightEye: title.base_view_right,
+            clipID: clipID,
+            audio: audio,
+            subtitles: subtitles
+        )
+    }
+
+    private static func streams(_ streams: [bd3d_stream], count: UInt8) -> [BlurayTitleFacts.Stream] {
+        streams.prefix(Int(count)).map { stream in
+            var stream = stream
+            let language = withUnsafeBytes(of: &stream.language) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+            return BlurayTitleFacts.Stream(pid: stream.pid, codingType: stream.coding_type, language: language)
+        }
+    }
+}
+
+/// Bridges the C demuxer's packet callback to a `Bluray3DPacketSink`.
+enum BlurayDemuxCallback {
+    private final class Context {
+        let sink: Bluray3DPacketSink
+        init(sink: Bluray3DPacketSink) { self.sink = sink }
+    }
+
+    typealias Demux = (
+        _ emit: bd3d_packet_fn,
+        _ context: UnsafeMutableRawPointer,
+        _ stats: UnsafeMutablePointer<bd3d_stats>
+    ) -> bd3d_result
+
+    static func run(sink: Bluray3DPacketSink, demux: Demux) throws -> Bluray3DReadStatistics {
+        let context = Context(sink: sink)
+        var stats = bd3d_stats()
+        let result = withExtendedLifetime(context) {
+            demux(emit, Unmanaged.passUnretained(context).toOpaque(), &stats)
+        }
+        let statistics = Bluray3DReadStatistics(
+            bytes: stats.bytes,
+            videoAccessUnits: stats.video_pairs,
+            audioPackets: stats.audio_packets,
+            subtitlePackets: stats.subtitle_packets
+        )
+        switch result {
+        case BD3D_OK, BD3D_STOPPED:
+            return statistics
+        case BD3D_READ_FAILED:
+            throw Bluray3DSourceError.readFailed
+        case BD3D_SSIF_UNAVAILABLE:
+            throw Bluray3DSourceError.unsupported(.stereoStreamMissing)
+        default:
+            throw Bluray3DSourceError.invalidStream(description(result))
+        }
+    }
+
+    private static let emit: bd3d_packet_fn = { context, packet in
+        guard let context, let packet else { return 1 }
+        let sink = Unmanaged<Context>.fromOpaque(context).takeUnretainedValue().sink
+        let value = packet.pointee
+        let packetData = Data(bytes: value.data, count: value.length)
+        let delivered: Bluray3DPacket
+        if value.kind == BD3D_PACKET_VIDEO {
+            var data = packetData
+            data.append(value.dependent, count: value.dependent_length)
+            delivered = .video(
+                MVCAccessUnit(pts: value.pts, dts: value.dts, isRandomAccess: value.random_access, data: data)
+            )
+        } else {
+            // The audio player's own PES parser, so headers are read one way for every source.
+            guard let pes = TransportStreamPESReader.parse(pid: value.pid, packetData) else { return 0 }
+            delivered = value.kind == BD3D_PACKET_AUDIO ? .audio(pes) : .subtitle(pes)
+        }
+        return sink.receive(delivered) ? 0 : 1
+    }
+
+    static func description(_ result: bd3d_result) -> String {
+        switch result {
+        case BD3D_INVALID_PACKET: return "invalid transport packet"
+        case BD3D_INVALID_PES: return "invalid PES header"
+        case BD3D_OUT_OF_MEMORY: return "out of memory"
+        case BD3D_PENDING_LIMIT: return "too much unpaired video"
+        case BD3D_NON_MONOTONIC: return "video decode times go backward"
+        case BD3D_UNMATCHED_PES: return "a base view has no dependent view"
+        case BD3D_NO_MVC: return "no MVC video"
+        case BD3D_TOO_MANY_PIDS: return "too many tracks selected"
+        default: return "demux error \(result.rawValue)"
+        }
+    }
+}
+
+/// Demuxes Blu-ray M2TS bytes held in memory, as the disc reader does for an SSIF file.
+enum BlurayTransportStream {
+    private final class Reader {
+        let data: Data
+        let chunkSize: Int
+        var offset = 0
+        init(data: Data, chunkSize: Int) {
+            self.data = data
+            self.chunkSize = chunkSize
+        }
+    }
+
+    /// `chunkSize` sets how many bytes each read returns, so reads can split packets.
+    static func demux(
+        _ data: Data,
+        audioTrackIDs: [Int] = [],
+        subtitleTrackIDs: [Int] = [],
+        chunkSize: Int = 6144,
+        into sink: Bluray3DPacketSink
+    ) throws -> Bluray3DReadStatistics {
+        let reader = Reader(data: data, chunkSize: max(1, chunkSize))
+        let audio = audioTrackIDs.map { UInt16(clamping: $0) }
+        let subtitles = subtitleTrackIDs.map { UInt16(clamping: $0) }
+        let read: bd3d_read_fn = { context, buffer, size in
+            guard let context, let buffer else { return -1 }
+            let reader = Unmanaged<Reader>.fromOpaque(context).takeUnretainedValue()
+            let count = min(Int(size), reader.chunkSize, reader.data.count - reader.offset)
+            reader.data.copyBytes(to: buffer, from: reader.offset..<(reader.offset + count))
+            reader.offset += count
+            return Int64(count)
+        }
+        return try withExtendedLifetime(reader) {
+            try BlurayDemuxCallback.run(sink: sink) { emit, context, stats in
+                bd3d_demux(
+                    read, Unmanaged.passUnretained(reader).toOpaque(), audio, audio.count, subtitles, subtitles.count,
+                    emit, context, stats
+                )
+            }
+        }
+    }
+}
