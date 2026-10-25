@@ -4,6 +4,7 @@ import SwiftUI
 
 struct PlayerView: View {
     private static let playerScaleInset: Float = 0.86
+    private static let unsizedVideoScale: Float = 0.001
     private static let playerDepthOffset: Float = -0.14
     private static let trackListAttachmentID = "player-track-list"
     /// Meters between the bottom edge of the video and the open track list.
@@ -20,6 +21,8 @@ struct PlayerView: View {
     @Environment(\.accessibilitySwitchControlEnabled) private var isSwitchControlEnabled
     @State private var hudVisibility = PlaybackHUDVisibilityState()
     @State private var trackPicker = PlaybackTrackPickerState()
+    /// The video's screen size from RealityKit's size event, before `playerScreenSize` has it.
+    @State private var reportedVideoSize: SIMD2<Float>?
 
     init(
         session: MVHEVCPlayerSession,
@@ -73,18 +76,16 @@ struct PlayerView: View {
                 hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
             }
         }
-        .onChange(of: session.isPlaying) { _, isPlaying in
-            hudVisibility.reconcile(
-                isPlaying: PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
-                    isPlaying: isPlaying,
-                    isVoiceOverEnabled: isVoiceOverEnabled,
-                    isSwitchControlEnabled: isSwitchControlEnabled
-                )
-            )
+        .onChange(of: session.isPlaying) { _, _ in
+            hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
+        }
+        .onChange(of: session.isBuffering) { _, _ in
+            hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
         }
         .onChange(of: session.state) { _, state in
             if state != .ready {
                 trackPicker.close()
+                reportedVideoSize = nil
             }
             hudVisibility.reconcile(isPlaying: isAutomaticHidingAllowed)
         }
@@ -162,14 +163,18 @@ struct PlayerView: View {
         case .failed:
             Color.clear
         case .ready:
+            let reportedSize = reportedVideoSize
             RealityView { content, attachments in
                 session.installPlayerComponent()
                 content.add(session.playerEntity)
-                fitPlayerEntity(proxy: geometry, content: content)
-                placeTrackList(content: content, attachments: attachments)
+                _ = content.subscribe(to: VideoPlayerEvents.VideoSizeDidChange.self, on: session.playerEntity) { event in
+                    reportedVideoSize = event.screenMeshSize
+                }
+                fitPlayerEntity(proxy: geometry, content: content, reportedSize: reportedSize)
+                placeTrackList(content: content, attachments: attachments, reportedSize: reportedSize)
             } update: { content, attachments in
-                fitPlayerEntity(proxy: geometry, content: content)
-                placeTrackList(content: content, attachments: attachments)
+                fitPlayerEntity(proxy: geometry, content: content, reportedSize: reportedSize)
+                placeTrackList(content: content, attachments: attachments, reportedSize: reportedSize)
             } attachments: {
                 if let picker = trackPicker.openPicker {
                     Attachment(id: Self.trackListAttachmentID) {
@@ -193,9 +198,10 @@ struct PlayerView: View {
         onDone()
     }
 
+    /// While a Blu-ray 3D title loads more, the controls stay up so the wearer sees why.
     private var isAutomaticHidingAllowed: Bool {
         PlaybackHUDVisibilityPolicy.allowsAutomaticHiding(
-            isPlaying: session.isPlaying,
+            isPlaying: session.isPlaying && !session.isBuffering,
             isVoiceOverEnabled: isVoiceOverEnabled,
             isSwitchControlEnabled: isSwitchControlEnabled
         )
@@ -205,15 +211,33 @@ struct PlayerView: View {
         session.mediaItem?.format == .sideBySide || session.mediaItem?.format == .overUnder
     }
 
-    private func fitPlayerEntity(proxy: GeometryProxy3D, content: RealityViewContent) {
+    /// The video's screen size in its entity's space, or nil before RealityKit knows it.
+    private func videoScreenSize(reportedSize: SIMD2<Float>?) -> SIMD2<Float>? {
         guard let component = session.playerEntity.components[VideoPlayerComponent.self] else {
+            return nil
+        }
+        let screenSize = component.playerScreenSize
+        if screenSize.x > 0, screenSize.y > 0 {
+            return screenSize
+        }
+        guard let reportedSize, reportedSize.x > 0, reportedSize.y > 0 else {
+            return nil
+        }
+        return reportedSize
+    }
+
+    private func fitPlayerEntity(proxy: GeometryProxy3D, content: RealityViewContent, reportedSize: SIMD2<Float>?) {
+        guard session.playerEntity.components[VideoPlayerComponent.self] != nil else {
             return
         }
 
         let frame = proxy.frame(in: .local)
         let frameSize = abs(content.convert(frame.size, from: .local, to: .scene))
-        let screenSize = component.playerScreenSize
-        guard screenSize.x > 0, screenSize.y > 0 else {
+        // Until the video's size is known, keep it too small to cover anything: at its natural
+        // size a stereo video can draw over the controls ornament (#1103).
+        guard let screenSize = videoScreenSize(reportedSize: reportedSize) else {
+            session.playerEntity.scale = SIMD3<Float>(repeating: Self.unsizedVideoScale)
+            session.playerEntity.position = SIMD3<Float>(0, 0, Self.playerDepthOffset)
             return
         }
 
@@ -223,6 +247,10 @@ struct PlayerView: View {
         }
         session.playerEntity.scale = SIMD3<Float>(repeating: scale)
         session.playerEntity.position = SIMD3<Float>(0, 0, Self.playerDepthOffset)
+#if BD_TO_AVP_QUALIFICATION
+        PlayerLayoutProbe.windowSize = SIMD2(frameSize.x, frameSize.y)
+        PlayerLayoutProbe.videoSize = screenSize * scale
+#endif
     }
 
     /// Places the open track list on the bottom edge of the video and just in front of it, so it
@@ -230,7 +258,7 @@ struct PlayerView: View {
     /// below the window, a second ornament or a SwiftUI view in the window is hidden behind the
     /// window's surface or floats out in front of the controls, and system menus presented from
     /// an ornament open behind the video. A RealityView attachment shares the video's space.
-    private func placeTrackList(content: RealityViewContent, attachments: RealityViewAttachments) {
+    private func placeTrackList(content: RealityViewContent, attachments: RealityViewAttachments, reportedSize: SIMD2<Float>?) {
         let placed = content.entities.first { $0.name == Self.trackListAttachmentID }
         guard let list = attachments.entity(for: Self.trackListAttachmentID) else {
             placed?.removeFromParent()
@@ -243,7 +271,7 @@ struct PlayerView: View {
         }
 
         let video = session.playerEntity
-        let screenHeight = video.components[VideoPlayerComponent.self]?.playerScreenSize.y ?? 0
+        let screenHeight = videoScreenSize(reportedSize: reportedSize)?.y ?? 0
         let videoBottom = video.position.y - screenHeight * video.scale.y / 2
         let listHeight = list.visualBounds(relativeTo: list.parent).extents.y
         list.position = SIMD3<Float>(
@@ -499,6 +527,25 @@ private struct PlayerOrnamentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if let warning = session.audioWarning {
+                Label(warning, systemImage: "speaker.slash")
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("player-audio-warning")
+            }
+
+            if session.isBuffering {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Loading…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("player-buffering")
+            }
+
             if let notice = session.liveNotice {
                 Label(notice, systemImage: "hourglass")
                     .font(.subheadline)
@@ -514,7 +561,7 @@ private struct PlayerOrnamentView: View {
                     .accessibilityIdentifier("player-resume-notice")
             }
 
-            if let notice = session.relaySeekNotice {
+            if let notice = session.seekNotice {
                 Label(notice, systemImage: "clock.arrow.circlepath")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -825,7 +872,8 @@ private struct PlayerTrackListView: View {
             trackList(
                 title: "Subtitles",
                 identifier: "player-subtitle-tracks",
-                note: PlaybackTrackListNote.note(for: .subtitles, optionCount: session.subtitleOptions.count),
+                note: session.subtitleListNote
+                    ?? PlaybackTrackListNote.note(for: .subtitles, optionCount: session.subtitleOptions.count),
                 options: session.subtitleOptions,
                 selectedID: session.selectedSubtitleID,
                 select: { session.selectSubtitle(id: $0) }
@@ -996,3 +1044,12 @@ private struct PlaybackScrubBar: View {
         }
     }
 }
+
+#if BD_TO_AVP_QUALIFICATION
+/// The last fitted layout in scene meters, for the on-device qualification report.
+@MainActor
+enum PlayerLayoutProbe {
+    static var windowSize: SIMD2<Float>?
+    static var videoSize: SIMD2<Float>?
+}
+#endif

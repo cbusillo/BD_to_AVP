@@ -249,15 +249,15 @@ enum RelayQualificationDriver {
             let backwardTarget = max(player.earliestSeekTime + 5, player.player.currentTime().seconds - 20)
             player.seek(to: backwardTarget)
             try await wait(seconds: 10) { abs(player.player.currentTime().seconds - backwardTarget) < 1 }
-            liveEmit("seek_backward_result target=\(backwardTarget) position=\(player.player.currentTime().seconds) notice=\(player.relaySeekNotice ?? "none")")
+            liveEmit("seek_backward_result target=\(backwardTarget) position=\(player.player.currentTime().seconds) notice=\(player.seekNotice ?? "none")")
             try await observe(for: 10, label: "after_backward_seek")
 
             let earliest = player.earliestSeekTime
             if earliest > 1 {
                 player.seek(to: 0)
-                try await wait(seconds: 10) { player.relaySeekNotice != nil }
+                try await wait(seconds: 10) { player.seekNotice != nil }
                 try await Task.sleep(for: .seconds(2))
-                liveEmit("seek_evicted_result target=0 earliest_playable=\(earliest) position=\(player.player.currentTime().seconds) notice=\(player.relaySeekNotice ?? "none")")
+                liveEmit("seek_evicted_result target=0 earliest_playable=\(earliest) position=\(player.player.currentTime().seconds) notice=\(player.seekNotice ?? "none")")
             } else {
                 liveEmit("seek_evicted_result skipped=true earliest_playable=\(earliest)")
             }
@@ -303,7 +303,7 @@ enum RelayQualificationDriver {
         emit("pause_passed drift_seconds=\(drift)")
         player.seek(to: 1)
         try await wait(seconds: 5) { abs(player.player.currentTime().seconds - 1) < 0.15 }
-        guard player.relaySeekNotice == nil else { throw qualificationFailure("Retained seek was rejected.") }
+        guard player.seekNotice == nil else { throw qualificationFailure("Retained seek was rejected.") }
         emit("retained_backward_seek_passed from=\(pausedAt) to=\(player.player.currentTime().seconds)")
         player.play()
         try await wait(seconds: 5) { player.player.currentTime().seconds >= 2 && player.isPlaying }

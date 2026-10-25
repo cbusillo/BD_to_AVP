@@ -98,7 +98,6 @@ struct PlaybackRequest: Equatable, Sendable {
 
 enum PlaybackAvailability: Equatable, Sendable {
     case playable
-    case planned(String)
     case unavailable(String)
 }
 
@@ -233,7 +232,7 @@ final class PlayerAppModel: ObservableObject {
             if let reason = title.unsupportedReason {
                 return .unavailable(reason.message)
             }
-            return .planned("Blu-ray 3D will play here once headset playback is ready.")
+            return .playable
         case .unsupported:
             return .unavailable("This media format is not supported for playback.")
         }

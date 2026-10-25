@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "framework": "Edge264MVC",
+  "repository": "https://github.com/jens-duttke/edge264-mvc.git",
+  "revision": "272694e4ca7a7309176c03394e1da8e9fc612af8",
+  "version": "v2026.10.17",
+  "license": "BSD-3-Clause",
+  "compile_flags": [
+    "-std=gnu11",
+    "-O3",
+    "-fwrapv",
+    "-flax-vector-conversions",
+    "-Wno-override-init",
+    "-fvisibility=hidden"
+  ],
+  "xcode": [
+    "Xcode 27.0",
+    "Build version 27A266a"
+  ],
+  "sdks": {
+    "xros": "27.0",
+    "xrsimulator": "27.0"
+  },
+  "binaries": {
+    "xros-arm64/Edge264MVC.framework/Edge264MVC": "7044d6e793f05bc771be1bb218e4b542244a85bcbb7b42a01a945ba0bcc99962",
+    "xros-arm64_x86_64-simulator/Edge264MVC.framework/Edge264MVC": "2810a5d5f1669c5c55c7b5d7284a57b8e67f5ec7f55b6427694f57935e1bc2b1"
+  }
+}
