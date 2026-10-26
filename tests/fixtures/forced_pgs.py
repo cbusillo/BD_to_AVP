@@ -31,8 +31,10 @@ def segment(segment_type: int, milliseconds: int, payload: bytes) -> bytes:
     return b"PG" + struct.pack(">IIBH", timestamp, timestamp, segment_type, len(payload)) + payload
 
 
-def composition(milliseconds: int, number: int, state: int, objects: list[tuple[int, bool]]) -> bytes:
-    payload = struct.pack(">HHBHBBBB", 1920, 1080, 0x10, number, state, 0, 0, len(objects))
+def composition(
+    milliseconds: int, number: int, state: int, objects: list[tuple[int, bool]], *, palette_only: bool = False
+) -> bytes:
+    payload = struct.pack(">HHBHBBBB", 1920, 1080, 0x10, number, state, int(palette_only), 0, len(objects))
     for object_id, forced in objects:
         payload += struct.pack(">HBBHH", object_id, 0, FORCED if forced else 0, 100, 900)
     return segment(0x16, milliseconds, payload)
@@ -100,9 +102,11 @@ def build() -> bytes:
             display_set(9000, 8, NORMAL_CASE, [(1, True)]),
             display_set(10000, 9, NORMAL_CASE, []),
             # One forced caption replaced by another within the epoch, 11 to 12 and 12 to 13 s.
+            # A palette update without a window at 11.5 s keeps it on screen.
             display_set(11000, 10, EPOCH_START, [(0, True)], palette(11000), picture(11000, 0, FORCED_FIRST)),
-            display_set(12000, 11, NORMAL_CASE, [(1, True)], picture(12000, 1, FORCED_NEXT)),
-            display_set(13000, 12, NORMAL_CASE, []),
+            composition(11500, 11, NORMAL_CASE, [(0, True)], palette_only=True) + palette(11500) + end(11500),
+            display_set(12000, 12, NORMAL_CASE, [(1, True)], picture(12000, 1, FORCED_NEXT)),
+            display_set(13000, 13, NORMAL_CASE, []),
         ]
     )
 

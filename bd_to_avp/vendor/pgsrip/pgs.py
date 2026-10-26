@@ -463,8 +463,8 @@ class DisplaySet:
         return next(s for s in self.segments if isinstance(s, PresentationCompositionSegment))
 
     @property
-    def wds(self):
-        return next(s for s in self.segments if isinstance(s, WindowDefinitionSegment))
+    def wds(self) -> typing.Optional[WindowDefinitionSegment]:
+        return next((s for s in self.segments if isinstance(s, WindowDefinitionSegment)), None)
 
     @property
     def pds_segments(self):
@@ -581,6 +581,11 @@ def forced_only_pgs(data: bytes, media_path: MediaPath) -> bytes:
         window_bytes = [window.bytes] if window is not None else []
         redefined = any(isinstance(s, ObjectDefinitionSegment) and s.id in forced_ids for s in display_set.segments)
         if forced and (forced_ids != shown or redefined):
+            if shown:
+                # Close the picture on screen, so its cue ends where the next one starts.
+                output += _composition(pcs, [], CompositionState.NORMAL_CASE.value)
+                output += b"".join(window_bytes)
+                output += display_set.end.bytes
             palette = palettes.get(pcs.palette_id)
             output += _composition(pcs, forced, CompositionState.EPOCH_START.value)
             output += b"".join(window_bytes)
@@ -589,12 +594,10 @@ def forced_only_pgs(data: bytes, media_path: MediaPath) -> bytes:
                 output += b"".join(s.bytes for s in objects.get(object_id, []))
             output += display_set.end.bytes
         elif forced:
+            # The same picture, such as a palette fade; pgsrip needs a window in every display set.
             output += _composition(pcs, forced)
-            for segment in display_set.segments:
-                if isinstance(segment, (WindowDefinitionSegment, PaletteDefinitionSegment)) or (
-                    isinstance(segment, ObjectDefinitionSegment) and segment.id in forced_ids
-                ):
-                    output += segment.bytes
+            output += b"".join(window_bytes)
+            output += b"".join(s.bytes for s in display_set.segments if isinstance(s, PaletteDefinitionSegment))
             output += display_set.end.bytes
         elif shown:
             output += _composition(pcs, [], CompositionState.NORMAL_CASE.value)

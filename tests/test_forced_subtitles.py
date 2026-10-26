@@ -57,12 +57,13 @@ class ForcedOnlyStreamTests(unittest.TestCase):
                 ("00:00:09,000", "00:00:10,000", caption_shape(forced_pgs.EARLY_FORCED)),
                 # Replaced by another forced caption without a new epoch; pgsrip reads one picture
                 # per epoch, so each picture starts its own.
-                ("00:00:11,000", "00:00:11,999", caption_shape(forced_pgs.FORCED_FIRST)),
+                ("00:00:11,000", "00:00:12,000", caption_shape(forced_pgs.FORCED_FIRST)),
                 ("00:00:12,000", "00:00:13,000", caption_shape(forced_pgs.FORCED_NEXT)),
             ],
         )
 
     def test_full_stream_keeps_every_caption(self) -> None:
+        # Including the one whose palette update carries no window definition.
         self.assertEqual(
             [shape for _, _, shape in items(FIXTURE)],
             [
@@ -238,7 +239,7 @@ class ForcedOnlyRipTests(unittest.TestCase):
                 ("00:00:03,000 --> 00:00:04,000", "FORCED ALONE"),
                 ("00:00:05,000 --> 00:00:06,000", "MIXED FORCED"),
                 ("00:00:09,000 --> 00:00:10,000", "EARLY FORCED"),
-                ("00:00:11,000 --> 00:00:11,999", "FORCED FIRST"),
+                ("00:00:11,000 --> 00:00:12,000", "FORCED FIRST"),
                 ("00:00:12,000 --> 00:00:13,000", "FORCED NEXT"),
             ],
         )
