@@ -32,15 +32,11 @@ enum QueuePostRunAction: String, Codable, CaseIterable, Identifiable {
 enum QueuePostRunOtherWork: String, Codable, CaseIterable, Equatable {
     case conversion
     case preview
-    case movieSharing
-    case relaySession
 
     var phrase: String {
         switch self {
         case .conversion: "another conversion is running"
         case .preview: "a preview is running"
-        case .movieSharing: "Movie Sharing is on"
-        case .relaySession: "a relay session is active"
         }
     }
 }
@@ -247,6 +243,21 @@ struct QueuePostRunActivity: Codable, Equatable, Identifiable {
         self.action = action
         self.kind = kind
         self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, occurredAt, action, kind, reason
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        occurredAt = try values.decode(Date.self, forKey: .occurredAt)
+        action = try values.decode(QueuePostRunAction.self, forKey: .action)
+        kind = try values.decode(Kind.self, forKey: .kind)
+        // A reason an earlier version recorded that this version no longer has reads as none,
+        // so one old entry cannot block the saved automation settings from loading.
+        reason = try? values.decodeIfPresent(QueuePostRunReason.self, forKey: .reason)
     }
 
     var message: String {

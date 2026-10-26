@@ -4,12 +4,11 @@ This repository contains the full Mac converter and the Vision Pro movie player:
 
 | App | Platform | Purpose |
 | --- | --- | --- |
-| **3D Blu-ray to Vision Pro** | macOS | Convert supported sources into spatial movies and share completed movies with a paired headset. |
-| **Shiny 3D Cinema** | visionOS | Choose and play completed movies from Files or a compatible Mac's shared folders. |
+| **3D Blu-ray to Vision Pro** | macOS | Convert supported sources into spatial movies. |
+| **Shiny 3D Cinema** | visionOS | Play movies from the headset's own storage or from network shares added as Locations. |
 
-Use the [Movie Sharing beta quick start](docs/movie-sharing-beta.md) to install
-both apps, share a folder and pair the headset. The [player guide](docs/visionos-player.md)
-covers supported formats and developer workflows. The repository, CLI, Xcode targets, bundle IDs and
+The [player guide](docs/visionos-player.md) covers supported formats, Locations and
+developer workflows. The repository, CLI, Xcode targets, bundle IDs and
 saved-data paths retain their established `BD_to_AVP`/`BDToAVPPlayer` identities;
 they do not need to match the public app names.
 
@@ -66,14 +65,21 @@ features made of several clips; see
 [direct pipeline contracts](docs/direct-pipeline-contracts.md#direct-blu-ray-reads).
 Encrypted sources and previews still use MakeMKV.
 
-The production app bundle includes the arm64 `bd3d_reader` and `ssif_probe`
-helpers and their private `libbluray` and `libudfread` dylibs under
+The production app bundle includes the arm64 `bd3d_reader` helper and its
+private `libbluray` and `libudfread` dylibs under
 `Contents/Resources/app/bd_to_avp/{bin,lib}`. It also ships the pinned LGPL
 source archives, `RELINKING.md`, copyright notices, and build provenance under
-`Contents/Resources/app/bd_to_avp/resources/notices/ssif-probe`. The package
+`Contents/Resources/app/bd_to_avp/resources/notices/bluray-reader`. The package
 pipeline verifies the committed unsigned checksums before packaging, validates
 the copied signed tree's linkage and `@loader_path/../lib` rpath, and runs
-each helper's `--version` after signing.
+the helper's `--version` after signing.
+
+`uv run python scripts/build_bluray_reader_macos.py` rebuilds the reader and
+its dylibs from the checksum-pinned source archives in
+`vendor/bluray-reader-macos-arm64.toml`; `--verify-only` checks the committed
+artifacts, notices, provenance and linkage, and `--record-checksums` records the
+unsigned digests after an intentional rebuild. The Meson and Ninja pins in
+`pyproject.toml` must match that manifest.
 
 The shipped sources support relinking those LGPL-2.1-or-later libraries. Keep
 the replacement libraries ABI-compatible, preserve the private install names,
@@ -400,8 +406,8 @@ Mac or keep it awake.
 otherwise. It acts only when a run ends with every video in the queue finished:
 nothing waiting, held for review, stopped, failed, or needing a choice, and no
 **Start Later** window pending. It is also skipped when someone used the
-keyboard, mouse, or trackpad in the last 5 minutes, or while a preview, another
-conversion, Movie Sharing, or a relay session is active. Otherwise a 60-second
+keyboard, mouse, or trackpad in the last 5 minutes, or while a preview or another
+conversion is active. Otherwise a 60-second
 countdown appears with **Cancel**; any input, new queue work, or the Mac
 sleeping during the countdown cancels it. Sleep uses macOS power management.
 Shut Down asks macOS to shut down the way the Apple menu does, so apps with

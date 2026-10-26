@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build libbluray and libudfread as visionOS dynamic frameworks for Shiny 3D Cinema.
 
-The source pins, Meson options and tool versions come from the macOS SSIF probe
+The source pins, Meson options and tool versions come from the macOS Blu-ray reader
 manifest, so the Mac helper and the headset player always use the same LGPL sources.
 """
 
@@ -15,10 +15,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts.build_ssif_probe_macos import (
-    MANIFEST_PATH as SSIF_MANIFEST_PATH,
+from scripts.build_bluray_reader_macos import (
+    MANIFEST_PATH as READER_MANIFEST_PATH,
     NativeDependency,
-    SsifProbeManifest,
+    BlurayReaderManifest,
     command_output,
     load_manifest,
     meson_setup_command,
@@ -78,7 +78,7 @@ class Framework:
         return f"@rpath/{self.name}.framework/{self.name}"
 
 
-def frameworks(manifest: SsifProbeManifest) -> tuple[Framework, Framework]:
+def frameworks(manifest: BlurayReaderManifest) -> tuple[Framework, Framework]:
     return (
         Framework("libudfread", manifest.libudfread, manifest.libudfread.library_filename, ()),
         Framework("libbluray", manifest.libbluray, manifest.libbluray.library_filename, LIBBLURAY_HEADERS),
@@ -172,7 +172,7 @@ def macho_dependencies(path: Path) -> list[str]:
 
 
 def build_slice(
-    manifest: SsifProbeManifest, slice_: Slice, temporary: Path, meson: Path, ninja: Path
+    manifest: BlurayReaderManifest, slice_: Slice, temporary: Path, meson: Path, ninja: Path
 ) -> dict[str, Path]:
     work = temporary / slice_.name
     work.mkdir()
@@ -207,7 +207,7 @@ def slice_binary(framework: Framework, slice_: Slice) -> Path:
     )
 
 
-def checksums(manifest: SsifProbeManifest) -> dict[str, str]:
+def checksums(manifest: BlurayReaderManifest) -> dict[str, str]:
     return {
         str(slice_binary(framework, slice_).relative_to(REPOSITORY_ROOT)): sha256(slice_binary(framework, slice_))
         for framework in frameworks(manifest)
@@ -215,7 +215,7 @@ def checksums(manifest: SsifProbeManifest) -> dict[str, str]:
     }
 
 
-def verify(manifest: SsifProbeManifest) -> None:
+def verify(manifest: BlurayReaderManifest) -> None:
     provenance = json.loads(PROVENANCE_PATH.read_text(encoding="utf-8"))
     if provenance.get("unsigned_checksums") != checksums(manifest):
         raise RuntimeError("visionOS Blu-ray framework checksums do not match their provenance")
@@ -235,13 +235,13 @@ def verify(manifest: SsifProbeManifest) -> None:
                 raise RuntimeError(f"{binary} links an unapproved dependency")
 
 
-def build(manifest: SsifProbeManifest) -> None:
+def build(manifest: BlurayReaderManifest) -> None:
     tools = REPOSITORY_ROOT / ".venv/bin"
     meson, ninja = tools / "meson", tools / "ninja"
     if command_output([str(meson), "--version"]).strip() != manifest.meson_version:
-        raise RuntimeError("Meson version does not match the SSIF probe manifest; run uv sync")
+        raise RuntimeError("Meson version does not match the Blu-ray reader manifest; run uv sync")
     if command_output([str(ninja), "--version"]).strip() != manifest.ninja_version:
-        raise RuntimeError("Ninja version does not match the SSIF probe manifest; run uv sync")
+        raise RuntimeError("Ninja version does not match the Blu-ray reader manifest; run uv sync")
     with tempfile.TemporaryDirectory(prefix="bluray-visionos-") as temporary_name:
         temporary = Path(temporary_name)
         built = {slice_.name: build_slice(manifest, slice_, temporary, meson, ninja) for slice_ in SLICES}
@@ -257,11 +257,11 @@ def build(manifest: SsifProbeManifest) -> None:
     verify(manifest)
 
 
-def write_provenance(manifest: SsifProbeManifest) -> None:
+def write_provenance(manifest: BlurayReaderManifest) -> None:
     provenance = {
         "schema_version": 1,
         "builder": "scripts/build_bluray_visionos.py",
-        "source_manifest": str(SSIF_MANIFEST_PATH.relative_to(REPOSITORY_ROOT)),
+        "source_manifest": str(READER_MANIFEST_PATH.relative_to(REPOSITORY_ROOT)),
         "minimum_visionos": MINIMUM_VISIONOS,
         "targets": [target for slice_ in SLICES for target in slice_.targets],
         "library_compile_flags": list(LIBRARY_COMPILE_FLAGS),
@@ -286,7 +286,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify-only", action="store_true", help="Verify the committed frameworks.")
     args = parser.parse_args()
-    manifest = load_manifest(SSIF_MANIFEST_PATH)
+    manifest = load_manifest(READER_MANIFEST_PATH)
     if args.verify_only:
         verify(manifest)
         print("Verified visionOS Blu-ray frameworks")

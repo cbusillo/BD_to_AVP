@@ -40,38 +40,6 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(state.result, result)
     }
 
-    func testLiveSourceLifecyclePublishesReplayAndCompletes() throws {
-        var state = WorkerLifecycleState()
-        state.selectSource(URL(fileURLWithPath: "/tmp/movie.iso"))
-        try state.begin(jobID: jobID, operationKind: .liveSource)
-        try state.receive(event(.workerReady, sequence: 0, payload: .init(workerVersion: "0.3.3")))
-        try state.receive(event(.jobStarted, sequence: 1, payload: .init(operation: "start_live_source")))
-        let artifact = LiveSourceArtifact(
-            kind: "live_source_manifest",
-            manifestPath: "/tmp/live-source/live-source.json",
-            videoStreamID: "mvc",
-            audioStreamID: "audio:4352"
-        )
-        try state.receive(event(.artifactReady, sequence: 2, payload: .init(liveSource: artifact)))
-
-        XCTAssertEqual(state.phase, .processing)
-        XCTAssertEqual(state.activityMessage, "Live source replay is ready.")
-
-        let result = LiveSourceResult(
-            manifestPath: artifact.manifestPath,
-            videoStreamID: artifact.videoStreamID,
-            audioStreamID: artifact.audioStreamID,
-            earliestAvailableTicks: 0,
-            latestAvailableTicks: 180_000,
-            retainedGOPs: 2
-        )
-        try state.receive(event(.jobCompleted, sequence: 3, payload: .init(liveSourceResult: result)))
-
-        XCTAssertEqual(state.phase, .completed)
-        XCTAssertEqual(state.stageMessage, "Live source complete")
-        XCTAssertEqual(state.liveSourceResult, result)
-    }
-
     func testElapsedTimeTextFormatsMinuteAndHourDurations() {
         XCTAssertNil(ElapsedTimeText.format(seconds: 0))
         XCTAssertEqual(ElapsedTimeText.format(seconds: 65), "1:05")
@@ -401,40 +369,6 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertThrowsError(try state.receive(event(.jobDecisionRequired, sequence: 0))) { error in
             XCTAssertEqual(error as? WorkerLifecycleError, .missingPayload(event: .jobDecisionRequired))
         }
-    }
-
-    func testDecodesSharedLiveTitleCompletionFixture() throws {
-        let completed = try JSONDecoder().decode(
-            WorkerEvent.self,
-            from: currentProtocolFixtureData("native_worker_live_title_completed")
-        )
-
-        let result = try XCTUnwrap(completed.payload.liveTitleResult)
-        XCTAssertTrue(result.eligible)
-        XCTAssertNil(result.unsupportedReason)
-        XCTAssertEqual(result.playlist, 1_005)
-        XCTAssertEqual(result.durationSeconds, 5_400)
-        XCTAssertEqual(result.audioStreams.map(\.pid), [4_352, 4_354])
-        XCTAssertEqual(result.audioStreams.first?.codingType, 134)
-        XCTAssertEqual(result.audioStreams.first?.language, "eng")
-        XCTAssertNil(completed.payload.result)
-    }
-
-    func testDecodesIneligibleLiveTitleWithoutPlaylist() throws {
-        let data = Data(
-            """
-            {"eligible":false,"unsupported_reason":"no_live_titles","playlist":null,\
-            "duration_seconds":null,"audio_streams":[]}
-            """.utf8
-        )
-
-        let result = try JSONDecoder().decode(LiveTitleInspection.self, from: data)
-
-        XCTAssertFalse(result.eligible)
-        XCTAssertEqual(result.unsupportedReason, "no_live_titles")
-        XCTAssertNil(result.playlist)
-        XCTAssertNil(result.durationSeconds)
-        XCTAssertEqual(result.audioStreams, [])
     }
 
     func testDecodesAndAppliesSharedConversionCompletionFixture() throws {

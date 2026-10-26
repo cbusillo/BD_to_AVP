@@ -24,9 +24,9 @@ startup and worker smokes.
     └── Resources/
         ├── app/                bd_to_avp source and bundled tools
         │   └── bd_to_avp/
-        │       ├── bin/{bd3d_reader,ssif_probe}
+        │       ├── bin/bd3d_reader
         │       ├── lib/*.dylib
-        │       └── resources/notices/ssif-probe/
+        │       └── resources/notices/bluray-reader/
         └── app_packages/       lock-derived Python dependencies
 ```
 
@@ -52,8 +52,7 @@ under the worktree's build directory, and removes that home after the run.
 App preferences in a unit-test host use an absolute-path UserDefaults domain
 beside that home, inside the same temporary test root; individual defaults fixtures
 also keep their temporary domains in that root, so a crashed host leaves no
-defaults fixture directories outside the runner's cleanup. The host disables Sparkle and uses a file
-for its Movie Sharing identity even when it is team-signed.
+defaults fixture directories outside the runner's cleanup. The host disables Sparkle.
 The runner checks filenames in the real Preferences directory before and after
 each run and fails on new app or test-suite entries, while reporting unrelated
 entries separately; it reads no preference values and
@@ -71,12 +70,12 @@ signature, launches the packaged app through `--startup-smoke`, and runs a real
 `inspect_source` request through the embedded worker. The worker smoke also
 requires canonical schema-v1 FFprobe observability in the protocol stream, so a
 package cannot pass while silently falling back to a legacy child-process path.
-Before expensive packaging, the pipeline verifies the committed Blu-ray reader and SSIF probe,
-private dylibs, source archives, notices, provenance, and unsigned checksums.
+Before expensive packaging, the pipeline verifies the committed Blu-ray reader,
+its private dylibs, source archives, notices, provenance, and unsigned checksums.
 After copying the tree into the app, layout verification repeats the structural
 and linkage checks with checksums disabled so signing does not alter the
-unsigned digest contract, and the signed `bd3d_reader --version` and
-`ssif_probe --version` smokes must pass.
+unsigned digest contract, and the signed `bd3d_reader --version` smoke must
+pass.
 Layout verification also checks the shipping Swift executable's direct platform
 framework links, including AVKit for the embedded preview player, so dead-linking
 cannot defer a missing superclass failure until the player is presented.
@@ -86,7 +85,7 @@ passes `--sign-identity` and `--sign-keychain`. Ad-hoc packages omit Hardened
 Runtime because they have no Team ID for dyld library validation; Developer ID
 packages retain Hardened Runtime.
 
-The SSIF bundle contains LGPL-2.1-or-later libbluray and libudfread source
+The Blu-ray reader bundle contains LGPL-2.1-or-later libbluray and libudfread source
 archives, copyright notices, and `RELINKING.md` beside the packaged libraries.
 They are replaceable arm64 private dylibs with bundle-relative install names;
 redistributors must preserve those materials and the relinking boundary. Issue

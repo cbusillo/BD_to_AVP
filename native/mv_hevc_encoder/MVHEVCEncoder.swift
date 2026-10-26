@@ -28,9 +28,7 @@ private enum EncoderFailure: Error, CustomStringConvertible {
 }
 
 private struct EncoderOptions {
-    let outputURL: URL?
-    let hlsDirectoryURL: URL?
-    let hlsSegmentDurationSeconds: Double?
+    let outputURL: URL
     let bitrateMbps: Double
     let quality: Double?
     let fieldOfViewDegrees: Double
@@ -40,16 +38,9 @@ private struct EncoderOptions {
     let upscaleMode: FrameUpscaleMode?
     let swapEyes: Bool
     let overwrite: Bool
-    var audioPCMPath: String? = nil
-    var audioStartTicks: Int64 = 0
-
-    var isHLSOutput: Bool { hlsDirectoryURL != nil }
 
     static func parse(arguments: [String]) throws -> EncoderOptions {
         var outputPath: String?
-        var hlsDirectoryPath: String?
-        var hlsSegmentDurationSeconds = 6.0
-        var hlsSegmentDurationWasSpecified = false
         var bitrateMbps = 8.0
         var bitrateWasSpecified = false
         var quality: Double?
@@ -60,8 +51,6 @@ private struct EncoderOptions {
         var upscaleMode: FrameUpscaleMode?
         var swapEyes = false
         var overwrite = false
-        var audioPCMPath: String?
-        var audioStartTicks: Int64?
 
         var index = 0
         while index < arguments.count {
@@ -69,11 +58,6 @@ private struct EncoderOptions {
             switch argument {
             case "--output":
                 outputPath = try value(after: argument, arguments: arguments, index: &index)
-            case "--hls-directory":
-                hlsDirectoryPath = try value(after: argument, arguments: arguments, index: &index)
-            case "--segment-duration":
-                hlsSegmentDurationSeconds = try doubleValue(after: argument, arguments: arguments, index: &index)
-                hlsSegmentDurationWasSpecified = true
             case "--bitrate-mbps":
                 bitrateMbps = try doubleValue(after: argument, arguments: arguments, index: &index)
                 bitrateWasSpecified = true
@@ -99,14 +83,6 @@ private struct EncoderOptions {
                 swapEyes = true
             case "--overwrite":
                 overwrite = true
-            case "--audio-pcm":
-                audioPCMPath = try value(after: argument, arguments: arguments, index: &index)
-            case "--audio-start-ticks":
-                let rawValue = try value(after: argument, arguments: arguments, index: &index)
-                guard let parsed = Int64(rawValue) else {
-                    throw EncoderFailure.invalidArguments("--audio-start-ticks requires an integer.")
-                }
-                audioStartTicks = parsed
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -116,20 +92,11 @@ private struct EncoderOptions {
             index += 1
         }
 
-        guard (outputPath != nil) != (hlsDirectoryPath != nil) else {
-            throw EncoderFailure.invalidArguments("Specify exactly one of --output or --hls-directory.")
+        guard let outputPath else {
+            throw EncoderFailure.invalidArguments("Specify --output.")
         }
-        if let outputPath, outputPath.isEmpty {
+        if outputPath.isEmpty {
             throw EncoderFailure.invalidArguments("--output requires a non-empty path.")
-        }
-        if let hlsDirectoryPath, hlsDirectoryPath.isEmpty {
-            throw EncoderFailure.invalidArguments("--hls-directory requires a non-empty path.")
-        }
-        if hlsSegmentDurationWasSpecified, hlsDirectoryPath == nil {
-            throw EncoderFailure.invalidArguments("--segment-duration requires --hls-directory.")
-        }
-        if hlsDirectoryPath != nil, (!hlsSegmentDurationSeconds.isFinite || hlsSegmentDurationSeconds <= 0) {
-            throw EncoderFailure.invalidArguments("--segment-duration must be a positive number of seconds.")
         }
         guard bitrateMbps.isFinite, bitrateMbps > 0, bitrateMbps <= 500 else {
             throw EncoderFailure.invalidArguments("--bitrate-mbps must be greater than 0 and at most 500.")
@@ -154,25 +121,9 @@ private struct EncoderOptions {
         if let expectedFrameCount, expectedFrameCount <= 0 {
             throw EncoderFailure.invalidArguments("--expected-frames must be greater than 0.")
         }
-        if let audioPCMPath {
-            guard !audioPCMPath.isEmpty else {
-                throw EncoderFailure.invalidArguments("--audio-pcm requires a non-empty path.")
-            }
-            guard hlsDirectoryPath != nil else {
-                throw EncoderFailure.invalidArguments("--audio-pcm requires --hls-directory.")
-            }
-        }
-        if audioStartTicks != nil, audioPCMPath == nil {
-            throw EncoderFailure.invalidArguments("--audio-start-ticks requires --audio-pcm.")
-        }
-        if let audioStartTicks, abs(audioStartTicks) > PCMAudioContract.maximumStartOffsetTicks {
-            throw EncoderFailure.invalidArguments("--audio-start-ticks must be within one hour of video start.")
-        }
 
         return EncoderOptions(
-            outputURL: outputPath.map { URL(fileURLWithPath: $0).standardizedFileURL },
-            hlsDirectoryURL: hlsDirectoryPath.map { URL(fileURLWithPath: $0).standardizedFileURL },
-            hlsSegmentDurationSeconds: hlsDirectoryPath == nil ? nil : hlsSegmentDurationSeconds,
+            outputURL: URL(fileURLWithPath: outputPath).standardizedFileURL,
             bitrateMbps: bitrateMbps,
             quality: quality,
             fieldOfViewDegrees: fieldOfViewDegrees,
@@ -181,9 +132,7 @@ private struct EncoderOptions {
             expectedFrameCount: expectedFrameCount,
             upscaleMode: upscaleMode,
             swapEyes: swapEyes,
-            overwrite: overwrite,
-            audioPCMPath: audioPCMPath,
-            audioStartTicks: audioStartTicks ?? 0
+            overwrite: overwrite
         )
     }
 
@@ -226,13 +175,11 @@ private struct EncoderOptions {
     private static func printUsage() {
         print(
             """
-            Usage: mv-hevc-encoder (--output FILE | --hls-directory DIR) [options]
+            Usage: mv-hevc-encoder --output FILE [options]
 
-            Reads progressive, 8-bit 4:2:0 side-by-side Y4M from standard input and writes MV-HEVC MOV or HLS/CMAF segments.
+            Reads progressive, 8-bit 4:2:0 side-by-side Y4M from standard input and writes MV-HEVC MOV.
 
-              --output FILE                  MOV output path; exclusive with --hls-directory.
-              --hls-directory DIR            HLS output directory; exclusive with --output.
-              --segment-duration SECONDS     Positive HLS segment duration (default: 6).
+              --output FILE                  MOV output path.
               --bitrate-mbps VALUE           Final MV-HEVC average bitrate (default: 8).
               --quality VALUE                Compression quality from 0 through 1; exclusive with bitrate.
               --fov DEGREES                   Horizontal field of view (default: 90).
@@ -242,8 +189,6 @@ private struct EncoderOptions {
               --upscale-mode MODE             Prototype 2x scaler: metalfx or pixel-transfer.
               --swap-eyes                     Treat the right half as the left eye.
               --overwrite                     Replace an existing output file.
-              --audio-pcm PATH                Mux AAC encoded from s16le stereo 48 kHz PCM read from PATH (HLS only).
-              --audio-start-ticks TICKS       90 kHz time of the first PCM sample relative to the first frame.
               --capability-probe              Report stereo MV-HEVC encode support and exit.
             """
         )
@@ -492,8 +437,7 @@ private func makeOutputSettings(options: EncoderOptions, header: Y4MHeader) thro
 }
 
 private func isStereoMVHEVCOutputConfigurationSupported(
-    upscaleMode: FrameUpscaleMode? = nil,
-    hlsOutput: Bool = false
+    upscaleMode: FrameUpscaleMode? = nil
 ) throws -> Bool {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         return false
@@ -512,8 +456,6 @@ private func isStereoMVHEVCOutputConfigurationSupported(
         defer { try? FileManager.default.removeItem(at: probeURL) }
         let options = EncoderOptions(
             outputURL: probeURL,
-            hlsDirectoryURL: nil,
-            hlsSegmentDurationSeconds: nil,
             bitrateMbps: 8.0,
             quality: quality,
             fieldOfViewDegrees: 90.0,
@@ -525,13 +467,7 @@ private func isStereoMVHEVCOutputConfigurationSupported(
             overwrite: true
         )
         let outputSettings = try makeOutputSettings(options: options, header: header)
-        let delegate = hlsOutput ? DiscardingSegmentDelegate() : nil
-        let writer: AVAssetWriter
-        if let delegate {
-            writer = makeHLSAssetWriter(segmentDurationSeconds: 6.0, delegate: delegate)
-        } else {
-            writer = try AVAssetWriter(outputURL: probeURL, fileType: .mov)
-        }
+        let writer = try AVAssetWriter(outputURL: probeURL, fileType: .mov)
         if !writer.canApply(outputSettings: outputSettings, forMediaType: .video) {
             return false
         }
@@ -684,10 +620,6 @@ private func emitStatus(_ values: [String: Any]) {
     try? FileHandle.standardError.write(contentsOf: data)
 }
 
-private func atomicallyWrite(_ data: Data, to url: URL) throws {
-    try data.write(to: url, options: .atomic)
-}
-
 private func atomicallyRename(_ sourceURL: URL, to destinationURL: URL) throws {
     let renameStatus = sourceURL.path.withCString { sourcePath in
         destinationURL.path.withCString { destinationPath in
@@ -699,484 +631,10 @@ private func atomicallyRename(_ sourceURL: URL, to destinationURL: URL) throws {
     }
 }
 
-private final class HLSOutputDirectory {
-    let directoryURL: URL
-    private let fileManager = FileManager.default
-    private var backupURL: URL?
-
-    init(directoryURL: URL, overwrite: Bool) throws {
-        self.directoryURL = directoryURL
-        let parentURL = directoryURL.deletingLastPathComponent()
-        try fileManager.createDirectory(at: parentURL, withIntermediateDirectories: true)
-
-        var isDirectory = ObjCBool(false)
-        if fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory) {
-            guard isDirectory.boolValue else {
-                throw EncoderFailure.invalidArguments("HLS output path exists and is not a directory.")
-            }
-            guard overwrite else {
-                throw EncoderFailure.invalidArguments("Output already exists; pass --overwrite to replace it.")
-            }
-            let backupURL = parentURL.appendingPathComponent(
-                ".\(directoryURL.lastPathComponent).previous-\(UUID().uuidString)"
-            )
-            try atomicallyRename(directoryURL, to: backupURL)
-            self.backupURL = backupURL
-        }
-        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: false)
-    }
-
-    func complete() {
-        if let backupURL {
-            do {
-                try fileManager.removeItem(at: backupURL)
-                self.backupURL = nil
-            } catch {
-                emitStatus([
-                    "event": "encoder.cleanup_warning",
-                    "message": "Encoded output is complete, but the previous HLS backup could not be removed.",
-                    "schema_version": 1,
-                ])
-            }
-        }
-    }
-
-    func discard() {
-        try? fileManager.removeItem(at: directoryURL)
-        if let backupURL {
-            try? atomicallyRename(backupURL, to: directoryURL)
-            self.backupURL = nil
-        }
-    }
-}
-
-private final class DiscardingSegmentDelegate: NSObject, AVAssetWriterDelegate, @unchecked Sendable {
-    func assetWriter(
-        _: AVAssetWriter,
-        didOutputSegmentData _: Data,
-        segmentType _: AVAssetSegmentType,
-        segmentReport _: AVAssetSegmentReport?
-    ) {}
-}
-
-private struct HLSSegment {
-    let filename: String
-    let durationSeconds: Double
-}
-
-private final class HLSOutputDelegate: NSObject, AVAssetWriterDelegate, @unchecked Sendable {
-    private let directoryURL: URL
-    private let preferredSegmentDurationSeconds: Double
-    private let targetDurationSeconds: Int
-    private let lock = NSLock()
-    private var initializationWritten = false
-    private var finalized = false
-    private var segments: [HLSSegment] = []
-    private var failure: Error?
-
-    init(directoryURL: URL, preferredSegmentDurationSeconds: Double) {
-        self.directoryURL = directoryURL
-        self.preferredSegmentDurationSeconds = preferredSegmentDurationSeconds
-        targetDurationSeconds = max(1, Int(ceil(preferredSegmentDurationSeconds + 1)))
-    }
-
-    func assetWriter(
-        _: AVAssetWriter,
-        didOutputSegmentData segmentData: Data,
-        segmentType: AVAssetSegmentType,
-        segmentReport: AVAssetSegmentReport?
-    ) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard failure == nil else {
-            return
-        }
-        guard !finalized else {
-            failure = EncoderFailure.writer("AVAssetWriter emitted an HLS segment after playlist finalization.")
-            return
-        }
-        do {
-            switch segmentType {
-            case .initialization:
-                guard !initializationWritten else {
-                    throw EncoderFailure.writer("AVAssetWriter emitted more than one HLS initialization segment.")
-                }
-                try atomicallyWrite(segmentData, to: directoryURL.appendingPathComponent("init.mp4"))
-                initializationWritten = true
-            case .separable:
-                guard initializationWritten else {
-                    throw EncoderFailure.writer("AVAssetWriter emitted an HLS media segment before initialization.")
-                }
-                let filename = String(format: "segment-%05d.m4s", segments.count + 1)
-                try atomicallyWrite(segmentData, to: directoryURL.appendingPathComponent(filename))
-                let segmentDurationSeconds = duration(from: segmentReport)
-                guard segmentDurationSeconds <= Double(targetDurationSeconds) else {
-                    throw EncoderFailure.writer(
-                        "AVAssetWriter emitted an HLS segment longer than the fixed target duration."
-                    )
-                }
-                segments.append(HLSSegment(filename: filename, durationSeconds: segmentDurationSeconds))
-                try writePlaylist(endList: false)
-            @unknown default:
-                throw EncoderFailure.writer("AVAssetWriter emitted an unknown HLS segment type.")
-            }
-        } catch {
-            failure = error
-        }
-    }
-
-    func throwIfFailed() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        if let failure {
-            throw failure
-        }
-    }
-
-    func finalizePlaylist() throws -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        if let failure {
-            throw failure
-        }
-        guard initializationWritten else {
-            throw EncoderFailure.writer("AVAssetWriter did not emit an HLS initialization segment.")
-        }
-        guard !segments.isEmpty else {
-            throw EncoderFailure.writer("AVAssetWriter did not emit an HLS media segment.")
-        }
-        try writePlaylist(endList: true)
-        finalized = true
-        return segments.count
-    }
-
-    private func duration(from report: AVAssetSegmentReport?) -> Double {
-        guard let videoTrackReport = report?.trackReports.first(where: { $0.mediaType == .video }) else {
-            return preferredSegmentDurationSeconds
-        }
-        let durationSeconds = CMTimeGetSeconds(videoTrackReport.duration)
-        guard durationSeconds.isFinite, durationSeconds > 0 else {
-            return preferredSegmentDurationSeconds
-        }
-        return durationSeconds
-    }
-
-    private func writePlaylist(endList: Bool) throws {
-        var lines = [
-            "#EXTM3U",
-            "#EXT-X-VERSION:7",
-            "#EXT-X-TARGETDURATION:\(targetDurationSeconds)",
-            "#EXT-X-PLAYLIST-TYPE:EVENT",
-            "#EXT-X-INDEPENDENT-SEGMENTS",
-            "#EXT-X-MAP:URI=\"init.mp4\"",
-        ]
-        for segment in segments {
-            lines.append("#EXTINF:\(String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), segment.durationSeconds)),")
-            lines.append(segment.filename)
-        }
-        if endList {
-            lines.append("#EXT-X-ENDLIST")
-        }
-        try atomicallyWrite(Data((lines.joined(separator: "\n") + "\n").utf8), to: directoryURL.appendingPathComponent("media.m3u8"))
-    }
-}
-
-private struct AudioSummary {
-    let appendedFrames: Int64
-    let firstPresentationFrame: Int64?
-}
-
-private enum PCMAudioContract {
-    static let sampleRate: Int64 = 48_000
-    static let channelCount = 2
-    static let bytesPerFrame = 4
-    static let aacBitRate = 192_000
-    static let maximumStartOffsetTicks: Int64 = 3_600 * 90_000
-    static let maximumBufferedBytes = 64 * 1_024 * 1_024
-    static let maximumFramesPerSampleBuffer: Int64 = 4_096
-}
-
-/// Reads interleaved s16le stereo PCM on a dedicated thread so the producer never
-/// blocks while the writer is waiting for video. The buffer is bounded; once video
-/// has ended the reader discards the remaining input instead of blocking its writer.
-private final class PCMAudioSource: @unchecked Sendable {
-    private let condition = NSCondition()
-    private var buffer = Data()
-    private var offset = 0
-    private var reachedEOF = false
-    private var discarding = false
-    private var failure: EncoderFailure?
-
-    init(path: String) {
-        let thread = Thread { [self] in
-            readAll(path: path)
-        }
-        thread.name = "mv-hevc-encoder-pcm"
-        thread.start()
-    }
-
-    private func readAll(path: String) {
-        let descriptor = path.withCString { Darwin.open($0, O_RDONLY) }
-        guard descriptor >= 0 else {
-            finish(failure: .invalidInput("Failed to open the PCM audio input."))
-            return
-        }
-        defer { Darwin.close(descriptor) }
-        var chunk = Data(count: 65_536)
-        while true {
-            let bytesRead = chunk.withUnsafeMutableBytes { bytes in
-                Darwin.read(descriptor, bytes.baseAddress, bytes.count)
-            }
-            if bytesRead == 0 {
-                finish(failure: nil)
-                return
-            }
-            if bytesRead < 0 {
-                if errno == EINTR {
-                    continue
-                }
-                finish(failure: .invalidInput("Failed to read the PCM audio input."))
-                return
-            }
-            condition.lock()
-            while !discarding, buffer.count - offset >= PCMAudioContract.maximumBufferedBytes {
-                condition.wait()
-            }
-            if !discarding {
-                buffer.append(chunk.prefix(bytesRead))
-            }
-            condition.unlock()
-        }
-    }
-
-    private func finish(failure: EncoderFailure?) {
-        condition.lock()
-        reachedEOF = true
-        self.failure = failure
-        condition.broadcast()
-        condition.unlock()
-    }
-
-    /// Returns up to `maximumFrames` complete PCM frames without blocking.
-    func take(maximumFrames: Int64) throws -> (data: Data, ended: Bool) {
-        condition.lock()
-        defer { condition.unlock() }
-        if let failure {
-            throw failure
-        }
-        let availableFrames = Int64((buffer.count - offset) / PCMAudioContract.bytesPerFrame)
-        let frames = min(availableFrames, maximumFrames)
-        let byteCount = Int(frames) * PCMAudioContract.bytesPerFrame
-        let data = Data(buffer[offset ..< offset + byteCount])
-        offset += byteCount
-        if offset > 1_048_576 || offset == buffer.count {
-            buffer.removeSubrange(0 ..< offset)
-            offset = 0
-        }
-        condition.broadcast()
-        let ended = reachedEOF && buffer.count - offset < PCMAudioContract.bytesPerFrame
-        if ended, buffer.count - offset != 0 {
-            throw EncoderFailure.invalidInput("PCM audio input ended inside a sample frame.")
-        }
-        return (data, ended)
-    }
-
-    func discardRemaining() {
-        condition.lock()
-        discarding = true
-        buffer.removeAll()
-        offset = 0
-        condition.broadcast()
-        condition.unlock()
-    }
-}
-
-/// Appends PCM to an AAC writer input on the video frame timeline. Sample `k` of the
-/// input is presented at `startOffsetFrames + k` 48 kHz ticks; samples before zero are
-/// dropped so audio never precedes the first video frame.
-private final class PCMAudioAppender {
-    let input: AVAssetWriterInput
-    private let source: PCMAudioSource
-    private let formatDescription: CMAudioFormatDescription
-    private var position: Int64
-    private var framesToDrop: Int64
-    private(set) var isFinished = false
-    private(set) var appendedFrames: Int64 = 0
-    private(set) var firstPresentationFrame: Int64?
-
-    init(path: String, startTicks: Int64) throws {
-        let startFrames = (startTicks * PCMAudioContract.sampleRate) / 90_000
-        position = max(0, startFrames)
-        framesToDrop = max(0, -startFrames)
-        var description = AudioStreamBasicDescription(
-            mSampleRate: Float64(PCMAudioContract.sampleRate),
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
-            mBytesPerPacket: UInt32(PCMAudioContract.bytesPerFrame),
-            mFramesPerPacket: 1,
-            mBytesPerFrame: UInt32(PCMAudioContract.bytesPerFrame),
-            mChannelsPerFrame: UInt32(PCMAudioContract.channelCount),
-            mBitsPerChannel: 16,
-            mReserved: 0
-        )
-        var layout = AudioChannelLayout()
-        layout.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo
-        var formatDescription: CMAudioFormatDescription?
-        let status = CMAudioFormatDescriptionCreate(
-            allocator: kCFAllocatorDefault,
-            asbd: &description,
-            layoutSize: MemoryLayout<AudioChannelLayout>.size,
-            layout: &layout,
-            magicCookieSize: 0,
-            magicCookie: nil,
-            extensions: nil,
-            formatDescriptionOut: &formatDescription
-        )
-        guard status == noErr, let formatDescription else {
-            throw EncoderFailure.writer("Failed to describe the PCM audio input.")
-        }
-        self.formatDescription = formatDescription
-        let layoutData = withUnsafeBytes(of: &layout) { Data($0) }
-        input = AVAssetWriterInput(
-            mediaType: .audio,
-            outputSettings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: Double(PCMAudioContract.sampleRate),
-                AVNumberOfChannelsKey: PCMAudioContract.channelCount,
-                AVEncoderBitRateKey: PCMAudioContract.aacBitRate,
-                AVChannelLayoutKey: layoutData,
-            ]
-        )
-        input.expectsMediaDataInRealTime = false
-        source = PCMAudioSource(path: path)
-    }
-
-    /// Appends available audio presented before `limit` while the writer accepts it.
-    func pump(upTo limit: CMTime) throws {
-        guard !isFinished else {
-            return
-        }
-        let limitFrame = CMTimeConvertScale(limit, timescale: CMTimeScale(PCMAudioContract.sampleRate), method: .roundTowardNegativeInfinity).value
-        while framesToDrop > 0 {
-            let (data, ended) = try source.take(maximumFrames: min(framesToDrop, 65_536))
-            framesToDrop -= Int64(data.count / PCMAudioContract.bytesPerFrame)
-            if ended {
-                finish()
-                return
-            }
-            if data.isEmpty {
-                return
-            }
-        }
-        while position < limitFrame, input.isReadyForMoreMediaData {
-            let wanted = min(limitFrame - position, PCMAudioContract.maximumFramesPerSampleBuffer)
-            let (data, ended) = try source.take(maximumFrames: wanted)
-            if !data.isEmpty {
-                try append(data)
-            }
-            if ended {
-                finish()
-                return
-            }
-            if data.isEmpty {
-                return
-            }
-        }
-    }
-
-    /// Waits for audio through the end of video, then closes the input. Audio that
-    /// extends beyond the final video frame is discarded.
-    func finish(at end: CMTime, cancellationFlag: CancellationFlag) async throws {
-        let endFrame = CMTimeConvertScale(end, timescale: CMTimeScale(PCMAudioContract.sampleRate), method: .roundTowardNegativeInfinity).value
-        while !isFinished, position < endFrame {
-            if cancellationFlag.isRequested || Task.isCancelled {
-                throw EncoderFailure.cancelled
-            }
-            try pump(upTo: end)
-            if !isFinished, position < endFrame {
-                try await Task.sleep(for: .milliseconds(2))
-            }
-        }
-        finish()
-        source.discardRemaining()
-    }
-
-    private func finish() {
-        guard !isFinished else {
-            return
-        }
-        isFinished = true
-        input.markAsFinished()
-    }
-
-    private func append(_ data: Data) throws {
-        let frameCount = data.count / PCMAudioContract.bytesPerFrame
-        var blockBuffer: CMBlockBuffer?
-        var status = CMBlockBufferCreateWithMemoryBlock(
-            allocator: kCFAllocatorDefault,
-            memoryBlock: nil,
-            blockLength: data.count,
-            blockAllocator: kCFAllocatorDefault,
-            customBlockSource: nil,
-            offsetToData: 0,
-            dataLength: data.count,
-            flags: kCMBlockBufferAssureMemoryNowFlag,
-            blockBufferOut: &blockBuffer
-        )
-        guard status == kCMBlockBufferNoErr, let blockBuffer else {
-            throw EncoderFailure.writer("Failed to allocate a PCM audio buffer.")
-        }
-        status = data.withUnsafeBytes { bytes in
-            CMBlockBufferReplaceDataBytes(
-                with: bytes.baseAddress!,
-                blockBuffer: blockBuffer,
-                offsetIntoDestination: 0,
-                dataLength: data.count
-            )
-        }
-        guard status == kCMBlockBufferNoErr else {
-            throw EncoderFailure.writer("Failed to copy PCM audio samples.")
-        }
-        var sampleBuffer: CMSampleBuffer?
-        status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
-            allocator: kCFAllocatorDefault,
-            dataBuffer: blockBuffer,
-            formatDescription: formatDescription,
-            sampleCount: frameCount,
-            presentationTimeStamp: CMTime(value: position, timescale: CMTimeScale(PCMAudioContract.sampleRate)),
-            packetDescriptions: nil,
-            sampleBufferOut: &sampleBuffer
-        )
-        guard status == noErr, let sampleBuffer else {
-            throw EncoderFailure.writer("Failed to create a PCM audio sample buffer.")
-        }
-        guard input.append(sampleBuffer) else {
-            throw EncoderFailure.writer("The writer rejected PCM audio samples.")
-        }
-        if firstPresentationFrame == nil {
-            firstPresentationFrame = position
-        }
-        position += Int64(frameCount)
-        appendedFrames += Int64(frameCount)
-    }
-}
-
-private func makeHLSAssetWriter(
-    segmentDurationSeconds: Double,
-    delegate: AVAssetWriterDelegate
-) -> AVAssetWriter {
-    let writer = AVAssetWriter(contentType: .mpeg4Movie)
-    writer.outputFileTypeProfile = .mpeg4AppleHLS
-    writer.preferredOutputSegmentInterval = CMTime(seconds: segmentDurationSeconds, preferredTimescale: 600)
-    writer.initialSegmentStartTime = .zero
-    writer.delegate = delegate
-    return writer
-}
-
 private func encode(
     options: EncoderOptions,
     cancellationFlag: CancellationFlag
-) async throws -> (Y4MHeader, Int, FrameUpscaleMetrics?, Int?, AudioSummary?) {
+) async throws -> (Y4MHeader, Int, FrameUpscaleMetrics?) {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         throw EncoderFailure.unsupported("This Mac does not report stereo MV-HEVC encode support.")
     }
@@ -1190,34 +648,23 @@ private func encode(
     }
     let header = try Y4MHeader.parse(headerLine)
     let fileManager = FileManager.default
-    let hlsOutputDirectory = try options.hlsDirectoryURL.map {
-        try HLSOutputDirectory(directoryURL: $0, overwrite: options.overwrite)
-    }
-    let partialURL: URL?
-    if let outputURL = options.outputURL {
-        let outputExists = fileManager.fileExists(atPath: outputURL.path)
-        if outputExists {
-            guard options.overwrite else {
-                throw EncoderFailure.invalidArguments("Output already exists; pass --overwrite to replace it.")
-            }
+    let outputURL = options.outputURL
+    if fileManager.fileExists(atPath: outputURL.path) {
+        guard options.overwrite else {
+            throw EncoderFailure.invalidArguments("Output already exists; pass --overwrite to replace it.")
         }
-        try fileManager.createDirectory(
-            at: outputURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        partialURL = outputURL.deletingLastPathComponent().appendingPathComponent(
-            ".\(outputURL.lastPathComponent).partial-\(UUID().uuidString)"
-        )
-    } else {
-        partialURL = nil
     }
+    try fileManager.createDirectory(
+        at: outputURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    let partialURL = outputURL.deletingLastPathComponent().appendingPathComponent(
+        ".\(outputURL.lastPathComponent).partial-\(UUID().uuidString)"
+    )
     var completed = false
     defer {
         if !completed {
-            if let partialURL {
-                try? fileManager.removeItem(at: partialURL)
-            }
-            hlsOutputDirectory?.discard()
+            try? fileManager.removeItem(at: partialURL)
         }
     }
 
@@ -1228,35 +675,13 @@ private func encode(
         try StereoFrameUpscaler(mode: $0, inputWidth: header.eyeWidth, inputHeight: header.frameHeight)
     }
     let outputSettings = try makeOutputSettings(options: options, header: header)
-    let hlsOutputDelegate = options.hlsDirectoryURL.map {
-        HLSOutputDelegate(
-            directoryURL: $0,
-            preferredSegmentDurationSeconds: options.hlsSegmentDurationSeconds!
-        )
-    }
-    let writer: AVAssetWriter
-    if let hlsOutputDelegate, let hlsSegmentDurationSeconds = options.hlsSegmentDurationSeconds {
-        writer = makeHLSAssetWriter(segmentDurationSeconds: hlsSegmentDurationSeconds, delegate: hlsOutputDelegate)
-    } else if let partialURL {
-        writer = try AVAssetWriter(outputURL: partialURL, fileType: .mov)
-    } else {
-        throw EncoderFailure.writer("No output writer was configured.")
-    }
+    let writer = try AVAssetWriter(outputURL: partialURL, fileType: .mov)
     guard writer.canApply(outputSettings: outputSettings, forMediaType: .video) else {
         throw EncoderFailure.unsupported("The MV-HEVC output settings are not supported on this Mac.")
     }
     let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: outputSettings)
     writerInput.expectsMediaDataInRealTime = false
     let receiver = writer.inputTaggedPixelBufferGroupReceiver(for: writerInput, pixelBufferAttributes: nil)
-    let audioAppender = try options.audioPCMPath.map {
-        try PCMAudioAppender(path: $0, startTicks: options.audioStartTicks)
-    }
-    if let audioAppender {
-        guard writer.canAdd(audioAppender.input) else {
-            throw EncoderFailure.unsupported("The AAC audio output settings are not supported on this Mac.")
-        }
-        writer.add(audioAppender.input)
-    }
 
     do {
         try writer.start()
@@ -1288,19 +713,10 @@ private func encode(
                 value: CMTimeValue(frameCount) * CMTimeValue(header.frameRateDenominator),
                 timescale: CMTimeScale(header.frameRateNumerator)
             )
-            let audioLimit = CMTime(
-                value: CMTimeValue(frameCount + 1) * CMTimeValue(header.frameRateDenominator),
-                timescale: CMTimeScale(header.frameRateNumerator)
-            )
-            try audioAppender?.pump(upTo: audioLimit)
 
             while try !receiver.appendImmediately(taggedBuffers, with: presentationTime) {
                 if cancellationFlag.isRequested || Task.isCancelled {
                     throw EncoderFailure.cancelled
-                }
-                try audioAppender?.pump(upTo: audioLimit)
-                if let hlsOutputDelegate {
-                    try hlsOutputDelegate.throwIfFailed()
                 }
                 if writer.status == .failed {
                     throw writerFailure(writer, fallback: "MV-HEVC writer failed while waiting for input capacity.")
@@ -1327,38 +743,16 @@ private func encode(
         }
 
         receiver.finish()
-        var audioSummary: AudioSummary?
-        if let audioAppender {
-            let videoEnd = CMTime(
-                value: CMTimeValue(frameCount) * CMTimeValue(header.frameRateDenominator),
-                timescale: CMTimeScale(header.frameRateNumerator)
-            )
-            try await audioAppender.finish(at: videoEnd, cancellationFlag: cancellationFlag)
-            audioSummary = AudioSummary(
-                appendedFrames: audioAppender.appendedFrames,
-                firstPresentationFrame: audioAppender.firstPresentationFrame
-            )
-        }
         await writer.finishWriting()
         guard writer.status == .completed else {
             throw writerFailure(writer, fallback: "MV-HEVC writer did not complete successfully.")
-        }
-        if let hlsOutputDelegate, let hlsOutputDirectory {
-            try hlsOutputDelegate.throwIfFailed()
-            let hlsSegmentCount = try hlsOutputDelegate.finalizePlaylist()
-            completed = true
-            hlsOutputDirectory.complete()
-            return (header, frameCount, upscaler?.metrics, hlsSegmentCount, audioSummary)
-        }
-        guard let partialURL, let outputURL = options.outputURL else {
-            throw EncoderFailure.writer("MOV output writer was not configured.")
         }
         if !options.overwrite, fileManager.fileExists(atPath: outputURL.path) {
             throw EncoderFailure.writer("Output appeared while encoding; refusing to replace it without --overwrite.")
         }
         try atomicallyRename(partialURL, to: outputURL)
         completed = true
-        return (header, frameCount, upscaler?.metrics, nil, nil)
+        return (header, frameCount, upscaler?.metrics)
     } catch {
         writer.cancelWriting()
         throw error
@@ -1378,7 +772,6 @@ private struct MVHEVCEncoder {
                 let pixelTransferUpscaleSupported = try isStereoMVHEVCOutputConfigurationSupported(
                     upscaleMode: .pixelTransfer
                 )
-                let hlsSupported = try isStereoMVHEVCOutputConfigurationSupported(hlsOutput: true)
                 let metalFXDeviceSupported = metalFXSpatialScalingSupported()
                 let metalFXWriterSupported = try isStereoMVHEVCOutputConfigurationSupported(
                     upscaleMode: .metalFX
@@ -1389,7 +782,6 @@ private struct MVHEVCEncoder {
                         "metalfx_2x_mv_hevc_supported": metalFXUpscaleSupported,
                         "schema_version": 1,
                         "stereo_mv_hevc_encode_supported": supported,
-                        "segmented_hls_mv_hevc_encode_supported": hlsSupported,
                         "metalfx_spatial_scaling_supported": metalFXDeviceSupported,
                         "pixel_transfer_2x_mv_hevc_supported": pixelTransferUpscaleSupported,
                     ],
@@ -1402,7 +794,7 @@ private struct MVHEVCEncoder {
                 return
             }
             let options = try EncoderOptions.parse(arguments: arguments)
-            let (header, frameCount, upscaleMetrics, hlsSegmentCount, audioSummary) = try await encode(
+            let (header, frameCount, upscaleMetrics) = try await encode(
                 options: options,
                 cancellationFlag: cancellationFlag
             )
@@ -1414,7 +806,7 @@ private struct MVHEVCEncoder {
                 "frame_rate_denominator": header.frameRateDenominator,
                 "frame_rate_numerator": header.frameRateNumerator,
                 "has_camera_baseline": options.baselineMillimeters != nil,
-                "output_mode": options.isHLSOutput ? "hls" : "mov",
+                "output_mode": "mov",
                 "schema_version": 1,
                 "swapped_eyes": options.swapEyes,
             ]
@@ -1442,20 +834,6 @@ private struct MVHEVCEncoder {
             } else {
                 summary["bitrate_mbps"] = options.bitrateMbps
                 summary["rate_control"] = "average_bitrate"
-            }
-            if let audioSummary {
-                summary["audio_codec"] = "aac"
-                summary["audio_bitrate"] = PCMAudioContract.aacBitRate
-                summary["audio_channel_count"] = PCMAudioContract.channelCount
-                summary["audio_sample_rate"] = PCMAudioContract.sampleRate
-                summary["audio_frame_count"] = audioSummary.appendedFrames
-                if let firstPresentationFrame = audioSummary.firstPresentationFrame {
-                    summary["audio_first_presentation_frame"] = firstPresentationFrame
-                }
-            }
-            if let hlsSegmentCount, let hlsSegmentDurationSeconds = options.hlsSegmentDurationSeconds {
-                summary["hls_segment_count"] = hlsSegmentCount
-                summary["hls_segment_duration_seconds"] = hlsSegmentDurationSeconds
             }
             let data = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])
             print(String(decoding: data, as: UTF8.self))

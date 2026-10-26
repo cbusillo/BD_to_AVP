@@ -13,28 +13,6 @@ final class ResumeStoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(try Data(contentsOf: storageURL).count, 64 * 1024)
     }
 
-    func testPositionSavedUnderAnOldKeyMovesToTheNewKeyAndPersists() throws {
-        let storageURL = temporaryURL()
-        let store = ResumeStore(storageURL: storageURL)
-        try store.setResumeTime(42, for: "shared:old")
-
-        try store.adoptPosition(from: "shared:old", to: "shared-file:new")
-
-        let reloaded = ResumeStore(storageURL: storageURL)
-        XCTAssertEqual(reloaded.resumeTime(for: "shared-file:new"), 42)
-        XCTAssertNil(reloaded.resumeTime(for: "shared:old"))
-    }
-
-    func testAdoptingAnOldPositionNeverReplacesANewerOne() throws {
-        let store = ResumeStore(storageURL: temporaryURL())
-        try store.setResumeTime(42, for: "shared:old")
-        try store.setResumeTime(90, for: "shared-file:new")
-
-        try store.adoptPosition(from: "shared:old", to: "shared-file:new")
-
-        XCTAssertEqual(store.resumeTime(for: "shared-file:new"), 90)
-    }
-
     func testABlurayTitleInALocationResumesWhereItStoppedAfterARelaunch() throws {
         let storageURL = temporaryURL()
         let location = UUID()

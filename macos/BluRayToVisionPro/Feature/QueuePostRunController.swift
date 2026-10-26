@@ -18,7 +18,7 @@ final class QueuePostRunController: ObservableObject {
 
     /// Called when a countdown starts, so a window, notification, or helper can show it.
     var countdownStartedHandler: (@MainActor (QueuePostRunCountdown) -> Void)?
-    /// Work outside the queue that keeps the Mac on, such as a preview or Movie Sharing.
+    /// Work outside the queue that keeps the Mac on, such as a preview.
     var otherWork: @MainActor () -> [QueuePostRunOtherWork] = { [] }
 
     let idleThreshold: TimeInterval

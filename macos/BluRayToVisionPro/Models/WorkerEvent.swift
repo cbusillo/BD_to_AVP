@@ -427,110 +427,6 @@ extension WorkerDecision {
     }
 }
 
-struct LiveSourceArtifact: Decodable, Equatable {
-    let kind: String
-    let manifestPath: String
-    let videoStreamID: String
-    let audioStreamID: String
-
-    enum CodingKeys: String, CodingKey {
-        case kind
-        case manifestPath = "manifest_path"
-        case videoStreamID = "video_stream_id"
-        case audioStreamID = "audio_stream_id"
-    }
-}
-
-struct LiveSourceResult: Decodable, Equatable {
-    let manifestPath: String
-    let videoStreamID: String
-    let audioStreamID: String
-    let earliestAvailableTicks: Int64
-    let latestAvailableTicks: Int64
-    let retainedGOPs: Int
-
-    enum CodingKeys: String, CodingKey {
-        case manifestPath = "manifest_path"
-        case videoStreamID = "video_stream_id"
-        case audioStreamID = "audio_stream_id"
-        case earliestAvailableTicks = "earliest_available_ticks"
-        case latestAvailableTicks = "latest_available_ticks"
-        case retainedGOPs = "retained_gops"
-    }
-}
-
-struct LiveHLSArtifact: Decodable, Equatable {
-    let kind: String
-    let manifestPath: String
-    let playlistPath: String
-
-    enum CodingKeys: String, CodingKey {
-        case kind
-        case manifestPath = "manifest_path"
-        case playlistPath = "playlist_path"
-    }
-}
-
-struct LiveHLSResult: Decodable, Equatable {
-    let manifestPath: String
-    let playlistPath: String
-    let earliestAvailableMicroseconds: Int64
-    let latestAvailableMicroseconds: Int64
-    let retainedSegments: Int
-    let publishedSegments: Int
-    let peakRetainedBytes: Int64
-    let peakRetiredBytes: Int64
-    let graceHolds: Int
-    let heldSeconds: Double
-    let viewerHeldSeconds: Double?
-
-    enum CodingKeys: String, CodingKey {
-        case manifestPath = "manifest_path"
-        case playlistPath = "playlist_path"
-        case earliestAvailableMicroseconds = "earliest_available_microseconds"
-        case latestAvailableMicroseconds = "latest_available_microseconds"
-        case retainedSegments = "retained_segments"
-        case publishedSegments = "published_segments"
-        case peakRetainedBytes = "peak_retained_bytes"
-        case peakRetiredBytes = "peak_retired_bytes"
-        case graceHolds = "grace_holds"
-        case heldSeconds = "held_seconds"
-        case viewerHeldSeconds = "viewer_held_seconds"
-    }
-}
-
-struct LiveTitleInspection: Decodable, Equatable {
-    struct AudioStream: Decodable, Equatable {
-        let pid: Int
-        let codingType: Int
-        let format: Int?
-        let rate: Int?
-        let language: String?
-
-        enum CodingKeys: String, CodingKey {
-            case pid
-            case codingType = "coding_type"
-            case format
-            case rate
-            case language
-        }
-    }
-
-    let eligible: Bool
-    let unsupportedReason: String?
-    let playlist: Int?
-    let durationSeconds: Double?
-    let audioStreams: [AudioStream]
-
-    enum CodingKeys: String, CodingKey {
-        case eligible
-        case unsupportedReason = "unsupported_reason"
-        case playlist
-        case durationSeconds = "duration_seconds"
-        case audioStreams = "audio_streams"
-    }
-}
-
 struct WorkerEventPayload: Decodable, Equatable {
     let workerVersion: String?
     let processGroupID: Int32?
@@ -544,12 +440,7 @@ struct WorkerEventPayload: Decodable, Equatable {
     let result: SourceInspection?
     let conversionResult: ConversionResult?
     let artifact: PreviewArtifact?
-    let liveSource: LiveSourceArtifact?
     let previewResult: PreviewArtifact?
-    let liveSourceResult: LiveSourceResult?
-    let liveTitleResult: LiveTitleInspection?
-    let liveHLS: LiveHLSArtifact?
-    let liveHLSResult: LiveHLSResult?
     let error: WorkerFailure?
     let decision: WorkerDecision?
     let observabilityEvent: ObservabilityEvent?
@@ -571,12 +462,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         result: SourceInspection? = nil,
         conversionResult: ConversionResult? = nil,
         artifact: PreviewArtifact? = nil,
-        liveSource: LiveSourceArtifact? = nil,
         previewResult: PreviewArtifact? = nil,
-        liveSourceResult: LiveSourceResult? = nil,
-        liveTitleResult: LiveTitleInspection? = nil,
-        liveHLS: LiveHLSArtifact? = nil,
-        liveHLSResult: LiveHLSResult? = nil,
         error: WorkerFailure? = nil,
         decision: WorkerDecision? = nil,
         observabilityEvent: ObservabilityEvent? = nil,
@@ -597,12 +483,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.result = result
         self.conversionResult = conversionResult
         self.artifact = artifact
-        self.liveSource = liveSource
         self.previewResult = previewResult
-        self.liveSourceResult = liveSourceResult
-        self.liveTitleResult = liveTitleResult
-        self.liveHLS = liveHLS
-        self.liveHLSResult = liveHLSResult
         self.error = error
         self.decision = decision
         self.observabilityEvent = observabilityEvent
@@ -631,12 +512,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         result = try container.decodeIfPresent(SourceInspection.self, forKey: .result)
         conversionResult = try container.decodeIfPresent(ConversionResult.self, forKey: .conversionResult)
         artifact = try container.decodeIfPresent(PreviewArtifact.self, forKey: .artifact)
-        liveSource = try container.decodeIfPresent(LiveSourceArtifact.self, forKey: .liveSource)
         previewResult = try container.decodeIfPresent(PreviewArtifact.self, forKey: .previewResult)
-        liveSourceResult = try container.decodeIfPresent(LiveSourceResult.self, forKey: .liveSourceResult)
-        liveTitleResult = try container.decodeIfPresent(LiveTitleInspection.self, forKey: .liveTitleResult)
-        liveHLS = try container.decodeIfPresent(LiveHLSArtifact.self, forKey: .liveHLS)
-        liveHLSResult = try container.decodeIfPresent(LiveHLSResult.self, forKey: .liveHLSResult)
         error = try container.decodeIfPresent(WorkerFailure.self, forKey: .error)
         decision = try container.decodeIfPresent(WorkerDecision.self, forKey: .decision)
         observabilityEvent = try container.decodeIfPresent(ObservabilityEvent.self, forKey: .observabilityEvent)
@@ -668,12 +544,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         case result
         case conversionResult = "conversion_result"
         case artifact
-        case liveSource = "live_source"
         case previewResult = "preview_result"
-        case liveSourceResult = "live_source_result"
-        case liveTitleResult = "live_title_result"
-        case liveHLS = "live_hls"
-        case liveHLSResult = "live_hls_result"
         case error
         case decision
         case observabilityEvent = "event"

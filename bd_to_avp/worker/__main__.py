@@ -23,7 +23,6 @@ from bd_to_avp.worker.protocol import (
     WorkerEventTransportError,
     WorkerEventType,
     WorkerObservabilitySink,
-    WorkerOperation,
     WorkerProtocolError,
     bounded_detail,
 )
@@ -140,7 +139,6 @@ def _run_worker(
             cancellation=CancellationToken(owner.cancellation_event),
             diagnostic_observer=diagnostic_relay.emit,
             process_controls=job_controls,
-            viewer_position=job_controls.viewer_position_microseconds,
         )
         activity = WorkerActivityReporter(emitter, run_context)
         if job.operation.value == "inspect_source":
@@ -174,15 +172,11 @@ def _run_worker(
 
         if owner.transport_failure_event.is_set():
             raise WorkerEventTransportError("Worker event transport failed")
-        if job.operation not in {WorkerOperation.START_LIVE_SOURCE, WorkerOperation.START_LIVE_HLS}:
-            owner.check_cancelled()
+        owner.check_cancelled()
         result_key = {
             "convert_source": "conversion_result",
             "rip_source": "conversion_result",
             "preview_source": "preview_result",
-            "start_live_source": "live_source_result",
-            "start_live_hls": "live_hls_result",
-            "inspect_live_title": "live_title_result",
         }.get(job.operation.value, "result")
         emitter.emit(WorkerEventType.JOB_COMPLETED, {result_key: result})
         return 0

@@ -196,8 +196,7 @@ final class QueuePostRunTests: XCTestCase {
             ("conversion", { $0.queue.hasActiveConversion = true }),
             ("recent input", { $0.idleTime = 30 }),
             ("unknown idle", { $0.idleTime = nil }),
-            ("movie sharing", { $0.controller.otherWork = { [.movieSharing] } }),
-            ("relay", { $0.controller.otherWork = { [.relaySession] } }),
+            ("preview", { $0.controller.otherWork = { [.preview] } }),
             ("permission", { $0.performer.permissionResult = .denied }),
         ]
         for action in [QueuePostRunAction.sleep, .shutDown] {
@@ -280,6 +279,29 @@ final class QueuePostRunTests: XCTestCase {
         XCTAssertNil(reloaded.loadErrorMessage)
         XCTAssertEqual(reloaded.runPolicy, store.runPolicy)
         XCTAssertEqual(reloaded.postRunActivity, store.postRunActivity)
+    }
+
+    @MainActor
+    func testAnActivityReasonThisBuildNoLongerHasStillLoads() throws {
+        let fileURL = try makeDirectory().appendingPathComponent("queue.automation.json")
+        let store = QueueAutomationStore(fileURL: fileURL)
+        try store.recordPostRunActivity(QueuePostRunActivity(
+            occurredAt: Date(timeIntervalSince1970: 1_800_000_000),
+            action: .sleep,
+            kind: .skipped,
+            reason: .otherWork(.preview)
+        ))
+        var file = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any])
+        var activity = try XCTUnwrap(file["postRunActivity"] as? [[String: Any]])
+        activity[0]["reason"] = ["otherWork": ["_0": "retiredWork"]]
+        file["postRunActivity"] = activity
+        try JSONSerialization.data(withJSONObject: file).write(to: fileURL)
+
+        let reloaded = QueueAutomationStore(fileURL: fileURL)
+        XCTAssertNil(reloaded.loadErrorMessage)
+        XCTAssertFalse(reloaded.writesBlocked)
+        XCTAssertEqual(reloaded.postRunActivity.map(\.kind), [.skipped])
+        XCTAssertNil(reloaded.postRunActivity.first?.reason)
     }
 
     @MainActor

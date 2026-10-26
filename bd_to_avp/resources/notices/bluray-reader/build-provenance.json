@@ -1,6 +1,6 @@
 {
   "architecture": "arm64",
-  "builder": "scripts/build_ssif_probe_macos.py",
+  "builder": "scripts/build_bluray_reader_macos.py",
   "install_names": {
     "libbluray": "@rpath/libbluray.3.dylib",
     "libudfread": "@rpath/libudfread.3.dylib"
@@ -42,7 +42,7 @@
   "minimum_macos": "14.0",
   "ninja_version": "1.13.2.git.kitware.jobserver-pipe-1",
   "platform": "macOS arm64",
-  "probe_compile_flags": [
+  "reader_compile_flags": [
     "-std=c11",
     "-O2",
     "-g0",
@@ -52,7 +52,7 @@
     "-arch",
     "arm64"
   ],
-  "probe_rpath": "@loader_path/../lib",
+  "reader_rpath": "@loader_path/../lib",
   "schema_version": 1,
   "source_archives": [
     {
@@ -84,7 +84,6 @@
   ],
   "unsigned_checksums": {
     "bd_to_avp/bin/bd3d_reader": "8fcc1265ec5199986aab92231702957548afc084ee54c876243e2e7e85ae1543",
-    "bd_to_avp/bin/ssif_probe": "15b66da8cff7d2a13119d20ba072fdf704327458b969cfa1fe8a55c6e08bf849",
     "bd_to_avp/lib/libbluray.3.dylib": "7dab117e64e637eeb95a59b540584cc3ab62eab66b7e82302bb4f507b3605075",
     "bd_to_avp/lib/libudfread.3.dylib": "9bc270075be50fb9644d01d06a6bff501125f51343d2f434410a745a2da39150"
   }

@@ -218,52 +218,15 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertNil(scrubState.finish())
     }
 
-    func testTimelineSpansTheKnownTitleLengthWhileALiveStreamGrows() {
-        let early = PlaybackTimeline(titleDuration: 5_400, playerDuration: 12, loadedRange: 0 ... 12)
-        let later = PlaybackTimeline(titleDuration: 5_400, playerDuration: 600, loadedRange: 0 ... 600)
-
-        XCTAssertEqual(early.duration, 5_400)
-        XCTAssertEqual(later.duration, 5_400)
-        XCTAssertEqual(early.loadedEnd, 12)
-        XCTAssertEqual(later.loadedEnd, 600)
-    }
-
-    func testTimelineShowsTheRetainedLiveWindowAsTheLoadedRange() {
-        let timeline = PlaybackTimeline(titleDuration: 1_000, playerDuration: 400, loadedRange: 100 ... 400)
-
-        XCTAssertEqual(timeline.loadedStart, 100)
-        XCTAssertEqual(timeline.loadedEnd, 400)
-        XCTAssertEqual(timeline.loadedStartFraction, 0.1, accuracy: 0.0001)
-        XCTAssertEqual(timeline.loadedEndFraction, 0.4, accuracy: 0.0001)
-    }
-
-    func testTimelineUsesTheRealLengthOnceTheStreamIsFinal() {
-        let timeline = PlaybackTimeline(
-            titleDuration: 5_400,
-            playerDuration: 5_390,
-            loadedRange: 0 ... 5_390,
-            isFinal: true
-        )
-
-        XCTAssertEqual(timeline.duration, 5_390)
-        XCTAssertEqual(timeline.loadedEnd, 5_390)
-    }
-
-    func testTimelineFallsBackToTheLoadedLengthWhenTheTitleLengthIsUnknown() {
-        let timeline = PlaybackTimeline(titleDuration: nil, playerDuration: 30, loadedRange: 0 ... 30)
+    func testTimelineSpansTheLoadedLength() {
+        let timeline = PlaybackTimeline(playerDuration: 30, loadedRange: 0 ... 30)
 
         XCTAssertEqual(timeline.duration, 30)
         XCTAssertEqual(timeline.loadedEnd, 30)
     }
 
-    func testTimelineGrowsPastAShortTitleLengthRatherThanHidingPlayableTime() {
-        let timeline = PlaybackTimeline(titleDuration: 100, playerDuration: 120, loadedRange: 0 ... 120)
-
-        XCTAssertEqual(timeline.duration, 120)
-    }
-
     func testTimelineForACompletedMovieSpansItsDurationWithTheBufferedRangeLoaded() {
-        let timeline = PlaybackTimeline(titleDuration: nil, playerDuration: 5_640, loadedRange: 60 ... 90)
+        let timeline = PlaybackTimeline(playerDuration: 5_640, loadedRange: 60 ... 90)
 
         XCTAssertEqual(timeline.duration, 5_640)
         XCTAssertEqual(timeline.loadedStart, 60)
@@ -271,7 +234,7 @@ final class PlaybackPresentationTests: XCTestCase {
     }
 
     func testTimelineMapsBetweenTimeAndBarPositionWithinItsSpan() {
-        let timeline = PlaybackTimeline(titleDuration: 200, playerDuration: 50, loadedRange: 0 ... 50)
+        let timeline = PlaybackTimeline(playerDuration: 200, loadedRange: 0 ... 50)
 
         XCTAssertEqual(timeline.fraction(of: 50), 0.25, accuracy: 0.0001)
         XCTAssertEqual(timeline.fraction(of: 400), 1)
@@ -281,7 +244,7 @@ final class PlaybackPresentationTests: XCTestCase {
     }
 
     func testTimelineIsEmptyBeforeAnyLengthIsKnown() {
-        let timeline = PlaybackTimeline(titleDuration: nil, playerDuration: 0, loadedRange: nil)
+        let timeline = PlaybackTimeline(playerDuration: 0, loadedRange: nil)
 
         XCTAssertEqual(timeline.duration, 0)
         XCTAssertEqual(timeline.fraction(of: 10), 0)
@@ -688,33 +651,6 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertTrue(ResumeWritePolicy.isPeriodicSaveDue(lastSaveUptime: 100, now: 100 + interval))
     }
 
-    func testLiveTitleSaysItStartsOverOnlyWhenTheWearerWatchedPartOfItBefore() throws {
-        let minimum = ResumeWritePolicy.liveResumeNoticeMinimumPosition
-
-        XCTAssertNil(ResumeWritePolicy.liveResumeNotice(savedPosition: minimum / 2))
-        let notice = try XCTUnwrap(ResumeWritePolicy.liveResumeNotice(savedPosition: 3_725))
-        XCTAssertTrue(notice.contains(PlaybackTimeFormatter.string(for: 3_725)))
-    }
-
-    func testSharedMovieResumesUnderTheMacsStableKeyAndFallsBackForOlderMacs() throws {
-        let id = String(repeating: "a", count: 64)
-        let revision = String(repeating: "b", count: 64)
-        let stableKey = String(repeating: "c", count: 64)
-        let fromNewMac = SharedMovie(id: id, rootID: UUID().uuidString, fileName: "Movie.mov", byteCount: 10, revision: revision, resumeKey: stableKey)
-        // The same file after its folder was removed and added again: new approval, new id and revision.
-        let afterReAdd = SharedMovie(
-            id: String(repeating: "d", count: 64), rootID: UUID().uuidString, fileName: "Movie.mov",
-            byteCount: 10, revision: String(repeating: "e", count: 64), resumeKey: stableKey
-        )
-        XCTAssertEqual(fromNewMac.resumeID, afterReAdd.resumeID)
-
-        let olderMacJSON = Data(#"{"id":"\#(id)","rootID":"\#(UUID().uuidString)","fileName":"Movie.mov","byteCount":10,"revision":"\#(revision)"}"#.utf8)
-        let fromOlderMac = try JSONDecoder().decode(SharedMovie.self, from: olderMacJSON)
-        XCTAssertNoThrow(try fromOlderMac.validate())
-        XCTAssertEqual(fromOlderMac.resumeID, fromOlderMac.legacyResumeID)
-        XCTAssertNotEqual(fromNewMac.resumeID, fromNewMac.legacyResumeID)
-    }
-
     func testResumePolicySkipsInvalidPosition() {
         XCTAssertEqual(ResumeWritePolicy.decision(currentTime: .infinity, duration: 120), .skip)
     }
@@ -934,226 +870,6 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(session.duration, 0)
     }
 
-    @MainActor
-    func testExpiredRelayRefreshClosesLoopbackAndPreservesFailureForRetry() async throws {
-        let fixture = try await makeRelayPlaybackFixture()
-        let session = MVHEVCPlayerSession()
-        session.installRelayPlaybackResources(
-            source: fixture.source,
-            transport: fixture.transport,
-            item: try makePlayableRelayTestItem(),
-            mediaItem: relayItem(for: fixture.source),
-            observeItemStatus: false,
-            startRefreshLoop: false
-        )
-
-        let reachableSession = URLSession(configuration: .ephemeral)
-        defer { reachableSession.invalidateAndCancel() }
-        let (_, reachableResponse) = try await reachableSession.data(from: fixture.loopbackURL)
-        XCTAssertEqual((reachableResponse as? HTTPURLResponse)?.statusCode, 200)
-
-        await fixture.mode.set(.expired)
-        await session.refreshRelayWindowNow()
-
-        XCTAssertEqual(session.state, .failed)
-        XCTAssertNil(session.player.currentItem)
-        XCTAssertNil(session.playerItem)
-        XCTAssertTrue(session.isRelayPlayback)
-        XCTAssertEqual(
-            session.failureMessage,
-            "The relay session ended. Pair with the Mac again to continue."
-        )
-        XCTAssertEqual(session.relayTerminationEvent?.reason, .sessionEnded)
-
-        let closedConfiguration = URLSessionConfiguration.ephemeral
-        closedConfiguration.timeoutIntervalForRequest = 0.25
-        let closedSession = URLSession(configuration: closedConfiguration)
-        defer { closedSession.invalidateAndCancel() }
-        do {
-            _ = try await closedSession.data(from: fixture.loopbackURL)
-            XCTFail("Terminal relay cleanup must close its localhost listener")
-        } catch { }
-    }
-
-    @MainActor
-    func testRelayRefreshFailureBudgetResetsAfterSuccess() async throws {
-        let fixture = try await makeRelayPlaybackFixture(startLoopback: false)
-        let session = MVHEVCPlayerSession()
-        let item = try makePlayableRelayTestItem()
-        session.installRelayPlaybackResources(
-            source: fixture.source,
-            transport: fixture.transport,
-            item: item,
-            mediaItem: relayItem(for: fixture.source),
-            observeItemStatus: false,
-            startRefreshLoop: false
-        )
-
-        await fixture.mode.set(.unreachable)
-        await session.refreshRelayWindowNow()
-        await session.refreshRelayWindowNow()
-        XCTAssertNotEqual(session.state, .failed)
-        XCTAssertTrue(session.player.currentItem === item)
-
-        await fixture.mode.set(.success)
-        await session.refreshRelayWindowNow()
-        await fixture.mode.set(.unreachable)
-        await session.refreshRelayWindowNow()
-        await session.refreshRelayWindowNow()
-        XCTAssertNotEqual(session.state, .failed)
-
-        await session.refreshRelayWindowNow()
-        XCTAssertEqual(session.state, .failed)
-        XCTAssertNil(session.player.currentItem)
-        XCTAssertTrue(session.isRelayPlayback)
-        XCTAssertEqual(session.relayTerminationEvent?.reason, .serverUnreachable)
-    }
-
-    @MainActor
-    func testStaleRelayRefreshCompletionCannotFailFinishedSession() async throws {
-        let sessions = try await makePairedSessions(now: Date())
-        let transport = SuspendingRelayRefreshTransport()
-        let source = try RelayRemotePlaybackSource(
-            session: sessions.client,
-            serverBaseURL: URL(string: "http://relay.local:7431")!
-        )
-        let session = MVHEVCPlayerSession()
-        session.installRelayPlaybackResources(
-            source: source,
-            transport: transport,
-            item: try makePlayableRelayTestItem(),
-            mediaItem: relayItem(for: source),
-            observeItemStatus: false,
-            startRefreshLoop: false
-        )
-
-        let refresh = Task { await session.refreshRelayWindowNow() }
-        await transport.waitUntilRequested()
-        session.finish()
-        await transport.fail(with: .sessionExpired)
-        await refresh.value
-
-        XCTAssertEqual(session.state, .idle)
-        XCTAssertNil(session.failureMessage)
-        XCTAssertNil(session.relayTerminationEvent)
-        XCTAssertFalse(session.isRelayPlayback)
-    }
-
-    @MainActor
-    func testRelayPreparationRejectsInvalidAuthenticatedResponseAndRetainsRetryIdentity() async throws {
-        let sessions = try await makePairedSessions(now: Date())
-        let transport = FakeRelayTransport()
-        await transport.setHandler { request in
-            let body = Data("{}".utf8)
-            return (
-                body,
-                try makeAuthenticatedHTTPResponse(
-                    request,
-                    body: body,
-                    serverSession: sessions.server,
-                    authenticatedBody: Data("different".utf8)
-                )
-            )
-        }
-        let session = MVHEVCPlayerSession()
-
-        await session.prepareRelayPlayback(
-            RelayRemotePlaybackConfiguration(
-                session: sessions.client,
-                serverBaseURL: URL(string: "http://relay.local:7431")!,
-                serverName: "Test Relay",
-                transport: transport
-            )
-        )
-
-        XCTAssertEqual(session.state, .failed)
-        XCTAssertNil(session.player.currentItem)
-        XCTAssertNil(session.playerItem)
-        XCTAssertTrue(session.isRelayPlayback)
-        XCTAssertEqual(session.relayTerminationEvent?.reason, .rejected)
-        XCTAssertEqual(
-            session.relayTerminationEvent?.sessionID,
-            sessions.client.sessionID.rawValue
-        )
-    }
-
-    @MainActor
-    private func makeRelayPlaybackFixture(
-        startLoopback: Bool = true
-    ) async throws -> (
-        source: RelayRemotePlaybackSource,
-        loopbackURL: URL,
-        transport: FakeRelayTransport,
-        mode: RelayRefreshMode
-    ) {
-        let now = Date()
-        let sessions = try await makePairedSessions(now: now)
-        let mode = RelayRefreshMode()
-        let transport = FakeRelayTransport()
-        await transport.setHandler { request in
-            switch await mode.value {
-            case .expired:
-                throw RelayTransportError.sessionExpired
-            case .unreachable:
-                throw URLError(.cannotConnectToHost)
-            case .success:
-                let body: Data
-                if request.url?.path == RelayWireContract.playlistPath {
-                    body = Data("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-ENDLIST\n".utf8)
-                } else {
-                    body = try JSONEncoder().encode(
-                        try RelayPlaylistSnapshot(
-                            earliestPlayableTimeMilliseconds: 0,
-                            totalDurationMilliseconds: 2_000,
-                            isFinalized: false,
-                            segments: [
-                                try RelayPlaylistSegment(
-                                    sequenceNumber: 0,
-                                    startTimeMilliseconds: 0,
-                                    durationMilliseconds: 2_000,
-                                    resourceIdentifier: "segment-000.m4s"
-                                ),
-                            ]
-                        )
-                    )
-                }
-                return (
-                    body,
-                    try makeAuthenticatedHTTPResponse(request, body: body, serverSession: sessions.server)
-                )
-            }
-        }
-        var source = try RelayRemotePlaybackSource(
-            session: sessions.client,
-            serverBaseURL: URL(string: "http://relay.local:7431")!
-        )
-        let loopbackURL: URL
-        if startLoopback {
-            let (asset, _) = try await source.makeAssetAndLoader(transport: transport)
-            loopbackURL = asset.url
-        } else {
-            loopbackURL = URL(string: "http://127.0.0.1")!
-        }
-        return (source, loopbackURL, transport, mode)
-    }
-
-    private func makePlayableRelayTestItem() throws -> AVPlayerItem {
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RelayPlayerSessionTests")
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let check = try XCTUnwrap(BuiltInStereoChecks.install(destinationDirectory: destination).first)
-        return AVPlayerItem(url: check.url)
-    }
-
-    private func relayItem(for source: RelayRemotePlaybackSource) -> MediaItem {
-        MediaItem(
-            id: "relay:\(source.session.sessionID.rawValue)",
-            title: "Test Relay",
-            fileName: "live.m3u8",
-            format: .mvHEVC
-        )
-    }
-
     private func makePixelBuffer(width: Int, height: Int) throws -> CVMutablePixelBuffer {
         var attributes = CVPixelBufferCreationAttributes(
             pixelFormatType: CVPixelFormatType(rawValue: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
@@ -1228,32 +944,5 @@ final class PlaybackPresentationTests: XCTestCase {
         buffer.withUnsafeBuffer { pixelBuffer in
             CVBufferCopyAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey, nil) != nil
         }
-    }
-}
-
-private actor RelayRefreshMode {
-    enum Value { case success, expired, unreachable }
-    private(set) var value: Value = .success
-    func set(_ value: Value) { self.value = value }
-}
-
-private actor SuspendingRelayRefreshTransport: RelayTransport {
-    private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        for waiter in waiters { waiter.resume() }
-        waiters.removeAll()
-        return try await withCheckedThrowingContinuation { continuation = $0 }
-    }
-
-    func waitUntilRequested() async {
-        if continuation != nil { return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-
-    func fail(with error: RelayTransportError) {
-        continuation?.resume(throwing: error)
-        continuation = nil
     }
 }

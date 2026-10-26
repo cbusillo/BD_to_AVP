@@ -11,8 +11,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     weak var workCoordinator: AppWorkCoordinator?
     var observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
-    weak var relayHostController: RelayHostSessionController?
-    weak var movieSharingController: MovieSharingController?
     /// Queue automation lives outside any window so a later menu-bar helper can own it instead.
     weak var queueAutomationController: QueueAutomationController?
     var postRunCountdownPresenter: QueuePostRunCountdownPresenter?
@@ -47,11 +45,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             previewPresentationSmokeWindow = window
             window.orderFrontRegardless()
             return
-        }
-        if !Self.isUnitTestHost(environment: ProcessInfo.processInfo.environment) {
-            // No live stream survives a relaunch: start removing what a crash left. Sharing awaits
-            // this before it enables live services.
-            _ = LiveRelayStreamStarter.leftoverSweep
         }
         startQueueAutomationIfNeeded(arguments: arguments, environment: ProcessInfo.processInfo.environment)
         guard Self.isStartupSmoke(arguments: arguments) else {
@@ -109,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         environment[unitTestHomeEnvironmentKey] != nil || environment["XCTestConfigurationFilePath"] != nil
     }
 
-    /// Startup work that reaches the user's Keychain item and shared-folder bookmarks is for a person using the app.
+    /// Startup work such as watch folders and update checks is for a person using the app.
     nonisolated static func suppressesDefaultLaunch(arguments: [String], environment: [String: String]) -> Bool {
         isAutomationSmoke(arguments: arguments) || isUnitTestHost(environment: environment)
     }
@@ -146,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if allowManagedWindowClose || (!(workCoordinator?.hasActiveWorker ?? false) && !(relayHostController?.isSessionActive ?? false) && !(movieSharingController?.isSharing ?? false)) {
+        if allowManagedWindowClose || !(workCoordinator?.hasActiveWorker ?? false) {
             return originalWindowDelegate?.windowShouldClose?(sender) ?? true
         }
         if isStoppingForWindowClose {
@@ -161,8 +154,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         isStoppingForWindowClose = true
         Task {
             await workCoordinator?.stopForQuit()
-            await relayHostController?.stopForAppQuit()
-            await movieSharingController?.stopForAppQuit()
             allowManagedWindowClose = true
             sender.performClose(nil)
         }
@@ -180,11 +171,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         if isStoppingForTermination {
             return .terminateLater
         }
-        guard let workCoordinator, workCoordinator.hasActiveWorker || relayHostController?.isSessionActive == true || movieSharingController?.isSharing == true else {
+        guard let workCoordinator, workCoordinator.hasActiveWorker else {
             isStoppingForTermination = true
             Task {
-                await relayHostController?.stopForAppQuit()
-                await movieSharingController?.stopForAppQuit()
                 await flushObservabilityStoreWithDeadline()
                 sender.reply(toApplicationShouldTerminate: true)
             }
@@ -200,8 +189,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         isStoppingForTermination = true
         Task {
             await workCoordinator.stopForQuit()
-            await relayHostController?.stopForAppQuit()
-            await movieSharingController?.stopForAppQuit()
             await flushObservabilityStoreWithDeadline()
             sender.reply(toApplicationShouldTerminate: true)
         }

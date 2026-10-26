@@ -15,7 +15,7 @@ form. Do not open a public issue for a vulnerability.
 Include the app and version (Mac converter or Vision Pro player), the macOS
 or visionOS version, the impact, and the smallest steps that reproduce it.
 
-Do not send pairing codes, device identifiers, network addresses, disc keys,
+Do not send device identifiers, network addresses, disc keys,
 movie files, or other personal data. Use redacted or made-up values.
 
 This is a single-maintainer project. Reports are handled on a best-effort
@@ -25,8 +25,6 @@ basis, and I aim to reply within seven days.
 
 Relevant reports include:
 
-- movie sharing exposing folders or files to a headset or device that was not
-  paired;
 - unsafe handling of disc images, video files, or subtitles given to the
   converter or player;
 - the signed app, DMG, or update path being replaced or tampered with; and

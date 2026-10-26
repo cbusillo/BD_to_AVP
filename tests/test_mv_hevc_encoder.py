@@ -5,7 +5,6 @@ import shutil
 import signal
 import subprocess
 import tempfile
-import time
 import unittest
 
 from contextlib import suppress
@@ -164,7 +163,6 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
             cls.metalfx_supported = bool(probe_payload.get("metalfx_spatial_scaling_supported"))
             cls.metalfx_upscale_supported = bool(probe_payload.get("metalfx_2x_mv_hevc_supported"))
             cls.pixel_transfer_upscale_supported = bool(probe_payload.get("pixel_transfer_2x_mv_hevc_supported"))
-            cls.segmented_hls_supported = bool(probe_payload.get("segmented_hls_mv_hevc_encode_supported"))
         except BaseException:
             cls.temporary_directory.cleanup()
             raise
@@ -178,13 +176,6 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         path.unlink(missing_ok=True)
         for partial in path.parent.glob(f".{path.name}.partial-*"):
             partial.unlink()
-        return path
-
-    def hls_directory(self, name: str) -> Path:
-        path = Path(self.temporary_directory.name) / name
-        shutil.rmtree(path, ignore_errors=True)
-        for partial in path.parent.glob(f".{path.name}.partial-*"):
-            shutil.rmtree(partial, ignore_errors=True)
         return path
 
     def run_encoder(
@@ -217,51 +208,8 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
             timeout=30,
         )
 
-    def run_hls_encoder(
-        self,
-        directory: Path,
-        input_bytes: bytes,
-        *,
-        segment_duration: float = 0.5,
-        expected_frames: int | None = None,
-        overwrite: bool = False,
-    ) -> subprocess.CompletedProcess[bytes]:
-        command = [
-            str(self.encoder),
-            "--hls-directory",
-            str(directory),
-            "--segment-duration",
-            str(segment_duration),
-        ]
-        if expected_frames is not None:
-            command.extend(["--expected-frames", str(expected_frames)])
-        if overwrite:
-            command.append("--overwrite")
-        return subprocess.run(
-            command,
-            input=input_bytes,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-        )
-
     def assert_no_partial_output(self, output_path: Path) -> None:
         self.assertEqual(list(output_path.parent.glob(f".{output_path.name}.partial-*")), [])
-
-    def wait_for_event_playlist(self, playlist_path: Path) -> str:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if playlist_path.is_file():
-                playlist = playlist_path.read_text(encoding="utf-8")
-                if "#EXT-X-PLAYLIST-TYPE:EVENT" in playlist and "segment-" in playlist:
-                    return playlist
-            time.sleep(0.02)
-        raise AssertionError("encoder did not publish an EVENT playlist within ten seconds")
-
-    @staticmethod
-    def target_duration(playlist: str) -> int:
-        prefix = "#EXT-X-TARGETDURATION:"
-        return int(next(line.removeprefix(prefix) for line in playlist.splitlines() if line.startswith(prefix)))
 
     def frame_pts(self, path: Path) -> list[float]:
         assert FFPROBE is not None
@@ -328,288 +276,9 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
                 "metalfx_spatial_scaling_supported": self.metalfx_supported,
                 "pixel_transfer_2x_mv_hevc_supported": self.pixel_transfer_upscale_supported,
                 "schema_version": 1,
-                "segmented_hls_mv_hevc_encode_supported": self.segmented_hls_supported,
                 "stereo_mv_hevc_encode_supported": True,
             },
         )
-
-    def test_help_documents_mutually_exclusive_segmented_output(self) -> None:
-        completed = subprocess.run(
-            [str(self.encoder), "--help"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-        )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
-        self.assertIn(b"--hls-directory DIR", completed.stdout)
-        self.assertIn(b"--segment-duration SECONDS", completed.stdout)
-        self.assertIn(b"exclusive with --hls-directory", completed.stdout)
-
-    def test_rejects_multiple_output_modes_before_creating_output(self) -> None:
-        output_path = self.output_path("exclusive.mov")
-        hls_directory = self.hls_directory("exclusive-hls")
-
-        completed = subprocess.run(
-            [
-                str(self.encoder),
-                "--output",
-                str(output_path),
-                "--hls-directory",
-                str(hls_directory),
-            ],
-            input=y4m_header(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-        )
-
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn(b"exactly one", completed.stderr)
-        self.assertFalse(output_path.exists())
-        self.assertFalse(hls_directory.exists())
-
-    def test_rejects_non_positive_hls_segment_duration_before_creating_output(self) -> None:
-        hls_directory = self.hls_directory("invalid-segment-duration")
-
-        completed = self.run_hls_encoder(hls_directory, y4m_header(), segment_duration=0)
-
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn(b"positive number of seconds", completed.stderr)
-        self.assertFalse(hls_directory.exists())
-
-    def test_rejects_segment_duration_without_hls_output(self) -> None:
-        output_path = self.output_path("segment-duration.mov")
-
-        completed = subprocess.run(
-            [str(self.encoder), "--output", str(output_path), "--segment-duration", "2"],
-            input=y4m_header(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-        )
-
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn(b"requires --hls-directory", completed.stderr)
-        self.assertFalse(output_path.exists())
-
-    def test_hls_output_writes_cmaf_segments_and_final_vod_playlist(self) -> None:
-        if not self.segmented_hls_supported:
-            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
-        hls_directory = self.hls_directory("segmented-hls")
-        input_bytes = y4m_header() + b"".join(y4m_frame(index) for index in range(48))
-
-        completed = self.run_hls_encoder(
-            hls_directory,
-            input_bytes,
-            segment_duration=0.5,
-            expected_frames=48,
-        )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
-        summary = json.loads(completed.stdout)
-        self.assertEqual(summary["output_mode"], "hls")
-        self.assertEqual(summary["frame_count"], 48)
-        self.assertGreater(summary["hls_segment_count"], 0)
-        initialization_segment = hls_directory / "init.mp4"
-        playlist_path = hls_directory / "media.m3u8"
-        self.assertGreater(initialization_segment.stat().st_size, 0)
-        playlist = playlist_path.read_text(encoding="utf-8")
-        self.assertIn("#EXTM3U", playlist)
-        self.assertIn("#EXT-X-PLAYLIST-TYPE:EVENT", playlist)
-        self.assertIn('#EXT-X-MAP:URI="init.mp4"', playlist)
-        self.assertIn("#EXT-X-ENDLIST", playlist)
-        target_duration = self.target_duration(playlist)
-        self.assertEqual(target_duration, 2)
-        durations = [
-            float(line.removeprefix("#EXTINF:").removesuffix(","))
-            for line in playlist.splitlines()
-            if line.startswith("#EXTINF:")
-        ]
-        self.assertTrue(durations)
-        self.assertTrue(all(duration <= target_duration for duration in durations))
-        segment_names = sorted(path.name for path in hls_directory.glob("segment-*.m4s"))
-        self.assertEqual(len(segment_names), summary["hls_segment_count"])
-        for segment_name in segment_names:
-            self.assertIn(segment_name, playlist)
-            self.assertGreater((hls_directory / segment_name).stat().st_size, 0)
-
-    def test_hls_output_muxes_aac_on_the_video_timeline(self) -> None:
-        if not self.segmented_hls_supported:
-            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
-        if FFPROBE is None:
-            self.skipTest("FFprobe is required to inspect muxed audio")
-        hls_directory = self.hls_directory("segmented-hls-audio")
-        frame_count, frame_rate, sample_rate = 48, 24, 48_000
-        pcm_path = Path(self.temporary_directory.name) / "audio.pcm"
-        pcm_path.write_bytes(b"\x00\x01\x00\x01" * (3 * sample_rate))
-        lead_ticks = 9_000
-        command = [
-            str(self.encoder),
-            "--hls-directory",
-            str(hls_directory),
-            "--segment-duration",
-            "0.5",
-            "--audio-pcm",
-            str(pcm_path),
-            "--audio-start-ticks",
-            str(-lead_ticks),
-        ]
-        completed = subprocess.run(
-            command,
-            input=y4m_header(frame_rate=frame_rate) + b"".join(y4m_frame(index) for index in range(frame_count)),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-        )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
-        summary = json.loads(completed.stdout)
-        self.assertEqual(summary["audio_frame_count"], frame_count * sample_rate // frame_rate)
-        self.assertEqual(summary["audio_first_presentation_frame"], 0)
-        probe = subprocess.run(
-            [FFPROBE, "-v", "error", "-show_streams", "-of", "json", str(hls_directory / "media.m3u8")],
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-        )
-        audio = [stream for stream in json.loads(probe.stdout)["streams"] if stream["codec_type"] == "audio"]
-        self.assertEqual([(stream["codec_name"], stream["channels"]) for stream in audio], [("aac", 2)])
-
-    def test_rejects_audio_without_hls_output(self) -> None:
-        output_path = self.output_path("audio-without-hls.mov")
-
-        completed = subprocess.run(
-            [str(self.encoder), "--output", str(output_path), "--audio-pcm", "/dev/null"],
-            input=y4m_header() + y4m_frame(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-        )
-
-        self.assertEqual(completed.returncode, 1)
-        self.assertFalse(output_path.exists())
-
-    def test_hls_target_duration_is_stable_from_event_to_vod(self) -> None:
-        if not self.segmented_hls_supported:
-            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
-        hls_directory = self.hls_directory("growing-hls")
-        process = subprocess.Popen(
-            [
-                str(self.encoder),
-                "--hls-directory",
-                str(hls_directory),
-                "--segment-duration",
-                "0.5",
-                "--expected-frames",
-                "96",
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        assert process.stdin is not None
-        process.stdin.write(y4m_header())
-        for frame_index in range(48):
-            process.stdin.write(y4m_frame(frame_index))
-        process.stdin.flush()
-
-        event_playlist = self.wait_for_event_playlist(hls_directory / "media.m3u8")
-        self.assertNotIn("#EXT-X-ENDLIST", event_playlist)
-        event_target_duration = self.target_duration(event_playlist)
-
-        for frame_index in range(48, 96):
-            process.stdin.write(y4m_frame(frame_index))
-        process.stdin.close()
-        process.stdin = None
-        stdout, stderr = process.communicate(timeout=30)
-
-        self.assertEqual(process.returncode, 0, stderr.decode())
-        self.assertEqual(json.loads(stdout)["frame_count"], 96)
-        final_playlist = (hls_directory / "media.m3u8").read_text(encoding="utf-8")
-        self.assertIn("#EXT-X-PLAYLIST-TYPE:EVENT", final_playlist)
-        self.assertIn("#EXT-X-ENDLIST", final_playlist)
-        self.assertEqual(self.target_duration(final_playlist), event_target_duration)
-
-    def test_hls_failed_overwrite_restores_existing_directory(self) -> None:
-        if not self.segmented_hls_supported:
-            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
-        hls_directory = self.hls_directory("preserve-hls")
-        hls_directory.mkdir()
-        marker = hls_directory / "existing.txt"
-        marker.write_text("existing output", encoding="utf-8")
-
-        completed = self.run_hls_encoder(
-            hls_directory,
-            y4m_header() + b"FRAME\ntruncated",
-            expected_frames=1,
-            overwrite=True,
-        )
-
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn(b"incomplete frame", completed.stderr)
-        self.assertEqual(marker.read_text(encoding="utf-8"), "existing output")
-        self.assertEqual(list(hls_directory.parent.glob(f".{hls_directory.name}.previous-*")), [])
-
-    def test_hls_failure_removes_partial_directory(self) -> None:
-        if not self.segmented_hls_supported:
-            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
-        hls_directory = self.hls_directory("truncated-hls")
-
-        completed = self.run_hls_encoder(
-            hls_directory,
-            y4m_header() + b"FRAME\ntruncated",
-            expected_frames=1,
-        )
-
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn(b"incomplete frame", completed.stderr)
-        self.assertFalse(hls_directory.exists())
-
-    def test_hls_sigterm_removes_partial_directory(self) -> None:
-        if not self.segmented_hls_supported:
-            self.skipTest("this Mac cannot create segmented HLS MV-HEVC output")
-        hls_directory = self.hls_directory("cancelled-hls")
-        process = subprocess.Popen(
-            [str(self.encoder), "--hls-directory", str(hls_directory), "--expected-frames", "2"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        assert process.stdin is not None
-        assert process.stderr is not None
-        process.stdin.write(y4m_header())
-        process.stdin.flush()
-        readable, _, _ = select.select([process.stderr], [], [], READINESS_TIMEOUT_SECONDS)
-        if not readable:
-            process.kill()
-            process.wait(timeout=5)
-            self.fail(f"encoder did not emit readiness within {READINESS_TIMEOUT_SECONDS} seconds")
-        ready_line = process.stderr.readline()
-        self.assertEqual(json.loads(ready_line)["event"], "encoder.ready")
-        process.send_signal(signal.SIGTERM)
-        readable, _, _ = select.select([process.stderr], [], [], 5)
-        if not readable:
-            process.kill()
-            process.wait(timeout=5)
-            self.fail("encoder did not acknowledge cancellation within five seconds")
-        cancellation_line = process.stderr.readline()
-        self.assertEqual(json.loads(cancellation_line)["event"], "encoder.cancellation_requested")
-        with suppress(BrokenPipeError):
-            process.stdin.write(b"FRAME\n")
-            process.stdin.flush()
-        with suppress(BrokenPipeError):
-            process.stdin.close()
-        status = process.wait(timeout=10)
-        stderr = ready_line + cancellation_line + process.stderr.read()
-        process.stderr.close()
-        if process.stdout:
-            process.stdout.close()
-
-        self.assertEqual(status, 130, stderr.decode())
-        self.assertFalse(hls_directory.exists())
 
     def test_rejects_unknown_upscale_mode(self) -> None:
         output_path = self.output_path("invalid-upscale.mov")

@@ -36,17 +36,10 @@
 	<string>NSApplication</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>3D Blu-ray to Vision Pro asks macOS to shut down this Mac after the queue finishes, only when you choose Shut Down in Settings.</string>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_bdtoavp-relay._tcp</string>
-		<string>_bdtoavp-movies._tcp</string>
-	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>3D Blu-ray to Vision Pro shares movies from folders you choose with your paired Vision Pro on the local network.</string>
 	<key>NSNetworkVolumesUsageDescription</key>
-	<string>3D Blu-ray to Vision Pro reads the movie folders you share from network drives so your paired Vision Pro can play them.</string>
+	<string>3D Blu-ray to Vision Pro reads and saves videos on network drives you choose.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
-	<string>3D Blu-ray to Vision Pro reads 3D Blu-ray discs and the movie folders you share from external drives.</string>
+	<string>3D Blu-ray to Vision Pro reads 3D Blu-ray discs and videos from external drives.</string>
 	<key>SUAllowsAutomaticUpdates</key>
 	<false/>
 	<key>SUFeedURL</key>

@@ -350,7 +350,6 @@ def _parse_capability_payload(payload: str, *, returncode: int) -> DirectMVHEVCC
         "metalfx_2x_mv_hevc_supported",
         "metalfx_spatial_scaling_supported",
         "pixel_transfer_2x_mv_hevc_supported",
-        "segmented_hls_mv_hevc_encode_supported",
     }
     if (
         not isinstance(raw, Mapping)
@@ -370,11 +369,8 @@ def _parse_capability_payload(payload: str, *, returncode: int) -> DirectMVHEVCC
     metalfx_supported = raw.get("metalfx_2x_mv_hevc_supported", False)
     metalfx_device_supported = raw.get("metalfx_spatial_scaling_supported", False)
     pixel_transfer_supported = raw.get("pixel_transfer_2x_mv_hevc_supported", False)
-    segmented_hls_supported = raw.get("segmented_hls_mv_hevc_encode_supported", False)
-    if (
-        (metalfx_supported and (not supported or not metalfx_device_supported))
-        or (pixel_transfer_supported and not supported)
-        or (segmented_hls_supported and not supported)
+    if (metalfx_supported and (not supported or not metalfx_device_supported)) or (
+        pixel_transfer_supported and not supported
     ):
         raise VideoRoutePreflightError("The direct MV-HEVC capability probe returned an invalid contract.")
     if supported and returncode != 0:
