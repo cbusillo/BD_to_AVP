@@ -404,6 +404,17 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertGreaterThan(fadeOut.duration, reveal.duration)
     }
 
+    func testScrubHighlightHugsTheVisibleTrackInsideTheTallerHitArea() {
+        let bounds = CGRect(x: 0, y: 0, width: 640, height: PlaybackScrubBarLayout.hitHeight)
+        let highlight = PlaybackScrubBarLayout.highlightRect(in: bounds)
+
+        XCTAssertEqual(highlight.width, bounds.width)
+        XCTAssertEqual(highlight.midY, bounds.midY)
+        XCTAssertLessThan(highlight.height, bounds.height)
+        XCTAssertGreaterThanOrEqual(highlight.height, PlaybackScrubBarLayout.thumbSize)
+        XCTAssertGreaterThan(highlight.height, PlaybackScrubBarLayout.trackHeight)
+    }
+
     func testShortTrackListsShowEveryEntryWithoutScrolling() {
         let rowCount = 3
 
