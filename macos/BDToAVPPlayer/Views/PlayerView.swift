@@ -7,8 +7,9 @@ struct PlayerView: View {
     private static let unsizedVideoScale: Float = 0.001
     private static let playerDepthOffset: Float = -0.14
     private static let trackListAttachmentID = "player-track-list"
-    /// Meters between the bottom edge of the video and the open track list.
-    private static let trackListBottomInset: Float = 0.02
+    /// Meters between the bottom edge of the window and the open track list, so the list sits
+    /// just above the controls below the window.
+    private static let trackListBottomInset: Float = 0.015
     /// Meters the open track list sits in front of the video.
     private static let trackListDepthAboveVideo: Float = 0.02
 
@@ -46,12 +47,13 @@ struct PlayerView: View {
                     onDone: done
                 )
             } else {
+                // No backing behind the video: where the window and video shapes differ, the
+                // room shows through instead of a black frame around the picture (#1132).
                 GeometryReader3D { geometry in
                     playerSurface(geometry: geometry)
                 }
             }
         }
-        .background(.black)
         .overlay {
             // While a track list is open it sits over the video, so the surface steps aside
             // rather than catching the pinches meant for the list.
@@ -171,10 +173,10 @@ struct PlayerView: View {
                     reportedVideoSize = event.screenMeshSize
                 }
                 fitPlayerEntity(proxy: geometry, content: content, reportedSize: reportedSize)
-                placeTrackList(content: content, attachments: attachments, reportedSize: reportedSize)
+                placeTrackList(proxy: geometry, content: content, attachments: attachments)
             } update: { content, attachments in
                 fitPlayerEntity(proxy: geometry, content: content, reportedSize: reportedSize)
-                placeTrackList(content: content, attachments: attachments, reportedSize: reportedSize)
+                placeTrackList(proxy: geometry, content: content, attachments: attachments)
             } attachments: {
                 if let picker = trackPicker.openPicker {
                     Attachment(id: Self.trackListAttachmentID) {
@@ -231,8 +233,7 @@ struct PlayerView: View {
             return
         }
 
-        let frame = proxy.frame(in: .local)
-        let frameSize = abs(content.convert(frame.size, from: .local, to: .scene))
+        let frameSize = windowSize(proxy: proxy, content: content)
         // Until the video's size is known, keep it too small to cover anything: at its natural
         // size a stereo video can draw over the controls ornament (#1103).
         guard let screenSize = videoScreenSize(reportedSize: reportedSize) else {
@@ -253,12 +254,17 @@ struct PlayerView: View {
 #endif
     }
 
-    /// Places the open track list on the bottom edge of the video and just in front of it, so it
-    /// reads as part of the controls panel below. Growing the controls ornament pushed the lists
+    /// The window's size in the RealityView's scene space, whose origin is the window's center.
+    private func windowSize(proxy: GeometryProxy3D, content: RealityViewContent) -> SIMD3<Float> {
+        abs(content.convert(proxy.frame(in: .local).size, from: .local, to: .scene))
+    }
+
+    /// Places the open track list at the bottom of the window, just in front of the video, so it
+    /// reads as part of the controls panel directly below. Growing the controls ornament pushed the lists
     /// below the window, a second ornament or a SwiftUI view in the window is hidden behind the
     /// window's surface or floats out in front of the controls, and system menus presented from
     /// an ornament open behind the video. A RealityView attachment shares the video's space.
-    private func placeTrackList(content: RealityViewContent, attachments: RealityViewAttachments, reportedSize: SIMD2<Float>?) {
+    private func placeTrackList(proxy: GeometryProxy3D, content: RealityViewContent, attachments: RealityViewAttachments) {
         let placed = content.entities.first { $0.name == Self.trackListAttachmentID }
         guard let list = attachments.entity(for: Self.trackListAttachmentID) else {
             placed?.removeFromParent()
@@ -270,14 +276,12 @@ struct PlayerView: View {
             content.add(list)
         }
 
-        let video = session.playerEntity
-        let screenHeight = videoScreenSize(reportedSize: reportedSize)?.y ?? 0
-        let videoBottom = video.position.y - screenHeight * video.scale.y / 2
+        let windowBottom = -windowSize(proxy: proxy, content: content).y / 2
         let listHeight = list.visualBounds(relativeTo: list.parent).extents.y
         list.position = SIMD3<Float>(
             0,
-            videoBottom + Self.trackListBottomInset + listHeight / 2,
-            video.position.z + Self.trackListDepthAboveVideo
+            windowBottom + Self.trackListBottomInset + listHeight / 2,
+            session.playerEntity.position.z + Self.trackListDepthAboveVideo
         )
     }
 }
@@ -965,8 +969,8 @@ private struct PlayerTrackListView: View {
 /// A streaming-style scrub bar: the track spans the title's full length, a lighter band shows
 /// the range that can be played right now, and the filled part shows the playhead.
 private struct PlaybackScrubBar: View {
-    private static let trackHeight: CGFloat = 8
-    private static let thumbSize: CGFloat = 22
+    private static let trackHeight = PlaybackScrubBarLayout.trackHeight
+    private static let thumbSize = PlaybackScrubBarLayout.thumbSize
     private static let adjustmentStep: TimeInterval = 10
 
     let timeline: PlaybackTimeline
@@ -1021,9 +1025,9 @@ private struct PlaybackScrubBar: View {
             )
         }
         .frame(minWidth: 600, maxWidth: .infinity)
-        .frame(height: 44)
-        // The look highlight follows the bar's rounded shape instead of the view's square frame.
-        .contentShape(.hoverEffect, Capsule())
+        .frame(height: PlaybackScrubBarLayout.hitHeight)
+        // The whole frame takes pinches, but the look highlight hugs the visible track.
+        .contentShape(.hoverEffect, ScrubBarHighlightShape())
         .hoverEffect(.highlight)
         .allowsHitTesting(isEnabled)
         .opacity(isEnabled ? 1 : 0.5)
@@ -1042,6 +1046,13 @@ private struct PlaybackScrubBar: View {
                 break
             }
         }
+    }
+}
+
+/// A capsule around the visible scrub track, centered in the bar's taller hit area.
+private struct ScrubBarHighlightShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        Capsule().path(in: PlaybackScrubBarLayout.highlightRect(in: rect))
     }
 }
 

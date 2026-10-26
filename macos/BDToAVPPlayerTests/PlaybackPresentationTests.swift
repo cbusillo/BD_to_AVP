@@ -395,13 +395,24 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: false, isLookedAt: true), 1)
     }
 
-    func testLookingAtControlsRevealsThemAtOnceAndLookingAwayWaitsBeforeASlowerFade() {
+    func testLookingAtControlsRevealsThemAfterAShortDwellAndLookingAwayWaitsLongerBeforeASlowerFade() {
         let reveal = PlaybackHUDPresentation.lookTransition(isLookedAt: true)
         let fadeOut = PlaybackHUDPresentation.lookTransition(isLookedAt: false)
 
-        XCTAssertEqual(reveal.delay, 0)
-        XCTAssertGreaterThan(fadeOut.delay, 0)
+        XCTAssertGreaterThan(reveal.delay, 0)
+        XCTAssertLessThan(reveal.delay, fadeOut.delay)
         XCTAssertGreaterThan(fadeOut.duration, reveal.duration)
+    }
+
+    func testScrubHighlightHugsTheVisibleTrackInsideTheTallerHitArea() {
+        let bounds = CGRect(x: 0, y: 0, width: 640, height: PlaybackScrubBarLayout.hitHeight)
+        let highlight = PlaybackScrubBarLayout.highlightRect(in: bounds)
+
+        XCTAssertEqual(highlight.width, bounds.width)
+        XCTAssertEqual(highlight.midY, bounds.midY)
+        XCTAssertLessThan(highlight.height, bounds.height)
+        XCTAssertGreaterThanOrEqual(highlight.height, PlaybackScrubBarLayout.thumbSize)
+        XCTAssertGreaterThan(highlight.height, PlaybackScrubBarLayout.trackHeight)
     }
 
     func testShortTrackListsShowEveryEntryWithoutScrolling() {
