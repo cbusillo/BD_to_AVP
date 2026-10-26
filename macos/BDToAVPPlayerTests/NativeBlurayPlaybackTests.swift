@@ -35,22 +35,29 @@ final class NativeBlurayPlaybackTests: XCTestCase {
             )
         }
 
+        private let starts = OSAllocatedUnfairLock(initialState: [Int64]())
+        /// Where each read started, in ticks.
+        var readStarts: [Int64] { starts.withLock { $0 } }
+
         func read(
             title: Bluray3DTitle,
+            from startTicks: Int64,
             audioTrackIDs: [Int],
             subtitleTrackIDs: [Int],
             into sink: Bluray3DPacketSink
         ) throws -> Bluray3DReadStatistics {
+            starts.withLock { $0.append(startTicks) }
             // The fixture's base view is coded POC 0, 2, 6, 4 in each IDR sequence of four.
             let displayIndex = [0, 1, 3, 2]
+            // A read starts at the IDR sequence that holds `startTicks`, as an entry point would.
+            let firstSequence = Int(Double(startTicks) / (4 * 3_753.75))
             var statistics = Bluray3DReadStatistics()
-            var pendingAudio = audio[...]
+            var pendingAudio = audio.drop { ($0.pts ?? 0) < UInt64(max(0, Double(firstSequence * 4) * 3_753.75)) }
             for repetition in 0..<repetitions {
-                for (index, unit) in units.enumerated() {
+                for (index, unit) in units.enumerated() where repetition * 2 + index / 4 >= firstSequence {
                     // The first unit carries the parameter sets; later repetitions resend it whole.
                     let frame = repetition * 8 + (index / 4) * 4 + displayIndex[index % 4]
-                    // The Rainforest audio fixture starts at PTS 48,754, the title's first video PTS.
-                    let pts = UInt64(NativeBlurayPlaybackTests.originPTS + (Double(frame) * 3_753.75).rounded())
+                    let pts = UInt64((Double(frame) * 3_753.75).rounded())
                     while let next = pendingAudio.first, (next.pts ?? 0) <= pts {
                         pendingAudio.removeFirst()
                         if !sink.receive(.audio(next)) { return statistics }
@@ -67,7 +74,9 @@ final class NativeBlurayPlaybackTests: XCTestCase {
         }
     }
 
-    static let originPTS: Double = 48_754
+    /// The Rainforest audio fixture starts at this PTS, its title's first video PTS; the tests
+    /// move it to time zero.
+    static let originPTS: UInt64 = 48_754
 
     /// Rainforest's German and English DTS-HD MA tracks: 24 core frames of 960 ticks each per
     /// track, repeated back to back so the audio spans the whole test title.
@@ -79,20 +88,25 @@ final class NativeBlurayPlaybackTests: XCTestCase {
             packets.map { packet in
                 BluRayPESPacket(
                     pid: packet.pid, streamID: packet.streamID, streamIDExtension: packet.streamIDExtension,
-                    pts: packet.pts.map { $0 + UInt64(repeatIndex * 24 * 960) }, payload: packet.payload
+                    pts: packet.pts.map { $0 - Self.originPTS + UInt64(repeatIndex * 24 * 960) }, payload: packet.payload
                 )
             }
         }
     }
 
-    private func makePlayback(_ source: FixtureSource, configuration: NativeBlurayPlayback.Configuration = .init()) -> NativeBlurayPlayback {
+    private func makePlayback(
+        _ source: FixtureSource,
+        startSeconds: TimeInterval = 0,
+        configuration: NativeBlurayPlayback.Configuration = .init()
+    ) -> NativeBlurayPlayback {
         var configuration = configuration
         configuration.decoderThreads = 1
         // A renderer takes frames only once it has a video target; a display layer is the one a
         // unit test can give it.
         let layer = AVSampleBufferDisplayLayer()
         let playback = NativeBlurayPlayback(
-            source: source, title: source.info.titles[0], configuration: configuration, renderer: layer.sampleBufferRenderer
+            source: source, title: source.info.titles[0], startSeconds: startSeconds, configuration: configuration,
+            renderer: layer.sampleBufferRenderer
         )
         addTeardownBlock { playback.stop(); _ = layer }
         return playback
@@ -195,19 +209,54 @@ final class NativeBlurayPlaybackTests: XCTestCase {
         XCTAssertLessThanOrEqual(playback.audioPlayer?.pendingCount ?? 0, HeadsetAudioPlayer.maximumPendingChunks)
     }
 
-    func testSeeksInsideTheLoadedPartAndRefusesOtherTargets() throws {
-        let playback = makePlayback(try FixtureSource(repetitions: 30))
+    func testSeeksInsideTheLoadedPartWithoutReadingAgain() throws {
+        let source = try FixtureSource(repetitions: 30)
+        let playback = makePlayback(source)
         playback.start()
         XCTAssertTrue(waitUntil(10) { playback.status.currentTime > 0.5 && (playback.status.loadedRange?.upperBound ?? 0) > 8 })
-        XCTAssertEqual(playback.seek(to: 6), .seeking)
+        playback.seek(to: 6)
         XCTAssertTrue(waitUntil(5) { playback.status.currentTime > 6.2 }, "status \(playback.status)")
-        XCTAssertEqual(playback.seek(to: 1), .seeking)
+        playback.seek(to: 1)
         XCTAssertTrue(waitUntil(5) { (1.1..<3).contains(playback.status.currentTime) }, "status \(playback.status)")
-        guard case let .outside(loaded) = playback.seek(to: 600) else {
-            return XCTFail("A target past the title is outside the loaded part")
-        }
-        XCTAssertEqual(loaded?.upperBound ?? 0, 239 / 23.976, accuracy: 0.05)
+        XCTAssertEqual(source.readStarts, [0])
         XCTAssertNil(playback.status.failure)
+    }
+
+    func testSeekOutsideTheLoadedPartReadsAgainFromThere() throws {
+        // 30 repetitions of eight frames: 10 s, of which the first 15 s ahead is not all loaded.
+        var configuration = NativeBlurayPlayback.Configuration()
+        configuration.buffer.aheadTarget = 2
+        let source = try FixtureSource(repetitions: 30, audio: try rainforestAudio(repeats: 40))
+        let playback = makePlayback(source, configuration: configuration)
+        playback.start()
+        XCTAssertTrue(waitUntil(10) { playback.status.currentTime > 0.3 })
+        XCTAssertLessThan(playback.status.loadedRange?.upperBound ?? 0, 7)
+
+        playback.seek(to: 8)
+
+        XCTAssertTrue(waitUntil(10) { playback.status.currentTime > 8.3 }, "status \(playback.status)")
+        XCTAssertEqual(source.readStarts, [0, 720_000])
+        // The new read starts at the IDR before 8 s, and nothing before that is kept.
+        XCTAssertGreaterThan(playback.status.loadedRange?.lowerBound ?? 0, 7.5)
+        XCTAssertEqual(playback.status.statistics.lateFrames, 0)
+        // Audio resumes at the target on the same clock.
+        let player = try XCTUnwrap(playback.audioPlayer)
+        let after = player.enqueuedRanges.filter { $0.pid == player.selectedTrackID && $0.startTicks >= 700_000 }
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(after.first).startTicks, 720_000 - 9_000)
+        XCTAssertNil(playback.status.failure)
+    }
+
+    func testStartsMidTitleForAResume() throws {
+        let source = try FixtureSource(repetitions: 30)
+        let playback = makePlayback(source, startSeconds: 5)
+        XCTAssertEqual(playback.status.currentTime, 5, accuracy: 0.001)
+        playback.start()
+
+        XCTAssertTrue(waitUntil(10) { playback.status.currentTime > 5.3 }, "status \(playback.status)")
+        XCTAssertEqual(source.readStarts, [450_000])
+        XCTAssertEqual(playback.status.statistics.lateFrames, 0)
+        // Frames before the start are decoded from the IDR but not shown.
+        XCTAssertGreaterThanOrEqual(playback.status.loadedRange?.lowerBound ?? 0, 4.5)
     }
 
     func testAStalledSourceStopsTheClockUntilItCatchesUp() throws {

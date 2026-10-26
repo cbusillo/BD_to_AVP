@@ -29,20 +29,10 @@ final class BlurayDiscSource: Bluray3DSource {
         bd3d_disc_close(disc)
     }
 
+    /// Every timestamp is on the playlist timeline, whatever clip it is in.
     func read(
         title: Bluray3DTitle,
-        audioTrackIDs: [Int],
-        subtitleTrackIDs: [Int],
-        into sink: Bluray3DPacketSink
-    ) throws -> Bluray3DReadStatistics {
-        try read(title: title, startingAt: 0, audioTrackIDs: audioTrackIDs, subtitleTrackIDs: subtitleTrackIDs, into: sink)
-    }
-
-    /// Reads `title` from `startTicks` on its playlist timeline, starting at the last random
-    /// access unit at or before it. Every timestamp is on that timeline, whatever clip it is in.
-    func read(
-        title: Bluray3DTitle,
-        startingAt startTicks: UInt64,
+        from startTicks: Int64,
         audioTrackIDs: [Int],
         subtitleTrackIDs: [Int],
         into sink: Bluray3DPacketSink
@@ -56,7 +46,7 @@ final class BlurayDiscSource: Bluray3DSource {
         let audio = audioTrackIDs.map { UInt16(clamping: $0) }
         let subtitles = subtitleTrackIDs.map { UInt16(clamping: $0) }
         return try BlurayDemuxCallback.run(sink: sink) { emit, context, stats in
-            bd3d_disc_stream(disc, playlist, startTicks, audio, audio.count, subtitles, subtitles.count, emit, context, stats)
+            bd3d_disc_stream(disc, playlist, UInt64(max(0, startTicks)), audio, audio.count, subtitles, subtitles.count, emit, context, stats)
         }
     }
 

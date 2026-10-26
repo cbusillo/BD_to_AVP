@@ -62,6 +62,32 @@ final class MatroskaMVCSourceTests: XCTestCase {
         XCTAssertEqual(sink.video.map(\.pts), [900_000, 903_780, 1_800_000])
     }
 
+    func testReadingFromATimeStartsAtTheCuedClusterBeforeIt() throws {
+        let source = try MatroskaMVCSource(source: DataByteSource(seekableFile(cues: true)))
+        let title = try XCTUnwrap(source.info.mainTitle)
+
+        // Only the keyframe clusters at 10 s and 30 s are cued: 12 s starts at 10 s, 31 s at 30 s.
+        let fromTwelve = CollectingPacketSink()
+        _ = try source.read(title: title, from: 12 * 90_000, audioTrackIDs: [], subtitleTrackIDs: [], into: fromTwelve)
+        let fromThirty = CollectingPacketSink()
+        _ = try source.read(title: title, from: 31 * 90_000, audioTrackIDs: [], subtitleTrackIDs: [], into: fromThirty)
+
+        XCTAssertEqual(fromTwelve.video.map(\.pts), [900_000, 903_780, 1_800_000, 2_700_000])
+        XCTAssertEqual(fromThirty.video.map(\.pts), [2_700_000])
+        // A read from mid-title starts with the parameter sets, as one from the start does.
+        XCTAssertEqual(fromThirty.video.first?.data.prefix(5), Data([0, 0, 0, 1]) + sps.prefix(1))
+    }
+
+    func testWithoutCuesReadingFromATimeStartsAtTheLastClusterBeforeItAndItsNextKeyframe() throws {
+        let source = try MatroskaMVCSource(source: DataByteSource(seekableFile(cues: false)))
+        let sink = CollectingPacketSink()
+
+        _ = try source.read(title: try XCTUnwrap(source.info.mainTitle), from: 25 * 90_000, audioTrackIDs: [], subtitleTrackIDs: [], into: sink)
+
+        // The cluster at 20 s holds only a delta frame, so video starts at the keyframe at 30 s.
+        XCTAssertEqual(sink.video.map(\.pts), [2_700_000])
+    }
+
     func testAVCWithoutMVCIsListedButNotPlayable() throws {
         let source = try MatroskaMVCSource(source: DataByteSource(file(mvc: false)))
 
@@ -178,6 +204,44 @@ final class MatroskaMVCSourceTests: XCTestCase {
         return header + EBML.element(
             0x1853_8067, segmentPrefix + EBML.element(0x1549_A966, info) + EBML.element(0x1654_AE6B, tracks) + clusters
         )
+    }
+
+    /// Clusters at 10 s (keyframe, delta), 20 s (delta) and 30 s (keyframe), with a SeekHead
+    /// pointing at Cues for the two keyframe clusters when `cues` is set.
+    private func seekableFile(cues: Bool) -> Data {
+        let avcC = Data([1, 0x64, 0, 0x29, 0xFF, 0xE1]) + length16(sps) + sps + Data([1]) + length16(pps) + pps
+        let mvcC = Data([1, 0x80, 0, 0x29, 0xFF, 0x02]) + length16(sps) + sps + length16(subsetSPS) + subsetSPS
+            + Data([2]) + length16(pps) + pps + length16(dependentPPS) + dependentPPS
+        let video = EBML.uint(0xD7, 1) + EBML.uint(0x83, 1) + EBML.string(0x86, "V_MPEG4/ISO/AVC") + EBML.element(0x63A2, avcC)
+            + EBML.element(0x41E4, EBML.uint(0x41E7, 0x6D76_6343) + EBML.element(0x41ED, mvcC))
+        let info = EBML.element(0x1549_A966, EBML.uint(0x2AD7B1, 1_000_000))
+        let tracks = EBML.element(0x1654_AE6B, EBML.element(0xAE, video))
+        let keyframe = lengthPrefixed([Data([0x65, 1, 2]), Data([0x14, 3, 4])])
+        let delta = lengthPrefixed([Data([0x41, 5]), Data([0x14, 6])])
+        let clusters = [
+            EBML.uint(0xE7, 10_000) + EBML.element(0xA3, block(track: 1, time: 0, flags: 0x80, keyframe))
+                + EBML.element(0xA0, EBML.element(0xA1, block(track: 1, time: 42, flags: 0, delta)) + EBML.element(0xFB, Data([0xFF]))),
+            EBML.uint(0xE7, 20_000) + EBML.element(0xA0, EBML.element(0xA1, block(track: 1, time: 0, flags: 0, delta)) + EBML.element(0xFB, Data([0xFF]))),
+            EBML.uint(0xE7, 30_000) + EBML.element(0xA3, block(track: 1, time: 0, flags: 0x80, keyframe)),
+        ].map { EBML.element(0x1F43_B675, $0) }
+        // Positions count from the Segment's data; every number here is eight bytes, so the
+        // SeekHead's length does not depend on the position it holds.
+        func seekHead(_ cuesAt: UInt64) -> Data {
+            EBML.element(0x114D_9B74, EBML.element(0x4DBB, EBML.element(0x53AB, EBML.id(0x1C53_BB6B)) + EBML.uint(0x53AC, cuesAt)))
+        }
+        let lead = cues ? seekHead(0).count : 0
+        var position = UInt64(lead + info.count + tracks.count)
+        var clusterPositions: [UInt64] = []
+        for cluster in clusters {
+            clusterPositions.append(position)
+            position += UInt64(cluster.count)
+        }
+        func cuePoint(_ time: UInt64, _ cluster: UInt64) -> Data {
+            EBML.element(0xBB, EBML.uint(0xB3, time) + EBML.element(0xB7, EBML.uint(0xF7, 1) + EBML.uint(0xF1, cluster)))
+        }
+        let cueElement = EBML.element(0x1C53_BB6B, cuePoint(30_000, clusterPositions[2]) + cuePoint(10_000, clusterPositions[0]))
+        let body = (cues ? seekHead(position) : Data()) + info + tracks + clusters.reduce(Data(), +) + (cues ? cueElement : Data())
+        return EBML.element(0x1A45_DFA3, EBML.string(0x4282, "matroska")) + EBML.element(0x1853_8067, body)
     }
 
     private func block(track: UInt8, time: Int16, flags: UInt8, _ payload: Data) -> Data {

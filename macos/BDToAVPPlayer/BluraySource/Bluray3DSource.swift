@@ -186,12 +186,28 @@ enum Bluray3DSourceError: Error, Equatable, LocalizedError {
 protocol Bluray3DSource: AnyObject {
     var info: Bluray3DSourceInfo { get }
 
-    /// Reads `title` from the start, delivering its MVC video plus the chosen audio and
-    /// subtitle tracks to `sink` until the end, an error, or the sink stops. Blocks the caller.
+    /// Reads `title` from `startTicks` on its timeline (90 kHz, zero at the title's start) to
+    /// the end, an error, or until the sink stops, delivering its MVC video plus the chosen audio
+    /// and subtitle tracks to `sink`. Video starts at the last random access unit at or before
+    /// `startTicks`, found through the disc's entry-point map or the Matroska cues. Blocks the
+    /// caller.
+    func read(
+        title: Bluray3DTitle,
+        from startTicks: Int64,
+        audioTrackIDs: [Int],
+        subtitleTrackIDs: [Int],
+        into sink: Bluray3DPacketSink
+    ) throws -> Bluray3DReadStatistics
+}
+
+extension Bluray3DSource {
+    /// Reads `title` from its start.
     func read(
         title: Bluray3DTitle,
         audioTrackIDs: [Int],
         subtitleTrackIDs: [Int],
         into sink: Bluray3DPacketSink
-    ) throws -> Bluray3DReadStatistics
+    ) throws -> Bluray3DReadStatistics {
+        try read(title: title, from: 0, audioTrackIDs: audioTrackIDs, subtitleTrackIDs: subtitleTrackIDs, into: sink)
+    }
 }
