@@ -343,8 +343,8 @@ enum PlaybackTrackListNote {
         }
     }
 
-    /// Blu-ray PGS subtitles are drawn in a later update (#1114).
-    static let bluraySubtitlesLater = "This title's subtitles will show here in a later update."
+    /// For a Blu-ray 3D title whose subtitles are all in a format other than PGS, such as text.
+    static let unsupportedBluraySubtitles = "This title's subtitles are in a format the headset can't show yet."
 }
 
 /// How faded controls look. visionOS never reports where the wearer looks; the system renders

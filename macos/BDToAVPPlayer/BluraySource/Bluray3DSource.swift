@@ -121,6 +121,9 @@ enum Bluray3DPacket: Sendable {
     case video(MVCAccessUnit)
     case audio(BluRayPESPacket)
     case subtitle(BluRayPESPacket)
+    /// A disc title's next clip starts here, on the playlist timeline (33-bit, 90 kHz), when
+    /// subtitles are read. Subtitles shown before it end.
+    case clipStart(pts: UInt64)
 }
 
 /// What the player's decoders consume. The reader calls `receive` on its own thread, in stream
@@ -151,7 +154,7 @@ final class Bluray3DPacketRouter: Bluray3DPacketSink {
         switch packet {
         case let .video(unit): return video(unit)
         case let .audio(packet): audio.receive(packet)
-        case .subtitle: break
+        case .subtitle, .clipStart: break
         }
         return true
     }
