@@ -390,7 +390,9 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
                 return 1
 
             with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srt) as rip:
-                mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
+                mkv_class.side_effect = lambda path, **_kwargs: type(
+                    "MkvStub", (), {"media_path": Path(path), "close": lambda _self: None}
+                )()
 
                 extract_subtitle_to_srt(source_mkv, output_folder)
 
@@ -429,7 +431,9 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             source_mkv.write_bytes(b"mkv")
             partial_srt = output_path / "movie.en.srt"
             warnings: list[str] = []
-            mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
+            mkv_class.side_effect = lambda path, **_kwargs: type(
+                "MkvStub", (), {"media_path": Path(path), "close": lambda _self: None}
+            )()
 
             def produce_no_usable_subtitles(_mkv_file, _options):
                 partial_srt.write_text("partial", encoding="utf-8")
@@ -474,7 +478,9 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             partial_srt = output_path / "movie.en.srt"
             partial_srt.write_text("partial", encoding="utf-8")
             warnings: list[str] = []
-            mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
+            mkv_class.side_effect = lambda path, **_kwargs: type(
+                "MkvStub", (), {"media_path": Path(path), "close": lambda _self: None}
+            )()
 
             with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=ValueError("malformed PGS stream")):
                 extract_subtitle_to_srt(source_mkv, output_path, warnings.append, run_context=run_context)
@@ -504,7 +510,9 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             output_path = Path(temp_dir)
             source_mkv = output_path / "movie.mkv"
             source_mkv.write_bytes(b"mkv")
-            mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
+            mkv_class.side_effect = lambda path, **_kwargs: type(
+                "MkvStub", (), {"media_path": Path(path), "close": lambda _self: None}
+            )()
 
             with self.assertRaisesRegex(ProcessCancelled, "cancelled"):
                 extract_subtitle_to_srt(source_mkv, output_path, run_context=run_context)

@@ -1,6 +1,6 @@
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -54,8 +54,13 @@ def create_srt_from_mkv(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     extract: bool | None = None,
+    forced_only_tracks: bool = False,
 ) -> None:
-    """``extract`` overrides the stage check for a direct Blu-ray read, which extracts later."""
+    """``extract`` overrides the stage check for a direct Blu-ray read, which extracts later.
+
+    ``forced_only_tracks`` adds the forced-only tracks MakeMKV would have made, for a source read
+    directly from the Blu-ray.
+    """
     output_path = output_path or mkv_path.parent
     if extract if extract is not None else config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         if config.skip_subtitles:
@@ -68,6 +73,7 @@ def create_srt_from_mkv(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            forced_only_tracks=forced_only_tracks,
         )
 
 
@@ -79,6 +85,7 @@ def extract_subtitle_to_srt(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    forced_only_tracks: bool = False,
 ) -> None:
     output_path = output_path or mkv_path.parent
     cleanup_existing_subtitle_files(output_path)
@@ -108,13 +115,16 @@ def extract_subtitle_to_srt(
         spinner_thread.start()
 
     try:
-        with subtitle_source_alias(mkv_path, output_path) as subtitle_mkv_path:
+        with ExitStack() as stack:
+            subtitle_mkv_path = stack.enter_context(subtitle_source_alias(mkv_path, output_path))
             mkv_file = Mkv(
                 subtitle_mkv_path.as_posix(),
                 run_context=run_context,
                 cancellation_event=cancellation_event,
                 observability_context=observability_context,
+                forced_only_tracks=forced_only_tracks,
             )
+            stack.callback(mkv_file.close)
             selected_subtitle_tracks = get_selected_subtitle_tracks(mkv_file, sub_options)
 
             if config.remove_extra_languages and not selected_subtitle_tracks:

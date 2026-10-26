@@ -622,6 +622,8 @@ def _process_each(
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("extract_subtitles"),
             extract=extract_subtitles,
+            # MakeMKV adds a forced-only track after each PG stream with forced captions.
+            forced_only_tracks=bluray_title is not None,
         )
         return extracted_audio_path, extracted_video_path
 

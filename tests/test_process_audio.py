@@ -163,6 +163,8 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 self.assertIs(call.kwargs["cancellation_event"], run_context.cancellation.event)
                 self.assertEqual(call.kwargs["observability_context"].stage.id, stage_id)
             self.assertIsNone(subtitle_stage.call_args.args[2])
+            # An MKV from MakeMKV already carries its forced-only tracks.
+            self.assertFalse(subtitle_stage.call_args.kwargs["forced_only_tracks"])
 
     def test_conversion_tools_use_its_temp_folder_and_the_caller_tmpdir_returns_afterwards(self) -> None:
         # The conversion's temp folder is removed when it ends; a TMPDIR left

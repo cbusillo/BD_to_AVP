@@ -318,6 +318,9 @@ class DirectBlurayProcessTests(unittest.TestCase):
                         sidecar.write_bytes(b"sidecar")
                     if name in {"audio", "subtitles"}:
                         self.assertEqual(args[1] if name == "audio" else args[0], sidecar)
+                    if name == "subtitles":
+                        # Without MakeMKV, the sidecar's PG streams need their forced-only tracks.
+                        self.assertIs(kwargs["forced_only_tracks"], True)
                     return result
 
                 return stage
