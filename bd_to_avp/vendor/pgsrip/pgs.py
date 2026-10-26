@@ -43,6 +43,17 @@ class Palette(typing.NamedTuple):
     alpha: int
 
 
+# Composition object flags (HDMV PG): object_cropped_flag and forced_on_flag.
+OBJECT_CROPPED_FLAG = 0x80
+OBJECT_FORCED_FLAG = 0x40
+
+
+class CompositionObject(typing.NamedTuple):
+    object_id: int
+    forced: bool
+    data: bytes
+
+
 class PgsReader:
     @classmethod
     def read_segments(cls, data: bytes, media_path: MediaPath):
@@ -281,6 +292,27 @@ class PresentationCompositionSegment(BaseSegment):
     def number_composition_objects(self):
         return self.data[10]
 
+    @property
+    def composition_objects(self) -> typing.List[CompositionObject]:
+        objects: typing.List[CompositionObject] = []
+        offset = 11
+        for _ in range(self.number_composition_objects):
+            if offset + 8 > len(self.data):
+                break
+            flags = self.data[offset + 3]
+            size = 16 if flags & OBJECT_CROPPED_FLAG else 8
+            if offset + size > len(self.data):
+                break
+            objects.append(
+                CompositionObject(
+                    from_hex(self.data[offset : offset + 2]),
+                    bool(flags & OBJECT_FORCED_FLAG),
+                    self.data[offset : offset + size],
+                )
+            )
+            offset += size
+        return objects
+
     def attributes(self):
         return {
             "width": "width",
@@ -431,8 +463,8 @@ class DisplaySet:
         return next(s for s in self.segments if isinstance(s, PresentationCompositionSegment))
 
     @property
-    def wds(self):
-        return next(s for s in self.segments if isinstance(s, WindowDefinitionSegment))
+    def wds(self) -> typing.Optional[WindowDefinitionSegment]:
+        return next((s for s in self.segments if isinstance(s, WindowDefinitionSegment)), None)
 
     @property
     def pds_segments(self):
@@ -483,3 +515,94 @@ class DisplaySet:
 
     def __repr__(self):
         return f"<{self.__class__.__name__}: {self}]>"
+
+
+def contains_forced_objects(data: bytes, media_path: MediaPath) -> bool:
+    """Whether any composition in a PG stream shows an object with its forced_on_flag set."""
+    return any(
+        composition_object.forced
+        for segment in PgsReader.read_segments(data, media_path)
+        if isinstance(segment, PresentationCompositionSegment)
+        for composition_object in segment.composition_objects
+    )
+
+
+def _segment(template: BaseSegment, payload: bytes) -> bytes:
+    """A segment with ``template``'s timestamps and type and a new payload."""
+    return template.bytes[:11] + len(payload).to_bytes(2) + payload
+
+
+def _composition(
+    pcs: PresentationCompositionSegment,
+    objects: typing.List[CompositionObject],
+    state: typing.Optional[int] = None,
+) -> bytes:
+    header = bytearray(pcs.data[:10])
+    if state is not None:
+        header[7] = state
+        header[8] = 0  # a full composition, not a palette-only update
+    return _segment(pcs, bytes(header) + bytes([len(objects)]) + b"".join(o.data for o in objects))
+
+
+def forced_only_pgs(data: bytes, media_path: MediaPath) -> bytes:
+    """A PG stream that shows only the objects flagged forced, like a player in forced-only mode.
+
+    Each new forced picture starts a new epoch carrying the window, palette and object data it
+    needs, even when the disc defined them in an earlier display set that showed only regular
+    captions or changed the picture without a new epoch; pgsrip reads one picture per epoch. A
+    showing ends at the next composition without forced objects. The result is empty when the
+    stream has no forced objects.
+    """
+    output = bytearray()
+    objects: typing.Dict[int, typing.List[ObjectDefinitionSegment]] = {}
+    palettes: typing.Dict[int, PaletteDefinitionSegment] = {}
+    window: typing.Optional[WindowDefinitionSegment] = None
+    shown: typing.Optional[typing.Set[int]] = None
+    for display_set in PgsReader.decode(data, media_path):
+        pcs = next((s for s in display_set.segments if isinstance(s, PresentationCompositionSegment)), None)
+        if pcs is None or len(pcs.data) < 11:
+            continue
+        if pcs.data[7] == CompositionState.EPOCH_START.value:
+            objects.clear()
+            palettes.clear()
+        for segment in display_set.segments:
+            if isinstance(segment, WindowDefinitionSegment):
+                window = segment
+            elif isinstance(segment, PaletteDefinitionSegment):
+                palettes[segment.palette_id] = segment
+            elif isinstance(segment, ObjectDefinitionSegment) and len(segment.data) >= 4:
+                if segment.data[3] & ObjectSequenceType.FIRST.value:
+                    objects[segment.id] = [segment]
+                else:
+                    objects.setdefault(segment.id, []).append(segment)
+
+        forced = [o for o in pcs.composition_objects if o.forced]
+        forced_ids = {o.object_id for o in forced}
+        window_bytes = [window.bytes] if window is not None else []
+        redefined = any(isinstance(s, ObjectDefinitionSegment) and s.id in forced_ids for s in display_set.segments)
+        if forced and (forced_ids != shown or redefined):
+            if shown:
+                # Close the picture on screen, so its cue ends where the next one starts.
+                output += _composition(pcs, [], CompositionState.NORMAL_CASE.value)
+                output += b"".join(window_bytes)
+                output += display_set.end.bytes
+            palette = palettes.get(pcs.palette_id)
+            output += _composition(pcs, forced, CompositionState.EPOCH_START.value)
+            output += b"".join(window_bytes)
+            if palette is not None:
+                output += palette.bytes
+            for object_id in sorted(forced_ids):
+                output += b"".join(s.bytes for s in objects.get(object_id, []))
+            output += display_set.end.bytes
+        elif forced:
+            # The same picture, such as a palette fade; pgsrip needs a window in every display set.
+            output += _composition(pcs, forced)
+            output += b"".join(window_bytes)
+            output += b"".join(s.bytes for s in display_set.segments if isinstance(s, PaletteDefinitionSegment))
+            output += display_set.end.bytes
+        elif shown:
+            output += _composition(pcs, [], CompositionState.NORMAL_CASE.value)
+            output += b"".join(window_bytes)
+            output += display_set.end.bytes
+        shown = forced_ids or None
+    return bytes(output)

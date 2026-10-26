@@ -30,8 +30,10 @@ class PgsSubtitleItem:
         self.start = min([ds.pcs.presentation_timestamp for ds in display_sets] or [None])
         self.end = max([ds.pcs.presentation_timestamp for ds in display_sets] or [None])
         self.image = PgsSubtitleItem.generate_image(display_sets)
-        self.x_offset = min([ds.wds.x_offset for ds in display_sets if ds.wds.num_windows > 0] or [None])
-        self.y_offset = min([ds.wds.y_offset for ds in display_sets if ds.wds.num_windows > 0] or [None])
+        # A palette-only update may carry no window definition.
+        windows = [wds for wds in (ds.wds for ds in display_sets) if wds is not None and wds.num_windows > 0]
+        self.x_offset = min([wds.x_offset for wds in windows] or [None])
+        self.y_offset = min([wds.y_offset for wds in windows] or [None])
         self.text: typing.Optional[str] = None
         self.place: typing.Optional[typing.Tuple[int, int, int, int]] = None
 

@@ -238,7 +238,12 @@ MVC to `edge264_test`, as source FFmpeg does for an MKV, and writes every audio
 and presentation-graphics stream of the title to
 `<name>_audio_subtitles.ts`. That sidecar's PMT carries each stream's playlist
 language. Each DTS-HD stream is followed by its DTS core, and FFmpeg exposes a
-TrueHD stream's AC-3 core, so the audio tracks match a MakeMKV rip. The sidecar
+TrueHD stream's AC-3 core, so the audio tracks match a MakeMKV rip. MakeMKV
+also adds a forced-only subtitle track after each presentation-graphics stream
+whose captions set `forced_on_flag`, and drops it when the stream has none.
+Extract Subtitles rebuilds those tracks from the sidecar: it keeps only the
+forced composition objects of each display set, so they reach the final mux as
+the same `.forced.` SRT files a MakeMKV rip gives. The sidecar
 also holds the first base-view access unit, so audio keeps its offset from the
 first video frame. Because the sidecar comes from the video pass, Extract MVC
 and Audio and Extract Subtitles run after the video stages for a direct read, so
