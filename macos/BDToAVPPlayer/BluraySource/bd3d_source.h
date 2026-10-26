@@ -102,10 +102,10 @@ typedef enum {
     BD3D_READ_EVENT_FINISHED,
 } bd3d_read_event;
 
-/// Watches each read, for a source on a network share. On BD3D_READ_EVENT_FAILED it may wait, then
-/// returns nonzero to try the same read again or zero to give up. Its return value is ignored
-/// for the other events.
-typedef int (*bd3d_read_monitor_fn)(void *context, bd3d_read_event event);
+/// Watches each read, for a source on a network share. On BD3D_READ_EVENT_FAILED, with the read's
+/// errno as `error`, it may wait, then returns nonzero to try the same read again or zero to give
+/// up. `error` is 0 and the return value is ignored for the other events.
+typedef int (*bd3d_read_monitor_fn)(void *context, bd3d_read_event event, int error);
 
 typedef struct bd3d_disc bd3d_disc;
 

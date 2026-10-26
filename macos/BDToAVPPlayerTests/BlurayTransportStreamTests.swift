@@ -91,7 +91,7 @@ final class BlurayTransportStreamTests: XCTestCase {
         let sink = CollectingPacketSink()
 
         let statistics = try BlurayTransportStream.demux(
-            stream, chunkSize: 500, failingReads: (after: 2, count: 5), reads: monitor, into: sink
+            stream, chunkSize: 500, failingReads: (after: 2, count: 5, error: ENOTCONN), reads: monitor, into: sink
         )
 
         XCTAssertEqual(sink.video.map(\.data), clean.video.map(\.data))
@@ -103,7 +103,20 @@ final class BlurayTransportStreamTests: XCTestCase {
     func testADroppedReadEndsTheStreamWhenNothingRetriesIt() {
         XCTAssertThrowsError(
             try BlurayTransportStream.demux(
-                fiveFrames(), chunkSize: 500, failingReads: (after: 2, count: 1), into: CollectingPacketSink()
+                fiveFrames(), chunkSize: 500, failingReads: (after: 2, count: 1, error: ENOTCONN), into: CollectingPacketSink()
+            )
+        ) { error in
+            XCTAssertEqual(error as? Bluray3DSourceError, .readFailed)
+        }
+    }
+
+    func testADiscReadThatNoReconnectCanCureIsNotRetried() {
+        let monitor = ShareConnectionMonitor(timing: .init(lostAfter: 2, retryInterval: 0.01))
+
+        XCTAssertThrowsError(
+            try BlurayTransportStream.demux(
+                fiveFrames(), chunkSize: 500, failingReads: (after: 2, count: 1, error: EACCES), reads: monitor,
+                into: CollectingPacketSink()
             )
         ) { error in
             XCTAssertEqual(error as? Bluray3DSourceError, .readFailed)

@@ -700,7 +700,13 @@ read-ahead buffer runs dry.
 
 A failed read on a share is tried again from the same place every half second
 instead of ending playback, for files, MKVs and disc images alike; the disc reader
-puts libbluray's file back where the read started before each retry. A read that has
+puts libbluray's file back where the read started before each retry. Only errors a
+reconnect can cure are retried: lost permission or a missing file fails at once. A
+read that keeps failing for a minute while the headset has a network gives up with
+**The movie's share stopped answering, so playback stopped.**; time with no network
+at all does not count. A request the player cancels, after a seek for example,
+stops retrying, and leaving the player stops every retry, including those of an MKV
+that is still opening. A read that has
 gone unanswered for two seconds, or no network at all while the movie's volume is
 remote, counts as a lost connection. The controls then stay up and say **Connection
 lost. Playing what has loaded while it reconnects.** while buffered video plays, or

@@ -5,14 +5,34 @@ import Network
 /// player can say the connection is lost instead of freezing silently, and keeps those reads
 /// going through a dropped connection instead of failing playback (#1131).
 ///
-/// A read that fails is tried again from the same place every `retryInterval` until it works
-/// or the monitor is cancelled; a read that hangs simply blocks. Once a read has gone
-/// unanswered for `lostAfter` seconds, or the headset has no network while the movie is on a
-/// network volume, the connection counts as lost until reads complete again. Thread-safe.
+/// A read that fails with an error a reconnect can cure is tried again from the same place every
+/// `retryInterval`. It stops when it works, when its caller no longer wants it, when the monitor
+/// is cancelled, or when it has kept failing for `giveUpAfter` seconds while the headset has a
+/// network. Time without any network does not count, so Wi-Fi can stay off as long as it likes.
+/// An error no reconnect can cure, such as lost permission or a missing file, fails at once. A
+/// read that hangs simply blocks. Once a read has gone unanswered for `lostAfter` seconds, or the
+/// headset has no network while the movie is on a network volume, the connection counts as lost
+/// until reads complete again. Thread-safe.
 final class ShareConnectionMonitor: @unchecked Sendable {
     struct Timing: Equatable {
         var lostAfter: TimeInterval = 2
         var retryInterval: TimeInterval = 0.5
+        var giveUpAfter: TimeInterval = 60
+    }
+
+    /// Why a share read stopped being retried, in words the player can show.
+    enum ReadError: Error, Equatable, LocalizedError {
+        case stoppedAnswering
+
+        var errorDescription: String? {
+            "The movie's share stopped answering, so playback stopped. Check the connection, then try again."
+        }
+    }
+
+    /// One failing read's retry history, for callers that retry on their own.
+    struct Retry {
+        fileprivate var failingSince: TimeInterval?
+        fileprivate(set) var gaveUp = false
     }
 
     let timing: Timing
@@ -53,6 +73,14 @@ final class ShareConnectionMonitor: @unchecked Sendable {
         }
     }
 
+    /// Watches the network when the system reports `url`'s volume as remote. It reads the file's
+    /// volume, so call it off the main thread.
+    func watchNetworkIfRemote(_ url: URL) {
+        if (try? url.resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == false {
+            watchNetwork()
+        }
+    }
+
     func setNetworkAvailable(_ isAvailable: Bool) {
         condition.withLock { isNetworkUnavailable = !isAvailable }
     }
@@ -78,16 +106,21 @@ final class ShareConnectionMonitor: @unchecked Sendable {
         }
     }
 
-    /// Runs `body`, trying it again after each failure until it succeeds or the monitor is
-    /// cancelled. `body` must start from the same place each time.
-    func read<T>(_ body: () throws -> T) throws -> T {
+    /// Runs `body`, trying it again after each curable failure while `isWanted` holds, until it
+    /// succeeds, the monitor is cancelled, or it gives up. `body` must start from the same place
+    /// each time. A read that gives up throws `ReadError.stoppedAnswering`; one that fails for
+    /// good, is no longer wanted, or is cancelled throws its own error.
+    func read<T>(while isWanted: () -> Bool = { true }, _ body: () throws -> T) throws -> T {
         let id = beginRead()
         defer { endRead(id) }
+        var retry = Retry()
         while true {
             do {
                 return try body()
             } catch {
-                guard waitToRetry() else { throw error }
+                guard isWanted(), waitToRetry(after: error, &retry), isWanted() else {
+                    throw retry.gaveUp ? ReadError.stoppedAnswering : error
+                }
             }
         }
     }
@@ -105,32 +138,65 @@ final class ShareConnectionMonitor: @unchecked Sendable {
         condition.withLock { _ = readStarts.removeValue(forKey: id) }
     }
 
-    /// Waits before a failed read is tried again. Returns false once cancelled.
-    func waitToRetry() -> Bool {
+    /// Decides what follows a failed read: waits and returns true to try it again, or returns
+    /// false when the error cannot be cured, the monitor is cancelled, or the read has failed for
+    /// `giveUpAfter` seconds with a network up, which sets `retry.gaveUp`.
+    func waitToRetry(after error: Error, _ retry: inout Retry) -> Bool {
+        guard !Self.isPermanent(error) else { return false }
         condition.lock()
         defer { condition.unlock() }
         guard !cancelled else { return false }
+        let time = now()
+        // Only failures while a network is up count toward giving up.
+        if isNetworkUnavailable || retry.failingSince == nil {
+            retry.failingSince = time
+        } else if let since = retry.failingSince, time - since >= timing.giveUpAfter {
+            retry.gaveUp = true
+            return false
+        }
         _ = condition.wait(until: Date(timeIntervalSinceNow: timing.retryInterval))
         return !cancelled
+    }
+
+    /// Errors a reconnect cannot cure: the file is gone, unreadable, or not a file.
+    static func isPermanent(_ error: Error) -> Bool {
+        let permanent: Set<Int32> = [EACCES, EPERM, ENOENT, ENOTDIR, EISDIR, EBADF, EINVAL, EROFS, ENAMETOOLONG]
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain {
+            return permanent.contains(Int32(nsError.code))
+        }
+        if nsError.domain == NSCocoaErrorDomain {
+            switch CocoaError.Code(rawValue: nsError.code) {
+            case .fileReadNoPermission, .fileReadNoSuchFile, .fileNoSuchFile, .fileReadInvalidFileName:
+                return true
+            default:
+                break
+            }
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                return isPermanent(underlying)
+            }
+        }
+        return false
     }
 }
 
 extension ShareConnectionMonitor {
     /// A monitor for a movie outside the app's own storage, or nil for one inside it, whose
-    /// read errors are real failures. The network is watched only when the system reports the
-    /// movie's volume as remote, so a movie on the headset never says its connection is lost.
+    /// read errors are real failures. This only looks at the path, so the session can hold the
+    /// monitor, and cancel it, before anything touches the share; call `watchNetworkIfRemote`
+    /// once off the main thread.
     static func forMovie(at url: URL) -> ShareConnectionMonitor? {
-        guard !isInsideAppStorage(url) else { return nil }
-        let monitor = ShareConnectionMonitor()
-        if (try? url.resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == false {
-            monitor.watchNetwork()
-        }
-        return monitor
+        isInsideAppStorage(url) ? nil : ShareConnectionMonitor()
     }
 
+    /// Compares paths without touching the movie's file, which may be on a share that is down.
     static func isInsideAppStorage(_ url: URL, home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> Bool {
-        let homePath = home.resolvingSymlinksInPath().path
-        let path = url.resolvingSymlinksInPath().path
+        // `/var` is a link to `/private/var`, and either spelling can reach the app.
+        func normalized(_ path: String) -> String {
+            path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+        }
+        let homePath = normalized(home.standardizedFileURL.path)
+        let path = normalized(url.standardizedFileURL.path)
         return path == homePath || path.hasPrefix(homePath.hasSuffix("/") ? homePath : homePath + "/")
     }
 }

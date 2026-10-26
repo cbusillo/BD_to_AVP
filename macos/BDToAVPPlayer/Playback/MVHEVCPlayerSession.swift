@@ -236,6 +236,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     /// The reads of a movie outside the app, for saying when its share stops answering.
     private var shareConnection: ShareConnectionMonitor?
     private var shareConnectionTask: Task<Void, Never>?
+    /// Opens a Blu-ray 3D source; tests replace it to stand in for a share.
+    var nativeSourceOpener: @Sendable (URL, ShareConnectionMonitor?) throws -> Bluray3DSource = { url, reads in
+        try Bluray3DSourceOpener.open(url, reads: reads)
+    }
     /// Blu-ray 3D playback decoded on the headset, used instead of `player`.
     private var nativePlayback: NativeBlurayPlayback?
     private var nativeStatusTask: Task<Void, Never>?
@@ -458,10 +462,16 @@ final class MVHEVCPlayerSession: ObservableObject {
             } else {
                 let bookmarkLease = try await bookmarkStore.open(id: mediaItem.id)
                 let url = bookmarkLease.url
+                // Held before anything touches the share, so leaving the player can stop it.
+                let connection = ShareConnectionMonitor.forMovie(at: url)
+                watchShareConnection(connection, generation: generation)
                 let shareLoader: ShareFileResourceLoader?
                 do {
                     shareLoader = try await Task.detached(priority: .userInitiated) {
-                        try ShareConnectionMonitor.forMovie(at: url).map { try ShareFileResourceLoader(url: url, connection: $0) }
+                        try connection.map { connection in
+                            connection.watchNetworkIfRemote(url)
+                            return try ShareFileResourceLoader(url: url, connection: connection)
+                        }
                     }.value
                 } catch {
                     bookmarkLease.close()
@@ -493,7 +503,6 @@ final class MVHEVCPlayerSession: ObservableObject {
             return
         }
         resourceLease = openedLease
-        watchShareConnection(openedConnection, generation: generation)
         preparationPhase = .preparingMedia
 
         do {
@@ -1137,17 +1146,16 @@ final class MVHEVCPlayerSession: ObservableObject {
         preparationPhase = .preparingMedia
 
         let url = openedLease.url
+        // Held before the source opens, since opening an MKV already reads the share, so leaving
+        // the player stops those reads too.
+        let reads = ShareConnectionMonitor.forMovie(at: url)
+        watchShareConnection(reads, generation: generation)
+        let openSource = nativeSourceOpener
         let source: Bluray3DSource
-        let reads: ShareConnectionMonitor?
         do {
-            (source, reads) = try await Task.detached(priority: .userInitiated) {
-                let reads = ShareConnectionMonitor.forMovie(at: url)
-                do {
-                    return (try Bluray3DSourceOpener.open(url, reads: reads), reads)
-                } catch {
-                    reads?.cancel()
-                    throw error
-                }
+            source = try await Task.detached(priority: .userInitiated) {
+                reads?.watchNetworkIfRemote(url)
+                return try openSource(url, reads)
             }.value
         } catch {
             guard generation == preparationGeneration, !Task.isCancelled else { return }
@@ -1160,7 +1168,6 @@ final class MVHEVCPlayerSession: ObservableObject {
             reads?.cancel()
             return
         }
-        watchShareConnection(reads, generation: generation)
         let title = source.info.titles.first { $0.id == mediaItem.bluray3DTitle?.id } ?? source.info.mainTitle
         guard let title, title.isPlayable else {
             presentFailure(.preparationFailed(

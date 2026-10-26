@@ -98,6 +98,7 @@ enum BlurayDemuxCallback {
     private final class ReadWatch {
         let monitor: ShareConnectionMonitor
         var readID: Int?
+        var retry = ShareConnectionMonitor.Retry()
         init(monitor: ShareConnectionMonitor) { self.monitor = monitor }
     }
 
@@ -140,14 +141,16 @@ enum BlurayDemuxCallback {
         }
     }
 
-    private static let watchRead: bd3d_read_monitor_fn = { context, event in
+    private static let watchRead: bd3d_read_monitor_fn = { context, event, error in
         guard let context else { return 0 }
         let watch = Unmanaged<ReadWatch>.fromOpaque(context).takeUnretainedValue()
         switch event {
         case BD3D_READ_EVENT_STARTED:
             watch.readID = watch.monitor.beginRead()
+            watch.retry = ShareConnectionMonitor.Retry()
         case BD3D_READ_EVENT_FAILED:
-            return watch.monitor.waitToRetry() ? 1 : 0
+            let code = POSIXErrorCode(rawValue: error) ?? .EIO
+            return watch.monitor.waitToRetry(after: POSIXError(code), &watch.retry) ? 1 : 0
         default:
             if let id = watch.readID { watch.monitor.endRead(id) }
             watch.readID = nil
@@ -197,7 +200,7 @@ enum BlurayTransportStream {
         let chunkSize: Int
         var offset = 0
         var reads = 0
-        var failingReads: (after: Int, count: Int)?
+        var failingReads: (after: Int, count: Int, error: Int32)?
         init(data: Data, chunkSize: Int) {
             self.data = data
             self.chunkSize = chunkSize
@@ -205,14 +208,15 @@ enum BlurayTransportStream {
     }
 
     /// `chunkSize` sets how many bytes each read returns, so reads can split packets.
-    /// `failingReads` says how many reads fail, as a dropped share's do, starting with the one
-    /// at that position in the sequence; `reads` decides whether they are tried again.
+    /// `failingReads` says how many reads fail, and with which errno, as a dropped share's do,
+    /// starting with the one at that position in the sequence; `reads` decides whether they are
+    /// tried again.
     static func demux(
         _ data: Data,
         audioTrackIDs: [Int] = [],
         subtitleTrackIDs: [Int] = [],
         chunkSize: Int = 6144,
-        failingReads: (after: Int, count: Int)? = nil,
+        failingReads: (after: Int, count: Int, error: Int32)? = nil,
         reads: ShareConnectionMonitor? = nil,
         into sink: Bluray3DPacketSink
     ) throws -> Bluray3DReadStatistics {
@@ -225,6 +229,7 @@ enum BlurayTransportStream {
             let reader = Unmanaged<Reader>.fromOpaque(context).takeUnretainedValue()
             defer { reader.reads += 1 }
             if let failing = reader.failingReads, reader.reads >= failing.after, reader.reads < failing.after + failing.count {
+                errno = failing.error
                 return -1
             }
             let count = min(Int(size), reader.chunkSize, reader.data.count - reader.offset)

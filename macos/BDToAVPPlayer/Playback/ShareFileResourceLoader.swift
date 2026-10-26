@@ -8,8 +8,8 @@ import UniformTypeIdentifiers
 /// file URL, `AVPlayer` keeps its clock running through a stalled read and then jumps forward to
 /// catch up (#1131).
 ///
-/// Reads go through `ShareConnectionMonitor`, which retries failures until the monitor is
-/// cancelled. Each loading request reads on its own work item, since a long sequential request
+/// Reads go through `ShareConnectionMonitor`, which retries curable failures until they work,
+/// the player cancels their request, or the monitor stops. Each loading request reads on its own work item, since a long sequential request
 /// and a short one elsewhere in the file can be open at once.
 final class ShareFileResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
     typealias Read = @Sendable (_ offset: Int64, _ count: Int) throws -> Data
@@ -107,7 +107,9 @@ final class ShareFileResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @u
             while offset < end {
                 guard isOpen(id) else { return }
                 let count = Int(min(Int64(Self.chunkBytes), end - offset))
-                let data = try connection.read { try read(offset, count) }
+                // A request the player cancels, say after a seek during an outage, stops retrying,
+                // so it neither holds a worker nor keeps the connection reported lost.
+                let data = try connection.read(while: { isOpen(id) }) { try read(offset, count) }
                 // The file ended before its recorded length: it changed under the player.
                 guard !data.isEmpty else { throw CocoaError(.fileReadUnknown) }
                 guard deliver(data, to: loading, id: id) else { return }

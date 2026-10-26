@@ -4,6 +4,7 @@
 #include <libbluray/clpi_data.h>
 #include <libbluray/filesystem.h>
 #include <libbluray/log_control.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -506,14 +507,18 @@ bd3d_result bd3d_demux(
     size_t carried = 0;
     while (result == BD3D_OK) {
         if (monitor != NULL) {
-            monitor(monitor_context, BD3D_READ_EVENT_STARTED);
+            monitor(monitor_context, BD3D_READ_EVENT_STARTED, 0);
         }
         int64_t count;
-        do {
+        for (;;) {
+            errno = 0;
             count = read(read_context, buffer + carried, (int64_t)(READ_CHUNK_SIZE - carried));
-        } while (count < 0 && monitor != NULL && monitor(monitor_context, BD3D_READ_EVENT_FAILED) != 0);
+            if (count >= 0 || monitor == NULL || monitor(monitor_context, BD3D_READ_EVENT_FAILED, errno) == 0) {
+                break;
+            }
+        }
         if (monitor != NULL) {
-            monitor(monitor_context, BD3D_READ_EVENT_FINISHED);
+            monitor(monitor_context, BD3D_READ_EVENT_FINISHED, 0);
         }
         if (count < 0) {
             result = BD3D_READ_FAILED;
@@ -546,9 +551,12 @@ static int64_t read_bluray_file(void *context, uint8_t *buffer, int64_t size) {
     BD_FILE_H *file = context;
     int64_t position = file->tell(file);
     int64_t count = file->read(file, buffer, size);
-    // Put the file back where the read started, so a monitor can try the same read again.
+    // Put the file back where the read started, so a monitor can try the same read again, and
+    // keep the read's errno for the monitor.
     if (count < 0 && position >= 0) {
+        int error = errno;
         file->seek(file, position, SEEK_SET);
+        errno = error;
     }
     return count;
 }
