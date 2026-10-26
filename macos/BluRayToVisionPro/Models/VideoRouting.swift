@@ -827,7 +827,8 @@ struct VideoStorageEstimate: Equatable {
     }
 
     private static func estimate(draft: ConversionDraft) -> DraftEstimate? {
-        guard let durationSeconds = draft.estimatedDurationSeconds,
+        guard !draft.options.job.intermediatePolicy.ripsOnly,
+              let durationSeconds = draft.estimatedDurationSeconds,
               durationSeconds.isFinite,
               durationSeconds > 0
         else {
@@ -882,7 +883,10 @@ struct VideoStorageEstimate: Equatable {
     }
 
     private static func unavailableReason(for draft: ConversionDraft) -> String {
-        switch VideoRoutePlan(options: draft.options).kind {
+        if draft.options.job.intermediatePolicy.ripsOnly {
+            return "A disc rip is about the size of the 3D movie on the disc."
+        }
+        return switch VideoRoutePlan(options: draft.options).kind {
         case .av1Stereo:
             "AV1 size varies with source content and CRF."
         case .existingArtifact:

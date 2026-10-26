@@ -93,12 +93,13 @@ struct EncodingProfile: Identifiable, Equatable {
 }
 
 enum ProfilePersistenceCopy {
-    static let summary = "Profiles save video, audio, subtitle, reusable-file, and encoder settings. Restart, overwrite, delete-source, recovery, command-output, sound, and keep-awake choices are not saved."
+    static let summary = "Profiles save video, audio, subtitle, output-file, and encoder settings. Restart, overwrite, delete-source, recovery, command-output, sound, and keep-awake choices are not saved."
 }
 
 enum ReusableFileOutcome: String, CaseIterable, Identifiable {
     case finishedMovieOnly
     case finishedMovieAndReusableFiles
+    case discRipOnly
 
     var id: String { rawValue }
 
@@ -108,6 +109,8 @@ enum ReusableFileOutcome: String, CaseIterable, Identifiable {
             "Just the finished movie"
         case .finishedMovieAndReusableFiles:
             "The finished movie plus reusable files"
+        case .discRipOnly:
+            "Just the 3D disc rip, not converted"
         }
     }
 
@@ -117,13 +120,20 @@ enum ReusableFileOutcome: String, CaseIterable, Identifiable {
             .automatic
         case .finishedMovieAndReusableFiles:
             .reusable
+        case .discRipOnly:
+            .ripOnly
         }
     }
 
     init(policy: IntermediatePolicy) {
-        self = policy.createsReusableArtifacts
-            ? .finishedMovieAndReusableFiles
-            : .finishedMovieOnly
+        switch policy {
+        case .automatic:
+            self = .finishedMovieOnly
+        case .reusable:
+            self = .finishedMovieAndReusableFiles
+        case .ripOnly:
+            self = .discRipOnly
+        }
     }
 
     var detail: String {
@@ -132,6 +142,8 @@ enum ReusableFileOutcome: String, CaseIterable, Identifiable {
             "You get one finished movie. Temporary processing files are removed after a successful conversion."
         case .finishedMovieAndReusableFiles:
             "You get the finished movie plus reusable left- and right-eye movies that can be used later without rereading the disc. This needs more storage and time, and some quality choices may be unavailable."
+        case .discRipOnly:
+            "Your copy of MakeMKV saves the 3D movie as one MKV file in the destination, with both eyes and every audio and subtitle track. Nothing is converted. Shiny 3D Cinema plays it from a shared folder. Works with Blu-ray discs, disc images, and Blu-ray folders."
         }
     }
 }
@@ -306,7 +318,10 @@ struct ConversionDraft: Equatable {
     }
 
     var proposedOutputURL: URL {
-        destinationURL.appendingPathComponent("\(outputStem)\(options.encoding.videoOutputMode.outputFileTag).mov")
+        if options.job.intermediatePolicy.ripsOnly {
+            return destinationURL.appendingPathComponent("\(outputStem).mkv")
+        }
+        return destinationURL.appendingPathComponent("\(outputStem)\(options.encoding.videoOutputMode.outputFileTag).mov")
     }
 
     func withSourceDetails(_ sourceDetails: SourceInspection?) -> ConversionDraft {

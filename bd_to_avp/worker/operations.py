@@ -4,12 +4,14 @@ import os
 import stat
 import subprocess
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePath
 from typing import Iterator
 
 import ffmpeg
+
+from wakepy.modes import keep
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
@@ -20,6 +22,9 @@ from bd_to_avp.modules.disc import (
     get_disc_and_mvc_video_info,
     makemkv_crash_signal_name,
     MKVCreationError,
+    RIP_STAGES,
+    rip_title_to_folder,
+    RipWithout3DError,
 )
 from bd_to_avp.modules.disc_image import MountedImageBackingUnknownError, backing_image_for_folder
 from bd_to_avp.modules.file import path_is_relative_to
@@ -125,6 +130,10 @@ def run_operation(
         if activity is None:
             raise WorkerOperationError("internal_error", "Conversion requires an activity reporter.")
         return convert_source(job, owner, activity)
+    if job.operation is WorkerOperation.RIP_SOURCE:
+        if activity is None:
+            raise WorkerOperationError("internal_error", "Ripping requires an activity reporter.")
+        return rip_source(job, owner, activity)
     if job.operation is WorkerOperation.PREVIEW_SOURCE:
         if activity is None:
             raise WorkerOperationError("internal_error", "Preview requires an activity reporter.")
@@ -356,6 +365,106 @@ def inspect_source(
 
 def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActivityReporter) -> dict[str, object]:
     return _convert_source(job, owner, activity)
+
+
+def rip_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActivityReporter) -> dict[str, object]:
+    """Saves the selected title as an MKV in the destination with the user's MakeMKV; nothing is converted."""
+    resolved_source = resolve_job_source(job.source)
+    source_path = resolved_source.path
+    destination = job.destination
+    job_options = job.job
+    if destination is None or job_options is None:
+        raise WorkerOperationError("invalid_request", "Rip requests require a destination and job options.")
+    if destination.path.exists() and not destination.path.is_dir():
+        raise WorkerOperationError("destination_not_directory", "The destination path must be a folder.")
+    if resolved_source.kind is WorkerSourceKind.BLU_RAY_FOLDER and path_is_relative_to(destination.path, source_path):
+        raise WorkerOperationError(
+            "destination_inside_source",
+            "Choose a destination outside the Blu-ray source folder.",
+        )
+    if not config.MAKEMKVCON_PATH.is_file():
+        raise WorkerOperationError(
+            "makemkv_missing",
+            "Ripping uses MakeMKV, which is not installed. Install MakeMKV, then try again.",
+            retryable=True,
+        )
+    emit_storage_capacity(activity, source_path, role="source")
+    emit_storage_capacity(activity, destination.path, role="destination")
+    if resolved_source.kind is not job.source.kind:
+        activity.log(
+            "Reading the disc image file instead of the mounted disc.",
+            stage="configure",
+            code="mounted_image_redirected",
+        )
+
+    owner.check_cancelled()
+    activity.set_stage_plan(RIP_STAGES)
+    with configured_source(resolved_source, source_path):
+        try:
+            with keep.running() if job_options.keep_awake else nullcontext():
+                output_path = rip_title_to_folder(
+                    destination.path,
+                    job.source.title_id,
+                    overwrite=job_options.overwrite,
+                    stage_started=activity.stage_started,
+                    progress_callback=activity.stage_progress,
+                    run_context=activity.run_context,
+                    cancellation_event=owner.cancellation_event,
+                    observability_context=stage_observability_context,
+                )
+            owner.check_cancelled()
+        except ProcessCancelled as error:
+            raise WorkerCancelled("The rip was cancelled.") from error
+        except RipWithout3DError as error:
+            raise WorkerOperationError("rip_missing_3d", str(error)) from error
+        except MKVCreationError as error:
+            if owner.cancellation_event.is_set():
+                raise WorkerCancelled("The rip was cancelled.") from error
+            raise WorkerOperationError(
+                "rip_failed",
+                "MakeMKV reported errors while ripping this disc. Clean the disc and try again.",
+                str(error),
+                retryable=True,
+            ) from error
+        except FileExistsError as error:
+            raise WorkerOperationError("output_exists", str(error), retryable=True) from error
+        except DiscTitleSelectionError as error:
+            raise WorkerOperationError("title_unavailable", str(error), retryable=True) from error
+        except subprocess.CalledProcessError as error:
+            if owner.cancellation_event.is_set():
+                raise WorkerCancelled("The rip was cancelled.") from error
+            raw_details = error.stderr or error.output
+            details = raw_details.decode("utf-8", errors="replace") if isinstance(raw_details, bytes) else raw_details
+            crash_signal_name = makemkv_crash_signal_name(error)
+            if crash_signal_name is not None:
+                raise WorkerOperationError(
+                    "makemkv_crashed",
+                    build_makemkv_crash_message(crash_signal_name),
+                    details if isinstance(details, str) else None,
+                    retryable=True,
+                ) from error
+            raise WorkerOperationError(
+                "rip_failed",
+                "MakeMKV could not rip this disc.",
+                details if isinstance(details, str) else None,
+                retryable=True,
+            ) from error
+        except (OSError, RuntimeError, ValueError) as error:
+            if owner.cancellation_event.is_set():
+                raise WorkerCancelled("The rip was cancelled.") from error
+            raise WorkerOperationError("rip_failed", "The disc could not be ripped.", str(error)) from error
+
+    emit_storage_capacity(activity, output_path, role="canonical_output")
+    activity.log("Rip ready", stage="move_files", output_path=output_path.as_posix())
+    result: dict[str, object] = {
+        "source_path": source_path.as_posix(),
+        "destination_path": destination.path.as_posix(),
+        "output_path": output_path.as_posix(),
+        "size_bytes": output_path.stat().st_size,
+    }
+    if job.source.title_id is not None:
+        result["title_id"] = job.source.title_id
+    return result
 
 
 def preview_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActivityReporter) -> dict[str, object]:

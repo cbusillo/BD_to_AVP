@@ -266,3 +266,29 @@ sibling output has been frozen for the full timeout.
 This protocol does not repair media or remux an MKV. A remux recovery route
 requires a reproducing source and validation that MVC/3D video, audio, and
 subtitles survive and that the resulting source converts successfully.
+
+## Rip without converting
+
+`rip_source` saves one disc title as an MKV with the user's own MakeMKV and
+converts nothing. The request has `source` (a `physical_disc`, `disc_image`, or
+`blu_ray_folder` with a `title_id` from inspection), `destination`, and `job`,
+and no `encoding`; `direct_file` sources are rejected with `invalid_rip_source`.
+The `job` object has the usual keys, but `start_stage` must be 1 and
+`keep_files`, `remove_original`, and `continue_on_error` must be false
+(`invalid_rip_options`). Only `overwrite`, `output_commands`, and `keep_awake`
+apply. The shared fixture is `native_worker_rip_physical_disc_v13.json`.
+
+The worker reads the titles through MakeMKV even when the shared Blu-ray reader
+could read the source, so a `bluray:` title maps to MakeMKV's title for the same
+first clip and keeps the reader's movie name, which the Mac app planned. When
+MakeMKV lists more than one title starting with that clip, the job fails with
+`title_unavailable` rather than guess. MakeMKV rips with the bundled profile
+that keeps the MVC view, every audio track, and every subtitle track into a new
+hidden `.<name>.ripping-*` folder in the destination, and only that folder is
+removed afterward. The worker then reads the first 48 frames of the video track and
+requires MVC coded slice extensions (NAL type 20). Only then is the file moved
+to `<destination>/<movie name>.mkv`, using the same names conversions use. A
+2D-only rip fails with `rip_missing_3d` and leaves nothing in the destination.
+Stages are `inspect_source`, `create_mkv`, `verify_3d`, and `move_files`; the
+result uses the `conversion_result` key with `output_path` and `size_bytes`.
+The worker never decrypts; MakeMKV reads any disc encryption itself.
