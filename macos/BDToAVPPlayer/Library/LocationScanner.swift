@@ -49,9 +49,10 @@ enum LocationScanner {
     /// Throws when the Location's own folder cannot be listed; unreadable subfolders are skipped
     /// and counted. Folders are read breadth first. The scan stops, and says the listing is
     /// truncated, when `budget` runs out or `limit` candidates are found, checked before every
-    /// entry so one very wide folder cannot run past either. A Location's folder that lists
-    /// nothing is listed once more after `emptyRetryDelay`: on an SMB share the first listing
-    /// can come back empty without an error (Apple DTS, developer forums thread 831359).
+    /// entry so one very wide folder cannot run past either. On an SMB share the first listing
+    /// of a folder can come back empty without an error (Apple DTS, developer forums thread
+    /// 831359), so an empty folder is listed once more: the Location's own folder after
+    /// `emptyRetryDelay`, a subfolder straight away.
     static func scan(
         root: URL,
         budget: Duration = .seconds(15),
@@ -127,7 +128,9 @@ enum LocationScanner {
         while !pending.isEmpty, !mustStop() {
             let next = pending.removeFirst()
             do {
-                visit(try list(next.url), relativePath: next.relativePath, depth: next.depth)
+                var entries = try list(next.url)
+                if entries.isEmpty { entries = try list(next.url) }
+                visit(entries, relativePath: next.relativePath, depth: next.depth)
             } catch {
                 unreadableCount += 1
             }

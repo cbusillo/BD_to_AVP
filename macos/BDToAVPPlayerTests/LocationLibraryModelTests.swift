@@ -319,6 +319,17 @@ final class LocationLibraryModelTests: XCTestCase {
 
         XCTAssertEqual(listing.candidates.map(\.fileName), ["Movie.mov"])
         XCTAssertFalse(listing.folderLooksEmpty)
+
+        let nested = root.appendingPathComponent("Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data().write(to: nested.appendingPathComponent("Deeper.mov"))
+        var nestedLooks = 0
+        let withSubfolder = try LocationScanner.scan(root: root) { url in
+            guard url.lastPathComponent == "Nested" else { return try LocationScanner.coordinatedContents(of: url) }
+            nestedLooks += 1
+            return nestedLooks == 1 ? [] : try LocationScanner.coordinatedContents(of: url)
+        }
+        XCTAssertEqual(withSubfolder.candidates.map(\.relativePath), ["Movie.mov", "Nested/Deeper.mov"])
     }
 
     func testScannerSaysWhatItCouldNotReadInsteadOfListingNothing() throws {

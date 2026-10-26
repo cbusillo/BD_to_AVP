@@ -113,7 +113,12 @@ final class LocationLibraryModel: ObservableObject {
     /// Adds the folder the wearer picked in Files and lists it. Returns the new Location's ID.
     @discardableResult
     func add(folderURL: URL) async -> UUID? {
-        let location = StoredLocation(id: UUID(), name: Self.displayName(for: folderURL), inspectedFiles: [])
+        // The name Files shows needs a read of the share, so the first refresh fills it in.
+        let location = StoredLocation(
+            id: UUID(),
+            name: Self.displayName(folderName: folderURL.lastPathComponent, localizedName: nil, volumeName: nil),
+            inspectedFiles: []
+        )
         guard saveBookmark(for: folderURL, locationID: location.id) else { return nil }
         locations.append(location)
         persist()
@@ -287,8 +292,8 @@ final class LocationLibraryModel: ObservableObject {
         saveInspectedFiles(inspected, for: locationID)
     }
 
-    /// Locations added before names came from the system were named by the raw folder, which
-    /// for an SMB share root is the mount folder with a random prefix, such as "fHqWGQmedia".
+    /// A Location starts out named by its raw folder, which for an SMB share root is the mount
+    /// folder with a random prefix, such as "fHqWGQmedia"; the name Files shows replaces it.
     private func renameIfNamedByRawFolder(_ locationID: UUID, folderURL: URL, systemName: String) {
         guard let index = locations.firstIndex(where: { $0.id == locationID }),
               locations[index].name == folderURL.lastPathComponent, systemName != locations[index].name
