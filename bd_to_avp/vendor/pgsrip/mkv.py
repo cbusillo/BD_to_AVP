@@ -1,5 +1,6 @@
 import json
 import logging
+import shutil
 import subprocess
 import typing
 from pathlib import Path
@@ -13,10 +14,11 @@ from trakit.api import trakit
 from bd_to_avp.vendor.pgsrip.media import Media, Pgs
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.options import Options
+from bd_to_avp.vendor.pgsrip.pgs import contains_forced_objects, forced_only_pgs
 from bd_to_avp.modules.command import run_ffprobe, run_process_capture
 from bd_to_avp.modules.config import config
 from bd_to_avp.observability import ObservabilityContext
-from bd_to_avp.process_runner import ProcessArtifactProbe
+from bd_to_avp.process_runner import ProcessArtifactProbe, ProcessCancelled
 from bd_to_avp.runtime import RunContext
 
 logger = logging.getLogger(__name__)
@@ -79,18 +81,22 @@ class MkvPgs(Pgs):
         run_context: RunContext | None = None,
         cancellation_event: Event | None = None,
         observability_context: ObservabilityContext | None = None,
+        data_reader: typing.Callable[[], bytes] | None = None,
     ):
         temp_folder = media_path.create_temp_folder()
         super().__init__(
             media_path=media_path.translate(language=language, number=number),
             options=options,
-            data_reader=lambda: self.read_data(
-                media_path=media_path,
-                track_id=track_id,
-                temp_folder=temp_folder,
-                run_context=run_context,
-                cancellation_event=cancellation_event,
-                observability_context=observability_context,
+            data_reader=data_reader
+            or (
+                lambda: self.read_data(
+                    media_path=media_path,
+                    track_id=track_id,
+                    temp_folder=temp_folder,
+                    run_context=run_context,
+                    cancellation_event=cancellation_event,
+                    observability_context=observability_context,
+                )
             ),
             temp_folder=temp_folder,
         )
@@ -160,6 +166,21 @@ class MkvTrack:
         return bool(self.properties.get("forced_track", False))
 
     @property
+    def forced_only(self) -> bool:
+        """A track derived from this stream's forced captions, as MakeMKV adds after each PG stream."""
+        return bool(self.properties.get("forced_only", False))
+
+    def forced_only_track(self) -> "MkvTrack":
+        return MkvTrack(
+            {
+                "id": self.id,
+                "type": self.type,
+                "codec": self.codec,
+                "properties": {**self.properties, "forced_track": True, "forced_only": True},
+            }
+        )
+
+    @property
     def has_decodable_pgs_dimensions(self) -> bool:
         if self.type != "subtitles" or self.codec != "HDMV PGS":
             return True
@@ -177,6 +198,11 @@ class MkvTrack:
 
 
 class Mkv(Media):
+    # A Blu-ray read without MakeMKV has no forced-only tracks; with this set, each selected PG
+    # stream that flags captions forced also yields a forced-only track, as MakeMKV makes.
+    forced_only_tracks = False
+    _stream_folder: str | None = None
+
     def __init__(
         self,
         path: str,
@@ -184,6 +210,7 @@ class Mkv(Media):
         run_context: RunContext | None = None,
         cancellation_event: Event | None = None,
         observability_context: ObservabilityContext | None = None,
+        forced_only_tracks: bool = False,
     ):
         try:
             metadata = run_ffprobe(
@@ -211,9 +238,59 @@ class Mkv(Media):
         self.run_context = run_context
         self.cancellation_event = cancellation_event
         self.observability_context = observability_context
+        self.forced_only_tracks = forced_only_tracks
+        self._stream_files: dict[int, Path] = {}
+        self._forced_streams: dict[int, bool] = {}
+
+    def stream_data(self, track_id: int) -> bytes:
+        """The PG stream's segments, extracted once and shared by its full and forced-only tracks."""
+        stream_file = self._stream_files.get(track_id)
+        if stream_file is not None:
+            return stream_file.read_bytes()
+        if self._stream_folder is None:
+            self._stream_folder = self.media_path.create_temp_folder()
+        data = MkvPgs.read_data(
+            self.media_path,
+            track_id,
+            self._stream_folder,
+            run_context=self.run_context,
+            cancellation_event=self.cancellation_event,
+            observability_context=self.observability_context,
+        )
+        self._stream_files[track_id] = Path(self._stream_folder) / f"track-{track_id}.sup"
+        return data
+
+    def has_forced_captions(self, track_id: int) -> bool:
+        if track_id not in self._forced_streams:
+            try:
+                self._forced_streams[track_id] = contains_forced_objects(self.stream_data(track_id), self.media_path)
+            except ProcessCancelled:
+                raise
+            except Exception as error:
+                # The full track's rip reports the unreadable stream.
+                logger.warning("Could not read PGS track %s for forced captions: %s", track_id, error)
+                self._forced_streams[track_id] = False
+        return self._forced_streams[track_id]
+
+    def close(self) -> None:
+        if self._stream_folder is not None:
+            shutil.rmtree(self._stream_folder, ignore_errors=True)
+            self._stream_folder = None
+            self._stream_files.clear()
 
     def get_selected_pgs_tracks(self, options: Options):
         tracks = [t for t in self.tracks if t.type == "subtitles" and t.codec == "HDMV PGS" and t.enabled]
+        if self.forced_only_tracks:
+            # MakeMKV drops a forced-only track that turns out empty, so only streams with forced
+            # captions get one.
+            tracks += [
+                t.forced_only_track()
+                for t in list(tracks)
+                if not t.forced
+                and t.has_decodable_pgs_dimensions
+                and (not options.languages or t.language in options.languages)
+                and self.has_forced_captions(t.id)
+            ]
         tracks.sort(key=lambda x: (x.forced, x.id))
         selected_languages: typing.Dict[str, int] = {}
         for t in tracks:
@@ -250,6 +327,13 @@ class Mkv(Media):
 
     def get_selected_pgs_medias(self, options: Options):
         for t, language, number in self.get_selected_pgs_tracks(options):
+            data_reader = None
+            if self.forced_only_tracks:
+                data_reader = (
+                    (lambda track_id=t.id: forced_only_pgs(self.stream_data(track_id), self.media_path))
+                    if t.forced_only
+                    else (lambda track_id=t.id: self.stream_data(track_id))
+                )
             pgs = MkvPgs(
                 self.media_path,
                 t.id,
@@ -259,6 +343,7 @@ class Mkv(Media):
                 run_context=getattr(self, "run_context", None),
                 cancellation_event=getattr(self, "cancellation_event", None),
                 observability_context=getattr(self, "observability_context", None),
+                data_reader=data_reader,
             )
             if pgs.matches(options):
                 logger.debug("Selecting track %s:%s in %s", t.id, language, self)
