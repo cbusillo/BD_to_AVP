@@ -788,7 +788,7 @@ its clip, as Fast X's feature starts a second into its clip, the reader finds th
 point in the clip information (CLPI) file's EP map and starts at the SSIF extent pair
 that holds it. Base and dependent extents sit together in the SSIF, so that pair starts
 after every earlier extent of both views; the dependent clip comes from the playlist's
-stereo sub-path. The same mapping starts playback anywhere in a title (#1113).
+stereo sub-path.
 
 The tests read fixtures cut from the Ocean Dreams and Fast X discs at their clip
 boundaries, read through libudfread and libbluray (disc images are never mounted).
