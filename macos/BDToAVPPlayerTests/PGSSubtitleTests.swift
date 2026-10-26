@@ -195,6 +195,28 @@ final class PGSSubtitleTests: XCTestCase {
         XCTAssertEqual(fresh.flatMap { decoder.receive($0, ticks: 360) }.first?.objects, [])
     }
 
+    func testDamagedObjectsAreLeftOutRatherThanExpanded() throws {
+        func objects(_ segments: [Data]) -> [PGSDisplayObject]? {
+            var decoder = PGSDecoder()
+            return segments.flatMap { decoder.receive($0, ticks: 0) }.first?.objects
+        }
+        // Wider than the 1920-pixel frame.
+        XCTAssertEqual(objects(
+            [PGS.composition([PGS.Placement(x: 0, y: 0)])] + PGS.object(width: 2000, height: 1, pixels: Array(repeating: 1, count: 2000))
+                + [PGS.end]
+        ), [])
+        // A crop that misses the object.
+        XCTAssertEqual(objects(
+            [PGS.composition([PGS.Placement(x: 0, y: 0, crop: PGSRect(x: 8, y: 0, width: 2, height: 1))])]
+                + PGS.object(width: 4, height: 1, pixels: [1, 1, 1, 1]) + [PGS.end]
+        ), [])
+        // Fragments that run past the declared length keep only what was declared.
+        var fragments = PGS.object(width: 2, height: 1, pixels: [1, 1], fragments: 2)
+        fragments[1] += Data(repeating: 0x07, count: 50)
+        let object = try XCTUnwrap(objects([PGS.composition([PGS.Placement(x: 0, y: 0)])] + fragments + [PGS.end])?.first)
+        XCTAssertEqual(object.runLengthData, Data([1, 1, 0, 0]))
+    }
+
     func testTracksOfferOnlyPGSWithTheirLanguages() {
         let tracks = [
             Bluray3DTrack(id: 0x1200, kind: .subtitle, codingType: 0x90, language: "eng", name: nil),
@@ -364,6 +386,11 @@ final class PGSSubtitleTests: XCTestCase {
         XCTAssertEqual(chroma(frame, column: column / 2, row: 1), [142, 114])
     }
 
+    func testAnObjectPartlyOffTheDiscsFrameIsCutBeforeDrawing() throws {
+        let subtitle = try overlay(PGS.block(x: 1918, y: 1078, width: 4, height: 4))
+        XCTAssertEqual(subtitle.bounds, PGSRect(x: 1918, y: 1078, width: 2, height: 2))
+    }
+
     func testDrawingPastTheFrameEdgeIsCut() throws {
         // Four rows from row 6 of an eight-row frame; the left eye's copy runs off the right edge.
         let x = 16 - SubtitleOverlay.eyeShift - 2
@@ -473,8 +500,10 @@ final class PGSSubtitleTests: XCTestCase {
         let german = try XCTUnwrap(session.subtitleOptions.last)
         session.selectSubtitle(id: german.id)
         XCTAssertEqual(session.selectedSubtitleID, german.id)
+        XCTAssertEqual(session.nativeSubtitleTrackID, 0x1202)
         session.selectSubtitle(id: "off")
         XCTAssertEqual(session.selectedSubtitleID, "off")
+        XCTAssertNil(session.nativeSubtitleTrackID)
         // Every PGS track is read so a switch shows at once; the text track is not.
         let deadline = Date(timeIntervalSinceNow: 5)
         while source.requestedSubtitleTracks.isEmpty, Date() < deadline {

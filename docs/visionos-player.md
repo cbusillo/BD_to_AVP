@@ -925,7 +925,9 @@ right and the right eye's 6 pixels left: crossed disparity that sets the subtitl
 little in front of the screen. The disc's own per-scene subtitle depths (the MVC
 offset sequences) are not read yet. After a seek or resume that starts a new read,
 subtitles start with the track's next display set, so a line already on screen at
-the target can be missed. Off shows nothing, forced
+the target can be missed. In a title made of several clips, a line whose clear falls
+just past a clip's end stays up until the next clip's first subtitle, because the
+reader drops packets outside each clip's part. Off shows nothing, forced
 captions included; a chosen track shows all of it, forced or not. A choice takes
 effect from the next frame decoded, about half a second ahead of the clock.
 

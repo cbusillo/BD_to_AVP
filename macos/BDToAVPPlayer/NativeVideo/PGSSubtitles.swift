@@ -89,8 +89,13 @@ struct PGSDecoder {
         var width: Int
         var height: Int
         var data: Data
+        /// The run-length data's size, as the first fragment declares it.
+        var length: Int
         var isComplete: Bool
     }
+
+    /// The largest frame a composition may describe; Blu-ray graphics are at most 1920x1080.
+    static let maximumCanvas = 4096
 
     private var composition: Composition?
     private var objects: [UInt16: ObjectData] = [:]
@@ -196,13 +201,21 @@ struct PGSDecoder {
         let isFirst = sequence & 0x80 != 0
         let isLast = sequence & 0x40 != 0
         if isFirst {
-            // The first fragment gives the data length (3 bytes), then the width and height.
+            // The first fragment gives the data length (3 bytes, counting the width and height
+            // that follow), then the width and height.
             guard bytes.count >= 11 else { return }
+            let length = (Int(bytes[4]) << 16 | Int(bytes[5]) << 8 | Int(bytes[6])) - 4
+            guard length >= 0 else {
+                objects[objectID] = nil
+                return
+            }
             objects[objectID] = ObjectData(
-                width: Self.word(bytes, 7), height: Self.word(bytes, 9), data: Data(bytes[11...]), isComplete: isLast
+                width: Self.word(bytes, 7), height: Self.word(bytes, 9), data: Data(bytes[11...].prefix(length)),
+                length: length, isComplete: isLast
             )
         } else if var object = objects[objectID], !object.isComplete {
-            object.data.append(contentsOf: bytes[4...])
+            // Data past the declared length is damage; it is dropped.
+            object.data.append(contentsOf: bytes[4...].prefix(max(0, object.length - object.data.count)))
             object.isComplete = isLast
             objects[objectID] = object
         }
@@ -211,14 +224,26 @@ struct PGSDecoder {
     private mutating func completeDisplay() -> PGSDisplay? {
         guard let composition else { return nil }
         self.composition = nil
+        let canvasLimit = 1...Self.maximumCanvas
+        guard canvasLimit.contains(composition.videoWidth), canvasLimit.contains(composition.videoHeight) else { return nil }
         let palette = palettes[composition.paletteID] ?? Array(repeating: .transparent, count: 256)
         // Objects missing since a reset, or still incomplete, are left out.
         let placed = composition.objects.compactMap { placement -> PGSDisplayObject? in
-            guard let object = objects[placement.objectID], object.isComplete, object.width > 0, object.height > 0 else {
+            // An object larger than the frame is damage; it is left out rather than expanded.
+            guard let object = objects[placement.objectID], object.isComplete,
+                  (1...composition.videoWidth).contains(object.width), (1...composition.videoHeight).contains(object.height)
+            else {
                 return nil
             }
             let full = PGSRect(x: 0, y: 0, width: object.width, height: object.height)
-            let crop = placement.crop.flatMap { $0.clipped(to: full) } ?? full
+            let crop: PGSRect
+            if let requested = placement.crop {
+                // A crop that misses the object shows nothing of it.
+                guard let clipped = requested.clipped(to: full) else { return nil }
+                crop = clipped
+            } else {
+                crop = full
+            }
             return PGSDisplayObject(
                 x: placement.x, y: placement.y, width: object.width, height: object.height, crop: crop,
                 isForced: placement.isForced, runLengthData: object.data

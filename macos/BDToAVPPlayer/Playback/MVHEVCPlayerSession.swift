@@ -1288,6 +1288,9 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
     }
 
+    /// The subtitle track the native Blu-ray 3D engine draws, nil while subtitles are off.
+    var nativeSubtitleTrackID: UInt16? { nativePlayback?.selectedSubtitleTrackID }
+
 #if BD_TO_AVP_QUALIFICATION
     /// The native Blu-ray 3D engine, for the on-device qualification driver.
     var qualificationNativePlayback: NativeBlurayPlayback? { nativePlayback }

@@ -30,26 +30,35 @@ struct SubtitleOverlay {
     private let cb: [UInt8]
     private let cr: [UInt8]
 
-    /// Nil for a display that shows nothing.
+    /// Nil for a display that shows nothing. Parts outside the display's frame are cut first.
     init?(_ display: PGSDisplay) {
-        let rects = display.objects.map { PGSRect(x: $0.x, y: $0.y, width: $0.crop.width, height: $0.crop.height) }
-        guard let first = rects.first else { return nil }
-        let left = rects.map(\.x).min() ?? first.x
-        let top = rects.map(\.y).min() ?? first.y
-        let right = rects.map { $0.x + $0.width }.max() ?? first.x
-        let bottom = rects.map { $0.y + $0.height }.max() ?? first.y
+        let canvas = PGSRect(x: 0, y: 0, width: display.videoWidth, height: display.videoHeight)
+        // Each object's visible part on the frame, with the object it comes from.
+        let visible = display.objects.compactMap { object -> (object: PGSDisplayObject, rect: PGSRect)? in
+            PGSRect(x: object.x, y: object.y, width: object.crop.width, height: object.crop.height)
+                .clipped(to: canvas)
+                .map { (object, $0) }
+        }
+        guard let first = visible.first?.rect else { return nil }
+        let left = visible.map(\.rect.x).min() ?? first.x
+        let top = visible.map(\.rect.y).min() ?? first.y
+        let right = visible.map { $0.rect.x + $0.rect.width }.max() ?? first.x
+        let bottom = visible.map { $0.rect.y + $0.rect.height }.max() ?? first.y
         let bounds = PGSRect(x: left, y: top, width: right - left, height: bottom - top)
         var alpha = [UInt8](repeating: 0, count: bounds.width * bounds.height)
         var luma = alpha
         var cb = alpha
         var cr = alpha
         var isVisible = false
-        for object in display.objects {
+        for (object, rect) in visible {
             let indices = PGSRunLength.decode(object.runLengthData, width: object.width, height: object.height)
-            for row in 0..<object.crop.height {
-                let source = (object.crop.y + row) * object.width + object.crop.x
-                let target = (object.y - top + row) * bounds.width + (object.x - left)
-                for column in 0..<object.crop.width {
+            // Where the visible part starts inside the object.
+            let sourceX = object.crop.x + rect.x - object.x
+            let sourceY = object.crop.y + rect.y - object.y
+            for row in 0..<rect.height {
+                let source = (sourceY + row) * object.width + sourceX
+                let target = (rect.y - top + row) * bounds.width + (rect.x - left)
+                for column in 0..<rect.width {
                     let entry = display.palette[Int(indices[source + column])]
                     // Objects do not overlap on a disc; a later one covers an earlier one.
                     guard entry.alpha > 0 else { continue }
