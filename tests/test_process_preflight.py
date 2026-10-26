@@ -130,6 +130,7 @@ class ProcessPreflightTests(unittest.TestCase):
             temporary_sentinel.write_bytes(b"existing")
             disc_info = Mock(name="disc_info")
             disc_info.name = "Movie"
+            disc_info.bluray_title = None
 
             with (
                 patch.object(process.config, "output_root_path", output_root),

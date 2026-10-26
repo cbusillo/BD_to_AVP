@@ -8,6 +8,15 @@ from threading import Event
 from typing import Callable
 
 from bd_to_avp.observability import ObservabilityContext, ObservabilityProgress
+from bd_to_avp.modules.bluray import (
+    BLURAY_TITLE_ID_PREFIX,
+    MAKEMKV_TITLE_ID_PREFIX,
+    BlurayDisc,
+    BlurayTitle,
+    direct_bluray_disc,
+    directly_readable_titles,
+    selected_clip,
+)
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
 from bd_to_avp.modules.command import combined_process_output, run_ffprobe, run_process_capture
@@ -34,6 +43,7 @@ class DiscTitleInfo:
     resolution: str
     frame_rate: str
     main_feature: bool
+    clip: int | None = None
 
 
 @dataclass
@@ -46,6 +56,8 @@ class DiscInfo:
     is_interlaced: bool = False
     duration_seconds: float = 0
     titles: tuple[DiscTitleInfo, ...] = ()
+    # Set when the title is read directly from an unencrypted Blu-ray instead of through MakeMKV.
+    bluray_title: BlurayTitle | None = None
 
 
 @dataclass
@@ -55,6 +67,7 @@ class TitleInfo:
     has_mvc: bool = False
     resolution: str | None = None
     frame_rate: str | None = None
+    clip: int | None = None
 
 
 ProgressCallback = Callable[[float, float], object]
@@ -109,6 +122,9 @@ def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
             if duration_match and current_title is not None:
                 h, m, s = map(int, duration_match.group(1).split(":"))
                 titles[current_title].duration = h * 3600 + m * 60 + s
+            segment_match = re.search(r"TINFO:\d+,26,0,\"(\d+)", line)
+            if segment_match and current_title is not None:
+                titles[current_title].clip = int(segment_match.group(1))
         elif line.startswith("SINFO:"):
             stream_title_match = re.match(r"SINFO:(\d+),", line)
             if not stream_title_match:
@@ -128,7 +144,9 @@ def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
     return disc_name, list(titles.values())
 
 
-def build_disc_title_catalog(disc_name: str, titles: list[TitleInfo]) -> tuple[DiscTitleInfo, ...]:
+def build_disc_title_catalog(
+    disc_name: str, titles: list[TitleInfo], id_prefix: str = MAKEMKV_TITLE_ID_PREFIX
+) -> tuple[DiscTitleInfo, ...]:
     mvc_titles = [title for title in titles if title.has_mvc]
     if not mvc_titles:
         raise ValueError("No MVC video found in disc info.")
@@ -153,7 +171,7 @@ def build_disc_title_catalog(disc_name: str, titles: list[TitleInfo]) -> tuple[D
             frame_rate = frame_rate.split(" ")[0]
         catalog.append(
             DiscTitleInfo(
-                id=f"makemkv:{title.index}",
+                id=f"{id_prefix}{title.index}",
                 title_number=title.index,
                 name=display_name,
                 output_name=output_name,
@@ -161,6 +179,7 @@ def build_disc_title_catalog(disc_name: str, titles: list[TitleInfo]) -> tuple[D
                 resolution=title.resolution or DiscInfo.resolution,
                 frame_rate=frame_rate,
                 main_feature=is_main,
+                clip=title.clip,
             )
         )
         if not is_main:
@@ -169,6 +188,9 @@ def build_disc_title_catalog(disc_name: str, titles: list[TitleInfo]) -> tuple[D
 
 
 def select_disc_title(titles: tuple[DiscTitleInfo, ...], title_id: str | None) -> DiscTitleInfo:
+    if (clip := selected_clip(title_id)) is not None:
+        # A title the direct reader listed, now listed by MakeMKV (a preview) or by the reader again.
+        title_id = next((title.id for title in titles if title.clip == clip), title_id)
     if title_id is None:
         return next(title for title in titles if title.main_feature)
     if selected_title := next((title for title in titles if title.id == title_id), None):
@@ -212,6 +234,14 @@ def get_disc_and_mvc_video_info(
             disc_info.duration_seconds = float(duration)
         return disc_info
 
+    if bluray_disc := direct_bluray_disc(
+        selected_title_id,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    ):
+        return direct_disc_info(bluray_disc, selected_title_id)
+
     source = get_makemkv_source()
 
     command = [
@@ -253,6 +283,34 @@ def get_disc_and_mvc_video_info(
         main_title_number=selected_title.title_number,
         duration_seconds=selected_title.duration_seconds,
         titles=titles,
+    )
+
+
+def direct_disc_info(disc: BlurayDisc, selected_title_id: str | None) -> DiscInfo:
+    readable = {title.clip_number: title for title in directly_readable_titles(disc)}
+    raw_titles = [
+        TitleInfo(
+            index=title.clip_number,
+            duration=round(title.duration_seconds),
+            has_mvc=True,
+            resolution=title.resolution,
+            frame_rate=title.frame_rate,
+            clip=title.clip_number,
+        )
+        for title in readable.values()
+    ]
+    titles = build_disc_title_catalog(sanitize_filename(disc.name), raw_titles, BLURAY_TITLE_ID_PREFIX)
+    selected_title = select_disc_title(titles, selected_title_id)
+    bluray_title = readable[selected_title.title_number]
+    return DiscInfo(
+        name=selected_title.output_name,
+        frame_rate=bluray_title.frame_rate,
+        resolution=bluray_title.resolution,
+        main_title_number=selected_title.title_number,
+        is_interlaced=bluray_title.interlaced,
+        duration_seconds=bluray_title.duration_seconds,
+        titles=titles,
+        bluray_title=bluray_title,
     )
 
 

@@ -1,6 +1,6 @@
-// Blu-ray 3D source access for Shiny 3D Cinema: disc and title facts from libbluray, and a
-// demuxer that pairs each MVC base-view access unit with its dependent view. The demuxer is
-// adapted from native/ssif_probe, which the Mac relay uses until the headset path replaces it.
+// Blu-ray 3D source access shared by Shiny 3D Cinema and the Mac converter (native/bd3d_reader):
+// disc and title facts from libbluray, and a demuxer that pairs each MVC base-view access unit
+// with its dependent view.
 //
 // A title is a playlist of clips. The reader plays them in order and rewrites every timestamp
 // onto the playlist's own timeline, which starts at zero, so audio and video keep one clock
@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 #define BD3D_MAX_STREAMS 32
-#define BD3D_MAX_SELECTED_PIDS 16
+#define BD3D_MAX_SELECTED_PIDS 64
 #define BD3D_BASE_VIEW_PID 0x1011
 #define BD3D_DEPENDENT_VIEW_PID 0x1012
 
@@ -63,6 +63,8 @@ typedef struct {
     bool base_view_right;
     /// The first clip.
     char clip_id[8];
+    uint8_t video_count;
+    bd3d_stream video;
     uint8_t audio_count;
     uint8_t subtitle_count;
     /// The first clip's streams, which the playlist keeps for every clip.

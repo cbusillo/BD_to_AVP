@@ -190,6 +190,7 @@ class NativeMvcSelectionTests(unittest.TestCase):
             cancellation_event=None,
             observability_context=None,
             damage_collector=None,
+            mvc_producer=None,
         )
 
     def test_split_uses_native_helper_for_mts_sources_when_present(self) -> None:

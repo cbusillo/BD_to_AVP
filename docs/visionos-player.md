@@ -755,7 +755,7 @@ The code is in `macos/BDToAVPPlayer/BluraySource`:
   feature comes before length because a disc can hold a longer playlist of looping
   extras: Ocean Dreams has a 3.6-hour slideshow beside its 94-minute feature. The first
   playable title is the one the player uses.
-- **The SSIF demuxer** (`bd3d_source.c`, adapted from `native/ssif_probe`) pairs each
+- **The SSIF demuxer** (`bd3d_source.c`, shared with the Mac converter's `bd3d_reader`) pairs each
   base-view access unit (PID 0x1011) with the dependent view (0x1012) that has the
   same DTS. It delivers whole PES packets for the chosen audio and PG subtitle PIDs.
   `TransportStreamPESReader.parse` builds the `BluRayPESPacket` values, so every
@@ -798,7 +798,7 @@ the `TEST_RUNNER_` prefix, also read the real discs across their boundaries.
 libbluray 1.4.1 and libudfread 1.2.0, both LGPL-2.1-or-later, are linked as separate
 dynamic frameworks in `macos/Vendor/libbluray.xcframework` and
 `macos/Vendor/libudfread.xcframework`. Each framework carries its `COPYING` text. They
-are built from the same pinned source archives as the Mac's `ssif_probe`, recorded in
+are built from the same pinned source archives as the Mac's `bd3d_reader`, recorded in
 `vendor/ssif-probe-macos-arm64.toml` and kept in `bd_to_avp/resources/notices/ssif-probe`.
 Rebuild or verify them with:
 

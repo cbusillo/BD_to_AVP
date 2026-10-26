@@ -53,9 +53,11 @@ def create_srt_from_mkv(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    extract: bool | None = None,
 ) -> None:
+    """``extract`` overrides the stage check for a direct Blu-ray read, which extracts later."""
     output_path = output_path or mkv_path.parent
-    if config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
+    if extract if extract is not None else config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         if config.skip_subtitles:
             cleanup_existing_subtitle_files(output_path)
             return None
