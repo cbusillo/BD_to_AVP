@@ -34,6 +34,12 @@ final class LocationLibraryModel: ObservableObject {
     /// Files inspected so far while a Location is being checked.
     @Published private(set) var progress: [UUID: (inspected: Int, total: Int)] = [:]
     @Published var errorMessage: String?
+    /// Temporary #1130 diagnostic: what the picker URL and the reopened bookmark each listed.
+    @Published private(set) var diagnostics: [UUID: String] = [:]
+    private var pickerReports: [UUID: String] = [:]
+    /// The picker's own folder access, kept open for the session so the share stays reachable
+    /// even if the saved bookmark's access alone does not cover it.
+    private var pickerLeases: [UUID: SecurityScopedResourceLease] = [:]
 
     private let store: LocationStore
     private let bookmarkStore: BookmarkStore
@@ -119,7 +125,7 @@ final class LocationLibraryModel: ObservableObject {
             name: Self.displayName(folderName: folderURL.lastPathComponent, localizedName: nil, volumeName: nil),
             inspectedFiles: []
         )
-        guard saveBookmark(for: folderURL, locationID: location.id) else { return nil }
+        guard await saveBookmark(for: folderURL, locationID: location.id) else { return nil }
         locations.append(location)
         persist()
         await refresh(location.id)
@@ -129,12 +135,15 @@ final class LocationLibraryModel: ObservableObject {
     /// Replaces a Location's folder access after the share moved or its bookmark stopped working,
     /// keeping its name and what was already inspected.
     func reconnect(_ locationID: UUID, folderURL: URL) async {
-        guard location(id: locationID) != nil, saveBookmark(for: folderURL, locationID: locationID) else { return }
+        guard location(id: locationID) != nil, await saveBookmark(for: folderURL, locationID: locationID) else { return }
         await refresh(locationID)
     }
 
     func remove(_ locationID: UUID) {
         refreshGenerations[locationID, default: 0] += 1
+        pickerLeases.removeValue(forKey: locationID)?.close()
+        pickerReports.removeValue(forKey: locationID)
+        diagnostics.removeValue(forKey: locationID)
         locations.removeAll { $0.id == locationID }
         statuses.removeValue(forKey: locationID)
         titles.removeValue(forKey: locationID)
@@ -147,16 +156,41 @@ final class LocationLibraryModel: ObservableObject {
         persist()
     }
 
-    private func saveBookmark(for folderURL: URL, locationID: UUID) -> Bool {
+    /// Saves the bookmark while the picker's access is open, and keeps that access for the session.
+    private func saveBookmark(for folderURL: URL, locationID: UUID) async -> Bool {
         let lease = SecurityScopedResourceLease(url: folderURL)
-        defer { lease.close() }
+        let started = lease.isAccessing
+        let report = await Task.detached(priority: .userInitiated) {
+            LocationAccessProbe.report(label: "picker", url: folderURL, startedAccess: started, isStale: nil)
+        }.value
+        pickerReports[locationID] = report
         do {
             try bookmarkStore.save(url: folderURL, for: Self.bookmarkID(for: locationID))
+            pickerLeases[locationID]?.close()
+            pickerLeases[locationID] = lease
             return true
         } catch {
+            lease.close()
+            LocationAccessProbe.logger.log("bookmark save failed: \(String(describing: error), privacy: .public)")
             errorMessage = "Shiny 3D Cinema could not keep access to this folder. Choose it again in Files."
             return false
         }
+    }
+
+    /// Temporary #1130 diagnostic: lists the folder through the saved bookmark and shows it
+    /// next to what the picker URL listed when the Location was added.
+    func diagnose(_ locationID: UUID) async {
+        guard let data = bookmarkStore.bookmarkData(for: Self.bookmarkID(for: locationID)) else {
+            diagnostics[locationID] = "No saved bookmark."
+            return
+        }
+        let bookmarkReport = await Task.detached(priority: .userInitiated) {
+            LocationAccessProbe.reportBookmark(data)
+        }.value
+        diagnostics[locationID] = [
+            pickerReports[locationID] ?? "picker\nnot recorded (Location added before this build or app relaunched)",
+            bookmarkReport,
+        ].joined(separator: "\n\n")
     }
 
     // MARK: Listing
@@ -290,6 +324,9 @@ final class LocationLibraryModel: ObservableObject {
         progress.removeValue(forKey: locationID)
         statuses[locationID] = .available
         saveInspectedFiles(inspected, for: locationID)
+        if listing.candidates.isEmpty || listing.unreadableCount > 0 {
+            await diagnose(locationID)
+        }
     }
 
     /// A Location starts out named by its raw folder, which for an SMB share root is the mount

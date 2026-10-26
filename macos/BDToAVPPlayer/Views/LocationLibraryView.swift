@@ -141,6 +141,26 @@ struct LocationLibraryView: View {
                 .foregroundStyle(.secondary)
             }
             unplayableSection
+            diagnosticSection
+        }
+    }
+
+    /// Temporary #1130 diagnostic, shown when a listing came back empty or incomplete.
+    @ViewBuilder
+    private var diagnosticSection: some View {
+        if let report = locations.diagnostics[locationID] {
+            DisclosureGroup("Folder access details") {
+                Text(report)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+                Button("Check Again") {
+                    Task { await locations.diagnose(locationID) }
+                }
+                .buttonStyle(.bordered)
+            }
+            .accessibilityIdentifier("location-diagnostics")
         }
     }
 
