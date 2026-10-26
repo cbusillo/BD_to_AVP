@@ -907,10 +907,29 @@ reveal and track lists drive it. The scrub bar spans the title's length, and its
 lighter band is the loaded part. While the title loads more, the controls stay up
 with a **Loading…** line. The audio list names what plays, for example
 **English (DTS core)**, and switches without stopping. If the chosen audio cannot play, the controls
-say so while the video plays on. The subtitle list offers
-only Off and says the title's subtitles come later (#1114). A title resumes where the
+say so while the video plays on. The subtitle list offers Off and the title's PGS
+tracks by language; a title whose only subtitles are in another format, such as
+Blu-ray text subtitles, says the headset can't show them yet. A title resumes where the
 wearer stopped, keyed by its library or Location item, across relaunches: playback
 starts there the same way a seek outside the loaded part does.
+
+PGS subtitles (#1114) are drawn into the video itself, never as a separate layer, so
+they cannot land behind the stereo video. The reader delivers every PGS track, and
+`ReadAheadBuffer` decodes each with `PGSDecoder` into displays timed on the same
+title timeline as the video, kept as long as the video around them, so switching
+tracks shows the new one at once. As the video thread prepares each frame, it looks
+up the chosen track's display for that frame's time and `SubtitleOverlay` blends it
+into both eyes' NV12 buffers. The palette is already limited-range Y′CbCr, like the
+video, so it blends without a color conversion. The left eye's copy moves 6 pixels
+right and the right eye's 6 pixels left: crossed disparity that sets the subtitle a
+little in front of the screen. The disc's own per-scene subtitle depths (the MVC
+offset sequences) are not read yet. After a seek or resume that starts a new read,
+subtitles start with the track's next display set, so a line already on screen at
+the target can be missed. The disc reader drops subtitle packets outside each clip's
+part, so when subtitles are read it also marks where each clip starts
+(`BD3D_PACKET_CLIP_START`), and every track's line clears there. Off shows nothing, forced
+captions included; a chosen track shows all of it, forced or not. A choice takes
+effect from the next frame decoded, about half a second ahead of the clock.
 
 The video is a RealityKit `VideoPlayerComponent(videoRenderer:)` sized inside the
 window, and the controls are an ornament below the window. Until RealityKit reports

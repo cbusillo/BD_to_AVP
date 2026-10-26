@@ -6,7 +6,9 @@ import Foundation
 /// so the reader runs up to `aheadTarget` seconds past the decoder.
 ///
 /// The reader thread calls `receive`, which blocks while the buffer is full. The decode thread
-/// takes video with `nextVideo` and the audio feeder takes audio with `nextAudio`. Packets behind
+/// takes video with `nextVideo` and the audio feeder takes audio with `nextAudio`. PGS subtitle
+/// packets are decoded as they arrive into timed displays that `subtitleDisplay(pid:at:)` looks
+/// up for each frame, kept as long as the video around them. Packets behind
 /// the decoder are kept for `behindLimit` seconds, so a seek inside that history or the loaded
 /// part ahead needs no new read. A seek anywhere else starts a new read with `restart(at:)`.
 /// Thread-safe.
@@ -19,6 +21,12 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         let ticks: Int64
         let isRandomAccess: Bool
         let data: Data
+    }
+
+    /// A subtitle display and its place in the order displays arrived, which identifies it.
+    struct SubtitleEntry: Equatable {
+        let sequence: Int
+        let display: PGSDisplay
     }
 
     struct AudioEntry: Equatable {
@@ -70,6 +78,10 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
     /// Set by `restart(at:)` until the decoder starts its new pass, so it cannot take a unit of
     /// the new read while it is still on the old one.
     private var awaitingDecoder = false
+    /// Per PGS track: its decoder and the displays it produced, in time order.
+    private var subtitleDecoders: [UInt16: PGSDecoder] = [:]
+    private var subtitleDisplays: [UInt16: [SubtitleEntry]] = [:]
+    private var subtitleSequence = 0
 
     init(limits: Limits = Limits()) {
         self.limits = limits
@@ -119,7 +131,11 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
             latestVideoTicks = max(latestVideoTicks ?? ticks, ticks)
         case let .audio(packet):
             appendAudio(packet)
-        case .subtitle:
+        case let .subtitle(packet):
+            appendSubtitle(packet)
+            return true
+        case let .clipStart(pts):
+            clearSubtitles(at: presentationTimeline.ticks(for: pts, near: latestVideoTicks ?? audioFloor ?? 0))
             return true
         }
         condition.broadcast()
@@ -157,6 +173,10 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         finishError = nil
         reservedSeekTicks = nil
         audioFloor = ticks - Self.audioPacketSlackTicks
+        // A new read starts mid-stream: earlier displays could be stale, and the decoders wait
+        // for display sets that carry everything again.
+        subtitleDecoders = [:]
+        subtitleDisplays = [:]
         awaitingDecoder = true
         condition.broadcast()
         return epoch
@@ -229,6 +249,14 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
             audioCursor += 1
         }
         return taken
+    }
+
+    /// The display PGS track `pid` shows at `ticks`: the last one timed at or before it. Nil when
+    /// nothing has been shown yet, or the track has said nothing since a read restarted.
+    func subtitleDisplay(pid: UInt16, at ticks: Int64) -> SubtitleEntry? {
+        condition.lock()
+        defer { condition.unlock() }
+        return subtitleDisplays[pid]?.last { $0.display.ticks <= ticks }
     }
 
     /// Seconds of video read past the decoder.
@@ -325,6 +353,42 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         bytes += packet.payload.count
     }
 
+    private func appendSubtitle(_ packet: BluRayPESPacket) {
+        let near = latestVideoTicks ?? audioFloor ?? 0
+        let ticks = packet.pts.map { presentationTimeline.ticks(for: $0, near: near) }
+        var decoder = subtitleDecoders[packet.pid] ?? PGSDecoder()
+        let displays = decoder.receive(packet.payload, ticks: ticks)
+        subtitleDecoders[packet.pid] = decoder
+        for display in displays {
+            append(display, pid: packet.pid)
+        }
+    }
+
+    /// A clip ends: every track's line clears, and its decoder starts over with the next clip.
+    private func clearSubtitles(at ticks: Int64) {
+        for pid in subtitleDecoders.keys {
+            subtitleDecoders[pid]?.reset()
+            append(PGSDisplay(ticks: ticks, videoWidth: 0, videoHeight: 0, objects: [], palette: []), pid: pid)
+        }
+    }
+
+    private func append(_ display: PGSDisplay, pid: UInt16) {
+        subtitleSequence += 1
+        var entries = subtitleDisplays[pid] ?? []
+        // Displays come in time order; one that does not replaces those it precedes.
+        entries.removeAll { $0.display.ticks >= display.ticks }
+        entries.append(SubtitleEntry(sequence: subtitleSequence, display: display))
+        subtitleDisplays[pid] = entries
+    }
+
+    /// Drops displays that ended before `ticks`, keeping the one that shows at `ticks`.
+    private func trimSubtitles(before ticks: Int64) {
+        for (pid, entries) in subtitleDisplays {
+            guard let showing = entries.lastIndex(where: { $0.display.ticks <= ticks }), showing > 0 else { continue }
+            subtitleDisplays[pid] = Array(entries[showing...])
+        }
+    }
+
     /// Drops history behind the decoder: older than `behindLimit`, or, when `force` and the
     /// buffer is over its byte limit, everything before the decoder's last random access unit.
     private func trimHistory(force: Bool) {
@@ -344,6 +408,7 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         video.removeFirst(keep)
         videoCursor -= keep
         let firstTicks = video.first?.ticks ?? current
+        trimSubtitles(before: firstTicks)
         let audioKeep = min(audioCursor, audio.firstIndex { ($0.ticks ?? .max) >= firstTicks - Self.audioPacketSlackTicks } ?? audio.count)
         if audioKeep > 0 {
             bytes -= audio[..<audioKeep].reduce(0) { $0 + $1.packet.payload.count }

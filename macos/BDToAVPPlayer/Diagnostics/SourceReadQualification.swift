@@ -88,6 +88,8 @@ enum SourceReadQualification {
             case let .audio(pes), let .subtitle(pes):
                 bytes += pes.payload.count
                 totalBytes += pes.payload.count
+            case .clipStart:
+                break
             }
             let elapsed = started.duration(to: .now)
             let second = Int(elapsed.components.seconds)

@@ -77,6 +77,10 @@ typedef enum {
     BD3D_PACKET_VIDEO = 1,
     BD3D_PACKET_AUDIO = 2,
     BD3D_PACKET_SUBTITLE = 3,
+    /// A playlist item's part of a clip starts, at `pts` on the playlist timeline, with PID 0 and
+    /// no data. Sent only when subtitles are selected: subtitle packets outside each part are
+    /// dropped, so a line whose clear falls past a clip's end must be cleared here.
+    BD3D_PACKET_CLIP_START = 4,
 } bd3d_packet_kind;
 
 /// One demuxed packet. For video, `data` is the base view and `dependent` the dependent view of

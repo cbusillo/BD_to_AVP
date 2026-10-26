@@ -167,6 +167,8 @@ enum BlurayDemuxCallback {
         guard let context, let packet else { return 1 }
         let sink = Unmanaged<Context>.fromOpaque(context).takeUnretainedValue().sink
         let value = packet.pointee
+        // A clip start carries no data.
+        guard value.kind != BD3D_PACKET_CLIP_START else { return sink.receive(.clipStart(pts: value.pts)) ? 0 : 1 }
         let packetData = Data(bytes: value.data, count: value.length)
         let delivered: Bluray3DPacket
         if value.kind == BD3D_PACKET_VIDEO {

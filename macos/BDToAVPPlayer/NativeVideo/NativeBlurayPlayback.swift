@@ -9,6 +9,7 @@ import os
 /// `AVSampleBufferVideoRenderer`, and `HeadsetAudioPlayer` plays the chosen audio track. Both
 /// renderers join one `AVSampleBufferRenderSynchronizer`, whose time is the title's timeline
 /// (zero at the first video PTS), so pause, buffering and seeking move audio and video together.
+/// The chosen PGS subtitle track is drawn into each eye's frame as it is prepared (#1114).
 ///
 /// Three threads do the work: the reader, the video decoder, and an audio feeder that hands the
 /// audio player packets a little ahead of the clock. The clock only runs while the wearer wants
@@ -60,6 +61,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     let synchronizer = AVSampleBufferRenderSynchronizer()
     let title: Bluray3DTitle
     let audioTracks: [HeadsetAudioTrack]
+    let subtitleTracks: [PGSSubtitleTrack]
     /// Called just before the clock's rate changes, with the new rate. Tests set it before
     /// `start()` to act at that moment.
     var willChangeClockRate: (@Sendable (Float) -> Void)?
@@ -105,6 +107,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         var readEpoch = 0
         var audioPlayer: HeadsetAudioPlayer?
         var selectedAudioTrackID: UInt16?
+        /// Nil while subtitles are off.
+        var selectedSubtitleTrackID: UInt16?
         var clockStarted = false
         /// Where the clock starts when the preroll is ready: the title start or a seek target.
         var clockOrigin: Int64 = 0
@@ -129,6 +133,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         self.configuration = configuration
         buffer = ReadAheadBuffer(limits: configuration.buffer)
         audioTracks = HeadsetAudioTrack.tracks(for: title.audioStreams, locale: locale)
+        subtitleTracks = PGSSubtitleTrack.tracks(for: title.subtitleTracks, locale: locale)
         let initial = audioTracks.first { $0.id == initialAudioTrackID } ?? HeadsetAudioTrack.preferredTrack(in: audioTracks)
         let start = Self.ticks(min(max(0, startSeconds), title.durationSeconds))
         startTicks = start
@@ -151,6 +156,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     }
 
     var selectedAudioTrackID: UInt16? { state.withLock { $0.selectedAudioTrackID } }
+
+    var selectedSubtitleTrackID: UInt16? { state.withLock { $0.selectedSubtitleTrackID } }
 
     /// The audio player, once the audio feeder has started; for diagnostics.
     var audioPlayer: HeadsetAudioPlayer? { state.withLock { $0.audioPlayer } }
@@ -240,6 +247,12 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         player?.select(trackID: trackID)
     }
 
+    /// Shows subtitle track `trackID`, or none for nil, from the next frame decoded: frames
+    /// already queued keep what they show. Every PGS track is read, so a switch needs no new read.
+    func selectSubtitle(trackID: UInt16?) {
+        state.withLock { $0.selectedSubtitleTrackID = trackID.flatMap { id in subtitleTracks.contains { $0.id == id } ? id : nil } }
+    }
+
     // MARK: Reader
 
     /// Reads the title from `ticks` into one feed of the buffer. Reads run one at a time: one
@@ -253,7 +266,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                 title: title,
                 from: ticks,
                 audioTrackIDs: audioTracks.map { Int($0.id) },
-                subtitleTrackIDs: [],
+                subtitleTrackIDs: subtitleTracks.map { Int($0.id) },
                 into: feed
             )
             buffer.finish(feed: feed)
@@ -281,6 +294,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         var epoch = initial.generation == 0 ? initial.epoch : -1
         // A start mid-title shows frames from the start time on.
         var skipBefore: Int64? = startTicks > 0 ? startTicks : nil
+        let subtitles = SubtitleOverlayCache()
         willBeginDecodingPass?(generation)
         buffer.beginRestartedPass(epoch: epoch)
         while !isCancelled {
@@ -314,7 +328,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                 didTakeVideoUnit?(generation, entry.ticks, entry.isRandomAccess)
                 do {
                     try decoder.decode(entry.data, ticks: entry.ticks) { frame in
-                        present(frame, factory: factory, generation: generation, skipBefore: &skipBefore)
+                        present(frame, factory: factory, subtitles: subtitles, generation: generation, skipBefore: &skipBefore)
                     }
                 } catch {
                     fail("The 3D video could not be decoded: \(error).")
@@ -325,7 +339,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                 updateClock()
             case let .ended(error):
                 _ = try? decoder.finish { frame in
-                    present(frame, factory: factory, generation: generation, skipBefore: &skipBefore)
+                    present(frame, factory: factory, subtitles: subtitles, generation: generation, skipBefore: &skipBefore)
                 }
                 record(decoder.statistics)
                 state.withLock { $0.videoEnded = true }
@@ -338,6 +352,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     private func present(
         _ frame: UnsafePointer<BDAVPMVCFrame>,
         factory: StereoSampleBufferFactory,
+        subtitles: SubtitleOverlayCache,
         generation: Int,
         skipBefore: inout Int64?
     ) -> Bool {
@@ -348,7 +363,9 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         }
         let sample: CMSampleBuffer
         do {
-            sample = try factory.sampleBuffer(for: frame, presentationTime: Self.time(ticks))
+            sample = try factory.sampleBuffer(
+                for: frame, presentationTime: Self.time(ticks), subtitle: subtitleOverlay(at: ticks, cache: subtitles)
+            )
         } catch {
             fail("A 3D video frame could not be prepared: \(error).")
             return false
@@ -376,6 +393,18 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         }
         updateClock()
         return isCurrent(generation)
+    }
+
+    /// The chosen subtitle track's display at `ticks`, decoded once per display.
+    private func subtitleOverlay(at ticks: Int64, cache: SubtitleOverlayCache) -> SubtitleOverlay? {
+        guard let trackID = selectedSubtitleTrackID, let entry = buffer.subtitleDisplay(pid: trackID, at: ticks) else {
+            return nil
+        }
+        if cache.sequence != entry.sequence {
+            cache.sequence = entry.sequence
+            cache.overlay = SubtitleOverlay(entry.display)
+        }
+        return cache.overlay
     }
 
     /// After the last frame: wait for the clock to pass it, then report the end or the error.
@@ -485,6 +514,12 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     }
 
     // MARK: Helpers
+
+    /// The video thread's last decoded subtitle display.
+    private final class SubtitleOverlayCache {
+        var sequence: Int?
+        var overlay: SubtitleOverlay?
+    }
 
     private func passState() -> (generation: Int, target: Int64?, restartedRead: Bool, epoch: Int) {
         state.withLock { ($0.seekGeneration, $0.seekTarget, $0.seekRestartedRead, $0.readEpoch) }
