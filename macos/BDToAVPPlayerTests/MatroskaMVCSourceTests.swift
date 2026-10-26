@@ -53,6 +53,41 @@ final class MatroskaMVCSourceTests: XCTestCase {
         XCTAssertEqual(statistics.audioPackets, 2)
     }
 
+    /// Bytes whose next `failuresLeft` reads fail, as a share's do when Wi-Fi drops.
+    private final class DroppingByteSource: ByteSource {
+        let base: DataByteSource
+        var failuresLeft = 0
+        var size: Int64 { base.size }
+
+        init(_ data: Data) { base = DataByteSource(data) }
+
+        func read(at offset: Int64, count: Int) throws -> Data {
+            if failuresLeft > 0 {
+                failuresLeft -= 1
+                throw CocoaError(.fileReadUnknown)
+            }
+            return try base.read(at: offset, count: count)
+        }
+    }
+
+    func testReadsDroppedByAShareAreTriedAgainAndEveryFrameArrives() throws {
+        let cleanSource = try MatroskaMVCSource(source: DataByteSource(file()))
+        let clean = CollectingPacketSink()
+        _ = try cleanSource.read(title: try XCTUnwrap(cleanSource.info.mainTitle), audioTrackIDs: [2], subtitleTrackIDs: [], into: clean)
+        let dropping = DroppingByteSource(file())
+        let monitor = ShareConnectionMonitor(timing: .init(lostAfter: 2, retryInterval: 0.01))
+        let source = try MatroskaMVCSource(source: ShareRetryingByteSource(dropping, reads: monitor))
+        // The connection drops once the title is open, while its clusters are read.
+        dropping.failuresLeft = 4
+        let sink = CollectingPacketSink()
+
+        _ = try source.read(title: try XCTUnwrap(source.info.mainTitle), audioTrackIDs: [2], subtitleTrackIDs: [], into: sink)
+
+        XCTAssertEqual(dropping.failuresLeft, 0)
+        XCTAssertEqual(sink.video.map(\.data), clean.video.map(\.data))
+        XCTAssertEqual(sink.audio.map(\.payload), clean.audio.map(\.payload))
+    }
+
     func testClustersOfUnknownSizeEndAtTheNextCluster() throws {
         let source = try MatroskaMVCSource(source: DataByteSource(file(unknownSizeClusters: true)))
         let sink = CollectingPacketSink()
@@ -91,6 +126,20 @@ final class MatroskaMVCSourceTests: XCTestCase {
         // at 10 s; the player shows frames from the target on.
         XCTAssertEqual(fromTwentyFive.video.map(\.pts), [900_000, 903_780, 1_800_000, 2_700_000])
         XCTAssertEqual(fromThirtyFive.video.map(\.pts), [2_700_000])
+    }
+
+    func testATitleReadThatASeekReplacedStopsRetryingADroppedShare() throws {
+        let file = FailingByteSource(seekableFile(cues: true))
+        let monitor = ShareConnectionMonitor(timing: .init(lostAfter: 2, retryInterval: 0.01))
+        let source = try MatroskaMVCSource(source: ShareRetryingByteSource(file, reads: monitor))
+        file.failing = true
+        let started = Date()
+
+        XCTAssertThrowsError(
+            try source.read(title: try XCTUnwrap(source.info.mainTitle), audioTrackIDs: [], subtitleTrackIDs: [], into: UnwantedPacketSink())
+        )
+        // The share stays down; retried, the read would wait for it for a minute.
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
     }
 
     func testAVCWithoutMVCIsListedButNotPlayable() throws {
@@ -294,6 +343,21 @@ final class RecordingByteSource: ByteSource {
 
     func read(at offset: Int64, count: Int) throws -> Data {
         largestRequest = max(largestRequest, count)
+        let start = Int(min(offset, size))
+        return data.subdata(in: start..<min(start + count, data.count))
+    }
+}
+
+/// Bytes in memory whose reads fail as a dropped share's do while `failing` is set.
+final class FailingByteSource: ByteSource {
+    private let data: Data
+    var failing = false
+    var size: Int64 { Int64(data.count) }
+
+    init(_ data: Data) { self.data = data }
+
+    func read(at offset: Int64, count: Int) throws -> Data {
+        if failing { throw POSIXError(.ENOTCONN) }
         let start = Int(min(offset, size))
         return data.subdata(in: start..<min(start + count, data.count))
     }

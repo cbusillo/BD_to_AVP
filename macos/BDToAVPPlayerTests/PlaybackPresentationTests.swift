@@ -15,6 +15,33 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertNil(PlaybackTrackListNote.note(for: .subtitles, optionCount: 2))
     }
 
+    func testALostConnectionIsNamedWhetherOrNotLoadedVideoIsStillPlaying() {
+        XCTAssertNil(PlaybackLoadingPresentation.state(isConnectionLost: false, isBuffering: false))
+        XCTAssertEqual(PlaybackLoadingPresentation.state(isConnectionLost: false, isBuffering: true), .loading)
+        XCTAssertEqual(
+            PlaybackLoadingPresentation.state(isConnectionLost: true, isBuffering: false),
+            .connectionLost(isPlayingLoadedPart: true)
+        )
+        XCTAssertEqual(
+            PlaybackLoadingPresentation.state(isConnectionLost: true, isBuffering: true),
+            .connectionLost(isPlayingLoadedPart: false)
+        )
+    }
+
+    func testAPlayerWaitingForDataIsBufferingButStillWantsToPlay() {
+        let waiting = PlayerTimeControl(status: .waitingToPlayAtSpecifiedRate, reasonForWaiting: .toMinimizeStalls)
+        XCTAssertTrue(waiting.isWaitingForData)
+        XCTAssertTrue(waiting.wantsPlayback)
+
+        let noItem = PlayerTimeControl(status: .waitingToPlayAtSpecifiedRate, reasonForWaiting: .noItemToPlay)
+        XCTAssertFalse(noItem.isWaitingForData)
+        XCTAssertFalse(noItem.wantsPlayback)
+
+        let paused = PlayerTimeControl(status: .paused, reasonForWaiting: nil)
+        XCTAssertFalse(paused.isWaitingForData)
+        XCTAssertFalse(paused.wantsPlayback)
+    }
+
     func testTimeFormatterUsesMinutesAndSeconds() {
         XCTAssertEqual(PlaybackTimeFormatter.string(for: 65.9), "1:05")
     }
@@ -395,13 +422,24 @@ final class PlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(PlaybackHUDPresentation.opacity(isFaded: false, isLookedAt: true), 1)
     }
 
-    func testLookingAtControlsRevealsThemAtOnceAndLookingAwayWaitsBeforeASlowerFade() {
+    func testLookingAtControlsRevealsThemAfterAShortDwellAndLookingAwayWaitsLongerBeforeASlowerFade() {
         let reveal = PlaybackHUDPresentation.lookTransition(isLookedAt: true)
         let fadeOut = PlaybackHUDPresentation.lookTransition(isLookedAt: false)
 
-        XCTAssertEqual(reveal.delay, 0)
-        XCTAssertGreaterThan(fadeOut.delay, 0)
+        XCTAssertGreaterThan(reveal.delay, 0)
+        XCTAssertLessThan(reveal.delay, fadeOut.delay)
         XCTAssertGreaterThan(fadeOut.duration, reveal.duration)
+    }
+
+    func testScrubHighlightHugsTheVisibleTrackInsideTheTallerHitArea() {
+        let bounds = CGRect(x: 0, y: 0, width: 640, height: PlaybackScrubBarLayout.hitHeight)
+        let highlight = PlaybackScrubBarLayout.highlightRect(in: bounds)
+
+        XCTAssertEqual(highlight.width, bounds.width)
+        XCTAssertEqual(highlight.midY, bounds.midY)
+        XCTAssertLessThan(highlight.height, bounds.height)
+        XCTAssertGreaterThanOrEqual(highlight.height, PlaybackScrubBarLayout.thumbSize)
+        XCTAssertGreaterThan(highlight.height, PlaybackScrubBarLayout.trackHeight)
     }
 
     func testShortTrackListsShowEveryEntryWithoutScrolling() {

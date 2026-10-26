@@ -307,6 +307,25 @@ enum PlaybackTrackListLayout {
     }
 }
 
+/// The scrub bar's geometry. The bar keeps a tall hit area so it is easy to target, while its
+/// look highlight hugs the visible track with an even margin, tall enough to hold the thumb.
+enum PlaybackScrubBarLayout {
+    static let trackHeight: CGFloat = 8
+    static let thumbSize: CGFloat = 22
+    static let hitHeight: CGFloat = 44
+    static let highlightMargin: CGFloat = 8
+
+    static var highlightHeight: CGFloat {
+        max(trackHeight + 2 * highlightMargin, thumbSize)
+    }
+
+    /// The highlight's frame inside the bar's bounds: full width, centered on the track.
+    static func highlightRect(in bounds: CGRect) -> CGRect {
+        let height = min(highlightHeight, bounds.height)
+        return CGRect(x: bounds.minX, y: bounds.midY - height / 2, width: bounds.width, height: height)
+    }
+}
+
 /// The line a track list shows when it has nothing to choose between, so a single-track or
 /// unsubtitled title says so instead of graying out its button. The subtitle list's own "Off"
 /// entry is not a subtitle.
@@ -332,8 +351,11 @@ enum PlaybackTrackListNote {
 /// the hover effect, so `isLookedAt` comes from the effect itself, never from app state.
 enum PlaybackHUDPresentation {
     static let fadedOpacity = 0.08
-    /// Looking at faded controls brings them back quickly.
-    static let revealDuration: TimeInterval = 0.2
+    /// Looking at faded controls brings them back only after a short dwell, so a passing glance
+    /// across the bottom of the video does not pop them up.
+    static let revealDwell: TimeInterval = 0.3
+    /// The reveal itself is a gentle fade rather than a jump.
+    static let revealDuration: TimeInterval = 0.45
     /// After the wearer looks away, the controls stay up this long before they start to fade,
     /// so a glance at the video and back does not flicker them.
     static let fadeOutHold: TimeInterval = 1.5
@@ -352,8 +374,35 @@ enum PlaybackHUDPresentation {
     /// The timing of the opacity change when the look starts (`isLookedAt`) or ends.
     static func lookTransition(isLookedAt: Bool) -> LookTransition {
         isLookedAt
-            ? LookTransition(delay: 0, duration: revealDuration)
+            ? LookTransition(delay: revealDwell, duration: revealDuration)
             : LookTransition(delay: fadeOutHold, duration: fadeOutDuration)
+    }
+}
+
+/// The line the controls show while a movie waits for its data, so playback never stops
+/// without saying why (#1131).
+enum PlaybackLoadingPresentation: Equatable {
+    /// The player is waiting for data that is merely slow.
+    case loading
+    /// The share stopped answering. `isPlayingLoadedPart` while the player still has data ahead.
+    case connectionLost(isPlayingLoadedPart: Bool)
+
+    static func state(isConnectionLost: Bool, isBuffering: Bool) -> PlaybackLoadingPresentation? {
+        if isConnectionLost {
+            return .connectionLost(isPlayingLoadedPart: !isBuffering)
+        }
+        return isBuffering ? .loading : nil
+    }
+
+    var message: String {
+        switch self {
+        case .loading:
+            "Loading…"
+        case .connectionLost(isPlayingLoadedPart: true):
+            "Connection lost. Playing what has loaded while it reconnects."
+        case .connectionLost(isPlayingLoadedPart: false):
+            "Connection lost. Playback continues from here when it reconnects."
+        }
     }
 }
 

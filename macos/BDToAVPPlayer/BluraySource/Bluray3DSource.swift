@@ -127,6 +127,14 @@ enum Bluray3DPacket: Sendable {
 /// order, and blocks while the sink does, so a sink can pace the reader; returning false stops it.
 protocol Bluray3DPacketSink: AnyObject {
     func receive(_ packet: Bluray3DPacket) -> Bool
+    /// Whether the read still wants packets. A reader waiting to retry a share read stops once
+    /// this turns false, as when a seek replaces the read, instead of retrying until the share
+    /// answers again.
+    var isWanted: Bool { get }
+}
+
+extension Bluray3DPacketSink {
+    var isWanted: Bool { true }
 }
 
 /// Forwards video to a closure and audio to the headset audio player's PES sink.

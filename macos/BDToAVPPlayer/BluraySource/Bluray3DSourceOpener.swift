@@ -31,15 +31,16 @@ enum Bluray3DSourceOpener {
         }
     }
 
-    /// Opens a source. Call it off the main thread: it reads the disc's navigation files.
-    static func open(_ url: URL) throws -> Bluray3DSource {
+    /// Opens a source. Call it off the main thread: it reads the disc's navigation files. With
+    /// `reads`, the title's stream reads retry through a dropped share connection.
+    static func open(_ url: URL, reads: ShareConnectionMonitor? = nil) throws -> Bluray3DSource {
         switch kind(of: url) {
         case .discImage:
-            return try BlurayDiscSource(path: url.path, container: .discImage)
+            return try BlurayDiscSource(path: url.path, container: .discImage, reads: reads)
         case let .discFolder(root):
-            return try BlurayDiscSource(path: root.path, container: .discFolder)
+            return try BlurayDiscSource(path: root.path, container: .discFolder, reads: reads)
         case .matroska:
-            return try MatroskaMVCSource(url: url)
+            return try MatroskaMVCSource(url: url, reads: reads)
         case nil:
             throw Bluray3DSourceError.unrecognized
         }

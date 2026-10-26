@@ -97,6 +97,14 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         }
 
         func receive(_ packet: Bluray3DPacket) -> Bool { buffer.receive(packet, epoch: epoch) }
+        var isWanted: Bool { buffer.isCurrentRead(epoch) }
+    }
+
+    /// Whether `readEpoch` is still the buffer's read, and the buffer is not cancelled.
+    func isCurrentRead(_ readEpoch: Int) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return !cancelled && readEpoch == epoch
     }
 
     private func receive(_ packet: Bluray3DPacket, epoch packetEpoch: Int?) -> Bool {

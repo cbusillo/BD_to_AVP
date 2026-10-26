@@ -3,6 +3,7 @@
 #include <libbluray/bluray.h>
 #include <libbluray/filesystem.h>
 #include <libbluray/log_control.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1003,6 +1004,8 @@ bd3d_result bd3d_demux_segment(
     bd3d_read_fn read,
     void *read_context,
     const bd3d_segment *segment,
+    bd3d_read_monitor_fn monitor,
+    void *monitor_context,
     const uint16_t *audio_pids,
     size_t audio_count,
     const uint16_t *subtitle_pids,
@@ -1027,7 +1030,20 @@ bd3d_result bd3d_demux_segment(
     bool resyncing = false;
     size_t unsynced = 0;
     while (result == BD3D_OK) {
-        int64_t count = read(read_context, buffer + carried, (int64_t)(READ_CHUNK_SIZE - carried));
+        if (monitor != NULL) {
+            monitor(monitor_context, BD3D_READ_EVENT_STARTED, 0);
+        }
+        int64_t count;
+        for (;;) {
+            errno = 0;
+            count = read(read_context, buffer + carried, (int64_t)(READ_CHUNK_SIZE - carried));
+            if (count >= 0 || monitor == NULL || monitor(monitor_context, BD3D_READ_EVENT_FAILED, errno) == 0) {
+                break;
+            }
+        }
+        if (monitor != NULL) {
+            monitor(monitor_context, BD3D_READ_EVENT_FINISHED, 0);
+        }
         if (count < 0) {
             result = BD3D_READ_FAILED;
             break;
@@ -1096,6 +1112,8 @@ bd3d_result bd3d_demux_segment(
 bd3d_result bd3d_demux(
     bd3d_read_fn read,
     void *read_context,
+    bd3d_read_monitor_fn monitor,
+    void *monitor_context,
     const uint16_t *audio_pids,
     size_t audio_count,
     const uint16_t *subtitle_pids,
@@ -1105,8 +1123,8 @@ bd3d_result bd3d_demux(
     bd3d_stats *stats
 ) {
     return bd3d_demux_segment(
-        read, read_context, NULL, audio_pids, audio_count, subtitle_pids, subtitle_count, emit_function, emit_context,
-        stats
+        read, read_context, NULL, monitor, monitor_context, audio_pids, audio_count, subtitle_pids, subtitle_count,
+        emit_function, emit_context, stats
     );
 }
 
@@ -1114,7 +1132,16 @@ bd3d_result bd3d_demux(
 
 static int64_t read_bluray_file(void *context, uint8_t *buffer, int64_t size) {
     BD_FILE_H *file = context;
-    return file->read(file, buffer, size);
+    int64_t position = file->tell(file);
+    int64_t count = file->read(file, buffer, size);
+    // Put the file back where the read started, so a monitor can try the same read again, and
+    // keep the read's errno for the monitor.
+    if (count < 0 && position >= 0) {
+        int error = errno;
+        file->seek(file, position, SEEK_SET);
+        errno = error;
+    }
+    return count;
 }
 
 static void add_stats(bd3d_stats *total, const bd3d_stats *clip) {
@@ -1166,6 +1193,8 @@ bd3d_result bd3d_disc_stream(
     bd3d_disc *disc,
     uint32_t playlist,
     uint64_t start_ticks,
+    bd3d_read_monitor_fn monitor,
+    void *monitor_context,
     const uint16_t *audio_pids,
     size_t audio_count,
     const uint16_t *subtitle_pids,
@@ -1216,8 +1245,8 @@ bd3d_result bd3d_disc_stream(
         }
         bd3d_stats clip_stats = {0};
         result = bd3d_demux_segment(
-            read_bluray_file, file, &segment, audio_pids, audio_count, subtitle_pids, subtitle_count, emit_function,
-            emit_context, &clip_stats
+            read_bluray_file, file, &segment, monitor, monitor_context, audio_pids, audio_count, subtitle_pids,
+            subtitle_count, emit_function, emit_context, &clip_stats
         );
         file->close(file);
         add_stats(&total, &clip_stats);

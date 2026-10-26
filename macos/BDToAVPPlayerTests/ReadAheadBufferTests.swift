@@ -73,6 +73,8 @@ final class ReadAheadBufferTests: XCTestCase {
         let newFeed = buffer.feed()
 
         // The read that was replaced is told to stop, and its finish is ignored.
+        XCTAssertFalse(oldFeed.isWanted)
+        XCTAssertTrue(newFeed.isWanted)
         XCTAssertFalse(oldFeed.receive(Self.unit(2)))
         buffer.finish(feed: oldFeed)
         XCTAssertFalse(buffer.isFinished)

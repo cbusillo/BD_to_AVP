@@ -25,6 +25,30 @@ final class FileByteSource: ByteSource {
     }
 }
 
+/// Tries a share's failed reads again through `ShareConnectionMonitor`, so a dropped connection
+/// pauses reading instead of ending it.
+final class ShareRetryingByteSource: ByteSource {
+    private let base: ByteSource
+    private let reads: ShareConnectionMonitor
+    private let isWanted: () -> Bool
+    var size: Int64 { base.size }
+
+    init(_ base: ByteSource, reads: ShareConnectionMonitor, while isWanted: @escaping () -> Bool = { true }) {
+        self.base = base
+        self.reads = reads
+        self.isWanted = isWanted
+    }
+
+    /// The same source for one read of a title, whose retries stop once `isWanted` turns false.
+    func wanting(_ isWanted: @escaping () -> Bool) -> ShareRetryingByteSource {
+        ShareRetryingByteSource(base, reads: reads, while: isWanted)
+    }
+
+    func read(at offset: Int64, count: Int) throws -> Data {
+        try reads.read(while: isWanted) { try base.read(at: offset, count: count) }
+    }
+}
+
 final class DataByteSource: ByteSource {
     let data: Data
     var size: Int64 { Int64(data.count) }
@@ -64,8 +88,10 @@ final class MatroskaMVCSource: Bluray3DSource {
     /// offset in the file.
     private var videoCues: [(timestamp: Int64, cluster: Int64)]?
 
-    convenience init(url: URL) throws {
-        try self.init(source: FileByteSource(url: url))
+    /// With `reads`, failed reads wait and try again instead of ending playback.
+    convenience init(url: URL, reads: ShareConnectionMonitor? = nil) throws {
+        let file = try FileByteSource(url: url)
+        try self.init(source: reads.map { ShareRetryingByteSource(file, reads: $0) } ?? file)
     }
 
     init(source: ByteSource) throws {
@@ -105,7 +131,12 @@ final class MatroskaMVCSource: Bluray3DSource {
         let audio = Set(audioTrackIDs)
         let subtitles = Set(subtitleTrackIDs)
         var statistics = Bluray3DReadStatistics()
-        let reader = EBMLReader(source: source, offset: startTicks > 0 ? try clusterOffset(at: startTicks, video: video.number) : firstCluster)
+        // A read that a seek replaces stops retrying a dropped share instead of waiting for it.
+        let titleSource = (source as? ShareRetryingByteSource)?.wanting { [weak sink] in sink?.isWanted ?? false } ?? source
+        let reader = EBMLReader(
+            source: titleSource,
+            offset: startTicks > 0 ? try clusterOffset(at: startTicks, video: video.number) : firstCluster
+        )
         var clusterTimestamp: Int64 = 0
         // Decoding starts at a keyframe; a cluster found by its cue normally starts with one.
         var awaitingKeyframe = startTicks > 0
