@@ -400,7 +400,11 @@ struct ConversionSetupView: View {
         Binding(
             get: { ReusableFileOutcome(policy: options.job.intermediatePolicy) },
             set: { outcome in
-                applyRouteEdit(.reusableIntermediates(outcome == .finishedMovieAndReusableFiles))
+                if outcome == .discRipOnly {
+                    options.job.intermediatePolicy = .ripOnly
+                } else {
+                    applyRouteEdit(.reusableIntermediates(outcome == .finishedMovieAndReusableFiles))
+                }
             }
         )
     }
@@ -436,6 +440,9 @@ struct ConversionSetupView: View {
     }
 
     private var profileOutcomeSummary: String {
+        if options.job.intermediatePolicy.ripsOnly {
+            return ConversionOptions.ripSummary
+        }
         if !profileModified, let builtInProfile = BuiltInProfile(rawValue: selectedProfile.id) {
             return builtInProfile.summary
         }

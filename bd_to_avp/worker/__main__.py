@@ -178,6 +178,7 @@ def _run_worker(
             owner.check_cancelled()
         result_key = {
             "convert_source": "conversion_result",
+            "rip_source": "conversion_result",
             "preview_source": "preview_result",
             "start_live_source": "live_source_result",
             "start_live_hls": "live_hls_result",

@@ -66,6 +66,15 @@ features made of several clips; see
 [direct pipeline contracts](docs/direct-pipeline-contracts.md#direct-blu-ray-reads).
 Encrypted sources and previews still use MakeMKV.
 
+To keep a 3D disc as a file instead of converting it, choose **Output files →
+Just the 3D disc rip, not converted** in Advanced Settings, or save it in a
+profile and give that profile to a watch folder. Your copy of MakeMKV saves the
+movie as one MKV with both eyes and every audio and subtitle track, named after
+the movie, in the destination folder. Point the destination at a shared folder
+and Shiny 3D Cinema plays it from **Locations**. The app checks that the rip
+kept the second eye and reports a 2D-only rip as a failure instead of adding it.
+The app never decrypts anything itself; only MakeMKV reads disc encryption.
+
 The production app bundle includes the arm64 `bd3d_reader` and `ssif_probe`
 helpers and their private `libbluray` and `libudfread` dylibs under
 `Contents/Resources/app/bd_to_avp/{bin,lib}`. It also ships the pinned LGPL

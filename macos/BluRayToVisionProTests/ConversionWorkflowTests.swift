@@ -2053,6 +2053,61 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(encoded as NSDictionary?, fixture as NSDictionary)
     }
 
+    func testRipOnlyDraftSendsRipJobMatchingSharedWorkerFixture() throws {
+        var options = ConversionOptions()
+        options.job.intermediatePolicy = .ripOnly
+        // Options that only apply to a conversion are not sent with a rip.
+        options.job.continueOnError = true
+        options.job.removeOriginalAfterSuccess = true
+        options.job.softwareEncoder = true
+        let draft = ConversionDraft(
+            source: ConversionSource(
+                kind: .physicalDisc,
+                url: URL(fileURLWithPath: "/Volumes/Feature", isDirectory: true),
+                workerSourcePath: "/dev/disk9"
+            ),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Volumes/Movies", isDirectory: true),
+            options: options,
+            selectedTitle: SourceTitle(
+                id: "makemkv:0",
+                name: "Main Movie",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            )
+        )
+        let spec = WorkerJobSpec(
+            draft: draft,
+            jobID: try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        )
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
+        let fixture = try JSONSerialization.jsonObject(
+            with: currentProtocolFixtureData("native_worker_rip_physical_disc")
+        ) as? NSDictionary
+
+        XCTAssertEqual(encoded, fixture)
+        XCTAssertEqual(draft.proposedOutputURL.path, "/Volumes/Movies/Feature.mkv")
+    }
+
+    func testRipOnlyChoiceSurvivesSavedQueuesAndProfiles() throws {
+        var job = JobOptions()
+        job.intermediatePolicy = ReusableFileOutcome.discRipOnly.policy
+
+        let restoredJob = try JSONDecoder().decode(JobOptions.self, from: JSONEncoder().encode(job))
+        let defaults = try JSONDecoder().decode(
+            ProfilePipelineDefaults.self,
+            from: JSONEncoder().encode(job.profilePipelineDefaults)
+        )
+
+        XCTAssertEqual(restoredJob.intermediatePolicy, .ripOnly)
+        XCTAssertEqual(defaults.intermediatePolicy, .ripOnly)
+        XCTAssertEqual(ReusableFileOutcome(policy: restoredJob.intermediatePolicy), .discRipOnly)
+    }
+
     func testPhysicalDiscJobSpecMatchesSharedWorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic

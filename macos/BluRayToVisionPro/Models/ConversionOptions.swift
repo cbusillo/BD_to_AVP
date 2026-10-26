@@ -294,6 +294,8 @@ struct MVHEVCOptions: Codable, Equatable {
 enum IntermediatePolicy: String, Codable {
     case automatic
     case reusable
+    /// MakeMKV saves the disc's 3D title as an MKV in the destination; nothing is converted.
+    case ripOnly = "rip_only"
 
     init(legacyKeepStageFiles: Bool) {
         self = legacyKeepStageFiles ? .reusable : .automatic
@@ -301,6 +303,10 @@ enum IntermediatePolicy: String, Codable {
 
     var createsReusableArtifacts: Bool {
         self == .reusable
+    }
+
+    var ripsOnly: Bool {
+        self == .ripOnly
     }
 }
 
@@ -652,12 +658,20 @@ struct ConversionOptions: Codable, Equatable {
     }
 
     var videoSummary: String {
-        encoding.videoSummary(for: videoRoutePlan)
+        if job.intermediatePolicy.ripsOnly {
+            return Self.ripSummary
+        }
+        return encoding.videoSummary(for: videoRoutePlan)
     }
 
     var compactSummary: String {
-        "\(videoSummary) · Audio: \(encoding.audioSummary) · Subtitles: \(encoding.subtitleSummary)"
+        if job.intermediatePolicy.ripsOnly {
+            return "\(Self.ripSummary) · every audio and subtitle track kept"
+        }
+        return "\(videoSummary) · Audio: \(encoding.audioSummary) · Subtitles: \(encoding.subtitleSummary)"
     }
+
+    static let ripSummary = "3D disc rip (MKV), not converted"
 
     @discardableResult
     mutating func resetSourceScopedState(

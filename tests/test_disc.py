@@ -439,3 +439,112 @@ class DiscStageArtifactTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+MVC_ACCESS_UNIT = b"\x00\x00\x00\x01\x09\xf0\x00\x00\x01\x65\x88\x00\x00\x01\x14\x88"
+BASE_VIEW_ACCESS_UNIT = b"\x00\x00\x00\x01\x09\xf0\x00\x00\x01\x65\x88"
+MAKEMKV_RIP_INFO = "\n".join(
+    [
+        'CINFO:2,0,"Feature 3D"',
+        'TINFO:3,9,0,"1:40:00"',
+        'TINFO:3,26,0,"801"',
+        'SINFO:3,1,6,0,"Mpeg4-MVC-3D"',
+        'TINFO:5,9,0,"0:05:00"',
+        'SINFO:5,1,6,0,"Mpeg4-MVC-3D"',
+    ]
+)
+
+
+class RipToFolderTests(unittest.TestCase):
+    """The rip-only route: MakeMKV saves the title with both views into the destination, unconverted."""
+
+    makemkv_path = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
+    ffmpeg_path = Path("/opt/bd_to_avp/ffmpeg")
+
+    def rip(
+        self,
+        destination: Path,
+        *,
+        title_id: str | None = "makemkv:3",
+        checked_stream: bytes = MVC_ACCESS_UNIT,
+        overwrite: bool = False,
+    ) -> tuple[Path, list[list[object]], list[str]]:
+        commands: list[list[object]] = []
+        stages: list[str] = []
+
+        def run_process_capture(command: list[object], _name: str, **_kwargs: object) -> ProcessResult:
+            commands.append(command)
+            if command[0] == self.ffmpeg_path:
+                Path(str(command[-1])).write_bytes(checked_stream)
+                return process_result()
+            if "info" in command:
+                return process_result(MAKEMKV_RIP_INFO)
+            profile = next(str(part) for part in command if str(part).startswith("--profile="))
+            self.assertIn("+sel:mvcvideo", Path(profile.removeprefix("--profile=")).read_text(encoding="utf-8"))
+            output_folder = Path(str(command[-1]))
+            (output_folder / "Feature 3D_t03.mkv").write_bytes(b"ripped")
+            return process_result(MAKEMKV_SUCCESS_OUTPUT)
+
+        with (
+            patch.object(disc.config, "source_path", None),
+            patch.object(disc.config, "source_str", "dev:/dev/disk9"),
+            patch.object(disc.config, "MAKEMKVCON_PATH", self.makemkv_path),
+            patch.object(disc.config, "FFMPEG_PATH", self.ffmpeg_path),
+            patch.object(disc.config, "continue_on_error", False),
+            patch.object(disc, "run_process_capture", side_effect=run_process_capture),
+        ):
+            output = disc.rip_title_to_folder(
+                destination,
+                title_id,
+                overwrite=overwrite,
+                stage_started=lambda stage, _message: stages.append(stage),
+            )
+        return output, commands, stages
+
+    def test_rips_title_with_mvc_profile_into_destination_under_movie_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir)
+
+            output, commands, stages = self.rip(destination)
+
+            self.assertEqual(output, destination / "Feature 3D.mkv")
+            self.assertEqual(output.read_bytes(), b"ripped")
+            self.assertEqual(sorted(path.name for path in destination.iterdir()), ["Feature 3D.mkv"])
+        rip_command = commands[1]
+        self.assertEqual(rip_command[0], self.makemkv_path)
+        self.assertEqual(rip_command[rip_command.index("mkv") + 1 : -1], ["dev:/dev/disk9", 3])
+        self.assertIn("-frames:v", commands[2])
+        self.assertEqual(stages, list(disc.RIP_STAGES))
+
+    def test_rip_reads_titles_through_makemkv_even_when_the_reader_could_read_the_disc(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(disc, "direct_bluray_disc", side_effect=AssertionError("must not read directly")),
+        ):
+            output, commands, _ = self.rip(Path(temp_dir), title_id="bluray:801")
+
+            self.assertEqual(output.name, "Feature 3D.mkv")
+        self.assertIn("info", commands[0])
+        self.assertEqual(commands[1][-2], 3)
+
+    def test_rip_without_second_view_fails_and_leaves_nothing_in_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir)
+
+            with self.assertRaisesRegex(disc.RipWithout3DError, "2D only"):
+                self.rip(destination, checked_stream=BASE_VIEW_ACCESS_UNIT * 4)
+
+            self.assertEqual(list(destination.iterdir()), [])
+
+    def test_existing_movie_is_kept_unless_overwrite_is_on(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir)
+            existing = destination / "Feature 3D.mkv"
+            existing.write_bytes(b"earlier rip")
+
+            with self.assertRaisesRegex(FileExistsError, "Overwrite"):
+                self.rip(destination)
+            self.assertEqual(existing.read_bytes(), b"earlier rip")
+
+            self.rip(destination, overwrite=True)
+            self.assertEqual(existing.read_bytes(), b"ripped")

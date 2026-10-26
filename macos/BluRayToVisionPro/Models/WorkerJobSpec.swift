@@ -626,13 +626,20 @@ struct WorkerJobSpec: Encodable, Equatable {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
-        operation = "convert_source"
         source = Source(source: draft.source, titleID: Self.titleID(for: draft))
         destination = Destination(path: draft.destinationURL.path)
 
-        let job = Self.conversionJob(from: draft)
-        encoding = Self.encoding(from: draft.options.encoding, job: job)
-        self.job = job
+        if draft.options.job.intermediatePolicy.ripsOnly {
+            // MakeMKV saves the title unconverted, so no encoding options apply.
+            operation = "rip_source"
+            encoding = nil
+            job = Self.ripJob(from: draft)
+        } else {
+            operation = "convert_source"
+            let job = Self.conversionJob(from: draft)
+            encoding = Self.encoding(from: draft.options.encoding, job: job)
+            self.job = job
+        }
         preview = nil
         liveSource = nil
         liveHLS = nil
@@ -1130,6 +1137,20 @@ struct WorkerJobSpec: Encodable, Equatable {
             removeOriginal: draft.source.kind == .physicalDisc ? false : options.removeOriginalAfterSuccess,
             continueOnError: options.continueOnError,
             softwareEncoder: options.softwareEncoder,
+            outputCommands: options.outputCommands,
+            keepAwake: options.keepAwake
+        )
+    }
+
+    private static func ripJob(from draft: ConversionDraft) -> Job {
+        let options = draft.options.job
+        return Job(
+            startStage: ConversionStage.createMKV.rawValue,
+            keepFiles: false,
+            overwrite: options.overwriteExisting,
+            removeOriginal: false,
+            continueOnError: false,
+            softwareEncoder: false,
             outputCommands: options.outputCommands,
             keepAwake: options.keepAwake
         )
