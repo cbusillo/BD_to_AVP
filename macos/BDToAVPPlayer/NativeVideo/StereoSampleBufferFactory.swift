@@ -11,7 +11,8 @@ enum StereoSampleBufferError: Error, Equatable {
 /// Turns decoded MVC frames into the stereo sample buffers `AVSampleBufferVideoRenderer` shows in
 /// RealityKit: one NV12 pixel buffer per eye, tagged `.stereoView(.leftEye)` and
 /// `.stereoView(.rightEye)`, in one `CMSampleBuffer` (#1103). Blu-ray 3D codes the left eye as
-/// the base view unless the title says otherwise.
+/// the base view unless the title says otherwise. A subtitle is drawn into both eyes, each copy
+/// shifted for its eye so it stands in front of the screen.
 final class StereoSampleBufferFactory {
     /// Every Blu-ray frame is 23.976 fps or slower; the renderer uses the next frame's time anyway.
     static let defaultFrameDuration = CMTime(value: 1_001, timescale: 24_000)
@@ -25,14 +26,17 @@ final class StereoSampleBufferFactory {
         self.baseViewIsRightEye = baseViewIsRightEye
     }
 
-    /// A stereo sample buffer for `frame`, presented at `presentationTime` on the shared clock.
+    /// A stereo sample buffer for `frame`, presented at `presentationTime` on the shared clock,
+    /// with `subtitle` drawn over it.
     func sampleBuffer(
         for frame: UnsafePointer<BDAVPMVCFrame>,
         presentationTime: CMTime,
-        duration: CMTime = defaultFrameDuration
+        duration: CMTime = defaultFrameDuration,
+        subtitle: SubtitleOverlay? = nil
     ) throws -> CMSampleBuffer {
-        let base = try pixelBuffer(frame, view: 0)
-        let dependent = try pixelBuffer(frame, view: 1)
+        let baseEye: SubtitleOverlay.Eye = baseViewIsRightEye ? .right : .left
+        let base = try pixelBuffer(frame, view: 0, subtitle: subtitle.map { ($0, baseEye) })
+        let dependent = try pixelBuffer(frame, view: 1, subtitle: subtitle.map { ($0, baseEye == .left ? .right : .left) })
         let (left, right) = baseViewIsRightEye ? (dependent, base) : (base, dependent)
         let tagged = [
             CMTaggedBuffer(tags: [.mediaType(.video), .stereoView(.leftEye), .videoLayerID(0)], pixelBuffer: left),
@@ -53,7 +57,11 @@ final class StereoSampleBufferFactory {
         )
     }
 
-    private func pixelBuffer(_ frame: UnsafePointer<BDAVPMVCFrame>, view: Int32) throws -> CVPixelBuffer {
+    private func pixelBuffer(
+        _ frame: UnsafePointer<BDAVPMVCFrame>,
+        view: Int32,
+        subtitle: (overlay: SubtitleOverlay, eye: SubtitleOverlay.Eye)?
+    ) throws -> CVPixelBuffer {
         let width = frame.pointee.width
         let height = frame.pointee.height
         if poolSize?.width != width || poolSize?.height != height {
@@ -78,6 +86,9 @@ final class StereoSampleBufferFactory {
             luma.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetBytesPerRowOfPlane(buffer, 0),
             chroma.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetBytesPerRowOfPlane(buffer, 1)
         )
+        if let subtitle {
+            subtitle.overlay.draw(into: buffer, eye: subtitle.eye)
+        }
         // Blu-ray video is BT.709.
         CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)

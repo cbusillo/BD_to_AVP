@@ -942,8 +942,14 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func selectSubtitle(id: String) {
-        if nativePlayback != nil {
-            // Blu-ray subtitles are not drawn yet (#1114), so Off is the only choice.
+        if let nativePlayback {
+            if id == "off" {
+                nativePlayback.selectSubtitle(trackID: nil)
+            } else {
+                guard let track = nativePlayback.subtitleTracks.first(where: { $0.mediaOption.id == id }) else { return }
+                nativePlayback.selectSubtitle(trackID: track.id)
+            }
+            selectedSubtitleID = id
             return
         }
         guard let subtitleGroup, let playerItem else {
@@ -1186,8 +1192,10 @@ final class MVHEVCPlayerSession: ObservableObject {
         duration = title.durationSeconds
         audioOptions = playback.audioTracks.map(\.mediaOption)
         selectedAudioID = playback.audioTracks.first { $0.id == playback.selectedAudioTrackID }?.mediaOption.id ?? ""
-        subtitleOptions = [PlaybackMediaOption(id: "off", displayName: "Off")]
-        subtitleListNote = title.subtitleTracks.isEmpty ? nil : PlaybackTrackListNote.bluraySubtitlesLater
+        subtitleOptions = [PlaybackMediaOption(id: "off", displayName: "Off")] + playback.subtitleTracks.map(\.mediaOption)
+        selectedSubtitleID = "off"
+        subtitleListNote = playback.subtitleTracks.isEmpty && !title.subtitleTracks.isEmpty
+            ? PlaybackTrackListNote.unsupportedBluraySubtitles : nil
         isBuffering = true
         state = .ready
         playback.start()
