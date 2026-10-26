@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.audio_mode import AudioMode
-from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
+from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError, RipWithout3DError
 from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.modules.video import GeneratedMVHEVCArtifactError
@@ -36,6 +36,7 @@ from bd_to_avp.worker.operations import (
     convert_source,
     inspect_source,
     preview_source,
+    run_operation,
 )
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
@@ -2610,3 +2611,89 @@ class WorkerProcessOwnerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def rip_request_line(source_path: Path, destination_path: Path, **job_overrides: object) -> str:
+    request = json.loads(current_protocol_fixture("native_worker_rip_physical_disc").read_text(encoding="utf-8"))
+    request["job_id"] = str(uuid4())
+    request["source"] = {
+        "kind": source_kind_for_path(source_path),
+        "path": str(source_path),
+        "title_id": "makemkv:0",
+    }
+    request["destination"] = {"path": str(destination_path)}
+    request["job"].update(job_overrides)
+    return json.dumps(request) + "\n"
+
+
+class RipSourceTests(unittest.TestCase):
+    def test_parses_shared_swift_rip_fixture(self) -> None:
+        job = JobSpec.from_json_line(
+            current_protocol_fixture("native_worker_rip_physical_disc").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(job.operation, WorkerOperation.RIP_SOURCE)
+        self.assertEqual(job.source.kind, WorkerSourceKind.PHYSICAL_DISC)
+        self.assertEqual(job.source.title_id, "makemkv:0")
+        self.assertEqual(job.destination.path if job.destination else None, Path("/Volumes/Movies"))
+        self.assertIsNone(job.encoding)
+
+    def test_rejects_rips_of_files_and_options_that_do_not_apply(self) -> None:
+        file_request = json.loads(rip_request_line(Path("/tmp/feature.iso"), Path("/tmp/output")))
+        file_request["source"] = {"kind": "direct_file", "path": "/tmp/movie.mkv"}
+        with self.assertRaisesRegex(WorkerProtocolError, "can be ripped"):
+            JobSpec.from_json_line(json.dumps(file_request))
+        for option in ("keep_files", "remove_original", "continue_on_error"):
+            with self.subTest(option=option), self.assertRaisesRegex(WorkerProtocolError, "Rip jobs"):
+                JobSpec.from_json_line(
+                    rip_request_line(Path("/tmp/feature.iso"), Path("/tmp/output"), **{option: True})
+                )
+
+    def run_rip(
+        self, rip_title_to_folder: Mock
+    ) -> tuple[dict[str, object] | WorkerOperationError, list[dict[str, Any]]]:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "feature.iso"
+            source_path.write_bytes(b"iso")
+            destination = temporary_path / "share"
+            destination.mkdir()
+            job = JobSpec.from_json_line(rip_request_line(source_path, destination))
+            output = io.StringIO()
+            activity = WorkerActivityReporter(WorkerEventEmitter(output, job.job_id))
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", source_path),
+                patch("bd_to_avp.worker.operations.rip_title_to_folder", rip_title_to_folder),
+            ):
+                try:
+                    outcome: dict[str, object] | WorkerOperationError = run_operation(
+                        job, WorkerProcessOwner(), activity
+                    )
+                except WorkerOperationError as error:
+                    outcome = error
+            return outcome, decoded_events(output)
+
+    def test_rip_reports_the_saved_movie_as_the_conversion_result(self) -> None:
+        def rip(destination: Path, title_id: str, **kwargs: Any) -> Path:
+            self.assertEqual(title_id, "makemkv:0")
+            self.assertEqual(config.source_str, f"iso:{config.source_path}")
+            for stage in ("inspect_source", "create_mkv", "verify_3d", "move_files"):
+                kwargs["stage_started"](stage, stage)
+            movie = destination / "Feature.mkv"
+            movie.write_bytes(b"movie")
+            return movie
+
+        result, events = self.run_rip(Mock(side_effect=rip))
+
+        assert isinstance(result, dict)
+        self.assertTrue(str(result["output_path"]).endswith("/share/Feature.mkv"))
+        self.assertEqual(result["size_bytes"], 5)
+        stages = [event["payload"] for event in events if event["type"] == "stage.started"]
+        self.assertEqual(stages[-1]["progress"], {"current_stage": 4, "total_stages": 4})
+
+    def test_rip_without_second_view_fails_with_its_own_reason(self) -> None:
+        error, _ = self.run_rip(Mock(side_effect=RipWithout3DError("2D only")))
+
+        assert isinstance(error, WorkerOperationError)
+        self.assertEqual(error.code, "rip_missing_3d")
+        self.assertFalse(error.retryable)

@@ -59,6 +59,8 @@ def bounded_detail(value: str) -> str:
 class WorkerOperation(StrEnum):
     INSPECT_SOURCE = "inspect_source"
     CONVERT_SOURCE = "convert_source"
+    # Saves a disc title as an MKV with MakeMKV, keeping both views, without converting it.
+    RIP_SOURCE = "rip_source"
     PREVIEW_SOURCE = "preview_source"
     START_LIVE_SOURCE = "start_live_source"
     START_LIVE_HLS = "start_live_hls"
@@ -364,6 +366,7 @@ class JobSpec:
         operation_keys = {
             WorkerOperation.INSPECT_SOURCE: base_keys,
             WorkerOperation.CONVERT_SOURCE: base_keys | {"destination", "encoding", "job"},
+            WorkerOperation.RIP_SOURCE: base_keys | {"destination", "job"},
             WorkerOperation.PREVIEW_SOURCE: base_keys | {"destination", "encoding", "job", "preview"},
             WorkerOperation.START_LIVE_SOURCE: base_keys | {"destination", "live_source"},
             WorkerOperation.START_LIVE_HLS: base_keys | {"destination", "live_hls"},
@@ -440,8 +443,15 @@ class JobSpec:
             WorkerSourceKind.DISC_IMAGE,
             WorkerSourceKind.BLU_RAY_FOLDER,
         }
+        if operation is WorkerOperation.RIP_SOURCE and source_kind is WorkerSourceKind.DIRECT_FILE:
+            raise WorkerProtocolError(
+                "invalid_rip_source",
+                "Only Blu-ray discs, disc images, and Blu-ray folders can be ripped.",
+                job_id=job_id,
+            )
         title_selection_required = (
-            operation is WorkerOperation.CONVERT_SOURCE and source_kind is not WorkerSourceKind.DIRECT_FILE
+            operation in {WorkerOperation.CONVERT_SOURCE, WorkerOperation.RIP_SOURCE}
+            and source_kind is not WorkerSourceKind.DIRECT_FILE
         ) or (operation is WorkerOperation.PREVIEW_SOURCE and preview_disc_source)
         if title_selection_required and title_id is None:
             raise WorkerProtocolError(
@@ -472,6 +482,21 @@ class JobSpec:
                 raise WorkerProtocolError(
                     "invalid_job_options",
                     "job.remove_original must be false for physical discs.",
+                    job_id=job_id,
+                )
+        elif operation is WorkerOperation.RIP_SOURCE:
+            destination = JobDestination(path=cls._parse_destination(raw.get("destination"), job_id))
+            job_options = cls._parse_job_options(raw.get("job"), job_id)
+            if (
+                job_options.start_stage != 1
+                or job_options.keep_files
+                or job_options.remove_original
+                or job_options.continue_on_error
+            ):
+                raise WorkerProtocolError(
+                    "invalid_rip_options",
+                    "Rip jobs start from the beginning, keep no stage files, stop on errors, "
+                    "and never remove the source.",
                     job_id=job_id,
                 )
         elif operation is WorkerOperation.PREVIEW_SOURCE:

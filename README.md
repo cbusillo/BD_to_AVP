@@ -334,6 +334,15 @@ app is open; at launch the app checks for anything that arrived while it was
 closed. A folder on a disconnected drive shows **Drive offline** and resumes when
 the drive mounts again.
 
+To keep a 3D disc as a file instead of converting it, choose **Output files →
+Just the 3D disc rip, not converted** in Advanced Settings, or save it in a
+profile and give that profile to a watch folder. Your copy of MakeMKV saves the
+movie as one MKV with both eyes and every audio and subtitle track, named after
+the movie, in the destination folder. Point the destination at a shared folder
+and Shiny 3D Cinema plays it from **Locations**. The app checks that the rip
+kept the second eye and reports a 2D-only rip as a failure instead of adding it.
+The app never decrypts anything itself; only MakeMKV reads disc encryption.
+
 The queue also shows a coarse storage forecast grouped by destination. Each
 forecast separates estimated output, peak temporary/working space, retained
 intermediates, a visible safety margin, and total peak space. Forecasts use
