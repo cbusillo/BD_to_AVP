@@ -13,6 +13,7 @@ import ffmpeg
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.bluray import direct_bluray_disc
 from bd_to_avp.modules.disc import (
     build_makemkv_crash_message,
     DiscTitleSelectionError,
@@ -245,26 +246,27 @@ def inspect_source(
 ) -> dict[str, object]:
     source = resolve_job_source(source)
     source_path = source.path
-    if (
-        source.kind
-        in {
-            WorkerSourceKind.DISC_IMAGE,
-            WorkerSourceKind.BLU_RAY_FOLDER,
-            WorkerSourceKind.PHYSICAL_DISC,
-        }
-        and not config.MAKEMKVCON_PATH.is_file()
-    ):
-        raise WorkerOperationError(
-            "makemkv_missing",
-            "MakeMKV is required to inspect this Blu-ray source.",
-            retryable=True,
-        )
     if source.kind is WorkerSourceKind.DIRECT_FILE and not config.FFPROBE_PATH.is_file():
         raise WorkerOperationError("ffprobe_missing", "The FFprobe helper could not be found.")
 
     owner.check_cancelled()
     try:
         with configured_source(source, source_path):
+            if (
+                source.kind
+                in {
+                    WorkerSourceKind.DISC_IMAGE,
+                    WorkerSourceKind.BLU_RAY_FOLDER,
+                    WorkerSourceKind.PHYSICAL_DISC,
+                }
+                and not config.MAKEMKVCON_PATH.is_file()
+                and direct_bluray_disc(source.title_id) is None
+            ):
+                raise WorkerOperationError(
+                    "makemkv_missing",
+                    "MakeMKV is required to inspect this Blu-ray source.",
+                    retryable=True,
+                )
             disc_info = (
                 get_disc_and_mvc_video_info(
                     source.title_id,
@@ -474,7 +476,7 @@ def _convert_source(
             config.configure_tool_environment()
             resolved_video_route = resolved_video_route or resolve_job_video_route(job, owner, activity)
             apply_video_route_to_config(resolved_video_route)
-            activity.set_stage_plan(conversion_stage_plan(resolved_video_route))
+            activity.set_stage_plan(conversion_stage_plan(resolved_video_route, job.source.title_id))
             activity.stage_started("configure", "Preparing conversion settings")
             activity.log("Tool environment configured", stage="configure")
             if not route_already_reported:

@@ -173,7 +173,9 @@ def create_mvc_and_audio(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    extract: bool | None = None,
 ) -> tuple[Path, Path]:
+    """``extract`` overrides the stage check for a direct Blu-ray read, which extracts later."""
     video_output_path = output_folder / f"{disc_name}_mvc.h264"
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
     m4a_audio_preparation = is_audio_m4a_preparation_enabled()
@@ -188,7 +190,7 @@ def create_mvc_and_audio(
         )
     audio_source_path = mkv_output_path if m4a_audio_preparation or not source_audio_streams else audio_output_path
 
-    if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
+    if extract if extract is not None else config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
         extract_mvc_and_audio(
             mkv_output_path,
             None if direct_mvc_stream else video_output_path,
@@ -367,6 +369,11 @@ def audio_handler_metadata_options(
         title = audio_track_title(stream)
         if title is not None:
             options[f"metadata:s:a:{output_index}"] = f"handler_name={title}"
+        language = stream.get("tags", {}).get("language")
+        if isinstance(language, str) and language:
+            # These outputs hold only audio, so stream N is audio stream N. A language
+            # inherited from a shared PID is not in the source metadata FFmpeg maps.
+            options[f"metadata:s:{output_index}"] = f"language={language}"
         options[f"disposition:a:{output_index}"] = audio_disposition_value(stream)
     return options
 
@@ -419,4 +426,21 @@ def get_audio_stream_data(
     if not probe or "streams" not in probe:
         return []
     audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]
+    inherit_shared_pid_language(audio_streams)
     return audio_streams
+
+
+def inherit_shared_pid_language(streams: list[dict[str, Any]]) -> None:
+    """Give a Blu-ray TrueHD stream's AC-3 core, which FFmpeg reads as a second stream on the
+    same PID without the PMT language, the language of its TrueHD stream, as MakeMKV labels it."""
+    languages: dict[object, str] = {}
+    for stream in streams:
+        stream_id = stream.get("id")
+        tags = stream.setdefault("tags", {})
+        if stream_id is None or not isinstance(tags, dict):
+            continue
+        language = tags.get("language")
+        if isinstance(language, str) and language:
+            languages.setdefault(stream_id, language)
+        elif stream_id in languages:
+            tags["language"] = languages[stream_id]
