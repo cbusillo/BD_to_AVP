@@ -78,14 +78,19 @@ final class MatroskaMVCSourceTests: XCTestCase {
         XCTAssertEqual(fromThirty.video.first?.data.prefix(5), Data([0, 0, 0, 1]) + sps.prefix(1))
     }
 
-    func testWithoutCuesReadingFromATimeStartsAtTheLastClusterBeforeItAndItsNextKeyframe() throws {
+    func testWithoutCuesReadingFromATimeStartsAtTheLastKeyframeClusterBeforeIt() throws {
         let source = try MatroskaMVCSource(source: DataByteSource(seekableFile(cues: false)))
-        let sink = CollectingPacketSink()
+        let title = try XCTUnwrap(source.info.mainTitle)
+        let fromTwentyFive = CollectingPacketSink()
+        let fromThirtyFive = CollectingPacketSink()
 
-        _ = try source.read(title: try XCTUnwrap(source.info.mainTitle), from: 25 * 90_000, audioTrackIDs: [], subtitleTrackIDs: [], into: sink)
+        _ = try source.read(title: title, from: 25 * 90_000, audioTrackIDs: [], subtitleTrackIDs: [], into: fromTwentyFive)
+        _ = try source.read(title: title, from: 35 * 90_000, audioTrackIDs: [], subtitleTrackIDs: [], into: fromThirtyFive)
 
-        // The cluster at 20 s holds only a delta frame, so video starts at the keyframe at 30 s.
-        XCTAssertEqual(sink.video.map(\.pts), [2_700_000])
+        // The cluster at 20 s starts with a delta frame, so 25 s decodes forward from the keyframe
+        // at 10 s; the player shows frames from the target on.
+        XCTAssertEqual(fromTwentyFive.video.map(\.pts), [900_000, 903_780, 1_800_000, 2_700_000])
+        XCTAssertEqual(fromThirtyFive.video.map(\.pts), [2_700_000])
     }
 
     func testAVCWithoutMVCIsListedButNotPlayable() throws {

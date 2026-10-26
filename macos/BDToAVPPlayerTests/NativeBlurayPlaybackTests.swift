@@ -246,6 +246,40 @@ final class NativeBlurayPlaybackTests: XCTestCase {
         XCTAssertNil(playback.status.failure)
     }
 
+    func testASeekDuringTheStartOfAnotherSeeksPassLosesNoUnit() throws {
+        var configuration = NativeBlurayPlayback.Configuration()
+        configuration.buffer.aheadTarget = 2
+        let source = try FixtureSource(repetitions: 30)
+        let playback = makePlayback(source, configuration: configuration)
+        let taken = OSAllocatedUnfairLock(initialState: [(generation: Int, ticks: Int64, isRandomAccess: Bool)]())
+        playback.didTakeVideoUnit = { generation, ticks, isRandomAccess in
+            taken.withLock { $0.append((generation, ticks, isRandomAccess)) }
+        }
+        // As the decoder begins seek A's pass, the wearer scrubs on to B, and B's first units
+        // arrive before A's pass asks for a unit.
+        playback.willBeginDecodingPass = { generation in
+            guard generation == 1 else { return }
+            playback.seek(to: 8)
+            let deadline = Date(timeIntervalSinceNow: 2)
+            while Date() < deadline, (playback.status.loadedRange?.lowerBound ?? 0) < 7.5 {
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+        }
+        playback.start()
+        XCTAssertTrue(waitUntil(10) { playback.status.currentTime > 0.3 })
+
+        playback.seek(to: 5)
+
+        XCTAssertTrue(waitUntil(10) { playback.status.currentTime > 8.3 }, "status \(playback.status)")
+        let units = taken.withLock { $0 }
+        // B's read starts at the IDR at 705,705 ticks; every unit of it is decoded in B's pass.
+        let fromB = units.filter { $0.ticks >= 700_000 }
+        XCTAssertTrue(fromB.allSatisfy { $0.generation == 2 }, "\(fromB.prefix(4))")
+        XCTAssertEqual(units.first { $0.generation == 2 }?.isRandomAccess, true)
+        XCTAssertEqual(units.first { $0.generation == 2 }?.ticks, 705_705)
+        XCTAssertNil(playback.status.failure)
+    }
+
     func testStartsMidTitleForAResume() throws {
         let source = try FixtureSource(repetitions: 30)
         let playback = makePlayback(source, startSeconds: 5)

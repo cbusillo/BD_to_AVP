@@ -186,7 +186,7 @@ final class MatroskaMVCSource: Bluray3DSource {
             return cue.cluster
         }
         if !cues.isEmpty { return firstCluster }
-        return try scanClusters(through: target)
+        return try scanClusters(through: target, video: video)
     }
 
     private func readCues(video: Int) throws -> [(timestamp: Int64, cluster: Int64)] {
@@ -218,16 +218,39 @@ final class MatroskaMVCSource: Bluray3DSource {
         return points.sorted { $0.timestamp < $1.timestamp }
     }
 
-    /// Reads cluster headers from the first cluster on, for files without cues.
-    private func scanClusters(through target: Int64) throws -> Int64 {
+    /// For files without cues: the last cluster timed at or before `target` whose first video
+    /// block is a keyframe, so decoding can start there and run forward to the target. Clusters
+    /// are read from the first one on; within each, only the elements up to its first video block.
+    private func scanClusters(through target: Int64, video: Int) throws -> Int64 {
         let reader = EBMLReader(source: source, offset: firstCluster)
         var best = firstCluster
         while let element = try reader.nextElement(), element.id == MatroskaID.cluster, element.end != .max {
-            let timestamp = try reader.nextElement(endingBefore: element.end)
-            guard let timestamp, timestamp.id == MatroskaID.timestamp,
-                  let value = Int64(exactly: try reader.unsigned(timestamp)), value <= target
-            else { break }
-            best = element.start
+            var timestamp: Int64?
+            var startsWithKeyframe = false
+            while let child = try reader.nextElement(endingBefore: element.end) {
+                if child.id == MatroskaID.timestamp {
+                    timestamp = Int64(exactly: try reader.unsigned(child))
+                    reader.offset = child.end
+                    continue
+                }
+                let block: MatroskaBlock?
+                switch child.id {
+                case MatroskaID.simpleBlock:
+                    block = try MatroskaBlock(try reader.payload(child, limit: EBMLReader.maximumBlockSize), simple: true)
+                case MatroskaID.blockGroup:
+                    block = try reader.blockGroup(child)
+                default:
+                    block = nil
+                    try reader.skip(child)
+                }
+                if let block, block.track == video {
+                    startsWithKeyframe = block.isKeyframe
+                    break
+                }
+                reader.offset = child.end
+            }
+            guard let timestamp, timestamp <= target else { break }
+            if startsWithKeyframe { best = element.start }
             reader.offset = element.end
         }
         return best

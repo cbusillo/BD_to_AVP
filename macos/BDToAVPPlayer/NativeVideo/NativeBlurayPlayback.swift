@@ -63,6 +63,12 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     /// Called just before the clock's rate changes, with the new rate. Tests set it before
     /// `start()` to act at that moment.
     var willChangeClockRate: (@Sendable (Float) -> Void)?
+    /// Called on the video thread as it starts a decoding pass, with the pass's seek generation;
+    /// tests set it before `start()` to seek at that moment.
+    var willBeginDecodingPass: (@Sendable (Int) -> Void)?
+    /// Called on the video thread with each unit it decodes: the seek generation it decodes it
+    /// for, the unit's ticks and whether decoding can start there. For tests.
+    var didTakeVideoUnit: (@Sendable (_ generation: Int, _ ticks: Int64, _ isRandomAccess: Bool) -> Void)?
 
     private let source: Bluray3DSource
     private let configuration: Configuration
@@ -93,6 +99,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         var seekTarget: Int64?
         /// Whether the current seek started a new read rather than moving inside the buffer.
         var seekRestartedRead = false
+        /// The buffer's read the current pass decodes, set with the seek that started it.
+        var readEpoch = 0
         var audioPlayer: HeadsetAudioPlayer?
         var selectedAudioTrackID: UInt16?
         var clockStarted = false
@@ -152,7 +160,10 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             return true
         }
         guard shouldStart else { return }
-        buffer.restart(at: startTicks)
+        clockLock.withLock {
+            let epoch = buffer.restart(at: startTicks)
+            state.withLock { $0.readEpoch = epoch }
+        }
         let feed = buffer.feed()
         spawn("reader", qos: .userInitiated) { [self] in readSource(from: startTicks, into: feed) }
         spawn("video", qos: .userInteractive) { [self] in decodeVideo() }
@@ -188,16 +199,19 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         let ticks = Self.ticks(min(max(0, seconds), title.durationSeconds))
         clockLock.withLock {
             let restartsRead: Bool
+            let epoch: Int
             if case .outside = buffer.reserveSeek(to: ticks) {
-                buffer.restart(at: ticks)
+                epoch = buffer.restart(at: ticks)
                 restartsRead = true
             } else {
+                epoch = buffer.readEpoch
                 restartsRead = false
             }
             state.withLock { shared in
                 shared.seekGeneration += 1
                 shared.seekTarget = ticks
                 shared.seekRestartedRead = restartsRead
+                shared.readEpoch = epoch
                 shared.clockStarted = false
                 shared.clockOrigin = ticks
                 shared.lastQueuedEnd = nil
@@ -254,22 +268,28 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             return
         }
         let factory = StereoSampleBufferFactory(baseViewIsRightEye: title.baseViewIsRightEye)
+        // Each pass is bound to the read of the seek it carries out, taken with its generation: a
+        // restart after that leaves the pass waiting, and the next one begins the new read. A seek
+        // before this thread got here is carried out by the loop as a pass of its own.
         var generation = 0
+        let initial = passState()
+        var epoch = initial.generation == 0 ? initial.epoch : -1
         // A start mid-title shows frames from the start time on.
         var skipBefore: Int64? = startTicks > 0 ? startTicks : nil
-        buffer.beginRestartedPass()
+        willBeginDecodingPass?(generation)
+        buffer.beginRestartedPass(epoch: epoch)
         while !isCancelled {
-            let (currentGeneration, target, restartedRead) = state.withLock {
-                ($0.seekGeneration, $0.seekTarget, $0.seekRestartedRead)
-            }
+            let (currentGeneration, target, restartedRead, currentEpoch) = passState()
             if currentGeneration != generation {
                 generation = currentGeneration
+                epoch = currentEpoch
                 decoder.flush()
                 renderer.flush()
                 audioFeed.lock()
                 var moved = true
+                willBeginDecodingPass?(generation)
                 // Also after an in-buffer seek that replaced a restart the decoder never began.
-                buffer.beginRestartedPass()
+                buffer.beginRestartedPass(epoch: epoch)
                 if restartedRead {
                     skipBefore = target
                 } else if let target {
@@ -284,8 +304,9 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                     return
                 }
             }
-            switch buffer.nextVideo(timeout: 0.05) {
+            switch buffer.nextVideo(timeout: 0.05, epoch: epoch) {
             case let .unit(entry):
+                didTakeVideoUnit?(generation, entry.ticks, entry.isRandomAccess)
                 do {
                     try decoder.decode(entry.data, ticks: entry.ticks) { frame in
                         present(frame, factory: factory, generation: generation, skipBefore: &skipBefore)
@@ -459,6 +480,10 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     }
 
     // MARK: Helpers
+
+    private func passState() -> (generation: Int, target: Int64?, restartedRead: Bool, epoch: Int) {
+        state.withLock { ($0.seekGeneration, $0.seekTarget, $0.seekRestartedRead, $0.readEpoch) }
+    }
 
     private var isCancelled: Bool { state.withLock { $0.cancelled } }
 

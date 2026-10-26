@@ -123,10 +123,20 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         return !cancelled && (packetEpoch.map { $0 == epoch } ?? true)
     }
 
-    /// Drops everything for a read that starts at `ticks`, and refuses packets from the read
-    /// before. The decoder takes nothing until it calls `beginRestartedPass()`.
-    func restart(at ticks: Int64) {
+    /// The current read: bumped by every `restart(at:)`.
+    var readEpoch: Int {
         condition.lock()
+        defer { condition.unlock() }
+        return epoch
+    }
+
+    /// Drops everything for a read that starts at `ticks`, and refuses packets from the read
+    /// before. The decoder takes nothing until it calls `beginRestartedPass(epoch:)` with the
+    /// returned read.
+    @discardableResult
+    func restart(at ticks: Int64) -> Int {
+        condition.lock()
+        defer { condition.unlock() }
         epoch += 1
         video.removeAll()
         audio.removeAll()
@@ -141,14 +151,18 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         audioFloor = ticks - Self.audioPacketSlackTicks
         awaitingDecoder = true
         condition.broadcast()
-        condition.unlock()
+        return epoch
     }
 
-    /// The decoder is ready for the read `restart(at:)` started.
-    func beginRestartedPass() {
+    /// The decoder is ready for the read `epoch`. An acknowledgement for a read that a later
+    /// `restart(at:)` replaced does nothing, so a decoder still on an older seek cannot take the
+    /// new read's units.
+    func beginRestartedPass(epoch passEpoch: Int) {
         condition.lock()
-        awaitingDecoder = false
-        condition.broadcast()
+        if passEpoch == epoch {
+            awaitingDecoder = false
+            condition.broadcast()
+        }
         condition.unlock()
     }
 
@@ -176,12 +190,15 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
 
     // MARK: Decoder side
 
-    /// The next video unit in decode order, waiting up to `timeout` seconds for one.
-    func nextVideo(timeout: TimeInterval) -> VideoResult {
+    /// The next video unit in decode order, waiting up to `timeout` seconds for one. With an
+    /// `epoch`, only a unit of that read: once a restart replaces it, the decoder waits until it
+    /// starts its pass for the new read.
+    func nextVideo(timeout: TimeInterval, epoch passEpoch: Int? = nil) -> VideoResult {
         condition.lock()
         defer { condition.unlock() }
         let deadline = Date(timeIntervalSinceNow: timeout)
-        while !cancelled, awaitingDecoder || videoCursor >= video.count && !finished {
+        func stale() -> Bool { passEpoch.map { $0 != epoch } ?? false }
+        while !cancelled, stale() || awaitingDecoder || videoCursor >= video.count && !finished {
             if !condition.wait(until: deadline) { return .waiting }
         }
         guard !cancelled else { return .ended(error: nil) }

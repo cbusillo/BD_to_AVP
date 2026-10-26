@@ -858,9 +858,12 @@ frames from the target on. Accepting a seek reserves that unit, so trimming hist
 cannot drop it before the video thread gets there. A seek anywhere else starts a new
 read at the last random access unit before the target (#1113): the disc reader finds
 it through the EP map (see [Blu-ray 3D Sources](#blu-ray-3d-sources)) and the Matroska
-reader through the file's cues, or, without cues, the last cluster that starts before
-the target. The buffer drops the old read and the audio before the target, the decoder
-shows frames from the target on, and the read it replaced stops at its next packet.
+reader through the file's cues, or, without cues, the last cluster before the target
+that starts with a keyframe. The buffer drops the old read and the audio before the
+target, the decoder shows frames from the target on, and the read it replaced stops at
+its next packet. Each decoding pass is bound to its seek's read, so a scrub that restarts
+the buffer while the decoder is still starting the previous seek's pass cannot let that
+pass take the new read's first unit.
 Every clock change (start, pause, buffering,
 seek, stop) takes one lock from the state it depends on through the synchronizer
 write, so a pause can never be undone by a rate computed just before it.

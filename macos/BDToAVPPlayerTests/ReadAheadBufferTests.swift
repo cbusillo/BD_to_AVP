@@ -69,7 +69,7 @@ final class ReadAheadBufferTests: XCTestCase {
         XCTAssertTrue(oldFeed.receive(Self.unit(0)))
         XCTAssertTrue(oldFeed.receive(Self.unit(1)))
 
-        buffer.restart(at: 40 * Self.second)
+        let epoch = buffer.restart(at: 40 * Self.second)
         let newFeed = buffer.feed()
 
         // The read that was replaced is told to stop, and its finish is ignored.
@@ -85,10 +85,29 @@ final class ReadAheadBufferTests: XCTestCase {
         XCTAssertEqual(buffer.nextVideo(timeout: 0.05), .waiting, "the decoder has not begun its new pass")
         XCTAssertEqual(buffer.nextAudio(through: 50 * Self.second), [])
 
-        buffer.beginRestartedPass()
+        buffer.beginRestartedPass(epoch: epoch)
         XCTAssertEqual(take(buffer), 36 * Self.second)
         XCTAssertEqual(buffer.nextAudio(through: 50 * Self.second).map(\.ticks), [40 * Self.second])
         XCTAssertEqual(buffer.loadedTicks, (36 * Self.second)...(37 * Self.second))
+    }
+
+    func testAPassForAReplacedReadNeverTakesTheNewReadsUnits() {
+        let buffer = ReadAheadBuffer()
+        // The decoder took seek A's read, and seek B restarts the buffer before A's pass begins.
+        let first = buffer.restart(at: 20 * Self.second)
+        let second = buffer.restart(at: 40 * Self.second)
+        XCTAssertTrue(buffer.feed().receive(Self.unit(40)))
+
+        buffer.beginRestartedPass(epoch: first)
+
+        XCTAssertEqual(buffer.nextVideo(timeout: 0.05, epoch: first), .waiting)
+        XCTAssertEqual(buffer.nextVideo(timeout: 0.05, epoch: second), .waiting, "B's pass has not begun")
+        buffer.beginRestartedPass(epoch: second)
+        guard case let .unit(entry) = buffer.nextVideo(timeout: 1, epoch: second) else {
+            return XCTFail("B's pass takes B's first unit")
+        }
+        XCTAssertEqual(entry.ticks, 40 * Self.second)
+        XCTAssertTrue(entry.isRandomAccess)
     }
 
     func testSeekRestartsAtTheLastRandomAccessUnitAndRefusesTargetsOutsideTheLoadedPart() {
