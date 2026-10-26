@@ -90,8 +90,25 @@ final class ShareFileResourceLoaderTests: XCTestCase {
         // Wi-Fi goes off: the player plays what it has, then waits with its clock stopped.
         share.begin()
         XCTAssertTrue(waitUntil(3) { connection.isConnectionLost })
+        // Some simulators, such as CI's, run the clock without decoding the video. There the
+        // playhead passes the data the share has served, and an outage cannot stop it.
+        let duration = try XCTUnwrap(player.currentItem?.duration.seconds)
+        let bytesPerSecond = Double(share.data.count) / duration
+        var outranTheData = false
+        let stalled = waitUntil(60) {
+            if player.currentTime().seconds > Double(share.servedBytes) / bytesPerSecond + 5 {
+                outranTheData = true
+                return true
+            }
+            return PlayerTimeControl(player).isWaitingForData
+        }
+        if outranTheData {
+            throw XCTSkip(
+                "The player reached \(player.currentTime().seconds) s on \(share.servedBytes) bytes: this simulator does not decode the video."
+            )
+        }
         XCTAssertTrue(
-            waitUntil(60) { PlayerTimeControl(player).isWaitingForData },
+            stalled,
             "status \(player.timeControlStatus.rawValue) at \(player.currentTime().seconds) s, \(share.servedBytes) of \(share.data.count) bytes served"
         )
         XCTAssertTrue(PlayerTimeControl(player).wantsPlayback)
