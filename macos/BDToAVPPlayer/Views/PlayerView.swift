@@ -47,12 +47,13 @@ struct PlayerView: View {
                     onDone: done
                 )
             } else {
+                // No backing behind the video: where the window and video shapes differ, the
+                // room shows through instead of a black frame around the picture (#1132).
                 GeometryReader3D { geometry in
                     playerSurface(geometry: geometry)
                 }
             }
         }
-        .background(.black)
         .overlay {
             // While a track list is open it sits over the video, so the surface steps aside
             // rather than catching the pinches meant for the list.
