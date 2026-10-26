@@ -675,6 +675,8 @@ static int stream_title(
         disc,
         title.playlist,
         0,
+        NULL,
+        NULL,
         sidecar_path != NULL ? audio_pids : NULL,
         sidecar_path != NULL ? audio_count : 0,
         sidecar_path != NULL ? subtitle_pids : NULL,

@@ -626,8 +626,9 @@ Control is active. During uninterrupted playback the ornament fades to nearly
 invisible three seconds after the last of those ends; it is never removed. The
 faded controls stay in place and interactive, and a system hover effect brings
 them back to full opacity while the wearer looks at them, so a look and pinch
-works without a separate show-controls button. The reveal is quick; after the
-wearer looks away the controls hold for about 1.5 seconds and then fade more
+works without a separate show-controls button. The reveal waits for a short
+dwell, about a third of a second, so a passing glance does not pop the controls
+up, and then fades in gently; after the wearer looks away the controls hold for about 1.5 seconds and then fade more
 slowly. The timings live in `PlaybackHUDPresentation`. visionOS renders that effect out
 of process and never reports where the wearer looks, so the app's own state
 stays faded until an interaction or pinching the video surface reveals the
@@ -644,8 +645,8 @@ grows with the stream as before. A seek outside the band keeps the existing
 notices: before the window, playback continues at its start; past the live edge,
 playback moves to the latest available time and says how far the relay reaches.
 
-The MV-HEVC audio language and subtitle lists open over the bottom edge of the
-video, just in front of it and directly above the controls, so they read as part of
+The MV-HEVC audio language and subtitle lists open at the bottom of the window,
+just in front of the video and directly above the controls, so they read as part of
 the controls panel. Both buttons are enabled once the movie is ready. A list with
 nothing to choose between says so: **This title has one audio track.** or **This
 title has no subtitles.** The list is a RealityView attachment placed in the
@@ -733,6 +734,32 @@ does not implement direct `smb://` transport, offline pinning,
 provider-specific progress percentages, raw MVC playback, or source-side live
 conversion. Live Relay is limited to the authenticated EVENT-HLS contract; disc
 reading and just-in-time source production remain separate Mac-side work.
+
+### Lost and slow share connections
+
+A movie outside the app's own storage, such as one on an SMB share, plays through
+`ShareConnectionMonitor` (#1131). An MV-HEVC or packed-stereo file is read by
+`ShareFileResourceLoader`, an `AVAssetResourceLoader` delegate, rather than as a
+plain file URL: as a plain file, `AVPlayer` kept its clock running through a stalled
+share read and then jumped forward to catch up. Through the loader it buffers 20
+seconds ahead, stops its clock when the buffer runs out, and continues from the
+same frame when reads come back. A Blu-ray 3D title already stops its clock when its
+read-ahead buffer runs dry.
+
+A failed read on a share is tried again from the same place every half second
+instead of ending playback, for files, MKVs and disc images alike; the disc reader
+puts libbluray's file back where the read started before each retry. Only errors a
+reconnect can cure are retried: lost permission or a missing file fails at once. A
+read that keeps failing for a minute while the headset has a network gives up with
+**The movie's share stopped answering, so playback stopped.**; time with no network
+at all does not count. A request the player cancels, after a seek for example,
+stops retrying, and leaving the player stops every retry, including those of an MKV
+that is still opening. A read that has
+gone unanswered for two seconds, or no network at all while the movie's volume is
+remote, counts as a lost connection. The controls then stay up and say **Connection
+lost. Playing what has loaded while it reconnects.** while buffered video plays, or
+**Connection lost. Playback continues from here when it reconnects.** once it has
+stopped. A slow share that is still answering shows **Loading…** instead.
 
 ## Blu-ray 3D Sources
 
@@ -999,7 +1026,8 @@ comfort, long-session thermals, or headset-visible interaction. The accepted
 physical layout keeps the RealityKit video surface at the playback probe's
 conservative scale and depth offset so foreground stereo content remains behind
 the native ornament; changes to that geometry still require physical Vision Pro
-validation. The visionOS Simulator can expose the AVKit surface and contextual
+validation. Nothing is drawn behind the video, so where the window's shape and
+the video's differ the room shows through instead of a black frame (#1132). The visionOS Simulator can expose the AVKit surface and contextual
 actions but displays an unsupported-content placeholder for tagged stereo
 output. The automated suite therefore also prepares each bundled fixture through
 the real `AVPlayer` composition path and exercises the production rendering core

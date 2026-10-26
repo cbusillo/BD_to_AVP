@@ -25,6 +25,23 @@ final class FileByteSource: ByteSource {
     }
 }
 
+/// Tries a share's failed reads again through `ShareConnectionMonitor`, so a dropped connection
+/// pauses reading instead of ending it.
+final class ShareRetryingByteSource: ByteSource {
+    private let base: ByteSource
+    private let reads: ShareConnectionMonitor
+    var size: Int64 { base.size }
+
+    init(_ base: ByteSource, reads: ShareConnectionMonitor) {
+        self.base = base
+        self.reads = reads
+    }
+
+    func read(at offset: Int64, count: Int) throws -> Data {
+        try reads.read { try base.read(at: offset, count: count) }
+    }
+}
+
 final class DataByteSource: ByteSource {
     let data: Data
     var size: Int64 { Int64(data.count) }
@@ -58,8 +75,10 @@ final class MatroskaMVCSource: Bluray3DSource {
     private let timestampScale: Int64
     private let firstCluster: Int64
 
-    convenience init(url: URL) throws {
-        try self.init(source: FileByteSource(url: url))
+    /// With `reads`, failed reads wait and try again instead of ending playback.
+    convenience init(url: URL, reads: ShareConnectionMonitor? = nil) throws {
+        let file = try FileByteSource(url: url)
+        try self.init(source: reads.map { ShareRetryingByteSource(file, reads: $0) } ?? file)
     }
 
     init(source: ByteSource) throws {

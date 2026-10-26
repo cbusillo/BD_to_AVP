@@ -53,6 +53,41 @@ final class MatroskaMVCSourceTests: XCTestCase {
         XCTAssertEqual(statistics.audioPackets, 2)
     }
 
+    /// Bytes whose next `failuresLeft` reads fail, as a share's do when Wi-Fi drops.
+    private final class DroppingByteSource: ByteSource {
+        let base: DataByteSource
+        var failuresLeft = 0
+        var size: Int64 { base.size }
+
+        init(_ data: Data) { base = DataByteSource(data) }
+
+        func read(at offset: Int64, count: Int) throws -> Data {
+            if failuresLeft > 0 {
+                failuresLeft -= 1
+                throw CocoaError(.fileReadUnknown)
+            }
+            return try base.read(at: offset, count: count)
+        }
+    }
+
+    func testReadsDroppedByAShareAreTriedAgainAndEveryFrameArrives() throws {
+        let cleanSource = try MatroskaMVCSource(source: DataByteSource(file()))
+        let clean = CollectingPacketSink()
+        _ = try cleanSource.read(title: try XCTUnwrap(cleanSource.info.mainTitle), audioTrackIDs: [2], subtitleTrackIDs: [], into: clean)
+        let dropping = DroppingByteSource(file())
+        let monitor = ShareConnectionMonitor(timing: .init(lostAfter: 2, retryInterval: 0.01))
+        let source = try MatroskaMVCSource(source: ShareRetryingByteSource(dropping, reads: monitor))
+        // The connection drops once the title is open, while its clusters are read.
+        dropping.failuresLeft = 4
+        let sink = CollectingPacketSink()
+
+        _ = try source.read(title: try XCTUnwrap(source.info.mainTitle), audioTrackIDs: [2], subtitleTrackIDs: [], into: sink)
+
+        XCTAssertEqual(dropping.failuresLeft, 0)
+        XCTAssertEqual(sink.video.map(\.data), clean.video.map(\.data))
+        XCTAssertEqual(sink.audio.map(\.payload), clean.audio.map(\.payload))
+    }
+
     func testClustersOfUnknownSizeEndAtTheNextCluster() throws {
         let source = try MatroskaMVCSource(source: DataByteSource(file(unknownSizeClusters: true)))
         let sink = CollectingPacketSink()
