@@ -818,7 +818,8 @@ its clip, as Fast X's feature starts a second into its clip, the reader finds th
 point in the clip information (CLPI) file's EP map and starts at the SSIF extent pair
 that holds it. Base and dependent extents sit together in the SSIF, so that pair starts
 after every earlier extent of both views; the dependent clip comes from the playlist's
-stereo sub-path.
+stereo sub-path. The same mapping starts a read anywhere in a title, for seeking and
+resuming (#1113).
 
 The tests read fixtures cut from the Ocean Dreams and Fast X discs at their clip
 boundaries, read through libudfread and libbluray (disc images are never mounted).
@@ -878,10 +879,19 @@ The clock starts once a few frames are queued and two seconds are buffered. If t
 renderer is about to run dry before the title ends, the clock stops, the player
 shows that it is loading, and playback continues once four seconds are buffered
 again. The buffer keeps 20 seconds behind the decoder, so a seek inside that
-history or the loaded part ahead restarts at the nearest earlier IDR and shows
-frames from the target on. Accepting a seek reserves that IDR, so trimming history
-cannot drop it before the video thread gets there. A seek outside the loaded part is
-refused until #1113 adds seeking anywhere. Every clock change (start, pause, buffering,
+history or the loaded part ahead restarts at the nearest earlier random access unit
+and shows
+frames from the target on. Accepting a seek reserves that unit, so trimming history
+cannot drop it before the video thread gets there. A seek anywhere else starts a new
+read at the last random access unit before the target (#1113): the disc reader finds
+it through the EP map (see [Blu-ray 3D Sources](#blu-ray-3d-sources)) and the Matroska
+reader through the file's cues, or, without cues, the last cluster before the target
+that starts with a keyframe. The buffer drops the old read and the audio before the
+target, the decoder shows frames from the target on, and the read it replaced stops at
+its next packet. Each decoding pass is bound to its seek's read, so a scrub that restarts
+the buffer while the decoder is still starting the previous seek's pass cannot let that
+pass take the new read's first unit.
+Every clock change (start, pause, buffering,
 seek, stop) takes one lock from the state it depends on through the synchronizer
 write, so a pause can never be undone by a rate computed just before it.
 
@@ -898,9 +908,9 @@ lighter band is the loaded part. While the title loads more, the controls stay u
 with a **Loading…** line. The audio list names what plays, for example
 **English (DTS core)**, and switches without stopping. If the chosen audio cannot play, the controls
 say so while the video plays on. The subtitle list offers
-only Off and says the title's subtitles come later (#1114). The resume position is
-saved, but a title starts from the beginning and says where the wearer stopped
-until resuming anywhere arrives (#1113).
+only Off and says the title's subtitles come later (#1114). A title resumes where the
+wearer stopped, keyed by its library or Location item, across relaunches: playback
+starts there the same way a seek outside the loaded part does.
 
 The video is a RealityKit `VideoPlayerComponent(videoRenderer:)` sized inside the
 window, and the controls are an ornament below the window. Until RealityKit reports
@@ -912,7 +922,9 @@ when launched with `BD_TO_AVP_NATIVE_PLAY_ITEM` set to its file name, for
 `BD_TO_AVP_NATIVE_PLAY_SECONDS` (default 660). It pauses at
 `BD_TO_AVP_NATIVE_PAUSE_AT` (120) for `BD_TO_AVP_NATIVE_PAUSE_SECONDS` (10),
 switches audio at `BD_TO_AVP_NATIVE_AUDIO_SWITCH_AT` (240) and seeks 10 seconds
-back at `BD_TO_AVP_NATIVE_SEEK_BACK_AT` (300). It prints `NATIVE_PLAY` lines and
+back at `BD_TO_AVP_NATIVE_SEEK_BACK_AT` (300). `BD_TO_AVP_NATIVE_SEEKS` adds seeks as
+`second:target` pairs, such as `10:1200,30:5620`, and records how long each took to
+play again at its target. It prints `NATIVE_PLAY` lines and
 writes `native-playback-<file name>.json` to Documents, with position, buffering,
 frames, CPU, thermal state and memory each second, the renderer's dropped-frame
 count, and the window and video sizes.

@@ -32,20 +32,10 @@ final class BlurayDiscSource: Bluray3DSource {
         bd3d_disc_close(disc)
     }
 
+    /// Every timestamp is on the playlist timeline, whatever clip it is in.
     func read(
         title: Bluray3DTitle,
-        audioTrackIDs: [Int],
-        subtitleTrackIDs: [Int],
-        into sink: Bluray3DPacketSink
-    ) throws -> Bluray3DReadStatistics {
-        try read(title: title, startingAt: 0, audioTrackIDs: audioTrackIDs, subtitleTrackIDs: subtitleTrackIDs, into: sink)
-    }
-
-    /// Reads `title` from `startTicks` on its playlist timeline, starting at the last random
-    /// access unit at or before it. Every timestamp is on that timeline, whatever clip it is in.
-    func read(
-        title: Bluray3DTitle,
-        startingAt startTicks: UInt64,
+        from startTicks: Int64,
         audioTrackIDs: [Int],
         subtitleTrackIDs: [Int],
         into sink: Bluray3DPacketSink
@@ -60,8 +50,8 @@ final class BlurayDiscSource: Bluray3DSource {
         let subtitles = subtitleTrackIDs.map { UInt16(clamping: $0) }
         return try BlurayDemuxCallback.run(sink: sink, reads: reads) { emit, context, monitor, monitorContext, stats in
             bd3d_disc_stream(
-                disc, playlist, startTicks, monitor, monitorContext, audio, audio.count, subtitles, subtitles.count, emit,
-                context, stats
+                disc, playlist, UInt64(max(0, startTicks)), monitor, monitorContext, audio, audio.count, subtitles,
+                subtitles.count, emit, context, stats
             )
         }
     }
@@ -104,9 +94,13 @@ enum BlurayDemuxCallback {
     /// The demuxer's reads as `ShareConnectionMonitor` sees them; one reader thread at a time.
     private final class ReadWatch {
         let monitor: ShareConnectionMonitor
+        let sink: Bluray3DPacketSink
         var readID: Int?
         var retry = ShareConnectionMonitor.Retry()
-        init(monitor: ShareConnectionMonitor) { self.monitor = monitor }
+        init(monitor: ShareConnectionMonitor, sink: Bluray3DPacketSink) {
+            self.monitor = monitor
+            self.sink = sink
+        }
     }
 
     typealias Demux = (
@@ -119,7 +113,7 @@ enum BlurayDemuxCallback {
 
     static func run(sink: Bluray3DPacketSink, reads: ShareConnectionMonitor? = nil, demux: Demux) throws -> Bluray3DReadStatistics {
         let context = Context(sink: sink)
-        let watch = reads.map(ReadWatch.init)
+        let watch = reads.map { ReadWatch(monitor: $0, sink: sink) }
         var stats = bd3d_stats()
         let result = withExtendedLifetime((context, watch)) {
             demux(
@@ -159,7 +153,9 @@ enum BlurayDemuxCallback {
             watch.retry = ShareConnectionMonitor.Retry()
         case BD3D_READ_EVENT_FAILED:
             let code = POSIXErrorCode(rawValue: error) ?? .EIO
-            return watch.monitor.waitToRetry(after: POSIXError(code), &watch.retry) ? 1 : 0
+            // A read that a seek replaced stops instead of waiting for the share.
+            guard watch.sink.isWanted, watch.monitor.waitToRetry(after: POSIXError(code), &watch.retry) else { return 0 }
+            return watch.sink.isWanted ? 1 : 0
         default:
             if let id = watch.readID { watch.monitor.endRead(id) }
             watch.readID = nil

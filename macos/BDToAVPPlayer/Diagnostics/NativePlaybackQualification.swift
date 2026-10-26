@@ -9,6 +9,8 @@ import RealityKit
 /// BD_TO_AVP_NATIVE_PLAY_SECONDS (default 660), pauses at BD_TO_AVP_NATIVE_PAUSE_AT seconds for
 /// BD_TO_AVP_NATIVE_PAUSE_SECONDS, switches to the next audio track at
 /// BD_TO_AVP_NATIVE_AUDIO_SWITCH_AT, and seeks 10 seconds back at BD_TO_AVP_NATIVE_SEEK_BACK_AT.
+/// BD_TO_AVP_NATIVE_SEEKS lists seeks as `second:target` pairs, such as `10:1200,30:5620`; each
+/// records how long playback took to run again at its target.
 /// It prints NATIVE_PLAY lines and writes `native-playback-<file name>.json` to Documents with a
 /// sample per second: position, buffering, frames, CPU, thermal state and memory.
 @MainActor
@@ -62,6 +64,11 @@ enum NativePlaybackQualification {
         let pauseSeconds = Int(number("BD_TO_AVP_NATIVE_PAUSE_SECONDS", 10))
         let audioSwitchAt = Int(number("BD_TO_AVP_NATIVE_AUDIO_SWITCH_AT", 240))
         let seekBackAt = Int(number("BD_TO_AVP_NATIVE_SEEK_BACK_AT", 300))
+        var seeks: [Int: Double] = [:]
+        for pair in (environment["BD_TO_AVP_NATIVE_SEEKS"] ?? "").split(separator: ",") {
+            let parts = pair.split(separator: ":")
+            if parts.count == 2, let second = Int(parts[0]), let target = Double(parts[1]) { seeks[second] = target }
+        }
 
         var report = Report(fileName: fileName, device: sysctlString("hw.machine"), system: ProcessInfo.processInfo.operatingSystemVersionString)
         guard let item = model.library.items.first(where: { $0.fileName == fileName }) else {
@@ -115,6 +122,20 @@ enum NativePlaybackQualification {
                 let next = engine.audioTracks[(current + 1) % engine.audioTracks.count]
                 report.events.append("audio_switch to=\(next.label) position=\(status.currentTime)")
                 player.selectAudio(id: next.mediaOption.id)
+            }
+            if let target = seeks[second] {
+                let issued = ContinuousClock.now
+                player.seek(to: target)
+                var ready: Double?
+                for _ in 0..<300 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    let now = engine.status
+                    if !now.isBuffering, now.currentTime >= target - 0.05 { ready = elapsed(issued); break }
+                }
+                let event = "seek_to target=\(target) ready_after=\(ready.map { String(format: "%.2f", $0) } ?? "none") "
+                    + "position=\(String(format: "%.2f", engine.status.currentTime))"
+                report.events.append(event)
+                emit(event)
             }
             if second == seekBackAt {
                 report.events.append("seek_back from=\(status.currentTime) to=\(status.currentTime - 10)")

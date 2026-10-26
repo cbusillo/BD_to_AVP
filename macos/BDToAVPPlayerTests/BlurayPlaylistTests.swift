@@ -266,7 +266,7 @@ final class BlurayPlaylistTests: XCTestCase {
 
         _ = try source.read(
             title: title,
-            startingAt: end - 450_000,
+            from: Int64(end) - 450_000,
             audioTrackIDs: title.audioTracks.map(\.id),
             subtitleTrackIDs: [],
             into: sink

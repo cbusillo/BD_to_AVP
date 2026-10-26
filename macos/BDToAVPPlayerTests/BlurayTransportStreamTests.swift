@@ -1,6 +1,13 @@
 import XCTest
 @testable import BDToAVPPlayer
 
+/// A sink for a read that a seek has replaced, caught while the share is down: it says it no
+/// longer wants packets before any arrive to be refused.
+final class UnwantedPacketSink: Bluray3DPacketSink {
+    var isWanted: Bool { false }
+    func receive(_ packet: Bluray3DPacket) -> Bool { true }
+}
+
 final class CollectingPacketSink: Bluray3DPacketSink {
     var packets: [Bluray3DPacket] = []
     /// Stops the reader once this many video access units have arrived.
@@ -111,6 +118,22 @@ final class BlurayTransportStreamTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? Bluray3DSourceError, .readFailed)
         }
+    }
+
+    func testADroppedReadThatASeekReplacedIsNotRetried() {
+        let monitor = ShareConnectionMonitor(timing: .init(lostAfter: 2, retryInterval: 0.01))
+        let started = Date()
+
+        XCTAssertThrowsError(
+            try BlurayTransportStream.demux(
+                fiveFrames(), chunkSize: 500, failingReads: (after: 2, count: 10_000, error: ENOTCONN), reads: monitor,
+                into: UnwantedPacketSink()
+            )
+        ) { error in
+            XCTAssertEqual(error as? Bluray3DSourceError, .readFailed)
+        }
+        // Retried, the 10,000 failures would take 100 seconds.
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
     }
 
     func testADiscReadThatNoReconnectCanCureIsNotRetried() {
