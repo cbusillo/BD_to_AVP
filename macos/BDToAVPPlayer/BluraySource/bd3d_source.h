@@ -1,6 +1,10 @@
 // Blu-ray 3D source access shared by Shiny 3D Cinema and the Mac converter (native/bd3d_reader):
 // disc and title facts from libbluray, and a demuxer that pairs each MVC base-view access unit
 // with its dependent view.
+//
+// A title is a playlist of clips. The reader plays them in order and rewrites every timestamp
+// onto the playlist's own timeline, which starts at zero, so audio and video keep one clock
+// across clip boundaries.
 #ifndef BD3D_SOURCE_H
 #define BD3D_SOURCE_H
 
@@ -26,6 +30,8 @@ typedef enum {
     BD3D_NO_MVC = -9,
     BD3D_TOO_MANY_PIDS = -10,
     BD3D_SSIF_UNAVAILABLE = -11,
+    BD3D_TITLE_UNAVAILABLE = -12,
+    BD3D_INDEX_UNAVAILABLE = -13,
 } bd3d_result;
 
 typedef struct {
@@ -47,16 +53,22 @@ typedef struct {
     uint32_t playlist;
     uint64_t duration_ticks;
     uint32_t angle_count;
+    /// The clips the title plays: the playlist's items up to its first non-seamless connection.
     uint32_t clip_count;
     bool main_feature;
-    bool complete_clip;
+    /// Every clip is played from a point where decoding can start, through its end or to a
+    /// point where the next decodable picture starts, so the reader can join the clips.
+    bool clips_readable;
+    /// Every clip has its SSIF stereo file.
     bool ssif_available;
     bool base_view_right;
+    /// The first clip.
     char clip_id[8];
     uint8_t video_count;
     bd3d_stream video;
     uint8_t audio_count;
     uint8_t subtitle_count;
+    /// The first clip's streams, which the playlist keeps for every clip.
     bd3d_stream audio[BD3D_MAX_STREAMS];
     bd3d_stream subtitles[BD3D_MAX_STREAMS];
 } bd3d_title;
@@ -70,7 +82,8 @@ typedef enum {
 /// One demuxed packet. For video, `data` is the base view and `dependent` the dependent view of
 /// one stereo access unit, both Annex B, with the PES timestamps. For audio and subtitles, `data`
 /// is the whole PES packet, header included, and the timestamps are unset. The bytes are valid
-/// only during the callback.
+/// only during the callback. A title's timestamps, including those inside audio and subtitle PES
+/// headers, are on the playlist timeline.
 typedef struct {
     bd3d_packet_kind kind;
     uint16_t pid;
@@ -90,6 +103,8 @@ typedef struct {
     uint64_t audio_packets;
     uint64_t subtitle_packets;
     size_t maximum_pending_bytes;
+    /// Bytes skipped to find the packet sync again, as across a damaged stretch of an image.
+    uint64_t skipped_bytes;
 } bd3d_stats;
 
 /// Returns nonzero to stop demuxing.
@@ -117,10 +132,13 @@ void bd3d_disc_close(bd3d_disc *disc);
 bd3d_disc_info bd3d_disc_get_info(const bd3d_disc *disc);
 /// Fills `title` for the index-th title of at least 60 seconds. Returns false when unavailable.
 bool bd3d_disc_title(bd3d_disc *disc, uint32_t index, bd3d_title *title);
-/// Demuxes the SSIF of a single-clip title. PIDs not listed are skipped. `monitor` may be NULL.
+/// Demuxes a title's clips in order from `start_ticks` on its timeline, rewriting every
+/// timestamp onto that timeline. Video starts at the last random access unit at or before
+/// `start_ticks`. PIDs not listed are skipped. `monitor` may be NULL.
 bd3d_result bd3d_disc_stream(
     bd3d_disc *disc,
-    const char *clip_id,
+    uint32_t playlist,
+    uint64_t start_ticks,
     bd3d_read_monitor_fn monitor,
     void *monitor_context,
     const uint16_t *audio_pids,
@@ -145,5 +163,82 @@ bd3d_result bd3d_demux(
     void *emit_context,
     bd3d_stats *stats
 );
+
+// MARK: - Clip segments and the clip index
+
+/// The part of a clip that a playlist item plays, and where it lands on the playlist timeline.
+/// Times are 90 kHz.
+typedef struct {
+    /// The clip PTS where the item starts.
+    uint64_t in_time;
+    /// The item's length; audio and subtitles outside [in_time, in_time + duration) are dropped.
+    uint64_t duration;
+    /// Where `in_time` lands on the playlist timeline. Every timestamp is rewritten to
+    /// `timestamp - in_time + playlist_time`, modulo 2^33.
+    uint64_t playlist_time;
+    /// Video starts at the first random access unit at or after `in_time + start_offset`; the
+    /// units before it are dropped, with any view whose pair was read before the start.
+    int64_t start_offset;
+    /// Stop at the first random access unit at or after `in_time + duration`, because the item
+    /// ends before the clip does.
+    bool trim_end;
+} bd3d_segment;
+
+/// Demuxes one playlist item's part of a clip, read from `read`, onto the playlist timeline.
+/// `monitor` may be NULL.
+bd3d_result bd3d_demux_segment(
+    bd3d_read_fn read,
+    void *read_context,
+    const bd3d_segment *segment,
+    bd3d_read_monitor_fn monitor,
+    void *monitor_context,
+    const uint16_t *audio_pids,
+    size_t audio_count,
+    const uint16_t *subtitle_pids,
+    size_t subtitle_count,
+    bd3d_packet_fn emit,
+    void *emit_context,
+    bd3d_stats *stats
+);
+
+/// One entry of a clip's entry-point (EP) map: a random access unit's PTS, with the bits the
+/// map omits cleared, and the source packet number where it starts in the clip's M2TS file.
+typedef struct {
+    uint64_t pts;
+    uint32_t spn;
+} bd3d_entry_point;
+
+/// What a clip information (CLPI) file says about seeking in its clip: the EP map of one video
+/// PID, and the extent start points that interleave it in the SSIF file.
+typedef struct {
+    /// Whether the clip has one ATC and one STC sequence, as the reader needs.
+    bool single_sequence;
+    /// The PTS range the clip presents, from its sequence info.
+    uint64_t presentation_start;
+    uint64_t presentation_end;
+    uint32_t source_packets;
+    bd3d_entry_point *entry_points;
+    size_t entry_point_count;
+    uint32_t *extent_starts;
+    size_t extent_count;
+} bd3d_clip_index;
+
+/// Parses a CLPI file. Returns false when it is malformed or has no EP map for `pid`; a clip
+/// without extent start points parses with `extent_count` 0.
+bool bd3d_clip_index_parse(const uint8_t *clpi, size_t size, uint16_t pid, bd3d_clip_index *index);
+void bd3d_clip_index_free(bd3d_clip_index *index);
+/// The last entry point at or before `pts`, or the first when `pts` precedes every entry.
+/// Returns NULL for an empty map.
+const bd3d_entry_point *bd3d_entry_point_at(const bd3d_clip_index *index, uint64_t pts);
+/// The SSIF byte offset of the extent pair holding base-view source packet `spn`: base extent i
+/// and dependent extent i sit together, in either order, after every earlier extent of both.
+/// Returns -1 when the extent tables do not match.
+int64_t bd3d_ssif_offset(const bd3d_clip_index *base, const bd3d_clip_index *dependent, uint32_t spn);
+/// How many play items, from the first, join seamlessly (connection condition 5 or 6). A title
+/// ends at its first non-seamless connection, as MakeMKV reads it: what follows, such as a
+/// distributor logo after the feature, is a separate title. Returns 0 for a malformed playlist.
+uint32_t bd3d_seamless_items(const uint8_t *mpls, size_t size);
+/// The dependent-view clip of a playlist item, from the playlist's stereo sub-path extension.
+bool bd3d_dependent_clip_id(const uint8_t *mpls, size_t size, uint32_t play_item, char clip_id[6]);
 
 #endif

@@ -91,6 +91,46 @@ final class LocationLibraryModelTests: XCTestCase {
         XCTAssertEqual(relaunched.titles[locationID], firstTitles)
     }
 
+    func testAnswersFromAnOlderReaderAreInspectedAgain() async throws {
+        let share = try makeShare()
+        let fixture = makeFixture()
+        let locations = fixture.locations(inspector: Self.shareInspector)
+        let locationID = try await XCTUnwrapAsync(await locations.add(folderURL: share))
+        // As an earlier build saved Rainforest: refused because its title spans several clips.
+        var stored = fixture.locationStore.load()
+        stored[0].inspectedFiles = stored[0].inspectedFiles.map { file in
+            guard file.relativePath == "Rainforest.iso", let title = file.inspection.bluray3DTitle else { return file }
+            let refused = Bluray3DTitle(
+                id: title.id, playlist: title.playlist, durationSeconds: title.durationSeconds,
+                isMainFeature: title.isMainFeature, baseViewIsRightEye: title.baseViewIsRightEye,
+                unsupportedReason: .multipleClips, audioTracks: [], subtitleTracks: []
+            )
+            return InspectedFile(
+                relativePath: file.relativePath, size: file.size, modified: file.modified, fingerprint: file.fingerprint,
+                inspection: MediaSourceInspection(format: .bluray3D, bluray3DTitle: refused, readerVersion: nil)
+            )
+        }
+        try fixture.locationStore.save(stored)
+        let inspected = AccessProbe()
+        let relaunched = LocationLibraryModel(
+            store: fixture.locationStore,
+            bookmarkStore: BookmarkStore(storageURL: fixture.bookmarksURL),
+            inspector: MediaSourceInspector(
+                formatInspector: Self.shareInspector.formatInspector,
+                blurayInspector: { url in
+                    XCTAssertEqual(url.lastPathComponent, "Rainforest.iso")
+                    _ = inspected.recordInspection()
+                    return try await Self.shareInspector.blurayInspector(url)
+                }
+            )
+        )
+
+        await relaunched.refresh(locationID)
+
+        XCTAssertEqual(inspected.inspections, 1)
+        XCTAssertTrue(relaunched.titles[locationID]?.contains { $0.title == "Rainforest" } ?? false)
+    }
+
     func testRefreshPicksUpAddedAndRemovedFiles() async throws {
         let share = try makeShare()
         let fixture = makeFixture()

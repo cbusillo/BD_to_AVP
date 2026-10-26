@@ -63,6 +63,12 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     /// Called just before the clock's rate changes, with the new rate. Tests set it before
     /// `start()` to act at that moment.
     var willChangeClockRate: (@Sendable (Float) -> Void)?
+    /// Called on the video thread as it starts a decoding pass, with the pass's seek generation;
+    /// tests set it before `start()` to seek at that moment.
+    var willBeginDecodingPass: (@Sendable (Int) -> Void)?
+    /// Called on the video thread with each unit it decodes: the seek generation it decodes it
+    /// for, the unit's ticks and whether decoding can start there. For tests.
+    var didTakeVideoUnit: (@Sendable (_ generation: Int, _ ticks: Int64, _ isRandomAccess: Bool) -> Void)?
 
     private let source: Bluray3DSource
     /// The share reads the source retries through a dropped connection; stopping ends them.
@@ -77,6 +83,11 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     /// Held while the feeder hands audio over and while a seek moves the audio cursor, so no
     /// packet from before a seek reaches the audio player after its flush.
     private let audioFeed = NSLock()
+    /// Held for each read of the source, so a read started by a seek waits for the one before it
+    /// to stop.
+    private let readLock = NSLock()
+    /// Where playback starts on the title's timeline.
+    private let startTicks: Int64
     private static let frameTicks = Int64(
         StereoSampleBufferFactory.defaultFrameDuration.seconds * Double(BluRayPresentationTimeline.ticksPerSecond)
     )
@@ -88,6 +99,10 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         /// Bumped by every seek; the decode thread restarts when it changes.
         var seekGeneration = 0
         var seekTarget: Int64?
+        /// Whether the current seek started a new read rather than moving inside the buffer.
+        var seekRestartedRead = false
+        /// The buffer's read the current pass decodes, set with the seek that started it.
+        var readEpoch = 0
         var audioPlayer: HeadsetAudioPlayer?
         var selectedAudioTrackID: UInt16?
         var clockStarted = false
@@ -101,6 +116,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         source: Bluray3DSource,
         title: Bluray3DTitle,
         initialAudioTrackID: UInt16? = nil,
+        startSeconds: TimeInterval = 0,
         reads: ShareConnectionMonitor? = nil,
         configuration: Configuration = Configuration(),
         renderer: AVSampleBufferVideoRenderer = AVSampleBufferVideoRenderer(),
@@ -114,9 +130,11 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         buffer = ReadAheadBuffer(limits: configuration.buffer)
         audioTracks = HeadsetAudioTrack.tracks(for: title.audioStreams, locale: locale)
         let initial = audioTracks.first { $0.id == initialAudioTrackID } ?? HeadsetAudioTrack.preferredTrack(in: audioTracks)
-        state = OSAllocatedUnfairLock(initialState: SharedState(selectedAudioTrackID: initial?.id))
+        let start = Self.ticks(min(max(0, startSeconds), title.durationSeconds))
+        startTicks = start
+        state = OSAllocatedUnfairLock(initialState: SharedState(selectedAudioTrackID: initial?.id, clockOrigin: start))
         synchronizer.addRenderer(renderer)
-        synchronizer.setRate(0, time: .zero)
+        synchronizer.setRate(0, time: Self.time(start))
     }
 
     deinit {
@@ -134,7 +152,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
 
     var selectedAudioTrackID: UInt16? { state.withLock { $0.selectedAudioTrackID } }
 
-    /// The audio player, once the first video unit has set the timeline; for diagnostics.
+    /// The audio player, once the audio feeder has started; for diagnostics.
     var audioPlayer: HeadsetAudioPlayer? { state.withLock { $0.audioPlayer } }
 
     /// Starts reading and decoding. Playback begins once the first seconds are buffered.
@@ -146,7 +164,12 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             return true
         }
         guard shouldStart else { return }
-        spawn("reader", qos: .userInitiated) { [self] in readSource() }
+        clockLock.withLock {
+            let epoch = buffer.restart(at: startTicks)
+            state.withLock { $0.readEpoch = epoch }
+        }
+        let feed = buffer.feed()
+        spawn("reader", qos: .userInitiated) { [self] in readSource(from: startTicks, into: feed) }
         spawn("video", qos: .userInteractive) { [self] in decodeVideo() }
         spawn("audio", qos: .userInteractive) { [self] in feedAudio() }
     }
@@ -173,23 +196,27 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         }
     }
 
-    enum SeekOutcome: Equatable {
-        case seeking
-        /// The target is outside what is loaded; seeking anywhere comes with #1113.
-        case outside(loaded: ClosedRange<TimeInterval>?)
-    }
-
-    /// Accepting a seek reserves its random access unit in the buffer, so the video thread can
-    /// always carry it out even if history is trimmed in between.
-    func seek(to seconds: TimeInterval) -> SeekOutcome {
-        let ticks = Int64((max(0, seconds) * Double(BluRayPresentationTimeline.ticksPerSecond)).rounded())
-        return clockLock.withLock {
-            if case let .outside(loaded) = buffer.reserveSeek(to: ticks) {
-                return .outside(loaded: loaded.map { Self.seconds($0.lowerBound)...Self.seconds($0.upperBound) })
+    /// Seeks to `seconds`. A target inside what is loaded restarts decoding there; any other
+    /// starts a new read at the last random access unit before it, which the disc's entry-point
+    /// map or the Matroska cues locate. Accepting an in-buffer seek reserves its random access
+    /// unit, so the video thread can always carry it out even if history is trimmed in between.
+    func seek(to seconds: TimeInterval) {
+        let ticks = Self.ticks(min(max(0, seconds), title.durationSeconds))
+        clockLock.withLock {
+            let restartsRead: Bool
+            let epoch: Int
+            if case .outside = buffer.reserveSeek(to: ticks) {
+                epoch = buffer.restart(at: ticks)
+                restartsRead = true
+            } else {
+                epoch = buffer.readEpoch
+                restartsRead = false
             }
             state.withLock { shared in
                 shared.seekGeneration += 1
                 shared.seekTarget = ticks
+                shared.seekRestartedRead = restartsRead
+                shared.readEpoch = epoch
                 shared.clockStarted = false
                 shared.clockOrigin = ticks
                 shared.lastQueuedEnd = nil
@@ -198,7 +225,10 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                 shared.status.isBuffering = true
             }
             synchronizer.setRate(0, time: Self.time(ticks))
-            return .seeking
+            if restartsRead {
+                let feed = buffer.feed()
+                spawn("reader", qos: .userInitiated) { [self] in readSource(from: ticks, into: feed) }
+            }
         }
     }
 
@@ -212,17 +242,23 @@ final class NativeBlurayPlayback: @unchecked Sendable {
 
     // MARK: Reader
 
-    private func readSource() {
+    /// Reads the title from `ticks` into one feed of the buffer. Reads run one at a time: one
+    /// started by a seek waits here while the read it replaced finishes its current packet.
+    private func readSource(from ticks: Int64, into feed: Bluray3DPacketSink) {
+        readLock.lock()
+        defer { readLock.unlock() }
+        guard !isCancelled else { return }
         do {
             _ = try source.read(
                 title: title,
+                from: ticks,
                 audioTrackIDs: audioTracks.map { Int($0.id) },
                 subtitleTrackIDs: [],
-                into: buffer
+                into: feed
             )
-            buffer.finish()
+            buffer.finish(feed: feed)
         } catch {
-            buffer.finish(error: (error as? LocalizedError)?.errorDescription ?? "\(error)")
+            buffer.finish(error: (error as? LocalizedError)?.errorDescription ?? "\(error)", feed: feed)
         }
     }
 
@@ -237,17 +273,31 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             return
         }
         let factory = StereoSampleBufferFactory(baseViewIsRightEye: title.baseViewIsRightEye)
+        // Each pass is bound to the read of the seek it carries out, taken with its generation: a
+        // restart after that leaves the pass waiting, and the next one begins the new read. A seek
+        // before this thread got here is carried out by the loop as a pass of its own.
         var generation = 0
-        var skipBefore: Int64?
+        let initial = passState()
+        var epoch = initial.generation == 0 ? initial.epoch : -1
+        // A start mid-title shows frames from the start time on.
+        var skipBefore: Int64? = startTicks > 0 ? startTicks : nil
+        willBeginDecodingPass?(generation)
+        buffer.beginRestartedPass(epoch: epoch)
         while !isCancelled {
-            let (currentGeneration, target) = state.withLock { ($0.seekGeneration, $0.seekTarget) }
+            let (currentGeneration, target, restartedRead, currentEpoch) = passState()
             if currentGeneration != generation {
                 generation = currentGeneration
+                epoch = currentEpoch
                 decoder.flush()
                 renderer.flush()
                 audioFeed.lock()
                 var moved = true
-                if let target {
+                willBeginDecodingPass?(generation)
+                // Also after an in-buffer seek that replaced a restart the decoder never began.
+                buffer.beginRestartedPass(epoch: epoch)
+                if restartedRead {
+                    skipBefore = target
+                } else if let target {
                     if case .moved = buffer.seek(to: target) { skipBefore = target } else { moved = false }
                 }
                 state.withLock { $0.audioPlayer }?.discontinuity()
@@ -259,8 +309,9 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                     return
                 }
             }
-            switch buffer.nextVideo(timeout: 0.05) {
+            switch buffer.nextVideo(timeout: 0.05, epoch: epoch) {
             case let .unit(entry):
+                didTakeVideoUnit?(generation, entry.ticks, entry.isRandomAccess)
                 do {
                     try decoder.decode(entry.data, ticks: entry.ticks) { frame in
                         present(frame, factory: factory, generation: generation, skipBefore: &skipBefore)
@@ -358,10 +409,10 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     private func feedAudio() {
         let leadTicks = Int64(configuration.audioLeadSeconds * Double(BluRayPresentationTimeline.ticksPerSecond))
         while !isCancelled {
-            if state.withLock({ $0.audioPlayer }) == nil, !audioTracks.isEmpty, let timeline = buffer.presentationTimeline {
+            if state.withLock({ $0.audioPlayer }) == nil, !audioTracks.isEmpty {
                 let player = HeadsetAudioPlayer(
                     streams: audioTracks.map(\.stream),
-                    timeline: timeline,
+                    timeline: buffer.presentationTimeline,
                     synchronizer: synchronizer,
                     initialTrackID: selectedAudioTrackID
                 )
@@ -435,6 +486,10 @@ final class NativeBlurayPlayback: @unchecked Sendable {
 
     // MARK: Helpers
 
+    private func passState() -> (generation: Int, target: Int64?, restartedRead: Bool, epoch: Int) {
+        state.withLock { ($0.seekGeneration, $0.seekTarget, $0.seekRestartedRead, $0.readEpoch) }
+    }
+
     private var isCancelled: Bool { state.withLock { $0.cancelled } }
 
     private func isCurrent(_ generation: Int) -> Bool {
@@ -473,6 +528,10 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         thread.qualityOfService = qos
         thread.stackSize = 8 << 20
         thread.start()
+    }
+
+    static func ticks(_ seconds: TimeInterval) -> Int64 {
+        Int64((seconds * Double(BluRayPresentationTimeline.ticksPerSecond)).rounded())
     }
 
     static func seconds(_ ticks: Int64) -> TimeInterval {

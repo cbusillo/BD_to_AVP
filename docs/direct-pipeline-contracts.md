@@ -221,11 +221,15 @@ libbluray and libudfread, so the Mac and the headset share one reader. It never
 decrypts: a source with an `AACS` or `BDSVM` folder is refused before libbluray
 opens it.
 
-The direct route applies when the disc's main feature is one angle and one clip
-that the playlist plays completely, with the clip's SSIF stereo file. Its title
-list holds each readable 3D clip once, with `bluray:<clip>` IDs. Everything
-else keeps MakeMKV: encrypted sources, physical discs, main features that span
-several clips, previews, and a title ID from an earlier MakeMKV analysis
+The direct route applies when the disc's main feature is one angle with an SSIF
+stereo file for every clip, and clips the reader can join: each starts where its
+clip does or at an entry point, and ends where it does or at an entry point
+(#1142). The reader plays the clips in playlist order on one playlist timeline,
+up to the first non-seamless connection, where MakeMKV ends the title too;
+see [Blu-ray 3D Sources](visionos-player.md#blu-ray-3d-sources). Its title list
+holds each readable 3D title once, under its first clip, with `bluray:<clip>`
+IDs. Everything else keeps MakeMKV: encrypted sources, physical discs,
+previews, and a title ID from an earlier MakeMKV analysis
 (`makemkv:<n>`). A preview of a `bluray:` title uses the MakeMKV title whose
 segment map starts with that clip.
 
@@ -294,7 +298,7 @@ remain outside the Python pipeline.
 
 The MKV remains the shared source for color-depth probing, crop detection,
 MVC/audio extraction, subtitle OCR, and restart. Existing MKV/MTS/M2TS inputs
-are reused in place by default, while encrypted or multi-clip disc/image inputs
+are reused in place by default, while encrypted disc/image inputs
 retain MakeMKV output as a seekable source boundary. Direct Blu-ray reads
 replace it with the audio and subtitle sidecar and the video excerpt.
 

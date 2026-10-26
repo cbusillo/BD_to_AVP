@@ -105,6 +105,10 @@ static const char *result_code(bd3d_result result) {
             return "too_many_pids";
         case BD3D_SSIF_UNAVAILABLE:
             return "ssif_unavailable";
+        case BD3D_TITLE_UNAVAILABLE:
+            return "title_unavailable";
+        case BD3D_INDEX_UNAVAILABLE:
+            return "index_unavailable";
         default:
             return "demux_failed";
     }
@@ -236,7 +240,7 @@ static int list_titles(const char *path) {
             fputc(',', out);
         }
         first = false;
-        bool readable = title.ssif_available && title.complete_clip;
+        bool readable = title.ssif_available && title.clips_readable;
         fprintf(
             out,
             "{\"playlist\":%u,\"duration_ticks\":%" PRIu64 ",\"main_feature\":%s,\"clip_id\":",
@@ -632,9 +636,9 @@ static int stream_title(
         return print_error("open_failed", "libbluray could not open the source.");
     }
     bd3d_title title;
-    if (!find_playlist_title(disc, playlist, &title) || !title.ssif_available || !title.complete_clip) {
+    if (!find_playlist_title(disc, playlist, &title) || !title.ssif_available || !title.clips_readable) {
         bd3d_disc_close(disc);
-        return print_error("title_unreadable", "The title is not a single complete 3D clip.");
+        return print_error("title_unreadable", "The title's clips cannot be read as one 3D title.");
     }
     Sidecar sidecar = {0};
     if (sidecar_path != NULL) {
@@ -669,7 +673,10 @@ static int stream_title(
     bd3d_stats stats = {0};
     bd3d_result result = bd3d_disc_stream(
         disc,
-        title.clip_id,
+        title.playlist,
+        0,
+        NULL,
+        NULL,
         sidecar_path != NULL ? audio_pids : NULL,
         sidecar_path != NULL ? audio_count : 0,
         sidecar_path != NULL ? subtitle_pids : NULL,

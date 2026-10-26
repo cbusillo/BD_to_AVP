@@ -4,33 +4,36 @@ import XCTest
 final class BlurayTitleSelectionTests: XCTestCase {
     private let stereoDisc = BlurayDiscFacts(isStereo3D: true, isEncrypted: false)
 
-    func testMainTitleIsTheLongestPlayableTitle() {
+    func testMainTitleIsTheDiscMainFeatureThenTheLongestPlayableTitle() {
         let titles = BlurayTitleSelection.ordered(
             [
                 facts(playlist: 1, minutes: 5),
-                facts(playlist: 5, minutes: 90),
-                facts(playlist: 800, minutes: 120, clips: 3),
+                facts(playlist: 22, minutes: 94, mainFeature: true),
+                // A longer playlist that loops extras, as on Ocean Dreams.
+                facts(playlist: 71, minutes: 218),
+                facts(playlist: 800, minutes: 240, readable: false),
                 facts(playlist: 7, minutes: 60),
             ],
             disc: stereoDisc
         )
 
-        XCTAssertEqual(titles.map(\.playlist), [5, 7, 1, 800])
-        XCTAssertEqual(Bluray3DSourceInfo(container: .discImage, titles: titles).mainTitle?.playlist, 5)
-        XCTAssertEqual(titles.last?.unsupportedReason, .multipleClips)
+        XCTAssertEqual(titles.map(\.playlist), [22, 71, 7, 1, 800])
+        XCTAssertEqual(Bluray3DSourceInfo(container: .discImage, titles: titles).mainTitle?.playlist, 22)
+        XCTAssertEqual(titles.last?.unsupportedReason, .partialClip)
     }
 
-    func testEqualLengthPrefersTheDiscMainFeatureThenTheLowerPlaylist() {
+    func testWithoutAPlayableMainFeatureTheLongestThenTheLowerPlaylistPlays() {
         let titles = BlurayTitleSelection.ordered(
             [
                 facts(playlist: 9, minutes: 90),
                 facts(playlist: 8, minutes: 90),
-                facts(playlist: 12, minutes: 90, mainFeature: true),
+                facts(playlist: 12, minutes: 95),
+                facts(playlist: 3, minutes: 120, mainFeature: true, stereoStream: false),
             ],
             disc: stereoDisc
         )
 
-        XCTAssertEqual(titles.map(\.playlist), [12, 8, 9])
+        XCTAssertEqual(titles.map(\.playlist), [12, 8, 9, 3])
     }
 
     func testDiscWideProblemsMakeEveryTitleUnplayable() {
@@ -51,7 +54,7 @@ final class BlurayTitleSelectionTests: XCTestCase {
     func testTitleShapesTheSSIFReaderCannotPlayAreRejected() {
         let reasons = [
             facts(playlist: 1, minutes: 90, angles: 2),
-            facts(playlist: 2, minutes: 90, completeClip: false),
+            facts(playlist: 2, minutes: 90, readable: false),
             facts(playlist: 3, minutes: 90, stereoStream: false),
         ].map { BlurayTitleSelection.unsupportedReason($0, disc: stereoDisc) }
 
@@ -96,9 +99,8 @@ final class BlurayTitleSelectionTests: XCTestCase {
         playlist: UInt32,
         minutes: UInt64,
         angles: UInt32 = 1,
-        clips: UInt32 = 1,
         mainFeature: Bool = false,
-        completeClip: Bool = true,
+        readable: Bool = true,
         stereoStream: Bool = true,
         audio: [BlurayTitleFacts.Stream] = [],
         subtitles: [BlurayTitleFacts.Stream] = []
@@ -107,12 +109,10 @@ final class BlurayTitleSelectionTests: XCTestCase {
             playlist: playlist,
             durationTicks: minutes * 60 * 90_000,
             angleCount: angles,
-            clipCount: clips,
             isMainFeature: mainFeature,
-            coversCompleteClip: completeClip,
+            clipsReadable: readable,
             hasStereoStream: stereoStream,
             baseViewIsRightEye: false,
-            clipID: String(format: "%05u", playlist),
             audio: audio,
             subtitles: subtitles
         )

@@ -1176,10 +1176,13 @@ final class MVHEVCPlayerSession: ObservableObject {
             return
         }
 
-        let playback = NativeBlurayPlayback(source: source, title: title, reads: reads)
+        let startSeconds = ResumeWritePolicy.blurayStartSeconds(
+            savedPosition: resumeStore.resumeTime(for: mediaItem.id), duration: title.durationSeconds
+        )
+        let playback = NativeBlurayPlayback(source: source, title: title, startSeconds: startSeconds, reads: reads)
         nativePlayback = playback
         resumeID = mediaItem.id
-        resumeNotice = resumeStore.resumeTime(for: mediaItem.id).flatMap(ResumeWritePolicy.blurayResumeNotice(savedPosition:))
+        currentTime = startSeconds
         duration = title.durationSeconds
         audioOptions = playback.audioTracks.map(\.mediaOption)
         selectedAudioID = playback.audioTracks.first { $0.id == playback.selectedAudioTrackID }?.mediaOption.id ?? ""
@@ -1235,13 +1238,9 @@ final class MVHEVCPlayerSession: ObservableObject {
     private func seekNative(to requestedTime: TimeInterval) {
         guard let nativePlayback, canSeek else { return }
         let target = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
-        switch nativePlayback.seek(to: target) {
-        case .seeking:
-            seekNotice = nil
-            currentTime = target
-        case let .outside(loaded):
-            seekNotice = PlaybackSeekPolicy.blurayOutsideLoadedNotice(target: target, loaded: loaded)
-        }
+        nativePlayback.seek(to: target)
+        seekNotice = nil
+        currentTime = target
     }
 
     // MARK: Share connection

@@ -20,6 +20,7 @@ struct InspectedFile: Codable, Equatable, Sendable {
     func matches(_ candidate: LocationCandidate) -> Bool {
         relativePath == candidate.relativePath && size == candidate.size && modified == candidate.modified
             && fingerprint == candidate.fingerprint
+            && inspection.readerVersion == MediaSourceInspection.currentReaderVersion
     }
 }
 

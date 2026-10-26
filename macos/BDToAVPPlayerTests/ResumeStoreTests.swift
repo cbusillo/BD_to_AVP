@@ -35,6 +35,24 @@ final class ResumeStoreTests: XCTestCase {
         XCTAssertEqual(store.resumeTime(for: "shared-file:new"), 90)
     }
 
+    func testABlurayTitleInALocationResumesWhereItStoppedAfterARelaunch() throws {
+        let storageURL = temporaryURL()
+        let location = UUID()
+        let itemID = LocationLibraryModel.itemID(locationID: location, relativePath: "Testers/Ocean Dreams 3D (2013).iso")
+        try ResumeStore(storageURL: storageURL).setResumeTime(4_210.5, for: itemID)
+
+        // The relaunched app finds the same item under the same key and starts the title there.
+        let relaunchedID = LocationLibraryModel.itemID(locationID: location, relativePath: "Testers/Ocean Dreams 3D (2013).iso")
+        let saved = ResumeStore(storageURL: storageURL).resumeTime(for: relaunchedID)
+
+        XCTAssertEqual(ResumeWritePolicy.blurayStartSeconds(savedPosition: saved, duration: 5_642.8), 4_210.5)
+        XCTAssertNil(ResumeStore(storageURL: storageURL).resumeTime(
+            for: LocationLibraryModel.itemID(locationID: location, relativePath: "Testers/Fast X.iso")
+        ))
+        XCTAssertEqual(ResumeWritePolicy.blurayStartSeconds(savedPosition: nil, duration: 5_642.8), 0)
+        XCTAssertEqual(ResumeWritePolicy.blurayStartSeconds(savedPosition: 9_000, duration: 5_642.8), 5_642.8)
+    }
+
     func testMissingResumeReturnsNil() {
         let store = ResumeStore(storageURL: temporaryURL())
 

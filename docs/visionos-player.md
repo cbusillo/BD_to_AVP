@@ -774,11 +774,14 @@ own MakeMKV.
 
 The code is in `macos/BDToAVPPlayer/BluraySource`:
 
-- **Disc images and folders** open through libbluray. The title rules match the Mac's
-  `ssif_probe titles`: a title must be at least 60 seconds, have one angle and one
-  clip that it plays completely, and have the clip's SSIF stereo file. Playable
-  titles come first, then the longest, then the disc's main feature, then the lower
-  playlist number. The first playable title is the one the player uses.
+- **Disc images and folders** open through libbluray. A title must be at least 60
+  seconds, have one angle, and have the SSIF stereo file of every clip it plays. Each
+  clip must start where the clip does or at an entry point, and end where it does or at
+  an entry point, so the reader can join it to the next. Playable titles come first, then
+  the disc's main feature, then the longest, then the lower playlist number. The main
+  feature comes before length because a disc can hold a longer playlist of looping
+  extras: Ocean Dreams has a 3.6-hour slideshow beside its 94-minute feature. The first
+  playable title is the one the player uses.
 - **The SSIF demuxer** (`bd3d_source.c`, shared with the Mac converter's `bd3d_reader`) pairs each
   base-view access unit (PID 0x1011) with the dependent view (0x1012) that has the
   same DTS. It delivers whole PES packets for the chosen audio and PG subtitle PIDs.
@@ -800,9 +803,28 @@ and the sink paces it by blocking. All timestamps are raw 33-bit 90 kHz values;
 `BluRayPresentationTimeline` maps them to playback time with the title's first video
 PTS as zero.
 
-Titles made of several clips are not played yet. When they are, the reader will
-rewrite each clip's timestamps onto one playlist timeline, so audio and video keep a
-single clock. `discontinuity()` stays reserved for seeks.
+A title plays its clips in playlist order (#1142), up to the playlist's first
+non-seamless connection. That is where MakeMKV ends a title too: Ocean Dreams and Fast X
+each append a short clip that way, a 12-second logo and a second of black, which MakeMKV
+lists as separate titles too short to keep, so both features end with their first clip. The reader rewrites every timestamp,
+including those in audio and subtitle PES headers, onto the playlist's own timeline,
+which starts at zero, so audio and video keep one clock across a clip boundary and
+`discontinuity()` stays reserved for seeks. Each clip is read as a segment: its video
+starts at the first random access unit of the part the playlist plays, views whose pair
+was read before that are dropped, and audio and subtitles outside that part are dropped.
+A random access unit is an IDR or an I picture; many discs, Ocean Dreams among them, have
+a single IDR and an I picture at every entry point. When a playlist item starts inside
+its clip, as Fast X's feature starts a second into its clip, the reader finds the entry
+point in the clip information (CLPI) file's EP map and starts at the SSIF extent pair
+that holds it. Base and dependent extents sit together in the SSIF, so that pair starts
+after every earlier extent of both views; the dependent clip comes from the playlist's
+stereo sub-path. The same mapping starts a read anywhere in a title, for seeking and
+resuming (#1113).
+
+The tests read fixtures cut from the Ocean Dreams and Fast X discs at their clip
+boundaries, read through libudfread and libbluray (disc images are never mounted).
+`BD_TO_AVP_OCEAN_DREAMS_ISO` and `BD_TO_AVP_FAST_X_ISO`, passed to the simulator with
+the `TEST_RUNNER_` prefix, also read the real discs across their boundaries.
 
 libbluray 1.4.1 and libudfread 1.2.0, both LGPL-2.1-or-later, are linked as separate
 dynamic frameworks in `macos/Vendor/libbluray.xcframework` and
@@ -857,10 +879,19 @@ The clock starts once a few frames are queued and two seconds are buffered. If t
 renderer is about to run dry before the title ends, the clock stops, the player
 shows that it is loading, and playback continues once four seconds are buffered
 again. The buffer keeps 20 seconds behind the decoder, so a seek inside that
-history or the loaded part ahead restarts at the nearest earlier IDR and shows
-frames from the target on. Accepting a seek reserves that IDR, so trimming history
-cannot drop it before the video thread gets there. A seek outside the loaded part is
-refused until #1113 adds seeking anywhere. Every clock change (start, pause, buffering,
+history or the loaded part ahead restarts at the nearest earlier random access unit
+and shows
+frames from the target on. Accepting a seek reserves that unit, so trimming history
+cannot drop it before the video thread gets there. A seek anywhere else starts a new
+read at the last random access unit before the target (#1113): the disc reader finds
+it through the EP map (see [Blu-ray 3D Sources](#blu-ray-3d-sources)) and the Matroska
+reader through the file's cues, or, without cues, the last cluster before the target
+that starts with a keyframe. The buffer drops the old read and the audio before the
+target, the decoder shows frames from the target on, and the read it replaced stops at
+its next packet. Each decoding pass is bound to its seek's read, so a scrub that restarts
+the buffer while the decoder is still starting the previous seek's pass cannot let that
+pass take the new read's first unit.
+Every clock change (start, pause, buffering,
 seek, stop) takes one lock from the state it depends on through the synchronizer
 write, so a pause can never be undone by a rate computed just before it.
 
@@ -877,9 +908,9 @@ lighter band is the loaded part. While the title loads more, the controls stay u
 with a **Loading…** line. The audio list names what plays, for example
 **English (DTS core)**, and switches without stopping. If the chosen audio cannot play, the controls
 say so while the video plays on. The subtitle list offers
-only Off and says the title's subtitles come later (#1114). The resume position is
-saved, but a title starts from the beginning and says where the wearer stopped
-until resuming anywhere arrives (#1113).
+only Off and says the title's subtitles come later (#1114). A title resumes where the
+wearer stopped, keyed by its library or Location item, across relaunches: playback
+starts there the same way a seek outside the loaded part does.
 
 The video is a RealityKit `VideoPlayerComponent(videoRenderer:)` sized inside the
 window, and the controls are an ornament below the window. Until RealityKit reports
@@ -891,7 +922,9 @@ when launched with `BD_TO_AVP_NATIVE_PLAY_ITEM` set to its file name, for
 `BD_TO_AVP_NATIVE_PLAY_SECONDS` (default 660). It pauses at
 `BD_TO_AVP_NATIVE_PAUSE_AT` (120) for `BD_TO_AVP_NATIVE_PAUSE_SECONDS` (10),
 switches audio at `BD_TO_AVP_NATIVE_AUDIO_SWITCH_AT` (240) and seeks 10 seconds
-back at `BD_TO_AVP_NATIVE_SEEK_BACK_AT` (300). It prints `NATIVE_PLAY` lines and
+back at `BD_TO_AVP_NATIVE_SEEK_BACK_AT` (300). `BD_TO_AVP_NATIVE_SEEKS` adds seeks as
+`second:target` pairs, such as `10:1200,30:5620`, and records how long each took to
+play again at its target. It prints `NATIVE_PLAY` lines and
 writes `native-playback-<file name>.json` to Documents, with position, buffering,
 frames, CPU, thermal state and memory each second, the renderer's dropped-frame
 count, and the window and video sizes.
