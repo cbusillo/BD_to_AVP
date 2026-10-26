@@ -626,8 +626,9 @@ Control is active. During uninterrupted playback the ornament fades to nearly
 invisible three seconds after the last of those ends; it is never removed. The
 faded controls stay in place and interactive, and a system hover effect brings
 them back to full opacity while the wearer looks at them, so a look and pinch
-works without a separate show-controls button. The reveal is quick; after the
-wearer looks away the controls hold for about 1.5 seconds and then fade more
+works without a separate show-controls button. The reveal waits for a short
+dwell, about a third of a second, so a passing glance does not pop the controls
+up, and then fades in gently; after the wearer looks away the controls hold for about 1.5 seconds and then fade more
 slowly. The timings live in `PlaybackHUDPresentation`. visionOS renders that effect out
 of process and never reports where the wearer looks, so the app's own state
 stays faded until an interaction or pinching the video surface reveals the
@@ -644,8 +645,8 @@ grows with the stream as before. A seek outside the band keeps the existing
 notices: before the window, playback continues at its start; past the live edge,
 playback moves to the latest available time and says how far the relay reaches.
 
-The MV-HEVC audio language and subtitle lists open over the bottom edge of the
-video, just in front of it and directly above the controls, so they read as part of
+The MV-HEVC audio language and subtitle lists open at the bottom of the window,
+just in front of the video and directly above the controls, so they read as part of
 the controls panel. Both buttons are enabled once the movie is ready. A list with
 nothing to choose between says so: **This title has one audio track.** or **This
 title has no subtitles.** The list is a RealityView attachment placed in the

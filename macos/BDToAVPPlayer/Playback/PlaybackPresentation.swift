@@ -363,8 +363,11 @@ enum PlaybackTrackListNote {
 /// the hover effect, so `isLookedAt` comes from the effect itself, never from app state.
 enum PlaybackHUDPresentation {
     static let fadedOpacity = 0.08
-    /// Looking at faded controls brings them back quickly.
-    static let revealDuration: TimeInterval = 0.2
+    /// Looking at faded controls brings them back only after a short dwell, so a passing glance
+    /// across the bottom of the video does not pop them up.
+    static let revealDwell: TimeInterval = 0.3
+    /// The reveal itself is a gentle fade rather than a jump.
+    static let revealDuration: TimeInterval = 0.45
     /// After the wearer looks away, the controls stay up this long before they start to fade,
     /// so a glance at the video and back does not flicker them.
     static let fadeOutHold: TimeInterval = 1.5
@@ -383,7 +386,7 @@ enum PlaybackHUDPresentation {
     /// The timing of the opacity change when the look starts (`isLookedAt`) or ends.
     static func lookTransition(isLookedAt: Bool) -> LookTransition {
         isLookedAt
-            ? LookTransition(delay: 0, duration: revealDuration)
+            ? LookTransition(delay: revealDwell, duration: revealDuration)
             : LookTransition(delay: fadeOutHold, duration: fadeOutDuration)
     }
 }

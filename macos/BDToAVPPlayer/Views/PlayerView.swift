@@ -7,8 +7,9 @@ struct PlayerView: View {
     private static let unsizedVideoScale: Float = 0.001
     private static let playerDepthOffset: Float = -0.14
     private static let trackListAttachmentID = "player-track-list"
-    /// Meters between the bottom edge of the video and the open track list.
-    private static let trackListBottomInset: Float = 0.02
+    /// Meters between the bottom edge of the window and the open track list, so the list sits
+    /// just above the controls below the window.
+    private static let trackListBottomInset: Float = 0.015
     /// Meters the open track list sits in front of the video.
     private static let trackListDepthAboveVideo: Float = 0.02
 
@@ -171,10 +172,10 @@ struct PlayerView: View {
                     reportedVideoSize = event.screenMeshSize
                 }
                 fitPlayerEntity(proxy: geometry, content: content, reportedSize: reportedSize)
-                placeTrackList(content: content, attachments: attachments, reportedSize: reportedSize)
+                placeTrackList(proxy: geometry, content: content, attachments: attachments)
             } update: { content, attachments in
                 fitPlayerEntity(proxy: geometry, content: content, reportedSize: reportedSize)
-                placeTrackList(content: content, attachments: attachments, reportedSize: reportedSize)
+                placeTrackList(proxy: geometry, content: content, attachments: attachments)
             } attachments: {
                 if let picker = trackPicker.openPicker {
                     Attachment(id: Self.trackListAttachmentID) {
@@ -231,8 +232,7 @@ struct PlayerView: View {
             return
         }
 
-        let frame = proxy.frame(in: .local)
-        let frameSize = abs(content.convert(frame.size, from: .local, to: .scene))
+        let frameSize = windowSize(proxy: proxy, content: content)
         // Until the video's size is known, keep it too small to cover anything: at its natural
         // size a stereo video can draw over the controls ornament (#1103).
         guard let screenSize = videoScreenSize(reportedSize: reportedSize) else {
@@ -253,12 +253,17 @@ struct PlayerView: View {
 #endif
     }
 
-    /// Places the open track list on the bottom edge of the video and just in front of it, so it
-    /// reads as part of the controls panel below. Growing the controls ornament pushed the lists
+    /// The window's size in the RealityView's scene space, whose origin is the window's center.
+    private func windowSize(proxy: GeometryProxy3D, content: RealityViewContent) -> SIMD3<Float> {
+        abs(content.convert(proxy.frame(in: .local).size, from: .local, to: .scene))
+    }
+
+    /// Places the open track list at the bottom of the window, just in front of the video, so it
+    /// reads as part of the controls panel directly below. Growing the controls ornament pushed the lists
     /// below the window, a second ornament or a SwiftUI view in the window is hidden behind the
     /// window's surface or floats out in front of the controls, and system menus presented from
     /// an ornament open behind the video. A RealityView attachment shares the video's space.
-    private func placeTrackList(content: RealityViewContent, attachments: RealityViewAttachments, reportedSize: SIMD2<Float>?) {
+    private func placeTrackList(proxy: GeometryProxy3D, content: RealityViewContent, attachments: RealityViewAttachments) {
         let placed = content.entities.first { $0.name == Self.trackListAttachmentID }
         guard let list = attachments.entity(for: Self.trackListAttachmentID) else {
             placed?.removeFromParent()
@@ -270,14 +275,12 @@ struct PlayerView: View {
             content.add(list)
         }
 
-        let video = session.playerEntity
-        let screenHeight = videoScreenSize(reportedSize: reportedSize)?.y ?? 0
-        let videoBottom = video.position.y - screenHeight * video.scale.y / 2
+        let windowBottom = -windowSize(proxy: proxy, content: content).y / 2
         let listHeight = list.visualBounds(relativeTo: list.parent).extents.y
         list.position = SIMD3<Float>(
             0,
-            videoBottom + Self.trackListBottomInset + listHeight / 2,
-            video.position.z + Self.trackListDepthAboveVideo
+            windowBottom + Self.trackListBottomInset + listHeight / 2,
+            session.playerEntity.position.z + Self.trackListDepthAboveVideo
         )
     }
 }
