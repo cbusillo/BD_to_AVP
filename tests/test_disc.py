@@ -468,6 +468,7 @@ class RipToFolderTests(unittest.TestCase):
         title_id: str | None = "makemkv:3",
         checked_stream: bytes = MVC_ACCESS_UNIT,
         overwrite: bool = False,
+        makemkv_info: str = MAKEMKV_RIP_INFO,
     ) -> tuple[Path, list[list[object]], list[str]]:
         commands: list[list[object]] = []
         stages: list[str] = []
@@ -478,7 +479,7 @@ class RipToFolderTests(unittest.TestCase):
                 Path(str(command[-1])).write_bytes(checked_stream)
                 return process_result()
             if "info" in command:
-                return process_result(MAKEMKV_RIP_INFO)
+                return process_result(makemkv_info)
             profile = next(str(part) for part in command if str(part).startswith("--profile="))
             self.assertIn("+sel:mvcvideo", Path(profile.removeprefix("--profile=")).read_text(encoding="utf-8"))
             output_folder = Path(str(command[-1]))
@@ -516,16 +517,43 @@ class RipToFolderTests(unittest.TestCase):
         self.assertIn("-frames:v", commands[2])
         self.assertEqual(stages, list(disc.RIP_STAGES))
 
-    def test_rip_reads_titles_through_makemkv_even_when_the_reader_could_read_the_disc(self) -> None:
+    def test_reader_listed_title_rips_through_makemkv_under_the_readers_movie_name(self) -> None:
+        reader_disc = Mock(name="reader disc")
+        reader_info = disc.DiscInfo(name="FEATURE_3D_VOLUME")
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch.object(disc, "direct_bluray_disc", side_effect=AssertionError("must not read directly")),
+            patch.object(disc, "direct_bluray_disc", return_value=reader_disc) as direct,
+            patch.object(disc, "direct_disc_info", return_value=reader_info),
         ):
             output, commands, _ = self.rip(Path(temp_dir), title_id="bluray:801")
 
-            self.assertEqual(output.name, "Feature 3D.mkv")
+            self.assertEqual(output.name, "FEATURE_3D_VOLUME.mkv")
+        direct.assert_called_once()
         self.assertIn("info", commands[0])
         self.assertEqual(commands[1][-2], 3)
+
+    def test_reader_listed_title_that_makemkv_lists_twice_is_not_guessed(self) -> None:
+        info = MAKEMKV_RIP_INFO + '\nTINFO:7,9,0,"2:05:00"\nTINFO:7,26,0,"801,802"\nSINFO:7,1,6,0,"Mpeg4-MVC-3D"'
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(disc, "direct_bluray_disc", return_value=None),
+            self.assertRaisesRegex(disc.DiscTitleSelectionError, "more than one version"),
+        ):
+            self.rip(Path(temp_dir), title_id="bluray:801", makemkv_info=info)
+
+    def test_rip_leaves_other_hidden_folders_in_the_destination_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir)
+            other = destination / ".Feature 3D.ripping"
+            other.mkdir()
+            (other / "keep.mkv").write_bytes(b"other job")
+
+            self.rip(destination)
+
+            self.assertEqual((other / "keep.mkv").read_bytes(), b"other job")
+            self.assertEqual(
+                sorted(path.name for path in destination.iterdir()), [".Feature 3D.ripping", "Feature 3D.mkv"]
+            )
 
     def test_rip_without_second_view_fails_and_leaves_nothing_in_destination(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

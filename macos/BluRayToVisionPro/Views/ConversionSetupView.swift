@@ -401,6 +401,8 @@ struct ConversionSetupView: View {
             get: { ReusableFileOutcome(policy: options.job.intermediatePolicy) },
             set: { outcome in
                 if outcome == .discRipOnly {
+                    // A rip converts nothing, so a pending conversion-quality choice no longer applies.
+                    routeQualityState.reset()
                     options.job.intermediatePolicy = .ripOnly
                 } else {
                     applyRouteEdit(.reusableIntermediates(outcome == .finishedMovieAndReusableFiles))

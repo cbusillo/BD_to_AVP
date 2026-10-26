@@ -3,6 +3,7 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -595,14 +596,26 @@ def rip_title_to_folder(
         observability_context=context("inspect_source"),
         read_directly=False,
     )
-    final_path = destination / f"{disc_info.name}.mkv"
+    movie_name = disc_info.name
+    if (clip := selected_clip(selected_title_id)) is not None:
+        # The title was listed by the Blu-ray reader, which names and numbers titles its own way.
+        if sum(title.clip == clip for title in disc_info.titles) > 1:
+            raise DiscTitleSelectionError(
+                "MakeMKV lists more than one version of this movie that starts the same way, so it cannot tell "
+                "which one you chose. Convert this source instead; conversion reads the version you chose."
+            )
+        movie_name = get_disc_and_mvc_video_info(
+            selected_title_id,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=context("inspect_source"),
+        ).name
+    final_path = destination / f"{movie_name}.mkv"
     if not overwrite and final_path.exists():
         raise FileExistsError(f"{final_path.name} is already in {destination}. Turn on Overwrite to replace it.")
 
     destination.mkdir(parents=True, exist_ok=True)
-    workspace = destination / f".{disc_info.name}.ripping"
-    shutil.rmtree(workspace, ignore_errors=True)
-    workspace.mkdir()
+    workspace = Path(tempfile.mkdtemp(prefix=f".{movie_name}.ripping-", dir=destination))
     try:
         report("create_mkv", "Ripping the 3D movie with MakeMKV")
         rip_disc_to_mkv(
@@ -626,7 +639,7 @@ def rip_title_to_folder(
             observability_context=context("verify_3d"),
         ):
             raise RipWithout3DError(
-                f"MakeMKV saved {disc_info.name} without its second view, so it is 2D only and was not "
+                f"MakeMKV saved {movie_name} without its second view, so it is 2D only and was not "
                 f"added to {destination}. Update MakeMKV and try again."
             )
 
