@@ -11,7 +11,7 @@ import unittest
 from contextlib import chdir
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.artifact_identity import app_tree_sha256
@@ -55,7 +55,8 @@ from scripts.native_app import (
     sign_package,
     smoke_packaged_mv_hevc_encoder,
     smoke_packaged_native_app,
-    smoke_packaged_ssif_probe,
+    PACKAGED_BLURAY_HELPERS,
+    smoke_packaged_bluray_helpers,
     smoke_packaged_worker,
     ssif_required_paths,
     validate_smoke_events,
@@ -572,29 +573,33 @@ Load command 3
                         verify_layout(app_path)
                     self.assertFalse(verify_ssif.call_args.kwargs["run_runtime_probe"])
 
-    def test_ssif_probe_smoke_uses_packaged_binary_and_clean_environment(self) -> None:
+    def test_bluray_helper_smoke_uses_packaged_binaries_and_clean_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             app_path = Path(temporary_directory) / NATIVE_APP_NAME
-            probe_path = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ssif_probe"
-            probe_path.parent.mkdir(parents=True)
-            probe_path.write_bytes(b"probe")
-            completed = subprocess.CompletedProcess(
-                args=[str(probe_path), "--version"],
-                returncode=0,
-                stdout="ssif_probe contract 2\n",
-                stderr="",
-            )
+            bin_path = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin"
+            bin_path.mkdir(parents=True)
 
-            with patch("scripts.native_app.subprocess.run", return_value=completed) as run_mock:
-                smoke_packaged_ssif_probe(app_path)
+            def version(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                return subprocess.CompletedProcess(
+                    command, 0, stdout=PACKAGED_BLURAY_HELPERS[Path(command[0]).name], stderr=""
+                )
 
-        run_mock.assert_called_once_with(
-            [str(probe_path.resolve()), "--version"],
-            cwd=app_path.resolve(),
-            capture_output=True,
-            env=ANY,
-            text=True,
-            timeout=30,
+            with patch("scripts.native_app.subprocess.run", side_effect=version) as run_mock:
+                smoke_packaged_bluray_helpers(app_path)
+
+        self.assertEqual(
+            run_mock.call_args_list,
+            [
+                call(
+                    [str((bin_path / name).resolve()), "--version"],
+                    cwd=app_path.resolve(),
+                    capture_output=True,
+                    env=ANY,
+                    text=True,
+                    timeout=30,
+                )
+                for name in PACKAGED_BLURAY_HELPERS
+            ],
         )
 
     def test_publish_current_command_has_no_signing_options(self) -> None:
@@ -628,7 +633,7 @@ Load command 3
             patch("scripts.native_app.sign_package", side_effect=lambda *args: record("sign")) as sign,
             patch("scripts.native_app.smoke_packaged_native_app") as smoke_native,
             patch(
-                "scripts.native_app.smoke_packaged_ssif_probe",
+                "scripts.native_app.smoke_packaged_bluray_helpers",
                 side_effect=lambda *args: record("probe"),
             ) as smoke_probe,
             patch("scripts.native_app.smoke_packaged_mv_hevc_encoder") as smoke_encoder,

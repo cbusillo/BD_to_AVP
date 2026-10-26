@@ -1,4 +1,4 @@
-schema_version = 3
+schema_version = 4
 platform = "macOS arm64"
 architecture = "arm64"
 minimum_macos = "14.0"
@@ -26,6 +26,7 @@ libxml2 = "disabled"
 
 [filenames]
 probe = "ssif_probe"
+reader = "bd3d_reader"
 libbluray = "libbluray.3.dylib"
 libudfread = "libudfread.3.dylib"
 
@@ -51,5 +52,6 @@ install_name = "@rpath/libudfread.3.dylib"
 
 [unsigned_checksums]
 "bd_to_avp/bin/ssif_probe" = "15b66da8cff7d2a13119d20ba072fdf704327458b969cfa1fe8a55c6e08bf849"
+"bd_to_avp/bin/bd3d_reader" = "bd3e5afe914c4006e3c89edbadf2e861e0db478138180fcdad2316ed0efe3046"
 "bd_to_avp/lib/libbluray.3.dylib" = "7dab117e64e637eeb95a59b540584cc3ab62eab66b7e82302bb4f507b3605075"
 "bd_to_avp/lib/libudfread.3.dylib" = "9bc270075be50fb9644d01d06a6bff501125f51343d2f434410a745a2da39150"

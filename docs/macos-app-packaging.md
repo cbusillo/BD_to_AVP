@@ -24,7 +24,7 @@ startup and worker smokes.
     └── Resources/
         ├── app/                bd_to_avp source and bundled tools
         │   └── bd_to_avp/
-        │       ├── bin/ssif_probe
+        │       ├── bin/{bd3d_reader,ssif_probe}
         │       ├── lib/*.dylib
         │       └── resources/notices/ssif-probe/
         └── app_packages/       lock-derived Python dependencies
@@ -71,11 +71,12 @@ signature, launches the packaged app through `--startup-smoke`, and runs a real
 `inspect_source` request through the embedded worker. The worker smoke also
 requires canonical schema-v1 FFprobe observability in the protocol stream, so a
 package cannot pass while silently falling back to a legacy child-process path.
-Before expensive packaging, the pipeline verifies the committed SSIF probe,
+Before expensive packaging, the pipeline verifies the committed Blu-ray reader and SSIF probe,
 private dylibs, source archives, notices, provenance, and unsigned checksums.
 After copying the tree into the app, layout verification repeats the structural
 and linkage checks with checksums disabled so signing does not alter the
-unsigned digest contract, and the signed `ssif_probe --version` smoke must pass.
+unsigned digest contract, and the signed `bd3d_reader --version` and
+`ssif_probe --version` smokes must pass.
 Layout verification also checks the shipping Swift executable's direct platform
 framework links, including AVKit for the embedded preview player, so dead-linking
 cannot defer a missing superclass failure until the player is presented.
