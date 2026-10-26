@@ -755,7 +755,7 @@ The code is in `macos/BDToAVPPlayer/BluraySource`:
   feature comes before length because a disc can hold a longer playlist of looping
   extras: Ocean Dreams has a 3.6-hour slideshow beside its 94-minute feature. The first
   playable title is the one the player uses.
-- **The SSIF demuxer** (`bd3d_source.c`, adapted from `native/ssif_probe`) pairs each
+- **The SSIF demuxer** (`bd3d_source.c`, shared with the Mac converter's `bd3d_reader`) pairs each
   base-view access unit (PID 0x1011) with the dependent view (0x1012) that has the
   same DTS. It delivers whole PES packets for the chosen audio and PG subtitle PIDs.
   `TransportStreamPESReader.parse` builds the `BluRayPESPacket` values, so every
@@ -776,7 +776,10 @@ and the sink paces it by blocking. All timestamps are raw 33-bit 90 kHz values;
 `BluRayPresentationTimeline` maps them to playback time with the title's first video
 PTS as zero.
 
-A title plays its clips in playlist order (#1142). The reader rewrites every timestamp,
+A title plays its clips in playlist order (#1142), up to the playlist's first
+non-seamless connection. That is where MakeMKV ends a title too: Ocean Dreams and Fast X
+each append a short clip that way, a 12-second logo and a second of black, which MakeMKV
+lists as separate titles too short to keep, so both features end with their first clip. The reader rewrites every timestamp,
 including those in audio and subtitle PES headers, onto the playlist's own timeline,
 which starts at zero, so audio and video keep one clock across a clip boundary and
 `discontinuity()` stays reserved for seeks. Each clip is read as a segment: its video
@@ -799,7 +802,7 @@ the `TEST_RUNNER_` prefix, also read the real discs across their boundaries.
 libbluray 1.4.1 and libudfread 1.2.0, both LGPL-2.1-or-later, are linked as separate
 dynamic frameworks in `macos/Vendor/libbluray.xcframework` and
 `macos/Vendor/libudfread.xcframework`. Each framework carries its `COPYING` text. They
-are built from the same pinned source archives as the Mac's `ssif_probe`, recorded in
+are built from the same pinned source archives as the Mac's `bd3d_reader`, recorded in
 `vendor/ssif-probe-macos-arm64.toml` and kept in `bd_to_avp/resources/notices/ssif-probe`.
 Rebuild or verify them with:
 

@@ -58,16 +58,22 @@ The production interface starting with the `0.3.0` release line requires Apple
 Silicon and macOS 26 or later. Stable `0.2.143` remains the last desktop build
 for macOS 14 through 25.
 
-## Direct SSIF source support
+## Direct Blu-ray source support
 
-The production app bundle includes the arm64 `ssif_probe` helper and its private
-`libbluray` and `libudfread` dylibs under
+Unencrypted Blu-ray 3D images and folders convert without MakeMKV and without
+an intermediate MKV when the disc's main feature is readable 3D, including
+features made of several clips; see
+[direct pipeline contracts](docs/direct-pipeline-contracts.md#direct-blu-ray-reads).
+Encrypted sources and previews still use MakeMKV.
+
+The production app bundle includes the arm64 `bd3d_reader` and `ssif_probe`
+helpers and their private `libbluray` and `libudfread` dylibs under
 `Contents/Resources/app/bd_to_avp/{bin,lib}`. It also ships the pinned LGPL
 source archives, `RELINKING.md`, copyright notices, and build provenance under
 `Contents/Resources/app/bd_to_avp/resources/notices/ssif-probe`. The package
 pipeline verifies the committed unsigned checksums before packaging, validates
 the copied signed tree's linkage and `@loader_path/../lib` rpath, and runs
-`ssif_probe --version` after signing.
+each helper's `--version` after signing.
 
 The shipped sources support relinking those LGPL-2.1-or-later libraries. Keep
 the replacement libraries ABI-compatible, preserve the private install names,

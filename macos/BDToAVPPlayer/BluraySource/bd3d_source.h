@@ -1,6 +1,6 @@
-// Blu-ray 3D source access for Shiny 3D Cinema: disc and title facts from libbluray, and a
-// demuxer that pairs each MVC base-view access unit with its dependent view. The demuxer is
-// adapted from native/ssif_probe, which the Mac relay uses until the headset path replaces it.
+// Blu-ray 3D source access shared by Shiny 3D Cinema and the Mac converter (native/bd3d_reader):
+// disc and title facts from libbluray, and a demuxer that pairs each MVC base-view access unit
+// with its dependent view.
 //
 // A title is a playlist of clips. The reader plays them in order and rewrites every timestamp
 // onto the playlist's own timeline, which starts at zero, so audio and video keep one clock
@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 #define BD3D_MAX_STREAMS 32
-#define BD3D_MAX_SELECTED_PIDS 16
+#define BD3D_MAX_SELECTED_PIDS 64
 #define BD3D_BASE_VIEW_PID 0x1011
 #define BD3D_DEPENDENT_VIEW_PID 0x1012
 
@@ -53,6 +53,7 @@ typedef struct {
     uint32_t playlist;
     uint64_t duration_ticks;
     uint32_t angle_count;
+    /// The clips the title plays: the playlist's items up to its first non-seamless connection.
     uint32_t clip_count;
     bool main_feature;
     /// Every clip is played from a point where decoding can start, through its end or to a
@@ -63,6 +64,8 @@ typedef struct {
     bool base_view_right;
     /// The first clip.
     char clip_id[8];
+    uint8_t video_count;
+    bd3d_stream video;
     uint8_t audio_count;
     uint8_t subtitle_count;
     /// The first clip's streams, which the playlist keeps for every clip.
@@ -100,6 +103,8 @@ typedef struct {
     uint64_t audio_packets;
     uint64_t subtitle_packets;
     size_t maximum_pending_bytes;
+    /// Bytes skipped to find the packet sync again, as across a damaged stretch of an image.
+    uint64_t skipped_bytes;
 } bd3d_stats;
 
 /// Returns nonzero to stop demuxing.
@@ -115,7 +120,7 @@ void bd3d_disc_close(bd3d_disc *disc);
 bd3d_disc_info bd3d_disc_get_info(const bd3d_disc *disc);
 /// Fills `title` for the index-th title of at least 60 seconds. Returns false when unavailable.
 bool bd3d_disc_title(bd3d_disc *disc, uint32_t index, bd3d_title *title);
-/// Demuxes a playlist's clips in order from `start_ticks` on its timeline, rewriting every
+/// Demuxes a title's clips in order from `start_ticks` on its timeline, rewriting every
 /// timestamp onto that timeline. Video starts at the last random access unit at or before
 /// `start_ticks`. PIDs not listed are skipped.
 bd3d_result bd3d_disc_stream(
@@ -210,6 +215,10 @@ const bd3d_entry_point *bd3d_entry_point_at(const bd3d_clip_index *index, uint64
 /// and dependent extent i sit together, in either order, after every earlier extent of both.
 /// Returns -1 when the extent tables do not match.
 int64_t bd3d_ssif_offset(const bd3d_clip_index *base, const bd3d_clip_index *dependent, uint32_t spn);
+/// How many play items, from the first, join seamlessly (connection condition 5 or 6). A title
+/// ends at its first non-seamless connection, as MakeMKV reads it: what follows, such as a
+/// distributor logo after the feature, is a separate title. Returns 0 for a malformed playlist.
+uint32_t bd3d_seamless_items(const uint8_t *mpls, size_t size);
 /// The dependent-view clip of a playlist item, from the playlist's stereo sub-path extension.
 bool bd3d_dependent_clip_id(const uint8_t *mpls, size_t size, uint32_t play_item, char clip_id[6]);
 

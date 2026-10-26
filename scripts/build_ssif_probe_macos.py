@@ -19,6 +19,10 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPOSITORY_ROOT / "vendor/ssif-probe-macos-arm64.toml"
 SOURCE_PATH = REPOSITORY_ROOT / "native/ssif_probe/ssif_probe.c"
+READER_SOURCE_PATH = REPOSITORY_ROOT / "native/bd3d_reader/bd3d_reader.c"
+# The reader compiles the headset's Blu-ray 3D demuxer, so the Mac and the headset share one reader.
+SHARED_SOURCE_DIRECTORY = REPOSITORY_ROOT / "macos/BDToAVPPlayer/BluraySource"
+READER_VERSION_OUTPUT = "bd3d_reader contract 1\n"
 ARTIFACT_ROOT = REPOSITORY_ROOT / "bd_to_avp"
 BIN_PATH = ARTIFACT_ROOT / "bin/ssif_probe"
 LIBRARY_DIRECTORY = ARTIFACT_ROOT / "lib"
@@ -173,7 +177,7 @@ def load_manifest(path: Path) -> SsifProbeManifest:
     }
     data = require_table(data, "SSIF probe manifest", fields)
     schema_version = require_int(data["schema_version"], "schema_version")
-    if schema_version != 3:
+    if schema_version != 4:
         raise RuntimeError("unsupported SSIF probe manifest schema")
     allowlist = data["system_link_allowlist"]
     if not isinstance(allowlist, list) or not all(isinstance(item, str) and item for item in allowlist):
@@ -185,11 +189,16 @@ def load_manifest(path: Path) -> SsifProbeManifest:
         or not all(isinstance(item, str) and item for item in probe_compile_flags)
     ):
         raise RuntimeError("probe_compile_flags is missing or invalid")
-    filenames = require_table(data["filenames"], "filenames", {"probe", "libbluray", "libudfread"})
+    filenames = require_table(data["filenames"], "filenames", {"probe", "reader", "libbluray", "libudfread"})
     checksums = require_table(
         data["unsigned_checksums"],
         "unsigned_checksums",
-        {"bd_to_avp/bin/ssif_probe", "bd_to_avp/lib/libbluray.3.dylib", "bd_to_avp/lib/libudfread.3.dylib"},
+        {
+            "bd_to_avp/bin/ssif_probe",
+            "bd_to_avp/bin/bd3d_reader",
+            "bd_to_avp/lib/libbluray.3.dylib",
+            "bd_to_avp/lib/libudfread.3.dylib",
+        },
     )
     for relative_path, checksum in checksums.items():
         if not SHA256_PATTERN.fullmatch(require_string(checksum, f"unsigned checksum for {relative_path}")):
@@ -434,9 +443,31 @@ def compile_probe(prefix: Path, output_path: Path, manifest: SsifProbeManifest) 
     run(command)
 
 
+def compile_reader(prefix: Path, output_path: Path, manifest: SsifProbeManifest) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "/usr/bin/clang",
+        *manifest.probe_compile_flags,
+        f"-mmacosx-version-min={manifest.minimum_macos}",
+        f"-I{prefix / 'include'}",
+        f"-I{SHARED_SOURCE_DIRECTORY}",
+        str(SHARED_SOURCE_DIRECTORY / "bd3d_source.c"),
+        str(READER_SOURCE_PATH),
+        "-o",
+        str(output_path),
+        f"-L{prefix / 'lib'}",
+        "-lbluray",
+        "-ludfread",
+        "-Wl,-rpath,@loader_path/../lib",
+        "-Wl,-headerpad_max_install_names",
+    ]
+    run(command)
+
+
 def artifact_paths(manifest: SsifProbeManifest, artifact_root: Path = ARTIFACT_ROOT) -> dict[str, Path]:
     return {
         "bd_to_avp/bin/ssif_probe": artifact_root / "bin" / manifest.filenames["probe"],
+        "bd_to_avp/bin/bd3d_reader": artifact_root / "bin" / manifest.filenames["reader"],
         "bd_to_avp/lib/libbluray.3.dylib": artifact_root / "lib" / manifest.filenames["libbluray"],
         "bd_to_avp/lib/libudfread.3.dylib": artifact_root / "lib" / manifest.filenames["libudfread"],
     }
@@ -476,12 +507,14 @@ def verify_artifacts(
 ) -> dict[str, str]:
     artifacts = artifact_paths(manifest, artifact_root)
     probe_path = artifacts["bd_to_avp/bin/ssif_probe"]
+    reader_path = artifacts["bd_to_avp/bin/bd3d_reader"]
     for relative_path, path in artifacts.items():
         if not path.is_file():
             raise RuntimeError(f"required SSIF probe artifact is missing: {relative_path}")
         verify_macho_artifact(path, "arm64", manifest.minimum_macos)
     expected_dependencies = {
         probe_path: {manifest.libbluray.install_name},
+        reader_path: {manifest.libbluray.install_name, manifest.libudfread.install_name},
         artifacts["bd_to_avp/lib/libbluray.3.dylib"]: {manifest.libudfread.install_name},
         artifacts["bd_to_avp/lib/libudfread.3.dylib"]: set(),
     }
@@ -504,8 +537,9 @@ def verify_artifacts(
     ).splitlines()[1:]
     if udfread_install_names != [manifest.libudfread.install_name]:
         raise RuntimeError("libudfread does not have the required private install name")
-    if macho_rpaths(probe_path) != [manifest.rpath]:
-        raise RuntimeError("ssif_probe does not have the required private-library rpath")
+    for executable in (probe_path, reader_path):
+        if macho_rpaths(executable) != [manifest.rpath]:
+            raise RuntimeError(f"{executable.name} does not have the required private-library rpath")
     for dependency in (manifest.libbluray, manifest.libudfread):
         archive_path = source_archive_path(dependency, artifact_root)
         if not archive_path.is_file() or sha256(archive_path) != dependency.sha256:
@@ -525,13 +559,14 @@ def verify_artifacts(
             if checksum != manifest.unsigned_checksums[relative_path]:
                 raise RuntimeError(f"unsigned checksum does not match for {relative_path}")
     if run_runtime_probe:
-        verify_runtime(probe_path)
+        verify_runtime(probe_path, "ssif_probe contract 2\n")
+        verify_runtime(reader_path, READER_VERSION_OUTPUT)
     if require_provenance:
         verify_provenance(notice_directory(artifact_root) / "build-provenance.json", manifest)
     return actual_checksums
 
 
-def verify_runtime(probe_path: Path) -> None:
+def verify_runtime(probe_path: Path, expected_output: str) -> None:
     with tempfile.TemporaryDirectory(prefix="ssif-probe-runtime-") as temporary_directory:
         environment = {
             "HOME": temporary_directory,
@@ -547,8 +582,8 @@ def verify_runtime(probe_path: Path) -> None:
             text=True,
             timeout=30,
         )
-    if completed.returncode != 0 or completed.stdout != "ssif_probe contract 2\n" or completed.stderr:
-        raise RuntimeError("ssif_probe could not resolve its private libraries at runtime")
+    if completed.returncode != 0 or completed.stdout != expected_output or completed.stderr:
+        raise RuntimeError(f"{probe_path.name} could not resolve its private libraries at runtime")
 
 
 def verify_provenance(path: Path, manifest: SsifProbeManifest) -> None:
@@ -627,10 +662,13 @@ def build_ssif_probe(manifest: SsifProbeManifest) -> None:
         bluray_path, udfread_path = rewrite_install_names(prefix, manifest)
         staged_probe = temporary_directory / manifest.filenames["probe"]
         compile_probe(prefix, staged_probe, manifest)
+        staged_reader = temporary_directory / manifest.filenames["reader"]
+        compile_reader(prefix, staged_reader, manifest)
         BIN_PATH.parent.mkdir(parents=True, exist_ok=True)
         LIBRARY_DIRECTORY.mkdir(parents=True, exist_ok=True)
         NOTICE_DIRECTORY.mkdir(parents=True, exist_ok=True)
         shutil.copy2(staged_probe, BIN_PATH)
+        shutil.copy2(staged_reader, BIN_PATH.parent / manifest.filenames["reader"])
         shutil.copy2(bluray_path, LIBRARY_DIRECTORY / manifest.filenames["libbluray"])
         shutil.copy2(udfread_path, LIBRARY_DIRECTORY / manifest.filenames["libudfread"])
         shutil.copy2(bluray_copying, NOTICE_DIRECTORY / "libbluray-COPYING")
