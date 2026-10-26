@@ -56,3 +56,9 @@ its native app, diagnostics and player gates. Fixture and hosted-platform
 requirements remain in their workflow steps and linked testing guides.
 Here, release workflow structure is checked by rule in
 `tests/test_workflow_security_policy.py`.
+
+## What 3D Blu-ray to Vision Pro does
+
+The Mac app converts supported 3D Blu-ray sources into spatial movies; physical discs require MakeMKV for title extraction.
+The Movie Sharing beta pairs the Mac with the Shiny 3D Cinema app on Vision Pro, which plays completed movies from Files or compatible Mac shared folders.
+Evidence: [README.md](README.md) and the [Movie Sharing beta guide](docs/movie-sharing-beta.md).
