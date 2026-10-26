@@ -42,7 +42,7 @@
       "version": "1.4.1"
     }
   ],
-  "source_manifest": "vendor/ssif-probe-macos-arm64.toml",
+  "source_manifest": "vendor/bluray-reader-macos-arm64.toml",
   "targets": [
     "arm64-apple-xros26.0",
     "arm64-apple-xros26.0-simulator",

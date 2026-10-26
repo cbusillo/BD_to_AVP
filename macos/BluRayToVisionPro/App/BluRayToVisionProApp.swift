@@ -42,8 +42,6 @@ struct BluRayToVisionProApp: App {
     @StateObject private var resolutionMemoryStore: ResolutionMemoryStore
     @StateObject private var durableQueueStore: ConversionQueueStore
     @StateObject private var queueNotificationCoordinator: PersistentQueueNotificationCoordinator
-    @StateObject private var relayHostController: RelayHostSessionController
-    @StateObject private var movieSharingController: MovieSharingController
     @StateObject private var queueAutomationController: QueueAutomationController
 
     private let capabilities = AppCapabilities.current
@@ -67,9 +65,6 @@ struct BluRayToVisionProApp: App {
         )
         let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
         let settings = AppSettings()
-        let relayHostController = RelayHostSessionController()
-        let movieSharingController = MovieSharingController()
-        movieSharingController.isConversionActive = { [weak viewModel] in viewModel?.hasActiveWorker ?? false }
         let queueAutomationController = QueueAutomationController(
             store: QueueAutomationStore(),
             viewModel: viewModel,
@@ -110,22 +105,14 @@ struct BluRayToVisionProApp: App {
             previewViewModel?.hasActiveWorker ?? false
         }
         // The same work that makes the app ask before quitting keeps the Mac on after the queue finishes.
-        queueAutomationController.postRun.otherWork = { [weak previewViewModel, weak movieSharingController, weak relayHostController] in
+        queueAutomationController.postRun.otherWork = { [weak previewViewModel] in
             var work: [QueuePostRunOtherWork] = []
             if previewViewModel?.hasActiveWorker == true {
                 work.append(.preview)
             }
-            if movieSharingController?.isSharing == true {
-                work.append(.movieSharing)
-            }
-            if relayHostController?.isSessionActive == true {
-                work.append(.relaySession)
-            }
             return work
         }
         _queueNotificationCoordinator = StateObject(wrappedValue: queueNotificationCoordinator)
-        _relayHostController = StateObject(wrappedValue: relayHostController)
-        _movieSharingController = StateObject(wrappedValue: movieSharingController)
         _queueAutomationController = StateObject(wrappedValue: queueAutomationController)
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
@@ -134,8 +121,6 @@ struct BluRayToVisionProApp: App {
             environment: ProcessInfo.processInfo.environment
         )
         appDelegate.observabilityEventStore = observabilityEventStore
-        appDelegate.relayHostController = relayHostController
-        appDelegate.movieSharingController = movieSharingController
         appDelegate.queueAutomationController = queueAutomationController
         appDelegate.postRunCountdownPresenter = QueuePostRunCountdownPresenter(postRun: queueAutomationController.postRun)
     }
@@ -149,8 +134,6 @@ struct BluRayToVisionProApp: App {
                 settings: settings,
                 profileStore: profileStore,
                 resolutionMemoryStore: resolutionMemoryStore,
-                relayHostController: relayHostController,
-                movieSharingController: movieSharingController,
                 queueAutomationController: queueAutomationController,
                 capabilities: capabilities
             )
@@ -161,9 +144,6 @@ struct BluRayToVisionProApp: App {
                         appDelegate.attach(window: window, workCoordinator: workCoordinator)
                     }
                 )
-                .task {
-                    if !suppressDefaultLaunch { await movieSharingController.restoreIfNeeded() }
-                }
                 .onAppear {
                     updater.startIfNeeded()
                     settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)

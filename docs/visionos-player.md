@@ -9,10 +9,9 @@ which remains the qualification-only validator.
 
 - One plain SwiftUI window contains a split-view library, modal movie details,
   and the player.
-- The sidebar's **Library** section holds **On My Vision Pro** and **Mac Movies**;
-  its **Locations** section holds the network shares the wearer added (see
-  [Locations](#locations)). **Mac Movies** is where the wearer chooses a Mac and a
-  completed movie. **On My Vision Pro** opens the local **Your movies** collection with
+- The sidebar's **Library** section holds **On My Vision Pro**; its **Locations**
+  section holds the network shares the wearer added (see [Locations](#locations)).
+  **On My Vision Pro** opens the local **Your movies** collection with
   Posters and Files modes, format filtering, title or
   filename sorting, 16:9 source-frame thumbnails, and a typography-first
   fallback when a frame cannot be generated.
@@ -27,149 +26,6 @@ which remains the qualification-only validator.
   app's Application Support directory. Library media records omit source
   filesystem URLs, but bookmark blobs necessarily encode the source location so
   the app can regain security-scoped access.
-- Qualification builds also expose a Live Relay panel that discovers protocol-v3
-  Macs through Bonjour, fetches a
-  short-lived challenge, compares a large six-digit code with the Mac app, and
-  starts an authenticated MV-HEVC EVENT-HLS asset without requiring a hostname
-  or cloud service.
-
-## Completed movies shared by a Mac
-
-For installation and a first playback check, use the
-[Movie Sharing beta quick start](movie-sharing-beta.md).
-
-1. Open **Movie Sharing** in the Mac app and **Add Folder…**. Select a folder of
-   completed `.mp4`, `.mov`, or `.m4v` movies, then enable sharing.
-2. Keep the Mac awake with the app open, on the same trusted local network as
-   Vision Pro. Allow Local Network access on both devices.
-3. In **Mac Movies** on Vision Pro, tap **Find Macs** and choose the Mac. Compare the six-digit code
-   with the Mac's Movie Sharing screen and confirm on both devices.
-4. Search and select a movie on Vision Pro. The existing player provides audio
-   and subtitle selection, seeking, stereo presentation, and resume positions.
-
-The folder is configuration, not the playback selection: no movie needs to be
-opened or selected on the Mac. Only MV-HEVC and supported full SBS/OU HEVC stereo
-formats play; other completed movie files show the existing unsupported-format
-message. Blu-ray 3D ISOs in a shared folder appear separately as live titles; see
-[Live Blu-ray 3D titles](#live-blu-ray-3d-titles).
-
-Movie sharing advertises `_bdtoavp-movies._tcp` independently of playback. Approved
-folders use security-scoped bookmarks. Scans skip symlinks, hidden files, and package
-contents, and stop after 500 movies, five directory levels, 10,000 entries, or a
-five-second scan budget. An unavailable drive is reported per folder. Refresh
-rescans the folders; folder changes or stopping sharing revoke active sessions.
-
-The Mac identity, approved device public keys, and each Vision Pro connection's
-private key and pinned Mac key live in a nonsynchronizing Keychain item. Access or
-decoding errors never silently reset trust. Reconnection proves possession against
-a fresh challenge; recognizing a public key alone grants no movie access. **Forget**
-removes trust, including when the Mac is offline. Forget on the Mac revokes the
-device's active sessions immediately. A session lasts at most 24 hours.
-
-Each movie has an opaque ID and a metadata revision. Signed requests bind the exact
-revision, 64-bit offset, and count; each response authenticates the request nonce,
-status, and full body before AVFoundation receives bytes. Ranges are at most 1 MiB.
-The host opens files relative to the approved directory descriptor with `openat`
-and `O_NOFOLLOW`, validates regular-file identity and metadata before and after
-reading, and refuses changed sources. Revision checks detect ordinary replacement
-and editing; they are not immutable filesystem snapshots. Resume records include
-the revision so changed files cannot inherit a stale position.
-
-Completed movies use `AVAssetResourceLoaderDelegate` directly. That route supports
-progressive movie files; the EVENT-HLS media-segment restriction described below
-does not apply to these completed files. Loading cancels with playback and bounds
-concurrency and buffered data. HTTP provides authenticated integrity, not media
-confidentiality. This initial private beta is for a trusted LAN; it does not wake
-the Mac or run a background sharing daemon.
-
-### Live Blu-ray 3D titles
-
-A shared folder's `.iso` files are listed under **Blu-ray 3D Discs (Live)**. They come
-from the catalog's additive `liveTitles` list, which older players ignore, and never
-appear among completed movies. A row shows **Checking on the Mac…** while the Mac
-inspects the disc in the background; the player refreshes the catalog every 3 seconds
-for up to 2 minutes while any title is checking, and stops on disconnect, rediscovery,
-or leaving the library. An ineligible title shows the Mac's reason and cannot start.
-
-Choosing an eligible title starts it with the first audio track in the headset's most
-preferred language that the title has, or the disc's first track when none matches.
-The Mac carries the title's other supported tracks too, so the audio list offers every
-track and switching keeps the playhead; see [Live HLS Service](live-hls-service.md#alternate-audio).
-Live titles carry no subtitles yet, and the subtitle list says so:
-
-1. The player creates a start ID and sends `POST /movies/v1/live/start`, signed with
-   the movie session at `issuedAt`, the signed time of that first request. A retry
-   after a lost answer repeats the same body with a fresh signature; the Mac answers a
-   repeated start ID with its recorded outcome.
-2. The signed 202 carries the stream ID. The player polls the parent-signed live
-   status once a second until the stream is `live`, showing **The Mac is busy
-   converting; playback may pause.** while a conversion runs. A Mac failure such as
-   its 45-second ready deadline shows the Mac's reason. The player gives up 120 seconds
-   after sending the start.
-3. The player derives the stream session with `liveStreamSession(streamID:)` and plays
-   the stream's relay routes at the Mac's address. Every playlist, snapshot, segment,
-   position, and cancel request is signed with that stream session and carries its
-   media capability; the parent session signs only `/movies/v1/...` routes. The
-   one-second snapshot refresh also reports the playhead to
-   `POST /relay/v1/control/position`, and a pause or seek reports it at once. Live
-   items use a 20-second forward buffer. A live title cannot resume yet, because the
-   Mac can only start the stream from the beginning. The player still records how far
-   the wearer got, and when they open the title again it says that playback starts
-   from the beginning and where they stopped, instead of silently starting over.
-
-Cleanup is owned by the start until the player installs the stream, then by the
-playback. It runs detached, with a fresh signature on every attempt and retries after
-0.5, 1, 2, and 4 seconds, then every 4 seconds. The route depends on what the player
-knows:
-
-- With the stream ID: the stream's own `POST /relay/v1/control/cancel`. It works after
-  any length of playback; a signed 204 or a signed `stream_ended` both mean done. Done,
-  teardown, a failed or superseded preparation, a stream failure, and the client
-  timeout after a status all use it.
-- Without the stream ID, within 40 seconds of `issuedAt`: `POST /movies/v1/live/cancel`
-  by start ID. An acknowledged cancel means that start is never admitted.
-- Without the stream ID after that, or when the start-ID cancel answers `expired`:
-  `POST /movies/v1/live/release`, repeated until `issuedAt + 75 s` or until the Mac says
-  it drained that exact start. No start for the identity can be admitted after 70 s.
-
-The Mac's idle lease, 120 seconds before the first relay request and 60 seconds after,
-stops anything every cleanup attempt missed.
-
-A signed 410 or 503 carrying `RelayLiveStreamEnded` ends playback with "Live playback
-stopped on the Mac: <reason>", using the reason from the Mac's live status when it has
-one; it never asks to pair again. Only an unsigned, empty 401, meaning the Mac no longer
-knows the session, shows the pair-again message. The loopback bridge turns every
-upstream failure into a bare 503, so termination is decided by the verified snapshot
-refresh, not by AVPlayer's media errors.
-
-#### Live qualification on device
-
-A `BD_TO_AVP_QUALIFICATION` build runs a scripted live session when launched with
-`BD_TO_AVP_LIVE_QUALIFICATION_MAC` (the Mac's Bonjour name) and
-`BD_TO_AVP_LIVE_QUALIFICATION_TITLE` (the ISO file name or title). It connects with the
-remembered pairing, waits for the title to become eligible, plays it with its default
-audio for 600 seconds (override with `BD_TO_AVP_LIVE_QUALIFICATION_PLAY_SECONDS`), then
-pauses and resumes, seeks back to a retained position, seeks to an evicted position, and
-finishes with Done. It writes `RELAY_QUALIFICATION LIVE t=<seconds>` lines with a
-monotonic clock: `live_start_sent`, `status_live`, `first_frame`, `rebuffer_start`,
-`rebuffer_end`, periodic `sample` lines with the playhead and live edge,
-`seek_backward_result`, `seek_evicted_result`, and `cancel_acknowledged`. Release builds
-do not compile the driver.
-
-### Local development folder
-
-The local repository config can remember the operator's movie folder without
-committing a machine-specific path:
-
-```sh
-git config --local bdtoavp.movieSharingRoot /absolute/path/to/completed-movies
-git config --local --get bdtoavp.movieSharingRoot
-```
-
-This hint is shared by the repository's linked worktrees and is not pushed to
-GitHub. Select that folder through **Add Folder…** in the Mac app to grant access;
-the app retains its own bookmark. Do not copy personal movie files into test
-fixtures or enable sharing silently from repository configuration.
 
 ## Private internal TestFlight delivery
 
@@ -178,7 +34,7 @@ The visionOS bundle is `com.shinycomputers.bd-to-avp.player`, using team
 
 The public app name is separate from its established engineering identity. Keep
 the bundle ID, Xcode target/module, repository and package names, saved-data paths,
-Keychain identities, URL schemes and Bonjour service types stable when changing
+Keychain identities and URL schemes stable when changing
 public branding. Update the App Store name, `CFBundleDisplayName`, `CFBundleName`,
 visible UI/permission strings, current beta notes and privacy policy together.
 Changing bundled branding requires a new build number and upload; editing only
@@ -186,8 +42,8 @@ the App Store name does not update an installed binary. See
 [Apple's display-name instructions](https://developer.apple.com/library/archive/qa/qa1823/_index.html).
 
 **AVP Internal** is the owner-only group; automatic distribution remains off.
-The player uses only Apple's built-in cryptographic implementations for pairing
-and authentication; its plist declares no non-exempt encryption. Reassess that
+The player uses no cryptography beyond what Apple's system frameworks provide; its
+plist declares no non-exempt encryption. Reassess that
 configuration if cryptographic dependencies or capabilities change.
 
 Use an Xcode release currently accepted by App Store Connect, verified against
@@ -297,12 +153,9 @@ Reviewers can test the standalone player without an account, Mac, or downloaded
 movie: choose **On My Vision Pro** in the sidebar, then **Start SBS Check** and
 **Start Over-Under Check**. Both bundled synthetic samples are 45 seconds long and
 silent. **Add Location** in the sidebar opens the system folder picker for a
-folder or network share holding the reviewer's own supported movies. **Mac Movies** requires the full **3D Blu-ray to Vision Pro**
-Mac app with Movie Sharing, one-time folder approval and pairing on the same
-trusted LAN. The [Movie Sharing quick start](movie-sharing-beta.md) explains installation,
-the Stable and optional Beta updater routes and the initial stereo checks. Include the matching
-signed Mac release link in TestFlight's beta description and review notes once
-it is published; a developer's local Current build is not a public Mac release.
+folder or network share holding the reviewer's own supported movies. Include the
+matching signed Mac release link in TestFlight's beta description and review notes
+once it is published; a developer's local Current build is not a public Mac release.
 
 ### Point the TestFlight text at each new Mac Beta
 
@@ -334,186 +187,6 @@ break it. Use the same URL in TestFlight metadata. Update the
 [policy](visionos-player-privacy.md) and its link together when data handling
 changes. Apple requires an accessible policy in the app and its metadata under
 [the App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/#privacy).
-
-## Live Relay qualification
-
-Relay sessions are source-agnostic: the wire contract carries session,
-playlist, media, and playback state without MakeMKV-, SSIF-, AACS-, BD+-, or
-encryption-specific fields. Pairing derives directional request keys and a
-separate media capability. Every protected request binds the actual HTTP method,
-raw request target, body, timestamp, and fresh nonce; replayed, expired,
-reflected, unpaired, and capability-free requests fail closed.
-
-The pairing transcript commits the server nonce before the client contribution,
-then derives the numeric-comparison code under a dedicated HKDF domain after
-the nonce is revealed and verified. One provisional candidate is retained for
-five minutes from the pairing request, independently of the discovery challenge;
-Vision Pro's authenticated confirmation and the exact candidate's
-Mac approval are both required before protected routes open. A competing client
-cannot displace the displayed candidate, stale UI approvals are rejected by
-candidate ID, and three rejected candidates require a new relay. The player
-serves the playlist, initialization map, and media segments through a device-only
-HTTP listener bound to `127.0.0.1`, with a random per-playback URL capability.
-Every upstream request is signed and each complete response is authenticated
-before the bridge serves any bytes, including byte-range responses. The bridge
-restricts routes to playback media, bounds concurrent connections, and cancels
-its listener and requests when playback ends. AVFoundation requires HTTP media
-segment loading; supplying fMP4 bytes through a custom-scheme resource loader
-fails with `CoreMediaErrorDomain -12881`.
-An expired comparison clears automatically on Vision Pro. Discovery stops with
-recovery instructions after 15 seconds without a Mac. The Mac offers **Restart
-Relay** using the selected fixture after its ten-minute advertising window ends;
-a comparison already in progress retains its full five minutes.
-A previously established client can reconnect while its session remains
-unexpired.
-
-`uv run python scripts/create_event_hls_mv_hevc_fixture.py` generates the
-deterministic six-second fixture and checks stereo metadata, AAC tracks, and
-actual macOS AVFoundation playback through the production loopback bridge. The
-acceptance helper requires decoded frames and playback through the final
-segment before publishing the fixture. This local gate does not establish
-physical Vision Pro stereo presentation, audio sync, or interaction qualification.
-
-The current local-network transport provides authenticated integrity and replay
-protection, not confidentiality: HTTP media bodies and the short-lived media
-capability are visible to an on-path LAN observer. This is an explicit limit of
-the synthetic/decrypted relay slice. Any adapter carrying content whose threat
-model requires confidentiality must add a separately reviewed encrypted
-transport without weakening the existing request authentication.
-
-The fixture host preserves `#EXT-X-ENDLIST`, so a completed fixture stays
-completed when relayed instead of waiting indefinitely for more live segments.
-The served playlist has no `EXT-X-PLAYLIST-TYPE` tag even though the fixture
-file is an EVENT playlist, because the relay's retained window evicts older
-segments and an EVENT playlist must never remove any.
-The Mac retains a ten-second request deadline, then sends responses in 64 KiB
-chunks with a ten-second progress timeout and a sixty-second total response cap.
-This lets active segment transfers outlive the request deadline while still
-closing stalled clients. The player's loopback request cap remains thirty seconds.
-The Mac listener uses BSD sockets and DNS-SD Bonjour registration. On the physical
-reference setup, identical files transferred in 0.10–0.17 seconds through a
-standard socket server but took 22–44 seconds through the Network-framework
-server, including a minimal reproduction without relay authentication. Waiting
-for peer close and changing TCP options did not eliminate the delay. Authentication,
-LAN peer checks, the sixteen-connection cap, and cancellation remain above the
-socket transport. Shutdown interrupts blocked I/O; descriptor closure is serialized
-after that I/O returns.
-
-Candidate lifetime validation permits a server clock up to five seconds ahead,
-matching the default signed-request skew allowance. The server still expires the
-candidate at five minutes. Without that tolerance, a fast pairing response and
-even a 100 ms clock difference could reject a valid full-length candidate.
-
-The authenticated playlist snapshot supplies the retained window. The player
-refreshes that window during playback, moves the scrubber floor forward when
-history is evicted, and explains when a requested seek is before retained
-history or ahead of produced media. Session expiry and unpaired responses stop
-remote playback and require a fresh pairing.
-
-## Mac-driven relay qualification
-
-A build compiled with `BD_TO_AVP_QUALIFICATION` can perform relay setup without
-headset UI interaction. Build and install the qualification player as described
-in `visionos-sustained-playback-qualification.md`, start a fixture relay on the
-Mac, then launch the player with the exact Bonjour display name:
-
-```sh
-xcrun devicectl device process launch --device "$DEVICE_ID" \
-  --terminate-existing --console \
-  --environment-variables '{"BD_TO_AVP_RELAY_QUALIFICATION_SERVER":"YOUR_MAC_NAME"}' \
-  com.shinycomputers.bd-to-avp.player
-```
-
-The driver uses the production Bonjour browser, pairing coordinator, and relay
-player. It prints `RELAY_QUALIFICATION comparison_code=...` and confirms on
-Vision Pro. Compare the printed code with the Mac's visible code, then approve
-**Codes Match** on the Mac. Only matching confirmation on both sides opens
-media access. The driver waits at most four minutes for Mac approval, prepares
-playback, and observes the complete finalized fixture (two to thirty seconds).
-If readiness misses thirty seconds, it records a failed startup target and
-continues observing for up to ninety more seconds. It also samples decoded
-pixel buffers once ready and requires a sample in each two-second interval plus
-a sample within 250 ms of the end. Readiness and first-decoded-frame timing are
-reported separately against the thirty-second startup target. These are sampled
-decode checks, not proof that every frame or both eyes were rendered. Later
-readiness does not waive the startup target; physical presentation still needs
-the wearer report.
-It does not run unless both the compilation condition and explicit server-name
-environment variable are present. Normal builds contain no driver.
-
-Add `BD_TO_AVP_RELAY_TRANSFER_PROBE=1` to the launch environment to download up
-to three retained segments through the authenticated client without AVPlayer.
-This probe disables transient retries and reports transfer and verification
-durations separately. It does not establish playback acceptance.
-
-Add `BD_TO_AVP_RELAY_CONTROL_PROBE=1` instead to check pause, retained backward
-seek, resume, and same-session reconnect after playback observation. The reconnect
-probe injects the network-path notification but performs a real authenticated
-request; it does not physically disconnect Wi-Fi. The probe finishes playback,
-disconnects the coordinator, and checks that the loopback listener is unreachable.
-It requires a fixture at least five seconds long and returns to the library.
-
-This is programmatic device qualification, not UI acceptance or proof of stereo
-presentation or audio sync. The ordinary pairing UI and physical
-presentation still need their own checks. Physical native visionOS XCTest UI
-startup timed out while enabling automation on September 7; simulator UI success
-must not be treated as physical-device automation support.
-
-For a longer wearer acceptance run, generate a separate fixture:
-
-```sh
-BD_TO_AVP_FFMPEG_PATH=/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg \
-BD_TO_AVP_FFPROBE_PATH=/opt/homebrew/opt/ffmpeg-full/bin/ffprobe \
-uv run python scripts/create_event_hls_mv_hevc_fixture.py \
-  ~/Downloads/BDToAVP-Relay-Acceptance --acceptance
-```
-
-Use an FFmpeg build with `drawtext` support; the example selects Homebrew
-`ffmpeg-full`, when installed.
-
-This opt-in profile lasts 24 seconds, fitting the existing twelve-segment relay
-retention limit. The default six-second fixture remains unchanged. The acceptance
-profile adds an elapsed clock, per-eye identity labels, and a small white SYNC
-patch with a simultaneous 100 ms beep every two seconds starting at two seconds.
-The depth geometry stays the same: blue behind, green at screen depth, red in
-front. Check each eye separately for its label, then both eyes for comfortable
-depth; both labels visible together alone do not prove correct eye routing.
-
-First let the automatic timeline probe finish without pausing or seeking. For
-the wearer pass, replay and confirm flash/beep alignment before and after using
-the ordinary pause/resume and backward-seek controls. Record the app commit,
-fixture hashes, device, first-frame time, and the wearer's actual observations.
-Generation decodes all eleven flash/beep pairs and rejects offsets greater than
-one 30 fps frame. Video composition offsets are normalized before fragmentation
-to preserve the source timeline. This file check covers base-view cues; it does
-not establish headset presentation timing or correct eye routing.
-
-Keep actual interruption evidence separate from injected events: test active
-Mac cancellation and app quit, then device-side network interruption/reconnect
-when the wearer is ready. Record listener and player cleanup. Do not change the
-Mac's network settings to run this check. Fixture playback does not prove live
-source child-process cleanup, producer throughput, or full-title playback; those
-remain in #713 and #719.
-
-Set `BD_TO_AVP_RELAY_INTERRUPTION_PROBE=1` alongside the qualification server
-variable to wait after the first decoded frame for an actual external
-interruption. The probe checks failed playback, removal of the player item,
-retained relay retry identity, and an unreachable former loopback URL. It does
-not itself toggle networking or cancel the Mac session.
-
-Relay interruption handling keeps playback ownership separate from pairing.
-Terminal session/authentication failures release the player item, loopback
-listener, observers, and refresh task before showing the error. Three consecutive
-failed snapshot refreshes also release playback resources; successful refreshes
-reset that count. This is a request-count bound, with transport timeouts still
-applying, rather than a promise of three seconds.
-
-A device network outage releases playback resources while retaining the unexpired
-pairing. Once connectivity returns, the coordinator verifies the same session
-with a signed request; use Retry to resume relay playback. If the Mac cancels or
-quits, bounded reconnect attempts end with an honest failure. A session or
-authentication rejection requires pairing again. Failed relay playback keeps its
-relay identity so Retry cannot accidentally enter the local-file flow.
 
 ## Locations
 
@@ -634,16 +307,9 @@ of process and never reports where the wearer looks, so the app's own state
 stays faded until an interaction or pinching the video surface reveals the
 controls again.
 
-The MV-HEVC scrub bar spans the title's full length from the first frame and
-shows the range that can be played right now as a lighter band. A completed
-movie's length comes from the movie itself, and the band is the player's
-buffered range around the playhead. A live title's length comes from the Mac's
-live title index (`durationSeconds`), and the band is the retained live window.
-Its end time stays fixed while the stream loads, and the real length replaces it
-once the stream is finalized. When the Mac has not reported a length, the bar
-grows with the stream as before. A seek outside the band keeps the existing
-notices: before the window, playback continues at its start; past the live edge,
-playback moves to the latest available time and says how far the relay reaches.
+The MV-HEVC scrub bar spans the movie's full length from the first frame and
+shows the range that can be played right now as a lighter band: the player's
+buffered range around the playhead.
 
 The MV-HEVC audio language and subtitle lists open at the bottom of the window,
 just in front of the video and directly above the controls, so they read as part of
@@ -731,9 +397,7 @@ native playback action labeled Normal or Reversed.
 
 Files-provider sources may be backed by SMB or other network storage, but the app
 does not implement direct `smb://` transport, offline pinning,
-provider-specific progress percentages, raw MVC playback, or source-side live
-conversion. Live Relay is limited to the authenticated EVENT-HLS contract; disc
-reading and just-in-time source production remain separate Mac-side work.
+or provider-specific progress percentages.
 
 ### Lost and slow share connections
 
@@ -830,7 +494,7 @@ libbluray 1.4.1 and libudfread 1.2.0, both LGPL-2.1-or-later, are linked as sepa
 dynamic frameworks in `macos/Vendor/libbluray.xcframework` and
 `macos/Vendor/libudfread.xcframework`. Each framework carries its `COPYING` text. They
 are built from the same pinned source archives as the Mac's `bd3d_reader`, recorded in
-`vendor/ssif-probe-macos-arm64.toml` and kept in `bd_to_avp/resources/notices/ssif-probe`.
+`vendor/bluray-reader-macos-arm64.toml` and kept in `bd_to_avp/resources/notices/bluray-reader`.
 Rebuild or verify them with:
 
 ```sh

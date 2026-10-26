@@ -33,31 +33,18 @@ enum PlaybackSeekPolicy {
     }
 }
 
-/// The scrub bar's span and its loaded range. The span is the title's full length whenever that
-/// is known up front, so the bar does not grow while a live stream or a movie loads; the loaded
-/// range shows how far playback can seek right now.
+/// The scrub bar's span and its loaded range; the loaded range shows how far playback can seek
+/// right now.
 struct PlaybackTimeline: Equatable {
     let duration: TimeInterval
     let loadedStart: TimeInterval
     let loadedEnd: TimeInterval
 
     /// - Parameters:
-    ///   - titleDuration: The title's full length as the source reports it before playback,
-    ///     such as the Mac's live title index. Ignored once `isFinal` reports the real length.
     ///   - playerDuration: The length the player knows so far.
     ///   - loadedRange: What can be played right now, or nil when that is the whole timeline.
-    ///   - isFinal: Whether the source has reported its complete length.
-    init(
-        titleDuration: TimeInterval?,
-        playerDuration: TimeInterval,
-        loadedRange: ClosedRange<TimeInterval>?,
-        isFinal: Bool = false
-    ) {
-        let candidates = [
-            isFinal ? nil : titleDuration,
-            playerDuration,
-            loadedRange?.upperBound,
-        ]
+    init(playerDuration: TimeInterval, loadedRange: ClosedRange<TimeInterval>?) {
+        let candidates = [playerDuration, loadedRange?.upperBound]
         let span = candidates
             .compactMap { $0 }
             .filter { $0.isFinite && $0 > 0 }
@@ -588,15 +575,6 @@ struct PlaybackFailurePresentation: Equatable {
         )
     }
 
-    static func relayPreparationFailed(_ message: String) -> PlaybackFailurePresentation {
-        PlaybackFailurePresentation(
-            title: "Relay Playback Unavailable",
-            message: message,
-            canRetry: true,
-            canLocate: false
-        )
-    }
-
     static func builtInStereoCheckUnavailable(_ message: String) -> PlaybackFailurePresentation {
         PlaybackFailurePresentation(
             title: "Stereo Check Unavailable",
@@ -617,23 +595,12 @@ enum ResumeWritePolicy {
     static let completedPlaybackThreshold: TimeInterval = 5
     /// How often a position is saved while playing, so a forced quit loses only seconds.
     static let periodicSaveInterval: TimeInterval = 10
-    /// A live title watched for less than this is not worth mentioning when it starts over.
-    static let liveResumeNoticeMinimumPosition: TimeInterval = 30
 
     static func isPeriodicSaveDue(lastSaveUptime: TimeInterval?, now: TimeInterval) -> Bool {
         guard let lastSaveUptime else {
             return true
         }
         return now - lastSaveUptime >= periodicSaveInterval
-    }
-
-    /// What a live title says when the wearer comes back to it. Live titles can only start from
-    /// the beginning until the Mac can start the stream mid-title.
-    static func liveResumeNotice(savedPosition: TimeInterval) -> String? {
-        guard savedPosition.isFinite, savedPosition >= liveResumeNoticeMinimumPosition else {
-            return nil
-        }
-        return "Live titles can't resume yet, so this starts from the beginning. You stopped at \(PlaybackTimeFormatter.string(for: savedPosition))."
     }
 
     /// Where a Blu-ray 3D title starts: the saved position, which the reader reaches through the

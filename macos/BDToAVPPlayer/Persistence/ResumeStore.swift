@@ -65,16 +65,6 @@ final class ResumeStore {
         try persist()
     }
 
-    /// Carries a position saved under an older key over to `newID`, unless `newID` already has one.
-    func adoptPosition(from oldID: String, to newID: String) throws {
-        guard oldID != newID, entries[newID] == nil, let entry = entries[oldID] else {
-            return
-        }
-        entries[newID] = entry
-        entries.removeValue(forKey: oldID)
-        try persist()
-    }
-
     func remove(id: String) throws {
         entries.removeValue(forKey: id)
         try persist()

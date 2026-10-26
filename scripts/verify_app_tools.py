@@ -20,7 +20,6 @@ CORE_TOOLS = {
     "ffmpeg": ["-hide_banner", "-version"],
     "ffprobe": ["-hide_banner", "-version"],
     "MP4Box": ["-version"],
-    "ssif_probe": ["--version"],
     "bd3d_reader": ["--version"],
 }
 GUI_RUNTIME_TOOLS = {

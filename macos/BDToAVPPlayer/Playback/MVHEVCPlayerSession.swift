@@ -126,65 +126,6 @@ enum MVHEVCPlayerSessionState: Equatable {
     case failed
 }
 
-enum RelayPlaybackTerminationReason: Equatable {
-    case sessionEnded
-    case serverUnreachable
-    case rejected
-    /// The live stream stopped or failed on the Mac. The session stays valid.
-    case streamEnded
-}
-
-/// What `prepareRelayPlayback` did. Only `installed` hands the playback to the caller.
-enum RelayPlaybackPreparationOutcome: Equatable {
-    case installed
-    case failed(PlaybackFailurePresentation)
-    case superseded
-}
-
-/// The parts of a live ISO stream the player session needs beyond the relay configuration.
-struct RelayLivePlaybackContext: Sendable {
-    let title: String
-    let streamID: UUID
-    /// The title's full length from the Mac's live title index, when the Mac knows it.
-    let durationSeconds: TimeInterval?
-    /// Where the last position in this title is kept. A live title cannot resume yet, so the
-    /// position is only used to say so when the wearer comes back to it.
-    let resumeID: String?
-    /// The Mac's parent-signed live status, for the busy notice and why a stream ended.
-    let status: @Sendable () async -> LiveStreamStatus?
-    /// Called once when installed live playback is torn down for any reason (failure,
-    /// stream end, Done, replacement), so the owner of the stream's cleanup stops it.
-    let ended: @MainActor @Sendable () -> Void
-
-    init(
-        title: String,
-        streamID: UUID,
-        durationSeconds: TimeInterval? = nil,
-        resumeID: String? = nil,
-        status: @escaping @Sendable () async -> LiveStreamStatus?,
-        ended: @escaping @MainActor @Sendable () -> Void = {}
-    ) {
-        self.title = title
-        self.streamID = streamID
-        self.durationSeconds = durationSeconds
-        self.resumeID = resumeID
-        self.status = status
-        self.ended = ended
-    }
-}
-
-struct RelayPlaybackTerminationEvent: Equatable {
-    let id: UUID
-    let sessionID: String
-    let reason: RelayPlaybackTerminationReason
-
-    init(id: UUID = UUID(), sessionID: String, reason: RelayPlaybackTerminationReason) {
-        self.id = id
-        self.sessionID = sessionID
-        self.reason = reason
-    }
-}
-
 @MainActor
 final class MVHEVCPlayerSession: ObservableObject {
     let player = AVPlayer()
@@ -198,23 +139,14 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
-    /// The title's full length as reported before playback, for a live title whose stream is
-    /// still growing. Nil when the player's own duration is already the full length.
-    @Published private(set) var titleDuration: TimeInterval?
-    /// The player's buffered range around the playhead, for file and shared-movie playback.
+    /// The player's buffered range around the playhead.
     @Published private(set) var bufferedRange: ClosedRange<TimeInterval>?
-    @Published private(set) var seekNotice: String?
     @Published private(set) var audioOptions: [PlaybackMediaOption] = []
     @Published private(set) var subtitleOptions: [PlaybackMediaOption] = []
     @Published private(set) var selectedAudioID = ""
     @Published private(set) var selectedSubtitleID = "off"
     @Published private(set) var isEyeSwapped = false
     @Published private(set) var isChangingEyeOrder = false
-    @Published private(set) var relayTerminationEvent: RelayPlaybackTerminationEvent?
-    /// For live ISO playback, a notice such as the Mac being busy converting.
-    @Published private(set) var liveNotice: String?
-    /// Says why a title the wearer watched before starts from the beginning.
-    @Published private(set) var resumeNotice: String?
     /// Playback is waiting for more of the movie to load: a native Blu-ray 3D title's buffer ran
     /// dry, or `AVPlayer` stopped its clock to wait for data.
     @Published private(set) var isBuffering = false
@@ -225,8 +157,6 @@ final class MVHEVCPlayerSession: ObservableObject {
     /// Why the chosen Blu-ray 3D audio is not playing while the video plays on.
     @Published private(set) var audioWarning: String?
 
-    static let liveBusyNotice = "The Mac is busy converting; playback may pause."
-    static let liveForwardBufferDuration: TimeInterval = 20
     /// How far ahead a movie on a share is read, so a short drop in the connection never shows.
     static let shareForwardBufferDuration: TimeInterval = 20
 
@@ -243,14 +173,6 @@ final class MVHEVCPlayerSession: ObservableObject {
     /// Blu-ray 3D playback decoded on the headset, used instead of `player`.
     private var nativePlayback: NativeBlurayPlayback?
     private var nativeStatusTask: Task<Void, Never>?
-    private var remotePlaybackSource: RelayRemotePlaybackSource?
-    private var relayTransport: (any RelayTransport)?
-    private var relayWindowRefreshTask: Task<Void, Never>?
-    private var consecutiveRelayRefreshFailures = 0
-    private var liveContext: RelayLivePlaybackContext?
-    /// The live context whose playback is installed; its `ended` runs when that playback goes.
-    private var installedLiveContext: RelayLivePlaybackContext?
-    private var liveStatusRefreshCount = 0
     private var resumeStore: ResumeStore?
     /// The key the resume position is saved under, or nil when this playback keeps none.
     private var resumeID: String?
@@ -353,33 +275,15 @@ final class MVHEVCPlayerSession: ObservableObject {
         guard canControlPlayback else {
             return false
         }
-        if let remotePlaybackSource {
-            return remotePlaybackSource.retainedSeekPolicy.latestAvailableTime
-                > remotePlaybackSource.retainedSeekPolicy.earliestPlayableTime
-        }
         if nativePlayback != nil {
             return bufferedRange.map { $0.upperBound > $0.lowerBound } ?? false
         }
         return duration.isFinite && duration > 0
     }
 
-    var earliestSeekTime: TimeInterval {
-        remotePlaybackSource?.retainedSeekPolicy.earliestPlayableTime ?? 0
-    }
-
     /// The scrub bar's full span and the range that can be played right now.
     var timeline: PlaybackTimeline {
-        if let remotePlaybackSource {
-            let policy = remotePlaybackSource.retainedSeekPolicy
-            return PlaybackTimeline(
-                titleDuration: titleDuration,
-                playerDuration: duration,
-                loadedRange: policy.earliestPlayableTime ... max(policy.earliestPlayableTime, policy.latestAvailableTime),
-                isFinal: policy.window?.isFinalized == true
-            )
-        }
-        return PlaybackTimeline(
-            titleDuration: nil,
+        PlaybackTimeline(
             playerDuration: duration,
             loadedRange: bufferedRange ?? currentTime ... currentTime
         )
@@ -389,23 +293,14 @@ final class MVHEVCPlayerSession: ObservableObject {
         packedStereoSource != nil
     }
 
-    var isRelayPlayback: Bool {
-        mediaItem?.id.hasPrefix("relay:") == true
-    }
-
-    /// The live stream being played, if this relay playback is a live ISO title.
-    var liveStreamID: UUID? { liveContext?.streamID }
-
     func prepare(
         mediaItem: MediaItem,
         bookmarkStore: BookmarkStore,
-        resumeStore: ResumeStore,
-        sharedMovie: SharedMoviePlayback? = nil
+        resumeStore: ResumeStore
     ) async {
         preparationGeneration += 1
         let generation = preparationGeneration
         finishCurrentSession(persistResume: true)
-        liveContext = nil
 
         self.mediaItem = mediaItem
         if mediaItem.format != .mvHEVC {
@@ -416,12 +311,9 @@ final class MVHEVCPlayerSession: ObservableObject {
         state = .loading
         failureMessage = nil
         failurePresentation = nil
-        relayTerminationEvent = nil
-        seekNotice = nil
         preparationPhase = .openingSource
         currentTime = 0
         duration = 0
-        titleDuration = nil
         bufferedRange = nil
         audioOptions = []
         subtitleOptions = []
@@ -435,11 +327,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         qualificationRecorder?.recordPrepare(player: player)
 #endif
 
-        guard sharedMovie != nil || mediaItem.format != .unsupported else {
+        guard mediaItem.format != .unsupported else {
             presentFailure(.unsupported)
             return
         }
-        if sharedMovie == nil, mediaItem.format == .bluray3D {
+        if mediaItem.format == .bluray3D {
             await prepareNativeBluray(mediaItem, bookmarkStore: bookmarkStore, resumeStore: resumeStore, generation: generation)
             return
         }
@@ -449,47 +341,35 @@ final class MVHEVCPlayerSession: ObservableObject {
         let makeAsset: () -> AVURLAsset
         var openedConnection: ShareConnectionMonitor?
         do {
-            if let sharedMovie {
-                let loader = try MovieResourceLoader(movie: sharedMovie.movie) { offset, count in
-                    try await sharedMovie.read(sharedMovie.movie, offset, count)
-                }
-                makeAsset = { loader.makeAsset() }
-                asset = makeAsset()
-                openedLease = SecurityScopedResourceLease(url: asset.url, startAccessing: { true }, stopAccessing: {
-                    asset.cancelLoading()
-                    loader.cancel()
-                })
-            } else {
-                let bookmarkLease = try await bookmarkStore.open(id: mediaItem.id)
-                let url = bookmarkLease.url
-                // Held before anything touches the share, so leaving the player can stop it.
-                let connection = ShareConnectionMonitor.forMovie(at: url)
-                watchShareConnection(connection, generation: generation)
-                let shareLoader: ShareFileResourceLoader?
-                do {
-                    shareLoader = try await Task.detached(priority: .userInitiated) {
-                        try connection.map { connection in
-                            connection.watchNetworkIfRemote(url)
-                            return try ShareFileResourceLoader(url: url, connection: connection)
-                        }
-                    }.value
-                } catch {
-                    bookmarkLease.close()
-                    throw error
-                }
-                if let shareLoader {
-                    makeAsset = { shareLoader.makeAsset() }
-                    openedLease = SecurityScopedResourceLease(url: url, startAccessing: { true }, stopAccessing: {
-                        shareLoader.cancel()
-                        bookmarkLease.close()
-                    })
-                    openedConnection = shareLoader.connection
-                } else {
-                    makeAsset = { AVURLAsset(url: url) }
-                    openedLease = bookmarkLease
-                }
-                asset = makeAsset()
+            let bookmarkLease = try await bookmarkStore.open(id: mediaItem.id)
+            let url = bookmarkLease.url
+            // Held before anything touches the share, so leaving the player can stop it.
+            let connection = ShareConnectionMonitor.forMovie(at: url)
+            watchShareConnection(connection, generation: generation)
+            let shareLoader: ShareFileResourceLoader?
+            do {
+                shareLoader = try await Task.detached(priority: .userInitiated) {
+                    try connection.map { connection in
+                        connection.watchNetworkIfRemote(url)
+                        return try ShareFileResourceLoader(url: url, connection: connection)
+                    }
+                }.value
+            } catch {
+                bookmarkLease.close()
+                throw error
             }
+            if let shareLoader {
+                makeAsset = { shareLoader.makeAsset() }
+                openedLease = SecurityScopedResourceLease(url: url, startAccessing: { true }, stopAccessing: {
+                    shareLoader.cancel()
+                    bookmarkLease.close()
+                })
+                openedConnection = shareLoader.connection
+            } else {
+                makeAsset = { AVURLAsset(url: url) }
+                openedLease = bookmarkLease
+            }
+            asset = makeAsset()
         } catch {
             guard generation == preparationGeneration, !Task.isCancelled else {
                 return
@@ -514,14 +394,7 @@ final class MVHEVCPlayerSession: ObservableObject {
                 openedLease.close()
                 return
             }
-            let mediaItem = sharedMovie.map {
-                MediaItem(id: $0.movie.resumeID, title: $0.movie.title, fileName: $0.movie.fileName, format: detectedFormat)
-            } ?? mediaItem
-            self.mediaItem = mediaItem
             resumeID = mediaItem.id
-            if let sharedMovie {
-                try? resumeStore.adoptPosition(from: sharedMovie.movie.legacyResumeID, to: sharedMovie.movie.resumeID)
-            }
             guard detectedFormat != .unsupported else {
                 resourceLease = nil
                 openedLease.close()
@@ -605,163 +478,6 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
     }
 
-    @discardableResult
-    func prepareRelayPlayback(
-        _ configuration: RelayRemotePlaybackConfiguration,
-        live: RelayLivePlaybackContext? = nil,
-        resumeStore liveResumeStore: ResumeStore? = nil
-    ) async -> RelayPlaybackPreparationOutcome {
-        preparationGeneration += 1
-        let generation = preparationGeneration
-        finishCurrentSession(persistResume: true)
-
-        // A live stream's session ID is its stream ID, so the item identity names the stream.
-        let relayItem = MediaItem(
-            id: "relay:\(configuration.session.sessionID.rawValue)",
-            title: live?.title ?? "\(configuration.serverName) Live Relay",
-            fileName: "live.m3u8",
-            format: .mvHEVC
-        )
-        liveContext = live
-        mediaItem = relayItem
-        resumeID = live?.resumeID
-        resumeStore = resumeID == nil ? nil : liveResumeStore
-        resumeNotice = resumeID
-            .flatMap { liveResumeStore?.resumeTime(for: $0) }
-            .flatMap(ResumeWritePolicy.liveResumeNotice(savedPosition:))
-        state = .loading
-        failureMessage = nil
-        failurePresentation = nil
-        relayTerminationEvent = nil
-        seekNotice = nil
-        preparationPhase = .preparingMedia
-        currentTime = 0
-        duration = 0
-        titleDuration = nil
-        bufferedRange = nil
-        audioOptions = []
-        subtitleOptions = []
-        selectedAudioID = ""
-        selectedSubtitleID = "off"
-        isEyeSwapped = false
-        isChangingEyeOrder = false
-        playbackIntent.requestPlayback()
-
-        do {
-            var source = try RelayRemotePlaybackSource(
-                session: configuration.session,
-                serverBaseURL: configuration.serverBaseURL
-            )
-            var sourceInstalled = false
-            defer { if !sourceInstalled { source.cancelLoader() } }
-            try await source.refreshRetainedWindow(transport: configuration.transport)
-            let (asset, _) = try await source.makeAssetAndLoader(transport: configuration.transport)
-            let item = AVPlayerItem(asset: asset)
-            if live != nil {
-                // The Mac paces production to the reported playhead; a modest forward buffer
-                // keeps AVPlayer from racing to the live edge.
-                item.preferredForwardBufferDuration = Self.liveForwardBufferDuration
-            }
-            let preparedSelections = try await prepareMediaSelections(for: asset, item: item)
-            guard generation == preparationGeneration, !Task.isCancelled else {
-                source.cancelLoader()
-                return .superseded
-            }
-
-            sourceInstalled = true
-            packedStereoSource = nil
-            configureMediaSelections(preparedSelections)
-            installRelayPlaybackResources(
-                source: source,
-                transport: configuration.transport,
-                item: item,
-                mediaItem: relayItem
-            )
-            return .installed
-        } catch is CancellationError {
-            if generation == preparationGeneration {
-                pendingResume.clear()
-            }
-            return .superseded
-        } catch {
-            guard generation == preparationGeneration else {
-                return .superseded
-            }
-            let presentation = PlaybackFailurePresentation.relayPreparationFailed(
-                await relayFailureMessage(for: error, generation: generation)
-            )
-            guard generation == preparationGeneration else {
-                return .superseded
-            }
-            terminateRelayPlayback(
-                presentation: presentation,
-                reason: Self.relayTerminationReason(for: error),
-                emitEvent: true
-            )
-            return .failed(presentation)
-        }
-    }
-
-    /// The message for a relay failure. A live stream that ended shows the Mac's reason, never
-    /// a request to pair again; only a revoked session asks for that.
-    private func relayFailureMessage(for error: Error, generation: Int) async -> String {
-        switch error {
-        case RelayTransportError.sessionRevoked, RelayTransportError.sessionExpired, RelayTransportError.unpaired:
-            return Self.sessionEndedMessage
-        case let RelayTransportError.streamEnded(code, message):
-            let status = await liveContext?.status()
-            let reason = status?.failure?.message ?? message ?? Self.liveStopDescription(status?.stopReason ?? code)
-            return "Live playback stopped on the Mac: \(reason)"
-        default:
-            return Self.playbackFailureMessage(for: error)
-        }
-    }
-
-    static let sessionEndedMessage = "The relay session ended. Pair with the Mac again to continue."
-
-    static func liveStopDescription(_ code: String) -> String {
-        switch code {
-        case "viewerStopped": "playback was stopped."
-        case "replaced": "another live title started."
-        case "cancelled": "the start was cancelled."
-        case "sessionEnded": "this Vision Pro's access ended."
-        case "idle": "the stream was idle too long."
-        case "sharingStopped": "Movie Sharing was turned off."
-        case "appQuit": "the Mac app quit."
-        case "sourceChanged": "the disc image changed or is no longer available."
-        case RelayLiveStreamEnded.notCurrentCode: "this stream is no longer current."
-        case "live_start_timeout": "the stream did not start in time."
-        default: code
-        }
-    }
-
-    func installRelayPlaybackResources(
-        source: RelayRemotePlaybackSource,
-        transport: any RelayTransport,
-        item: AVPlayerItem,
-        mediaItem: MediaItem,
-        observeItemStatus: Bool = true,
-        startRefreshLoop: Bool = true,
-        live: RelayLivePlaybackContext? = nil
-    ) {
-        self.mediaItem = mediaItem
-        if let live { liveContext = live }
-        installedLiveContext = liveContext
-        titleDuration = liveContext?.durationSeconds.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
-        remotePlaybackSource = source
-        relayTransport = transport
-        playerItem = item
-        state = .loading
-        consecutiveRelayRefreshFailures = 0
-        if observeItemStatus {
-            observe(item, generation: preparationGeneration)
-        }
-        player.replaceCurrentItem(with: item)
-        if startRefreshLoop {
-            startRelayWindowRefresh(generation: preparationGeneration)
-        }
-    }
-
     func installPlayerComponent() {
         if let nativePlayback {
             guard playerEntity.components[VideoPlayerComponent.self] == nil else { return }
@@ -822,7 +538,6 @@ final class MVHEVCPlayerSession: ObservableObject {
             player.pause()
         }
         persistResume()
-        reportLivePositionNow()
     }
 
     func togglePlayback() {
@@ -847,28 +562,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
 
         let generation = preparationGeneration
-        let adjustedRequestedTime: TimeInterval
-        if origin == .user, let remotePlaybackSource {
-            switch remotePlaybackSource.retainedSeekPolicy.validateSeek(to: requestedTime) {
-            case .playable:
-                seekNotice = nil
-                adjustedRequestedTime = requestedTime
-            case let .beforeRetainedHistory(earliestPlayableTime):
-                seekNotice = "That part of the live relay is no longer retained. Continuing at \(PlaybackTimeFormatter.string(for: earliestPlayableTime))."
-                adjustedRequestedTime = earliestPlayableTime
-            case let .notYetAvailable(latestAvailableTime):
-                seekNotice = "The live relay is available through \(PlaybackTimeFormatter.string(for: latestAvailableTime))."
-                adjustedRequestedTime = max(earliestSeekTime, latestAvailableTime - 0.001)
-            case let .ended(finalDuration):
-                seekNotice = nil
-                adjustedRequestedTime = min(requestedTime, finalDuration)
-            case .invalidTime:
-                return
-            }
-        } else {
-            adjustedRequestedTime = requestedTime
-        }
-        let targetTime = PlaybackSeekPolicy.clampedTime(adjustedRequestedTime, duration: duration)
+        let targetTime = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
         if origin == .user {
             guard canSeek else {
                 return
@@ -900,7 +594,6 @@ final class MVHEVCPlayerSession: ObservableObject {
                 }
                 if completed {
                     self.currentTime = targetTime
-                    self.reportLivePositionNow()
                 }
 #if BD_TO_AVP_QUALIFICATION
                 if completed {
@@ -1110,14 +803,12 @@ final class MVHEVCPlayerSession: ObservableObject {
     func finish() {
         preparationGeneration += 1
         finishCurrentSession(persistResume: true)
-        liveContext = nil
         mediaItem = nil
         resumeStore = nil
         resumeID = nil
         state = .idle
         failureMessage = nil
         failurePresentation = nil
-        relayTerminationEvent = nil
         preparationPhase = .openingSource
     }
 
@@ -1239,7 +930,6 @@ final class MVHEVCPlayerSession: ObservableObject {
         guard let nativePlayback, canSeek else { return }
         let target = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
         nativePlayback.seek(to: target)
-        seekNotice = nil
         currentTime = target
     }
 
@@ -1315,16 +1005,14 @@ final class MVHEVCPlayerSession: ObservableObject {
                 {
                     self.persistResume()
                 }
-                if self.remotePlaybackSource == nil {
-                    let loadedRanges = item.loadedTimeRanges.compactMap { value -> ClosedRange<TimeInterval>? in
-                        let range = value.timeRangeValue
-                        let start = range.start.seconds
-                        let end = range.end.seconds
-                        guard start.isFinite, end.isFinite, end >= start else { return nil }
-                        return start ... end
-                    }
-                    self.bufferedRange = PlaybackTimeline.bufferedRange(containing: self.currentTime, in: loadedRanges)
+                let loadedRanges = item.loadedTimeRanges.compactMap { value -> ClosedRange<TimeInterval>? in
+                    let range = value.timeRangeValue
+                    let start = range.start.seconds
+                    let end = range.end.seconds
+                    guard start.isFinite, end.isFinite, end >= start else { return nil }
+                    return start ... end
                 }
+                self.bufferedRange = PlaybackTimeline.bufferedRange(containing: self.currentTime, in: loadedRanges)
 #if BD_TO_AVP_QUALIFICATION
                 self.qualificationRecorder?.recordSampleIfNeeded(
                     player: self.player,
@@ -1437,26 +1125,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
         case .failed:
             let message = Self.playbackFailureMessage(for: item.error)
-            if isRelayPlayback, liveContext != nil {
-                // AVPlayer only sees the loopback bridge's flattened 503. Ask the Mac, through
-                // the verified snapshot route, whether the stream ended before reporting it.
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    await self.refreshRelayWindow(generation: generation)
-                    guard generation == self.preparationGeneration, self.state != .failed else { return }
-                    self.terminateRelayPlayback(
-                        presentation: .relayPreparationFailed(message),
-                        reason: item.error.map(Self.relayTerminationReason(for:)) ?? .serverUnreachable,
-                        emitEvent: true
-                    )
-                }
-            } else if isRelayPlayback {
-                terminateRelayPlayback(
-                    presentation: .relayPreparationFailed(message),
-                    reason: item.error.map(Self.relayTerminationReason(for:)) ?? .serverUnreachable,
-                    emitEvent: true
-                )
-            } else if BuiltInStereoChecks.contains(mediaItem) {
+            if BuiltInStereoChecks.contains(mediaItem) {
                 presentFailure(.builtInStereoCheckUnavailable(message))
             } else {
                 presentFailure(.preparationFailed(message))
@@ -1713,10 +1382,6 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     private func finishCurrentSession(persistResume shouldPersistResume: Bool) {
-        if let installed = installedLiveContext {
-            installedLiveContext = nil
-            installed.ended()
-        }
         eyeOrderChangeTask?.cancel()
         eyeOrderChangeTask = nil
         if shouldPersistResume {
@@ -1770,17 +1435,6 @@ final class MVHEVCPlayerSession: ObservableObject {
         }
         resourceLease?.close()
         resourceLease = nil
-        remotePlaybackSource?.cancelLoader()
-        remotePlaybackSource = nil
-        relayTransport = nil
-        relayWindowRefreshTask?.cancel()
-        relayWindowRefreshTask = nil
-        consecutiveRelayRefreshFailures = 0
-        seekNotice = nil
-        liveNotice = nil
-        resumeNotice = nil
-        liveStatusRefreshCount = 0
-        titleDuration = nil
         bufferedRange = nil
         audioGroup = nil
         subtitleGroup = nil
@@ -1822,7 +1476,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         )
 
         do {
-            switch ResumeWritePolicy.decision(currentTime: resumeTime, duration: titleDuration ?? duration) {
+            switch ResumeWritePolicy.decision(currentTime: resumeTime, duration: duration) {
             case let .write(position):
                 try resumeStore.setResumeTime(position, for: resumeID)
             case .remove:
@@ -1997,178 +1651,6 @@ final class MVHEVCPlayerSession: ObservableObject {
         qualificationNativeResumeSeekSuppressionUntilUptime = 0
     }
 #endif
-
-    private func startRelayWindowRefresh(generation: Int) {
-        relayWindowRefreshTask?.cancel()
-        relayWindowRefreshTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled, let self, generation == self.preparationGeneration else {
-                    return
-                }
-                await self.refreshRelayWindow(generation: generation)
-            }
-        }
-    }
-
-    func refreshRelayWindowNow() async {
-        await refreshRelayWindow(generation: preparationGeneration)
-    }
-
-    private func refreshRelayWindow(generation: Int) async {
-        guard var source = remotePlaybackSource, let relayTransport else {
-            return
-        }
-        do {
-            try await source.refreshRetainedWindow(transport: relayTransport)
-            guard generation == preparationGeneration else {
-                return
-            }
-            remotePlaybackSource = source
-            consecutiveRelayRefreshFailures = 0
-            duration = max(duration, source.retainedSeekPolicy.latestAvailableTime)
-            if liveContext != nil {
-                reportLivePositionNow()
-                refreshLiveNoticeIfDue(generation: generation)
-            }
-        } catch RelayTransportError.sessionExpired, RelayTransportError.unpaired, RelayTransportError.sessionRevoked {
-            guard generation == preparationGeneration else {
-                return
-            }
-            terminateRelayPlayback(
-                presentation: .relayPreparationFailed(Self.sessionEndedMessage),
-                reason: .sessionEnded,
-                emitEvent: true
-            )
-        } catch let error as RelayTransportError where Self.isStreamEnd(error) {
-            // Termination is decided here, by the verified snapshot request. The loopback
-            // bridge flattens AVPlayer's media failures to 503, so they never decide it.
-            guard generation == preparationGeneration else { return }
-            let message = await relayFailureMessage(for: error, generation: generation)
-            guard generation == preparationGeneration else { return }
-            terminateRelayPlayback(
-                presentation: .relayPreparationFailed(message),
-                reason: .streamEnded,
-                emitEvent: true
-            )
-        } catch is CancellationError {
-            return
-        } catch let error as URLError where error.code == .cancelled {
-            return
-        } catch {
-            guard generation == preparationGeneration else { return }
-            if Self.isTerminalRelayRejection(error) {
-                terminateRelayPlayback(
-                    presentation: .relayPreparationFailed(Self.playbackFailureMessage(for: error)),
-                    reason: .rejected,
-                    emitEvent: true
-                )
-                return
-            }
-            consecutiveRelayRefreshFailures += 1
-            if consecutiveRelayRefreshFailures >= 3 {
-                terminateRelayPlayback(
-                    presentation: .relayPreparationFailed("The relay server could not be reached. Check the Mac and try again."),
-                    reason: .serverUnreachable,
-                    emitEvent: true
-                )
-            }
-        }
-    }
-
-    func handleRelayCoordinatorState(_ coordinatorState: RelayCoordinatorState) {
-        // A live ISO title belongs to the movie session, not the developer relay coordinator.
-        guard isRelayPlayback, liveContext == nil else { return }
-        switch coordinatorState {
-        case .idle:
-            finish()
-        case .sessionExpired:
-            terminateRelayPlayback(
-                presentation: .relayPreparationFailed("The relay session ended. Pair with the Mac again to continue."),
-                reason: .sessionEnded,
-                emitEvent: false
-            )
-        case let .failed(message):
-            terminateRelayPlayback(
-                presentation: .relayPreparationFailed(message),
-                reason: .serverUnreachable,
-                emitEvent: false
-            )
-        case .networkUnavailable:
-            terminateRelayPlayback(
-                presentation: .relayPreparationFailed("The network became unavailable. Reconnect and try again."),
-                reason: .serverUnreachable,
-                emitEvent: false
-            )
-        case .discovery, .confirming, .connected, .reconnecting:
-            break
-        }
-    }
-
-    private func terminateRelayPlayback(
-        presentation: PlaybackFailurePresentation,
-        reason: RelayPlaybackTerminationReason,
-        emitEvent: Bool
-    ) {
-        guard isRelayPlayback, state != .failed else { return }
-        let relayItem = mediaItem
-        let sessionID = remotePlaybackSource?.session.sessionID.rawValue
-            ?? relayItem?.id.dropFirst("relay:".count).description
-        preparationGeneration += 1
-        finishCurrentSession(persistResume: false)
-        mediaItem = relayItem
-        presentFailure(presentation)
-        if emitEvent, let sessionID {
-            relayTerminationEvent = RelayPlaybackTerminationEvent(
-                id: UUID(), sessionID: sessionID, reason: reason
-            )
-        }
-    }
-
-    private static func relayTerminationReason(for error: Error) -> RelayPlaybackTerminationReason {
-        if let relayError = error as? RelayTransportError {
-            switch relayError {
-            case .sessionExpired, .unpaired, .sessionRevoked: return .sessionEnded
-            case .streamEnded: return .streamEnded
-            case let .unexpectedStatusCode(status) where (400 ..< 500).contains(status): return .rejected
-            default: break
-            }
-        }
-        if isTerminalRelayRejection(error) { return .rejected }
-        return .serverUnreachable
-    }
-
-    private static func isStreamEnd(_ error: RelayTransportError) -> Bool {
-        if case .streamEnded = error { return true }
-        return false
-    }
-
-    /// Sends the playhead of a live stream, signed with the stream session. A lost report
-    /// only delays pacing; the snapshot refresh decides whether the stream ended.
-    private func reportLivePositionNow() {
-        guard liveContext != nil, let source = remotePlaybackSource, let relayTransport else { return }
-        let seconds = player.currentTime().seconds
-        let milliseconds = Int64(max(0, seconds.isFinite ? seconds : currentTime) * 1_000)
-        Task { try? await source.reportPosition(milliseconds: milliseconds, transport: relayTransport) }
-    }
-
-    /// Every fifth refresh, reads the Mac's live status for the busy notice.
-    private func refreshLiveNoticeIfDue(generation: Int) {
-        guard let liveContext else { return }
-        liveStatusRefreshCount += 1
-        guard liveStatusRefreshCount % 5 == 1 else { return }
-        Task { @MainActor [weak self] in
-            let status = await liveContext.status()
-            guard let self, generation == self.preparationGeneration, let status else { return }
-            self.liveNotice = status.macBusyConverting ? Self.liveBusyNotice : nil
-        }
-    }
-
-    private static func isTerminalRelayRejection(_ error: Error) -> Bool {
-        if error is RelaySessionError || error is DecodingError { return true }
-        guard case let RelayTransportError.unexpectedStatusCode(status) = error else { return false }
-        return (400 ..< 500).contains(status)
-    }
 
     private static func sourceFailurePresentation(for error: Error) -> PlaybackFailurePresentation {
         guard let bookmarkError = error as? BookmarkStoreError else {

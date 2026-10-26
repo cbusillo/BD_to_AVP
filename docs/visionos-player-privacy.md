@@ -1,14 +1,14 @@
 # Shiny 3D Cinema Privacy Policy
 
-Last updated: October 23, 2026
+Last updated: October 26, 2026
 
 Shiny 3D Cinema is a movie player for Apple Vision Pro provided by Shiny
 Computers Leasing LLC. This policy covers the Vision Pro player.
 
 ## Your movies and library
 
-The player processes movies you select on your device or from a Mac you pair
-with. We do not receive your movies, library, or playback history on our servers.
+The player processes movies you select on your device or in a Location you add.
+We do not receive your movies, library, or playback history on our servers.
 The player has no advertising, tracking, third-party analytics SDK, or account
 registration.
 
@@ -21,36 +21,14 @@ For each Location you add, such as a network share, the app stores the folder's
 name, saved access to that folder, and the names, sizes and formats of the movie
 files it finds there, locally, so it does not have to read every file again.
 
-## Sharing from your Mac
-
-When you choose Find Macs, the app discovers compatible Macs on your local
-network. Pairing exchanges device names and public identity information. Your
-paired Mac receives requests for its shared movie catalog and the movie bytes
-you choose to play. Pairing keys and trusted-device records are stored in the
-device Keychain and are not synchronized by the player.
-
-When you play a Blu-ray 3D disc live, your paired Mac also receives the title
-and audio track you chose, your playback position while you watch, and a request
-to stop when you are done, so it can prepare the part of the movie you are
-watching.
-
-Movie sharing authenticates requests and movie data, but the current local
-network stream is not encrypted. Use a trusted network. The app does not publish
-your Mac's movie library to the internet.
-
 ## Retention and your controls
 
-Library records and saved playback positions remain on your device. Live discs
-have no saved playback position. Removing a movie
+Library records and saved playback positions remain on your device. Removing a movie
 from the library removes its library entry and saved file access; it does not
 delete the original video. Removing a Location removes its saved folder access
 and file list; it does not change the share. Playback positions are stored in a bounded local
 history and may remain until overwritten, removed when that history reaches its
 limit, or the app's local data is erased.
-
-Use Forget in Mac Movies to remove that Mac's saved pairing record. On the Mac,
-you can forget a paired headset, remove an approved folder, or stop sharing to
-revoke access. Local Network access can also be revoked in system settings.
 
 ## TestFlight, feedback, and links
 

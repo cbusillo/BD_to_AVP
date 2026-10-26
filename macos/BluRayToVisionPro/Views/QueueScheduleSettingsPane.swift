@@ -405,7 +405,7 @@ struct QueuePostRunSettingsSection: View {
     }
 
     static func skipRules(idleMinutes: Int) -> String {
-        "Skipped if any video needs attention, is held for review, or has not finished; if someone used the Mac in the last \(idleMinutes) minutes; or while a preview, Movie Sharing, or a relay session is active."
+        "Skipped if any video needs attention, is held for review, or has not finished; if someone used the Mac in the last \(idleMinutes) minutes; or while a preview is running."
     }
 
     static let shutDownWarning = "Shut Down closes every app on this Mac. Apps with unsaved changes can stop it, but save your work before you leave."

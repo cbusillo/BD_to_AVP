@@ -49,14 +49,6 @@ class CILaneSelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"native": False, "player": True})
 
-    def test_sources_shared_by_both_apps_build_both(self) -> None:
-        for path in (
-            "macos/RelaySessionCore/MovieLibraryTrustStore.swift",
-            "macos/BluRayToVisionPro/Relay/RelayHTTP.swift",
-        ):
-            with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"native": True, "player": True})
-
     def test_the_project_spec_and_the_lane_definitions_build_everything(self) -> None:
         for path in ("macos/project.yml", ".github/workflows/ci.yml", "scripts/ci_lanes.py"):
             with self.subTest(path=path):

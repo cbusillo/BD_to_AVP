@@ -112,22 +112,12 @@ protocol WorkerProcessRunning: AnyObject {
     ) async throws -> WorkerRunResult
     func cancel()
     func sendControl(_ command: WorkerWaitCommand) async throws
-    /// Sends the live viewer's playhead. Throws `unavailable` unless the running job's worker
-    /// advertised `viewer_position_v1`.
-    func sendViewerPosition(_ command: WorkerViewerPositionCommand) async throws
     func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot
-    /// The running worker's process ID, once launched. A live source handoff accepts only this
-    /// peer.
-    func currentProcessIdentifier() -> pid_t?
 }
 
 extension WorkerProcessRunning {
     func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot { .empty }
-    func currentProcessIdentifier() -> pid_t? { nil }
     func sendControl(_ command: WorkerWaitCommand) async throws { throw WorkerControlError.unavailable }
-    func sendViewerPosition(_ command: WorkerViewerPositionCommand) async throws {
-        throw WorkerControlError.unavailable
-    }
 }
 
 /// Keeps macOS from throttling the app while a worker job runs.
@@ -172,7 +162,6 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     private var activeJobID: UUID?
     private var activeControlWriter: WorkerControlWriter?
     private var supportsWaiting = false
-    private var supportsViewerPosition = false
     private var activeDiagnosticBuffer: BoundedDiagnosticTextBuffer?
     private var lastDiagnosticSnapshot = WorkerProcessDiagnosticSnapshot.empty
     private var cancellationRequested = false
@@ -186,13 +175,6 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         self.configuration = configuration
         self.cancellationEscalationDelay = cancellationEscalationDelay
         self.activityAssertion = activityAssertion
-    }
-
-    func currentProcessIdentifier() -> pid_t? {
-        stateLock.withLock {
-            guard let pid = activeProcess?.processIdentifier, pid > 0 else { return nil }
-            return pid
-        }
     }
 
     func run(job: WorkerJobSpec, onEvent: @escaping EventHandler) async throws -> WorkerRunResult {
@@ -406,17 +388,6 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         try await writer.send(command)
     }
 
-    func sendViewerPosition(_ command: WorkerViewerPositionCommand) async throws {
-        let writer = stateLock.withLock {
-            guard activeJobID == command.jobID, supportsViewerPosition, !cancellationRequested else {
-                return Optional<WorkerControlWriter>.none
-            }
-            return activeControlWriter
-        }
-        guard let writer else { throw WorkerControlError.unavailable }
-        try await writer.send(command)
-    }
-
     private func register(
         _ process: Process,
         jobID: UUID,
@@ -429,7 +400,6 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             activeProcess = process
             activeJobID = jobID
             supportsWaiting = false
-            supportsViewerPosition = false
             activeProcessGroupID = nil
             activeDiagnosticBuffer = diagnosticBuffer
             lastDiagnosticSnapshot = .empty
@@ -452,7 +422,6 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             activeProcess = nil
             activeJobID = nil
             supportsWaiting = false
-            supportsViewerPosition = false
             let writer = activeControlWriter
             activeControlWriter = nil
             activeProcessGroupID = nil
@@ -485,7 +454,6 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             }
             activeProcessGroupID = processGroupID
             supportsWaiting = capabilities?.contains("keep_waiting_v1") == true
-            supportsViewerPosition = capabilities?.contains(WorkerViewerPositionCommand.capability) == true
         }
     }
 
@@ -553,7 +521,6 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                     terminalEvent = event
                     let writer = stateLock.withLock {
                         supportsWaiting = false
-                        supportsViewerPosition = false
                         return activeControlWriter
                     }
                     writer?.close()

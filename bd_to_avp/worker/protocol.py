@@ -40,11 +40,6 @@ EVENT_WRITE_TIMEOUT_SECONDS = 900.0
 DROPPABLE_EVENT_GRACE_SECONDS = 1.0
 EVENT_WRITE_CHUNK_BYTES = 512
 ZERO_JOB_ID = str(UUID(int=0))
-LIVE_HLS_MINIMUM_RETENTION_SECONDS = 30
-LIVE_HLS_MINIMUM_RETENTION_BYTES = 64 * 1_024 * 1_024
-LIVE_HLS_MINIMUM_VIEWER_LEAD_SECONDS = 10
-# The source helper serves at most seven alternate audio tracks beside the selected one.
-LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO = 7
 
 
 def bounded_detail(value: str) -> str:
@@ -60,9 +55,6 @@ class WorkerOperation(StrEnum):
     INSPECT_SOURCE = "inspect_source"
     CONVERT_SOURCE = "convert_source"
     PREVIEW_SOURCE = "preview_source"
-    START_LIVE_SOURCE = "start_live_source"
-    START_LIVE_HLS = "start_live_hls"
-    INSPECT_LIVE_TITLE = "inspect_live_title"
 
 
 class WorkerSourceKind(StrEnum):
@@ -134,10 +126,6 @@ class WorkerEventType(StrEnum):
 DROPPABLE_EVENT_TYPES = frozenset({WorkerEventType.HEARTBEAT, WorkerEventType.OBSERVABILITY})
 
 
-# sun_path holds 104 bytes on macOS, including the terminating NUL.
-MAXIMUM_HANDOFF_SOCKET_PATH_BYTES = 103
-
-
 class WorkerProtocolError(ValueError):
     def __init__(self, code: str, message: str, *, job_id: str = ZERO_JOB_ID) -> None:
         super().__init__(message)
@@ -147,34 +135,10 @@ class WorkerProtocolError(ValueError):
 
 
 @dataclass(frozen=True)
-class LiveSourceIdentity:
-    """The source file the host authorized, as ``lstat`` saw it on the host."""
-
-    device: int
-    inode: int
-    size_bytes: int
-    modification_seconds: int
-    modification_nanoseconds: int
-
-
-@dataclass(frozen=True)
-class DescriptorHandoff:
-    """A one-shot Unix socket where the host hands the worker the source's open descriptor."""
-
-    socket_path: Path
-    token: str
-
-
-@dataclass(frozen=True)
 class JobSource:
     kind: WorkerSourceKind
     path: Path
     title_id: str | None = None
-    # What the host saw when it authorized the source. With a handoff it is compared with the
-    # received descriptor; without one, with a fresh no-follow open of the path.
-    identity: LiveSourceIdentity | None = None
-    # With a handoff the worker never opens ``path``; it only names the file for diagnostics.
-    descriptor_handoff: DescriptorHandoff | None = None
 
 
 @dataclass(frozen=True)
@@ -276,28 +240,6 @@ class PreviewOptions:
 
 
 @dataclass(frozen=True)
-class LiveSourceOptions:
-    playlist: int
-    audio_pid: int
-    replay_window_seconds: int
-    replay_max_bytes: int
-    maximum_pairs: int | None = None
-
-
-@dataclass(frozen=True)
-class LiveHLSOptions:
-    playlist: int
-    audio_pid: int
-    retention_seconds: int
-    retention_max_bytes: int
-    maximum_pairs: int | None = None
-    # Hold production while it is this far ahead of the reported viewer position.
-    viewer_lead_seconds: int | None = None
-    # Other audio tracks carried as alternate renditions the viewer can switch to.
-    alternate_audio_pids: tuple[int, ...] = ()
-
-
-@dataclass(frozen=True)
 class JobSpec:
     protocol_version: int
     job_id: str
@@ -307,8 +249,6 @@ class JobSpec:
     encoding: EncodingOptions | None = None
     job: JobOptions | None = None
     preview: PreviewOptions | None = None
-    live_source: LiveSourceOptions | None = None
-    live_hls: LiveHLSOptions | None = None
 
     @classmethod
     def from_json_line(cls, line: str) -> "JobSpec":
@@ -365,9 +305,6 @@ class JobSpec:
             WorkerOperation.INSPECT_SOURCE: base_keys,
             WorkerOperation.CONVERT_SOURCE: base_keys | {"destination", "encoding", "job"},
             WorkerOperation.PREVIEW_SOURCE: base_keys | {"destination", "encoding", "job", "preview"},
-            WorkerOperation.START_LIVE_SOURCE: base_keys | {"destination", "live_source"},
-            WorkerOperation.START_LIVE_HLS: base_keys | {"destination", "live_hls"},
-            WorkerOperation.INSPECT_LIVE_TITLE: base_keys,
         }[operation]
         cls._reject_unknown_keys(raw, operation_keys, "request", job_id)
 
@@ -387,9 +324,7 @@ class JobSpec:
                 f"The source object is missing required field(s): {missing}.",
                 job_id=job_id,
             )
-        cls._reject_unknown_keys(
-            source, required_source_keys | {"title_id", "identity", "descriptor_handoff"}, "source", job_id
-        )
+        cls._reject_unknown_keys(source, required_source_keys | {"title_id"}, "source", job_id)
         raw_source_kind = source.get("kind")
         if not isinstance(raw_source_kind, str):
             raise WorkerProtocolError(
@@ -415,16 +350,7 @@ class JobSpec:
         source_path = cls._parse_absolute_path(raw_source_path, "source", job_id)
         has_title_id = "title_id" in source
         title_id = cls._parse_optional_title_id(source.get("title_id"), job_id)
-        if (
-            operation
-            in {
-                WorkerOperation.INSPECT_SOURCE,
-                WorkerOperation.START_LIVE_SOURCE,
-                WorkerOperation.START_LIVE_HLS,
-                WorkerOperation.INSPECT_LIVE_TITLE,
-            }
-            and has_title_id
-        ):
+        if operation is WorkerOperation.INSPECT_SOURCE and has_title_id:
             raise WorkerProtocolError(
                 "invalid_source",
                 "This source request cannot select a conversion title.",
@@ -450,14 +376,10 @@ class JobSpec:
                 job_id=job_id,
             )
 
-        source_identity, descriptor_handoff = cls._parse_source_authorization(source, operation, source_kind, job_id)
-
         destination: JobDestination | None = None
         encoding: EncodingOptions | None = None
         job_options: JobOptions | None = None
         preview_options: PreviewOptions | None = None
-        live_source_options: LiveSourceOptions | None = None
-        live_hls_options: LiveHLSOptions | None = None
         if operation in {WorkerOperation.CONVERT_SOURCE, WorkerOperation.PREVIEW_SOURCE}:
             destination = JobDestination(
                 path=cls._parse_destination(raw.get("destination"), job_id),
@@ -499,31 +421,6 @@ class JobSpec:
                     "Preview jobs cannot remove the source or continue from partial output.",
                     job_id=job_id,
                 )
-        elif operation is WorkerOperation.START_LIVE_SOURCE:
-            if source_kind not in {WorkerSourceKind.DISC_IMAGE, WorkerSourceKind.BLU_RAY_FOLDER}:
-                raise WorkerProtocolError(
-                    "invalid_live_source",
-                    "Live source jobs require an ISO image or Blu-ray folder.",
-                    job_id=job_id,
-                )
-            destination = JobDestination(path=cls._parse_destination(raw.get("destination"), job_id))
-            live_source_options = cls._parse_live_source_options(raw.get("live_source"), job_id)
-        elif operation is WorkerOperation.START_LIVE_HLS:
-            if source_kind not in {WorkerSourceKind.DISC_IMAGE, WorkerSourceKind.BLU_RAY_FOLDER}:
-                raise WorkerProtocolError(
-                    "invalid_live_hls",
-                    "Live HLS jobs require an ISO image or Blu-ray folder.",
-                    job_id=job_id,
-                )
-            destination = JobDestination(path=cls._parse_destination(raw.get("destination"), job_id))
-            live_hls_options = cls._parse_live_hls_options(raw.get("live_hls"), job_id)
-        elif operation is WorkerOperation.INSPECT_LIVE_TITLE:
-            if source_kind not in {WorkerSourceKind.DISC_IMAGE, WorkerSourceKind.BLU_RAY_FOLDER}:
-                raise WorkerProtocolError(
-                    "invalid_live_title",
-                    "Live title inspection requires an ISO image or Blu-ray folder.",
-                    job_id=job_id,
-                )
 
         return cls(
             protocol_version=protocol_version,
@@ -533,15 +430,11 @@ class JobSpec:
                 kind=source_kind,
                 path=source_path,
                 title_id=title_id,
-                identity=source_identity,
-                descriptor_handoff=descriptor_handoff,
             ),
             destination=destination,
             encoding=encoding,
             job=job_options,
             preview=preview_options,
-            live_source=live_source_options,
-            live_hls=live_hls_options,
         )
 
     @staticmethod
@@ -1434,251 +1327,6 @@ class JobSpec:
         )
 
     @classmethod
-    def _parse_live_source_options(cls, value: Any, job_id: str) -> LiveSourceOptions:
-        if not isinstance(value, Mapping):
-            raise WorkerProtocolError(
-                "invalid_live_source",
-                "The live source request must contain source-service options.",
-                job_id=job_id,
-            )
-        required_keys = {"playlist", "audio_pid", "replay_window_seconds", "replay_max_bytes"}
-        cls._reject_unknown_keys(
-            value,
-            required_keys | {"maximum_pairs"},
-            "live_source",
-            job_id,
-            error_code="invalid_live_source",
-        )
-        missing_keys = required_keys - set(value.keys())
-        if missing_keys:
-            missing = ", ".join(sorted(missing_keys))
-            raise WorkerProtocolError(
-                "invalid_live_source",
-                f"The live_source object is missing required field(s): {missing}.",
-                job_id=job_id,
-            )
-        maximum_pairs = None
-        if "maximum_pairs" in value:
-            maximum_pairs = cls._parse_int(
-                value,
-                "maximum_pairs",
-                "live_source",
-                job_id,
-                minimum=1,
-                maximum=(1 << 63) - 1,
-                error_code="invalid_live_source",
-            )
-        return LiveSourceOptions(
-            playlist=cls._parse_int(
-                value,
-                "playlist",
-                "live_source",
-                job_id,
-                minimum=0,
-                maximum=99_999,
-                error_code="invalid_live_source",
-            ),
-            audio_pid=cls._parse_int(
-                value,
-                "audio_pid",
-                "live_source",
-                job_id,
-                minimum=1,
-                maximum=8_191,
-                error_code="invalid_live_source",
-            ),
-            replay_window_seconds=cls._parse_int(
-                value,
-                "replay_window_seconds",
-                "live_source",
-                job_id,
-                minimum=1,
-                maximum=3_600,
-                error_code="invalid_live_source",
-            ),
-            replay_max_bytes=cls._parse_int(
-                value,
-                "replay_max_bytes",
-                "live_source",
-                job_id,
-                minimum=1_048_576,
-                maximum=8 * 1_024 * 1_024 * 1_024,
-                error_code="invalid_live_source",
-            ),
-            maximum_pairs=maximum_pairs,
-        )
-
-    @classmethod
-    def _parse_live_hls_options(cls, value: Any, job_id: str) -> LiveHLSOptions:
-        if not isinstance(value, Mapping):
-            raise WorkerProtocolError(
-                "invalid_live_hls",
-                "The live HLS request must contain live_hls options.",
-                job_id=job_id,
-            )
-        required_keys = {"playlist", "audio_pid", "retention_seconds", "retention_max_bytes"}
-        cls._reject_unknown_keys(
-            value,
-            required_keys | {"maximum_pairs", "viewer_lead_seconds", "alternate_audio_pids"},
-            "live_hls",
-            job_id,
-            error_code="invalid_live_hls",
-        )
-        missing_keys = required_keys - set(value.keys())
-        if missing_keys:
-            missing = ", ".join(sorted(missing_keys))
-            raise WorkerProtocolError(
-                "invalid_live_hls",
-                f"The live_hls object is missing required field(s): {missing}.",
-                job_id=job_id,
-            )
-
-        def parse(key: str, minimum: int, maximum: int) -> int:
-            return cls._parse_int(
-                value,
-                key,
-                "live_hls",
-                job_id,
-                minimum=minimum,
-                maximum=maximum,
-                error_code="invalid_live_hls",
-            )
-
-        retention_seconds = parse("retention_seconds", LIVE_HLS_MINIMUM_RETENTION_SECONDS, 24 * 3_600)
-        audio_pid = parse("audio_pid", 1, 8_191)
-        return LiveHLSOptions(
-            playlist=parse("playlist", 0, 99_999),
-            audio_pid=audio_pid,
-            retention_seconds=retention_seconds,
-            retention_max_bytes=parse(
-                "retention_max_bytes",
-                LIVE_HLS_MINIMUM_RETENTION_BYTES,
-                1_024 * 1_024 * 1_024 * 1_024,
-            ),
-            maximum_pairs=parse("maximum_pairs", 1, (1 << 63) - 1) if "maximum_pairs" in value else None,
-            viewer_lead_seconds=(
-                parse("viewer_lead_seconds", LIVE_HLS_MINIMUM_VIEWER_LEAD_SECONDS, retention_seconds // 2)
-                if "viewer_lead_seconds" in value
-                else None
-            ),
-            alternate_audio_pids=cls._parse_alternate_audio_pids(
-                value.get("alternate_audio_pids", []), audio_pid, job_id
-            ),
-        )
-
-    @staticmethod
-    def _parse_alternate_audio_pids(value: Any, audio_pid: int, job_id: str) -> tuple[int, ...]:
-        """Distinct PIDs other than the selected one, at most ``LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO``."""
-        if (
-            not isinstance(value, list)
-            or len(value) > LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO
-            or not all(isinstance(pid, int) and not isinstance(pid, bool) and 1 <= pid <= 8_191 for pid in value)
-            or len(set(value)) != len(value)
-            or audio_pid in value
-        ):
-            raise WorkerProtocolError(
-                "invalid_live_hls",
-                f"live_hls.alternate_audio_pids must list at most {LIVE_HLS_MAXIMUM_ALTERNATE_AUDIO} distinct "
-                "PIDs other than audio_pid.",
-                job_id=job_id,
-            )
-        return tuple(value)
-
-    @classmethod
-    def _parse_source_authorization(
-        cls,
-        source: Mapping[str, Any],
-        operation: WorkerOperation,
-        source_kind: WorkerSourceKind,
-        job_id: str,
-    ) -> tuple[LiveSourceIdentity | None, DescriptorHandoff | None]:
-        has_identity = "identity" in source
-        has_handoff = "descriptor_handoff" in source
-        if not has_identity and not has_handoff:
-            return None, None
-        if operation not in {WorkerOperation.START_LIVE_HLS, WorkerOperation.INSPECT_LIVE_TITLE}:
-            raise WorkerProtocolError(
-                "invalid_source",
-                "Only live HLS and live title jobs accept a source identity or descriptor handoff.",
-                job_id=job_id,
-            )
-        if has_handoff and not has_identity:
-            raise WorkerProtocolError(
-                "invalid_source",
-                "A source descriptor handoff requires source.identity.",
-                job_id=job_id,
-            )
-        if has_handoff and source_kind is not WorkerSourceKind.DISC_IMAGE:
-            raise WorkerProtocolError(
-                "invalid_source",
-                "A source descriptor handoff requires a disc image.",
-                job_id=job_id,
-            )
-        identity = cls._parse_live_source_identity(source["identity"], job_id)
-        handoff = cls._parse_descriptor_handoff(source["descriptor_handoff"], job_id) if has_handoff else None
-        return identity, handoff
-
-    @classmethod
-    def _parse_descriptor_handoff(cls, value: Any, job_id: str) -> DescriptorHandoff:
-        if not isinstance(value, Mapping) or set(value) != {"socket_path", "token"}:
-            raise WorkerProtocolError(
-                "invalid_source",
-                "source.descriptor_handoff must contain exactly socket_path and token.",
-                job_id=job_id,
-            )
-        socket_path = value["socket_path"]
-        token = value["token"]
-        if (
-            not isinstance(socket_path, str)
-            or not socket_path.startswith("/")
-            or "\0" in socket_path
-            or len(socket_path.encode("utf-8")) > MAXIMUM_HANDOFF_SOCKET_PATH_BYTES
-        ):
-            raise WorkerProtocolError(
-                "invalid_source",
-                "source.descriptor_handoff.socket_path must be a short absolute path.",
-                job_id=job_id,
-            )
-        if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
-            raise WorkerProtocolError(
-                "invalid_source",
-                "source.descriptor_handoff.token must be 64 lowercase hexadecimal characters.",
-                job_id=job_id,
-            )
-        return DescriptorHandoff(socket_path=Path(socket_path), token=token)
-
-    @classmethod
-    def _parse_live_source_identity(cls, value: Any, job_id: str) -> LiveSourceIdentity:
-        keys = {"device", "inode", "size_bytes", "modification_seconds", "modification_nanoseconds"}
-        if not isinstance(value, Mapping) or set(value) != keys:
-            raise WorkerProtocolError(
-                "invalid_source",
-                "source.identity must contain exactly the device, inode, size, and modification time.",
-                job_id=job_id,
-            )
-
-        def parse(key: str, maximum: int) -> int:
-            return cls._parse_int(
-                value,
-                key,
-                "source.identity",
-                job_id,
-                minimum=0,
-                maximum=maximum,
-                error_code="invalid_source",
-            )
-
-        unsigned_64 = (1 << 64) - 1
-        signed_64 = (1 << 63) - 1
-        return LiveSourceIdentity(
-            device=parse("device", unsigned_64),
-            inode=parse("inode", unsigned_64),
-            size_bytes=parse("size_bytes", signed_64),
-            modification_seconds=parse("modification_seconds", signed_64),
-            modification_nanoseconds=parse("modification_nanoseconds", 999_999_999),
-        )
-
-    @classmethod
     def _require_exact_keys(
         cls,
         value: Mapping[str, Any],
@@ -1857,12 +1505,6 @@ class WorkerActivityReporter:
 
     def artifact_ready(self, artifact: Mapping[str, Any]) -> None:
         self._emitter.emit(WorkerEventType.ARTIFACT_READY, {"artifact": dict(artifact)})
-
-    def live_source_ready(self, source: Mapping[str, Any]) -> None:
-        self._emitter.emit(WorkerEventType.ARTIFACT_READY, {"live_source": dict(source)})
-
-    def live_hls_ready(self, stream: Mapping[str, Any]) -> None:
-        self._emitter.emit(WorkerEventType.ARTIFACT_READY, {"live_hls": dict(stream)})
 
     def heartbeat_payload(self, elapsed_seconds: int) -> dict[str, Any]:
         with self._lock:

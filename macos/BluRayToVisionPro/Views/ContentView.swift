@@ -8,8 +8,6 @@ struct ContentView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
-    @ObservedObject var relayHostController: RelayHostSessionController
-    @ObservedObject var movieSharingController: MovieSharingController
     @ObservedObject var queueAutomationController: QueueAutomationController
     let capabilities: AppCapabilities
 
@@ -35,8 +33,6 @@ struct ContentView: View {
     @State private var isRefreshingDiscs = false
     @State private var isShowingOffPeakSchedule = false
     @State private var isEditingOffPeakSchedule = false
-    @State private var isShowingRelayHost = false
-    @State private var isShowingMovieSharing = false
     @State private var offPeakScheduleStartAt: Date
     @State private var offPeakScheduleEndAt: Date
     @State private var offPeakScheduleEditorError: String?
@@ -51,8 +47,6 @@ struct ContentView: View {
         settings: AppSettings,
         profileStore: ProfileStore,
         resolutionMemoryStore: ResolutionMemoryStore,
-        relayHostController: RelayHostSessionController,
-        movieSharingController: MovieSharingController,
         queueAutomationController: QueueAutomationController,
         capabilities: AppCapabilities
     ) {
@@ -62,8 +56,6 @@ struct ContentView: View {
         _settings = ObservedObject(wrappedValue: settings)
         _profileStore = ObservedObject(wrappedValue: profileStore)
         _resolutionMemoryStore = ObservedObject(wrappedValue: resolutionMemoryStore)
-        _relayHostController = ObservedObject(wrappedValue: relayHostController)
-        _movieSharingController = ObservedObject(wrappedValue: movieSharingController)
         _queueAutomationController = ObservedObject(wrappedValue: queueAutomationController)
         self.capabilities = capabilities
 
@@ -160,15 +152,6 @@ struct ContentView: View {
         .accessibilityIdentifier("main-window-content")
         .focusedSceneValue(\.persistentQueueCommandActions, persistentQueueCommandActions)
         .toolbar { toolbarContent }
-        .sheet(isPresented: $isShowingMovieSharing) {
-            MovieSharingSheet(controller: movieSharingController)
-        }
-        .onChange(of: movieSharingController.pairingCandidate?.candidateID) { _, candidate in
-            if candidate != nil { isShowingMovieSharing = true }
-        }
-        .sheet(isPresented: $isShowingRelayHost) {
-            RelayHostSheet(controller: relayHostController)
-        }
         .animation(.easeInOut(duration: 0.18), value: isShowingActivity)
         .dropDestination(for: URL.self, action: acceptDrop) { targeted in
             isDropTargeted = targeted
@@ -568,21 +551,6 @@ struct ContentView: View {
         ToolbarItem(placement: .navigation) {
             sourceMenu
         }
-
-        ToolbarItem(placement: .automatic) {
-            Button {
-                isShowingMovieSharing = true
-            } label: {
-                Label("Movie Sharing", systemImage: "visionpro")
-            }
-            .help("Share completed movies with Vision Pro")
-        }
-#if DEBUG
-        ToolbarItem(placement: .automatic) {
-            Button("Relay Fixture") { isShowingRelayHost = true }
-                .help("Share an EVENT-HLS qualification fixture")
-        }
-#endif
 
         ToolbarItem(placement: .automatic) {
             if viewModel.source?.kind == .physicalDisc {

@@ -45,47 +45,6 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         XCTAssertEqual(restored.useSoftwareEncoder, settings.useSoftwareEncoder)
     }
 
-    @MainActor
-    func testMovieSharingConstructionDoesNotReadOrWriteIdentity() throws {
-        let trust = MovieLibraryTrustStore(
-            read: {
-                XCTFail("Constructing the test host must not read its identity")
-                return nil
-            },
-            write: { _ in
-                XCTFail("Constructing the test host must not write its identity")
-            }
-        )
-        let controller = MovieSharingController(defaults: try isolatedDefaults(), trust: trust)
-        XCTAssertTrue(controller.sources.isEmpty)
-        XCTAssertTrue(controller.peers.isEmpty)
-        XCTAssertNil(controller.errorMessage)
-    }
-
-    @MainActor
-    func testMovieSharingReadsAndWritesIdentityOffTheMainThread() async throws {
-        // A Keychain call can wait on an access prompt, which would freeze the window.
-        let calls = TrustStoreThreadRecorder()
-        let trust = MovieLibraryTrustStore(read: { calls.record(); return nil }, write: { _ in calls.record() })
-        let controller = MovieSharingController(defaults: try isolatedDefaults(), trust: trust)
-
-        await controller.restoreIfNeeded()
-        await controller.forget(MovieTrustedPeer(publicKey: Data(repeating: 7, count: 32), name: "Headset"))
-
-        XCTAssertNil(controller.errorMessage)
-        XCTAssertGreaterThan(calls.total, 0)
-        XCTAssertEqual(calls.onMainThread, 0)
-    }
-
-    @MainActor
-    func testUnitTestHostNeverSelectsKeychainEvenWhenTeamSigned() {
-        XCTAssertFalse(MovieSharingController.usesKeychain())
-        let environment = [AppDelegate.unitTestHomeEnvironmentKey: "/tmp/test-home"]
-        XCTAssertFalse(MovieSharingController.usesKeychain(environment: environment, isTeamSigned: { true }))
-        XCTAssertTrue(MovieSharingController.usesKeychain(environment: [:], isTeamSigned: { true }))
-        XCTAssertFalse(MovieSharingController.usesKeychain(environment: [:], isTeamSigned: { false }))
-    }
-
     func testHostUsesTemporaryHomeForPreferencesAndApplicationSupport() throws {
         let environment = ProcessInfo.processInfo.environment
         let home = try XCTUnwrap(environment["CFFIXED_USER_HOME"])
@@ -114,12 +73,4 @@ final class IsolatedUserDefaultsTests: XCTestCase {
         )
         XCTAssertEqual(stored[key] as? Bool, true)
     }
-}
-
-private final class TrustStoreThreadRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var calls: [Bool] = []
-    var total: Int { lock.withLock { calls.count } }
-    var onMainThread: Int { lock.withLock { calls.filter { $0 }.count } }
-    func record() { let isMain = Thread.isMainThread; lock.withLock { calls.append(isMain) } }
 }

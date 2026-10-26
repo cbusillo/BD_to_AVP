@@ -22,20 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_bdtoavp-relay._tcp</string>
-		<string>_bdtoavp-movies._tcp</string>
-	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Shiny 3D Cinema discovers your Mac and plays movies from folders you share on your local network.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

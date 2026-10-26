@@ -562,28 +562,6 @@ private struct PlayerOrnamentView: View {
                 .accessibilityIdentifier(loading == .loading ? "player-buffering" : "player-connection-lost")
             }
 
-            if let notice = session.liveNotice {
-                Label(notice, systemImage: "hourglass")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if let notice = session.resumeNotice {
-                Label(notice, systemImage: "arrow.counterclockwise")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("player-resume-notice")
-            }
-
-            if let notice = session.seekNotice {
-                Label(notice, systemImage: "clock.arrow.circlepath")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
             VStack(spacing: 8) {
                 PlaybackScrubBar(
                     timeline: session.timeline,

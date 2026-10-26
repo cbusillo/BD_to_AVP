@@ -4,19 +4,15 @@ import UniformTypeIdentifiers
 struct AppShellView: View {
     @ObservedObject var model: PlayerAppModel
     @ObservedObject var playerSession: MVHEVCPlayerSession
-    @ObservedObject var relayCoordinator: RelaySessionCoordinator
     let resumeStore: ResumeStore
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var preparationTask: Task<Void, Never>?
-    @StateObject private var movieLibrary = MovieLibraryModel()
     @State private var selection: LibrarySelection = .onMyVisionPro
-    @State private var sharedPlayback: SharedMoviePlayback?
-    @State private var liveTitle: SharedLiveTitle?
     @State private var filePickerPurpose: FilePickerPurpose = .addLocation
     @State private var isFilePickerPresented = false
     #if BD_TO_AVP_QUALIFICATION
-    @State private var hasStartedRelayQualification = false
+    @State private var hasStartedQualification = false
     #endif
 
     var body: some View {
@@ -37,27 +33,12 @@ struct AppShellView: View {
                             } label: {
                                 Label("On My Vision Pro", systemImage: "visionpro")
                             }.accessibilityIdentifier("source-on-my-vision-pro")
-                            Button {
-                                selection = .macMovies
-                            } label: {
-                                Label("Mac Movies", systemImage: "desktopcomputer")
-                            }.accessibilityIdentifier("source-mac-movies")
                         }
                         LocationsSidebarSection(
                             locations: model.locations,
                             select: { selection = .location($0) },
                             add: { presentFilePicker(.addLocation) }
                         )
-                        #if BD_TO_AVP_QUALIFICATION
-                        Section("Live Relay") {
-                            Button {
-                                relayCoordinator.startDiscovery()
-                            } label: {
-                                Label("Connect to Mac", systemImage: "dot.radiowaves.left.and.right")
-                            }
-                            .disabled(!canStartRelayDiscovery)
-                        }
-                        #endif
                         Section("About") {
                             if let privacyURL = URL(
                                 string:
@@ -73,29 +54,18 @@ struct AppShellView: View {
                             .listStyle(.sidebar)
                             .navigationTitle("Library")
                 } detail: {
-                    VStack(spacing: 0) {
-                        if relayCoordinator.state != .idle {
-                            RelayConnectionView(
-                                coordinator: relayCoordinator,
-                                playRelay: startRelayPlayback
-                            )
-                            Divider()
-                        }
-                        switch selection {
-                        case .onMyVisionPro:
-                            LibraryView(model: model, addLocation: { presentFilePicker(.addLocation) })
-                        case .macMovies:
-                            MovieLibraryView(model: movieLibrary, play: startSharedPlayback, playLive: startLivePlayback)
-                        case let .location(locationID):
-                            LocationLibraryView(
-                                model: model,
-                                locations: model.locations,
-                                locationID: locationID,
-                                chooseFolderAgain: { presentFilePicker(.reconnectLocation(locationID)) },
-                                removed: { selection = .onMyVisionPro }
-                            )
-                            .id(locationID)
-                        }
+                    switch selection {
+                    case .onMyVisionPro:
+                        LibraryView(model: model, addLocation: { presentFilePicker(.addLocation) })
+                    case let .location(locationID):
+                        LocationLibraryView(
+                            model: model,
+                            locations: model.locations,
+                            locationID: locationID,
+                            chooseFolderAgain: { presentFilePicker(.reconnectLocation(locationID)) },
+                            removed: { selection = .onMyVisionPro }
+                        )
+                        .id(locationID)
                     }
                 }
             }
@@ -135,17 +105,8 @@ struct AppShellView: View {
             }
             prepareForPlayback(request.item)
         }
-                .onChange(of: relayCoordinator.state) { _, state in
-            playerSession.handleRelayCoordinatorState(state)
-        }
-                .onChange(of: playerSession.relayTerminationEvent) { _, event in
-            if let event {
-                relayCoordinator.handlePlaybackTermination(event)
-            }
-        }
                 .onDisappear {
             preparationTask?.cancel()
-            endLivePlayback()
         }
                 .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
@@ -159,12 +120,8 @@ struct AppShellView: View {
             await model.bootstrap()
             await model.locations.refreshAll()
             #if BD_TO_AVP_QUALIFICATION
-            if !hasStartedRelayQualification {
-                hasStartedRelayQualification = true
-                await RelayQualificationDriver.runIfRequested(
-                    coordinator: relayCoordinator, player: playerSession
-                )
-                await RelayQualificationDriver.runLiveIfRequested(library: movieLibrary, player: playerSession)
+            if !hasStartedQualification {
+                hasStartedQualification = true
                 await SourceReadQualification.runIfRequested(model: model)
                 await NativePlaybackQualification.runIfRequested(model: model, player: playerSession)
             }
@@ -216,8 +173,6 @@ struct AppShellView: View {
     }
 
     private func prepareForPlayback(_ item: MediaItem) {
-        endLivePlayback()
-        sharedPlayback = nil
         preparationTask?.cancel()
         preparationTask = Task {
             await playerSession.prepare(
@@ -228,48 +183,7 @@ struct AppShellView: View {
         }
     }
 
-    private func startSharedPlayback(_ selection: SharedMoviePlayback) {
-        endLivePlayback()
-        sharedPlayback = selection
-        preparationTask?.cancel()
-        preparationTask = Task {
-            await playerSession.prepare(
-                mediaItem: selection.mediaItem, bookmarkStore: model.bookmarkStore, resumeStore: resumeStore,
-                sharedMovie: selection)
-        }
-    }
-
-    /// Live titles start on the Mac first; the model installs the stream in the player once it
-    /// is live. Live titles start from the beginning; the player says so when one was watched before.
-    private func startLivePlayback(_ title: SharedLiveTitle) {
-        preparationTask?.cancel()
-        preparationTask = nil
-        sharedPlayback = nil
-        liveTitle = title
-        movieLibrary.startLive(title) { configuration, context in
-            await playerSession.prepareRelayPlayback(configuration, live: context, resumeStore: resumeStore)
-        }
-    }
-
-    private func endLivePlayback() {
-        guard liveTitle != nil else { return }
-        liveTitle = nil
-        movieLibrary.finishLivePlayback()
-    }
-
     private func retryPlayback() {
-        if let liveTitle {
-            startLivePlayback(liveTitle)
-            return
-        }
-        if let sharedPlayback {
-            startSharedPlayback(sharedPlayback)
-            return
-        }
-        if playerSession.isRelayPlayback {
-            startRelayPlayback()
-            return
-        }
         guard let item = playerSession.mediaItem else {
             return
         }
@@ -280,29 +194,6 @@ struct AppShellView: View {
         preparationTask?.cancel()
         preparationTask = nil
         model.clearPlaybackRequest()
-        sharedPlayback = nil
-        endLivePlayback()
-    }
-
-    private func startRelayPlayback() {
-        guard let configuration = relayCoordinator.remotePlaybackConfiguration() else {
-            playerSession.finish()
-            finishPlayback()
-            return
-        }
-        preparationTask?.cancel()
-        preparationTask = Task {
-            await playerSession.prepareRelayPlayback(configuration)
-        }
-    }
-
-    private var canStartRelayDiscovery: Bool {
-        switch relayCoordinator.state {
-        case .idle, .sessionExpired, .failed:
-            true
-        case .discovery, .confirming, .connected, .reconnecting, .networkUnavailable:
-            false
-        }
     }
 
     /// One file picker serves adding a Location, choosing its folder again, and the player's Locate.
@@ -347,7 +238,6 @@ struct AppShellView: View {
 
 private enum LibrarySelection: Hashable {
     case onMyVisionPro
-    case macMovies
     case location(UUID)
 }
 
