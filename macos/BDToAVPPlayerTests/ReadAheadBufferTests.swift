@@ -4,7 +4,7 @@ import XCTest
 final class ReadAheadBufferTests: XCTestCase {
     private static let second: Int64 = 90_000
     /// One video unit per second keeps the arithmetic readable; every fourth is an IDR.
-    private static func unit(_ second: Int64, origin: UInt64 = 1_000) -> Bluray3DPacket {
+    private static func unit(_ second: Int64, origin: UInt64 = 0) -> Bluray3DPacket {
         .video(MVCAccessUnit(
             pts: (origin + UInt64(second * Self.second)) & ((1 << 33) - 1),
             dts: nil,
@@ -49,25 +49,74 @@ final class ReadAheadBufferTests: XCTestCase {
         XCTAssertEqual(buffer.nextVideo(timeout: 0), .ended(error: nil))
     }
 
-    func testAudioBeforeTheFirstVideoUnitUsesItsPTSAsTimeZero() {
+    func testTimestampsAreOnTheTitleTimelineFromZero() {
         let buffer = ReadAheadBuffer()
-        XCTAssertTrue(buffer.receive(Self.audio(1_000 - 900)))
+        XCTAssertTrue(buffer.receive(Self.audio(100)))
         XCTAssertTrue(buffer.receive(Self.audio(nil)))
-        XCTAssertTrue(buffer.receive(Self.unit(0)))
-        XCTAssertTrue(buffer.receive(Self.audio(1_000 + 45_000)))
-        XCTAssertTrue(buffer.receive(Self.audio(1_000 + 180_000)))
+        XCTAssertTrue(buffer.receive(Self.unit(1)))
+        XCTAssertTrue(buffer.receive(Self.audio(45_000)))
+        XCTAssertTrue(buffer.receive(Self.audio(180_000)))
 
-        let first = buffer.nextAudio(through: 45_000)
-        XCTAssertEqual(first.map(\.ticks), [-900, nil, 45_000])
+        XCTAssertEqual(buffer.nextAudio(through: 45_000).map(\.ticks), [100, nil, 45_000])
         XCTAssertEqual(buffer.nextAudio(through: 100_000), [])
         XCTAssertEqual(buffer.nextAudio(through: 180_000).map(\.ticks), [180_000])
+        XCTAssertEqual(take(buffer), Self.second)
+    }
+
+    func testRestartDropsTheOldReadAndHoldsTheDecoderUntilItsNewPass() {
+        let buffer = ReadAheadBuffer()
+        let oldFeed = buffer.feed()
+        XCTAssertTrue(oldFeed.receive(Self.unit(0)))
+        XCTAssertTrue(oldFeed.receive(Self.unit(1)))
+
+        let epoch = buffer.restart(at: 40 * Self.second)
+        let newFeed = buffer.feed()
+
+        // The read that was replaced is told to stop, and its finish is ignored.
+        XCTAssertFalse(oldFeed.isWanted)
+        XCTAssertTrue(newFeed.isWanted)
+        XCTAssertFalse(oldFeed.receive(Self.unit(2)))
+        buffer.finish(feed: oldFeed)
+        XCTAssertFalse(buffer.isFinished)
+        // Audio from before the target, read from the random access unit before it, is dropped.
+        XCTAssertTrue(newFeed.receive(Self.audio(UInt64(38 * Self.second))))
+        XCTAssertTrue(newFeed.receive(Self.audio(nil)))
+        XCTAssertTrue(newFeed.receive(Self.unit(36)))
+        XCTAssertTrue(newFeed.receive(Self.audio(UInt64(40 * Self.second))))
+        XCTAssertTrue(newFeed.receive(Self.unit(37)))
+        XCTAssertEqual(buffer.nextVideo(timeout: 0.05), .waiting, "the decoder has not begun its new pass")
+        XCTAssertEqual(buffer.nextAudio(through: 50 * Self.second), [])
+
+        buffer.beginRestartedPass(epoch: epoch)
+        XCTAssertEqual(take(buffer), 36 * Self.second)
+        XCTAssertEqual(buffer.nextAudio(through: 50 * Self.second).map(\.ticks), [40 * Self.second])
+        XCTAssertEqual(buffer.loadedTicks, (36 * Self.second)...(37 * Self.second))
+    }
+
+    func testAPassForAReplacedReadNeverTakesTheNewReadsUnits() {
+        let buffer = ReadAheadBuffer()
+        // The decoder took seek A's read, and seek B restarts the buffer before A's pass begins.
+        let first = buffer.restart(at: 20 * Self.second)
+        let second = buffer.restart(at: 40 * Self.second)
+        XCTAssertTrue(buffer.feed().receive(Self.unit(40)))
+
+        buffer.beginRestartedPass(epoch: first)
+
+        XCTAssertEqual(buffer.nextVideo(timeout: 0.05, epoch: first), .waiting)
+        XCTAssertEqual(buffer.nextVideo(timeout: 0.05, epoch: second), .waiting, "B's pass has not begun")
+        buffer.beginRestartedPass(epoch: second)
+        guard case let .unit(entry) = buffer.nextVideo(timeout: 1, epoch: second) else {
+            return XCTFail("B's pass takes B's first unit")
+        }
+        XCTAssertEqual(entry.ticks, 40 * Self.second)
+        XCTAssertTrue(entry.isRandomAccess)
     }
 
     func testSeekRestartsAtTheLastRandomAccessUnitAndRefusesTargetsOutsideTheLoadedPart() {
         let buffer = ReadAheadBuffer()
         for second in 0..<10 {
             XCTAssertTrue(buffer.receive(Self.unit(Int64(second))))
-            XCTAssertTrue(buffer.receive(Self.audio(1_000 + UInt64(Int64(second) * Self.second))))
+            XCTAssertTrue(buffer.receive(Self.audio(UInt64(Int64(second) * Self.second))))
         }
         for _ in 0..<6 { _ = take(buffer) }
 
@@ -131,12 +180,13 @@ final class ReadAheadBufferTests: XCTestCase {
     }
 
     func testTimestampsKeepCountingAcrossThe33BitWrap() {
+        // A timeline that starts two seconds before the 33-bit counter wraps.
         let origin = (UInt64(1) << 33) - UInt64(2 * Self.second)
         let buffer = ReadAheadBuffer()
         for second in 0..<5 {
             XCTAssertTrue(buffer.receive(Self.unit(Int64(second), origin: origin)))
         }
-        XCTAssertEqual(buffer.loadedTicks, 0...(4 * Self.second))
+        XCTAssertEqual(buffer.loadedTicks, (-2 * Self.second)...(2 * Self.second))
     }
 
     func testCancelUnblocksTheReaderAndTheDecoder() {

@@ -61,10 +61,10 @@ for macOS 14 through 25.
 ## Direct Blu-ray source support
 
 Unencrypted Blu-ray 3D images and folders convert without MakeMKV and without
-an intermediate MKV when the disc's main feature is one complete 3D clip; see
+an intermediate MKV when the disc's main feature is readable 3D, including
+features made of several clips; see
 [direct pipeline contracts](docs/direct-pipeline-contracts.md#direct-blu-ray-reads).
-Encrypted sources, titles that span several clips, and previews still use
-MakeMKV.
+Encrypted sources and previews still use MakeMKV.
 
 The production app bundle includes the arm64 `bd3d_reader` and `ssif_probe`
 helpers and their private `libbluray` and `libudfread` dylibs under

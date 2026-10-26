@@ -5,7 +5,6 @@ final class BlurayDiscSource: Bluray3DSource {
     let info: Bluray3DSourceInfo
 
     private let disc: OpaquePointer
-    private let clipIDs: [String: String]
     private let lock = NSLock()
     private let reads: ShareConnectionMonitor?
 
@@ -26,10 +25,6 @@ final class BlurayDiscSource: Bluray3DSource {
             }
         }
         self.disc = disc
-        clipIDs = Dictionary(
-            facts.map { (String(format: "playlist:%05u", $0.playlist), $0.clipID) },
-            uniquingKeysWith: { first, _ in first }
-        )
         info = Bluray3DSourceInfo(container: container, titles: BlurayTitleSelection.ordered(facts, disc: discFacts))
     }
 
@@ -37,21 +32,26 @@ final class BlurayDiscSource: Bluray3DSource {
         bd3d_disc_close(disc)
     }
 
+    /// Every timestamp is on the playlist timeline, whatever clip it is in.
     func read(
         title: Bluray3DTitle,
+        from startTicks: Int64,
         audioTrackIDs: [Int],
         subtitleTrackIDs: [Int],
         into sink: Bluray3DPacketSink
     ) throws -> Bluray3DReadStatistics {
         if let reason = title.unsupportedReason { throw Bluray3DSourceError.unsupported(reason) }
-        guard let clipID = clipIDs[title.id] else { throw Bluray3DSourceError.titleUnavailable }
+        guard let playlist = title.playlist, info.titles.contains(where: { $0.id == title.id }) else {
+            throw Bluray3DSourceError.titleUnavailable
+        }
         lock.lock()
         defer { lock.unlock() }
         let audio = audioTrackIDs.map { UInt16(clamping: $0) }
         let subtitles = subtitleTrackIDs.map { UInt16(clamping: $0) }
         return try BlurayDemuxCallback.run(sink: sink, reads: reads) { emit, context, monitor, monitorContext, stats in
             bd3d_disc_stream(
-                disc, clipID, monitor, monitorContext, audio, audio.count, subtitles, subtitles.count, emit, context, stats
+                disc, playlist, UInt64(max(0, startTicks)), monitor, monitorContext, audio, audio.count, subtitles,
+                subtitles.count, emit, context, stats
             )
         }
     }
@@ -62,17 +62,14 @@ final class BlurayDiscSource: Bluray3DSource {
         let subtitles = withUnsafeBytes(of: &title.subtitles) {
             streams(Array($0.bindMemory(to: bd3d_stream.self)), count: title.subtitle_count)
         }
-        let clipID = withUnsafeBytes(of: &title.clip_id) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
         return BlurayTitleFacts(
             playlist: title.playlist,
             durationTicks: title.duration_ticks,
             angleCount: title.angle_count,
-            clipCount: title.clip_count,
             isMainFeature: title.main_feature,
-            coversCompleteClip: title.complete_clip,
+            clipsReadable: title.clips_readable,
             hasStereoStream: title.ssif_available,
             baseViewIsRightEye: title.base_view_right,
-            clipID: clipID,
             audio: audio,
             subtitles: subtitles
         )
@@ -97,9 +94,13 @@ enum BlurayDemuxCallback {
     /// The demuxer's reads as `ShareConnectionMonitor` sees them; one reader thread at a time.
     private final class ReadWatch {
         let monitor: ShareConnectionMonitor
+        let sink: Bluray3DPacketSink
         var readID: Int?
         var retry = ShareConnectionMonitor.Retry()
-        init(monitor: ShareConnectionMonitor) { self.monitor = monitor }
+        init(monitor: ShareConnectionMonitor, sink: Bluray3DPacketSink) {
+            self.monitor = monitor
+            self.sink = sink
+        }
     }
 
     typealias Demux = (
@@ -112,7 +113,7 @@ enum BlurayDemuxCallback {
 
     static func run(sink: Bluray3DPacketSink, reads: ShareConnectionMonitor? = nil, demux: Demux) throws -> Bluray3DReadStatistics {
         let context = Context(sink: sink)
-        let watch = reads.map(ReadWatch.init)
+        let watch = reads.map { ReadWatch(monitor: $0, sink: sink) }
         var stats = bd3d_stats()
         let result = withExtendedLifetime((context, watch)) {
             demux(
@@ -136,6 +137,8 @@ enum BlurayDemuxCallback {
             throw Bluray3DSourceError.readFailed
         case BD3D_SSIF_UNAVAILABLE:
             throw Bluray3DSourceError.unsupported(.stereoStreamMissing)
+        case BD3D_TITLE_UNAVAILABLE:
+            throw Bluray3DSourceError.titleUnavailable
         default:
             throw Bluray3DSourceError.invalidStream(description(result))
         }
@@ -150,7 +153,9 @@ enum BlurayDemuxCallback {
             watch.retry = ShareConnectionMonitor.Retry()
         case BD3D_READ_EVENT_FAILED:
             let code = POSIXErrorCode(rawValue: error) ?? .EIO
-            return watch.monitor.waitToRetry(after: POSIXError(code), &watch.retry) ? 1 : 0
+            // A read that a seek replaced stops instead of waiting for the share.
+            guard watch.sink.isWanted, watch.monitor.waitToRetry(after: POSIXError(code), &watch.retry) else { return 0 }
+            return watch.sink.isWanted ? 1 : 0
         default:
             if let id = watch.readID { watch.monitor.endRead(id) }
             watch.readID = nil
@@ -188,6 +193,7 @@ enum BlurayDemuxCallback {
         case BD3D_UNMATCHED_PES: return "a base view has no dependent view"
         case BD3D_NO_MVC: return "no MVC video"
         case BD3D_TOO_MANY_PIDS: return "too many tracks selected"
+        case BD3D_INDEX_UNAVAILABLE: return "the clip's entry-point map could not be read"
         default: return "demux error \(result.rawValue)"
         }
     }
@@ -207,12 +213,14 @@ enum BlurayTransportStream {
         }
     }
 
-    /// `chunkSize` sets how many bytes each read returns, so reads can split packets.
-    /// `failingReads` says how many reads fail, and with which errno, as a dropped share's do,
-    /// starting with the one at that position in the sequence; `reads` decides whether they are
-    /// tried again.
+    /// `chunkSize` sets how many bytes each read returns, so reads can split packets. With a
+    /// `segment`, the bytes are one playlist item's part of a clip, delivered on the playlist
+    /// timeline as the disc reader delivers them. `failingReads` says how many reads fail, and
+    /// with which errno, as a dropped share's do, starting with the one at that position in the
+    /// sequence; `reads` decides whether they are tried again.
     static func demux(
         _ data: Data,
+        segment: bd3d_segment? = nil,
         audioTrackIDs: [Int] = [],
         subtitleTrackIDs: [Int] = [],
         chunkSize: Int = 6144,
@@ -239,9 +247,16 @@ enum BlurayTransportStream {
         }
         return try withExtendedLifetime(reader) {
             try BlurayDemuxCallback.run(sink: sink, reads: reads) { emit, context, monitor, monitorContext, stats in
-                bd3d_demux(
-                    read, Unmanaged.passUnretained(reader).toOpaque(), monitor, monitorContext, audio, audio.count,
-                    subtitles, subtitles.count, emit, context, stats
+                let readContext = Unmanaged.passUnretained(reader).toOpaque()
+                guard var segment else {
+                    return bd3d_demux(
+                        read, readContext, monitor, monitorContext, audio, audio.count, subtitles, subtitles.count, emit,
+                        context, stats
+                    )
+                }
+                return bd3d_demux_segment(
+                    read, readContext, &segment, monitor, monitorContext, audio, audio.count, subtitles, subtitles.count,
+                    emit, context, stats
                 )
             }
         }

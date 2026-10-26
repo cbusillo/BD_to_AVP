@@ -8,7 +8,12 @@ import Foundation
 /// The reader thread calls `receive`, which blocks while the buffer is full. The decode thread
 /// takes video with `nextVideo` and the audio feeder takes audio with `nextAudio`. Packets behind
 /// the decoder are kept for `behindLimit` seconds, so a seek inside that history or the loaded
-/// part ahead needs no new read. Thread-safe.
+/// part ahead needs no new read. A seek anywhere else starts a new read with `restart(at:)`.
+/// Thread-safe.
+///
+/// Timestamps map onto the title's timeline, zero at the title's start: a disc reader delivers
+/// playlist time and a Matroska reader the file's own timestamps, so a read that starts mid-title
+/// lands on the same clock.
 final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
     struct VideoEntry: Equatable {
         let ticks: Int64
@@ -40,14 +45,12 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
     }
 
     let limits: Limits
+    let presentationTimeline = BluRayPresentationTimeline(originPTS: 0)
 
     private let condition = NSCondition()
     // Guarded by `condition`.
-    private var timeline: BluRayPresentationTimeline?
     private var video: [VideoEntry] = []
     private var audio: [AudioEntry] = []
-    /// Audio that arrived before the first video unit set the timeline.
-    private var untimedAudio: [BluRayPESPacket] = []
     private var videoCursor = 0
     private var audioCursor = 0
     private var bytes = 0
@@ -59,6 +62,14 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
     /// the seek is carried out.
     private var reservedSeekTicks: Int64?
     private var cancelled = false
+    /// Bumped by `restart(at:)`; packets from an older read are refused.
+    private var epoch = 0
+    /// Audio timed before this is dropped: a restarted read begins at a random access unit up to
+    /// a few seconds before its target, and that audio is never played.
+    private var audioFloor: Int64?
+    /// Set by `restart(at:)` until the decoder starts its new pass, so it cannot take a unit of
+    /// the new read while it is still on the old one.
+    private var awaitingDecoder = false
 
     init(limits: Limits = Limits()) {
         self.limits = limits
@@ -67,45 +78,110 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
     // MARK: Reader side
 
     func receive(_ packet: Bluray3DPacket) -> Bool {
+        receive(packet, epoch: nil)
+    }
+
+    /// A sink for one read: it stops taking packets once `restart(at:)` starts another.
+    func feed() -> Bluray3DPacketSink {
         condition.lock()
         defer { condition.unlock() }
-        guard !cancelled else { return false }
+        return Feed(buffer: self, epoch: epoch)
+    }
+
+    private final class Feed: Bluray3DPacketSink {
+        let buffer: ReadAheadBuffer
+        let epoch: Int
+        init(buffer: ReadAheadBuffer, epoch: Int) {
+            self.buffer = buffer
+            self.epoch = epoch
+        }
+
+        func receive(_ packet: Bluray3DPacket) -> Bool { buffer.receive(packet, epoch: epoch) }
+        var isWanted: Bool { buffer.isCurrentRead(epoch) }
+    }
+
+    /// Whether `readEpoch` is still the buffer's read, and the buffer is not cancelled.
+    func isCurrentRead(_ readEpoch: Int) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return !cancelled && readEpoch == epoch
+    }
+
+    private func receive(_ packet: Bluray3DPacket, epoch packetEpoch: Int?) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !cancelled, packetEpoch.map({ $0 == epoch }) ?? true else { return false }
         switch packet {
         case let .video(unit):
-            let timeline = timeline ?? BluRayPresentationTimeline(originPTS: unit.pts)
-            if self.timeline == nil {
-                self.timeline = timeline
-                for packet in untimedAudio {
-                    appendAudio(packet, timeline: timeline)
-                }
-                untimedAudio.removeAll()
-            }
-            let ticks = timeline.ticks(for: unit.pts, near: latestVideoTicks ?? 0)
+            let ticks = presentationTimeline.ticks(for: unit.pts, near: latestVideoTicks ?? audioFloor ?? 0)
             video.append(VideoEntry(ticks: ticks, isRandomAccess: unit.isRandomAccess, data: unit.data))
             bytes += unit.data.count
             latestVideoTicks = max(latestVideoTicks ?? ticks, ticks)
         case let .audio(packet):
-            if let timeline {
-                appendAudio(packet, timeline: timeline)
-            } else {
-                untimedAudio.append(packet)
-            }
-            bytes += packet.payload.count
+            appendAudio(packet)
         case .subtitle:
             return true
         }
         condition.broadcast()
-        while !cancelled, isFull {
+        while !cancelled, packetEpoch.map({ $0 == epoch }) ?? true, isFull {
             trimHistory(force: true)
             guard isFull else { break }
             condition.wait()
         }
-        return !cancelled
+        return !cancelled && (packetEpoch.map { $0 == epoch } ?? true)
     }
 
-    /// The reader stopped: at the end of the title, or with an error.
-    func finish(error: String? = nil) {
+    /// The current read: bumped by every `restart(at:)`.
+    var readEpoch: Int {
         condition.lock()
+        defer { condition.unlock() }
+        return epoch
+    }
+
+    /// Drops everything for a read that starts at `ticks`, and refuses packets from the read
+    /// before. The decoder takes nothing until it calls `beginRestartedPass(epoch:)` with the
+    /// returned read.
+    @discardableResult
+    func restart(at ticks: Int64) -> Int {
+        condition.lock()
+        defer { condition.unlock() }
+        epoch += 1
+        video.removeAll()
+        audio.removeAll()
+        videoCursor = 0
+        audioCursor = 0
+        bytes = 0
+        latestVideoTicks = nil
+        lastAudioTicks = ticks
+        finished = false
+        finishError = nil
+        reservedSeekTicks = nil
+        audioFloor = ticks - Self.audioPacketSlackTicks
+        awaitingDecoder = true
+        condition.broadcast()
+        return epoch
+    }
+
+    /// The decoder is ready for the read `epoch`. An acknowledgement for a read that a later
+    /// `restart(at:)` replaced does nothing, so a decoder still on an older seek cannot take the
+    /// new read's units.
+    func beginRestartedPass(epoch passEpoch: Int) {
+        condition.lock()
+        if passEpoch == epoch {
+            awaitingDecoder = false
+            condition.broadcast()
+        }
+        condition.unlock()
+    }
+
+    /// The reader stopped: at the end of the title, or with an error. A finish from a read that
+    /// `restart(at:)` replaced is ignored.
+    func finish(error: String? = nil, feed: Bluray3DPacketSink? = nil) {
+        condition.lock()
+        if let feed = feed as? Feed, feed.epoch != epoch {
+            condition.unlock()
+            return
+        }
         finished = true
         finishError = error
         condition.broadcast()
@@ -122,19 +198,15 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
 
     // MARK: Decoder side
 
-    /// The playback timeline, once the first video unit has arrived.
-    var presentationTimeline: BluRayPresentationTimeline? {
-        condition.lock()
-        defer { condition.unlock() }
-        return timeline
-    }
-
-    /// The next video unit in decode order, waiting up to `timeout` seconds for one.
-    func nextVideo(timeout: TimeInterval) -> VideoResult {
+    /// The next video unit in decode order, waiting up to `timeout` seconds for one. With an
+    /// `epoch`, only a unit of that read: once a restart replaces it, the decoder waits until it
+    /// starts its pass for the new read.
+    func nextVideo(timeout: TimeInterval, epoch passEpoch: Int? = nil) -> VideoResult {
         condition.lock()
         defer { condition.unlock() }
         let deadline = Date(timeIntervalSinceNow: timeout)
-        while !cancelled, videoCursor >= video.count, !finished {
+        func stale() -> Bool { passEpoch.map { $0 != epoch } ?? false }
+        while !cancelled, stale() || awaitingDecoder || videoCursor >= video.count && !finished {
             if !condition.wait(until: deadline) { return .waiting }
         }
         guard !cancelled else { return .ended(error: nil) }
@@ -151,6 +223,7 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         var taken: [AudioEntry] = []
+        guard !awaitingDecoder else { return taken }
         while audioCursor < audio.count, (audio[audioCursor].ticks ?? .min) <= ticks {
             taken.append(audio[audioCursor])
             audioCursor += 1
@@ -242,10 +315,14 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         secondsAheadLocked >= limits.aheadTarget || bytes >= limits.maximumBytes
     }
 
-    private func appendAudio(_ packet: BluRayPESPacket, timeline: BluRayPresentationTimeline) {
-        let ticks = packet.pts.map { timeline.ticks(for: $0, near: lastAudioTicks) }
+    private func appendAudio(_ packet: BluRayPESPacket) {
+        let ticks = packet.pts.map { presentationTimeline.ticks(for: $0, near: lastAudioTicks) }
         if let ticks { lastAudioTicks = ticks }
+        // An untimed packet continues the one before it, so it follows that packet's fate.
+        let dropped = ticks.map { $0 < (audioFloor ?? .min) } ?? (audio.isEmpty && audioFloor != nil)
+        guard !dropped else { return }
         audio.append(AudioEntry(ticks: ticks, packet: packet))
+        bytes += packet.payload.count
     }
 
     /// Drops history behind the decoder: older than `behindLimit`, or, when `force` and the

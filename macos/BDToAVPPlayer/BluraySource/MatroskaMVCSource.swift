@@ -30,15 +30,22 @@ final class FileByteSource: ByteSource {
 final class ShareRetryingByteSource: ByteSource {
     private let base: ByteSource
     private let reads: ShareConnectionMonitor
+    private let isWanted: () -> Bool
     var size: Int64 { base.size }
 
-    init(_ base: ByteSource, reads: ShareConnectionMonitor) {
+    init(_ base: ByteSource, reads: ShareConnectionMonitor, while isWanted: @escaping () -> Bool = { true }) {
         self.base = base
         self.reads = reads
+        self.isWanted = isWanted
+    }
+
+    /// The same source for one read of a title, whose retries stop once `isWanted` turns false.
+    func wanting(_ isWanted: @escaping () -> Bool) -> ShareRetryingByteSource {
+        ShareRetryingByteSource(base, reads: reads, while: isWanted)
     }
 
     func read(at offset: Int64, count: Int) throws -> Data {
-        try reads.read { try base.read(at: offset, count: count) }
+        try reads.read(while: isWanted) { try base.read(at: offset, count: count) }
     }
 }
 
@@ -74,6 +81,12 @@ final class MatroskaMVCSource: Bluray3DSource {
     private let source: ByteSource
     private let timestampScale: Int64
     private let firstCluster: Int64
+    private let segmentDataStart: Int64
+    private let cuesPosition: Int64?
+    private let cueLock = NSLock()
+    /// The video track's cue points, read on the first seek: cluster timestamp and the cluster's
+    /// offset in the file.
+    private var videoCues: [(timestamp: Int64, cluster: Int64)]?
 
     /// With `reads`, failed reads wait and try again instead of ending playback.
     convenience init(url: URL, reads: ShareConnectionMonitor? = nil) throws {
@@ -87,6 +100,8 @@ final class MatroskaMVCSource: Bluray3DSource {
         tracks = header.tracks
         timestampScale = header.timestampScale
         firstCluster = header.firstCluster
+        segmentDataStart = header.segmentDataStart
+        cuesPosition = header.cuesPosition
         let video = header.tracks.first { $0.type == 1 && $0.mvcConfiguration != nil }
         let title = Bluray3DTitle(
             id: "matroska",
@@ -103,6 +118,7 @@ final class MatroskaMVCSource: Bluray3DSource {
 
     func read(
         title: Bluray3DTitle,
+        from startTicks: Int64,
         audioTrackIDs: [Int],
         subtitleTrackIDs: [Int],
         into sink: Bluray3DPacketSink
@@ -115,8 +131,15 @@ final class MatroskaMVCSource: Bluray3DSource {
         let audio = Set(audioTrackIDs)
         let subtitles = Set(subtitleTrackIDs)
         var statistics = Bluray3DReadStatistics()
-        let reader = EBMLReader(source: source, offset: firstCluster)
+        // A read that a seek replaces stops retrying a dropped share instead of waiting for it.
+        let titleSource = (source as? ShareRetryingByteSource)?.wanting { [weak sink] in sink?.isWanted ?? false } ?? source
+        let reader = EBMLReader(
+            source: titleSource,
+            offset: startTicks > 0 ? try clusterOffset(at: startTicks, video: video.number) : firstCluster
+        )
         var clusterTimestamp: Int64 = 0
+        // Decoding starts at a keyframe; a cluster found by its cue normally starts with one.
+        var awaitingKeyframe = startTicks > 0
 
         func deliver(_ block: MatroskaBlock) throws -> Bool {
             let (timestamp, overflow) = clusterTimestamp.addingReportingOverflow(Int64(block.relativeTimestamp))
@@ -125,6 +148,10 @@ final class MatroskaMVCSource: Bluray3DSource {
             let packet: Bluray3DPacket
             if block.track == video.number {
                 guard let frame = block.frames.first else { return true }
+                if awaitingKeyframe {
+                    guard block.isKeyframe else { return true }
+                    awaitingKeyframe = false
+                }
                 packet = .video(
                     MVCAccessUnit(pts: pts, dts: nil, isRandomAccess: block.isKeyframe, data: try converter.convert(frame))
                 )
@@ -175,6 +202,89 @@ final class MatroskaMVCSource: Bluray3DSource {
             }
         }
         return statistics.reading(reader)
+    }
+
+    /// Where to start reading for `ticks`: the last cluster that the video track's cues place at
+    /// or before it, or, without cues, the last cluster whose timestamp is at or before it.
+    private func clusterOffset(at ticks: Int64, video: Int) throws -> Int64 {
+        // Matroska timestamps count `timestampScale` nanoseconds; 90 kHz ticks are 100,000 / 9 ns.
+        let target = Int64((Double(ticks) * 100_000 / 9 / Double(timestampScale)).rounded(.down))
+        let cues = try cueLock.withLock {
+            if videoCues == nil { videoCues = try readCues(video: video) }
+            return videoCues ?? []
+        }
+        if let cue = cues.last(where: { $0.timestamp <= target }) {
+            return cue.cluster
+        }
+        if !cues.isEmpty { return firstCluster }
+        return try scanClusters(through: target, video: video)
+    }
+
+    private func readCues(video: Int) throws -> [(timestamp: Int64, cluster: Int64)] {
+        guard let cuesPosition else { return [] }
+        let reader = EBMLReader(source: source, offset: cuesPosition)
+        guard let cues = try reader.nextElement(), cues.id == MatroskaID.cues, cues.end != .max else { return [] }
+        var points: [(timestamp: Int64, cluster: Int64)] = []
+        while let point = try reader.nextElement(endingBefore: cues.end) {
+            guard point.id == MatroskaID.cuePoint else {
+                try reader.skip(point)
+                continue
+            }
+            var time: Int64?
+            var cluster: Int64?
+            for child in try reader.children(of: point) {
+                if child.id == MatroskaID.cueTime { time = Int64(exactly: try reader.unsigned(child)) }
+                guard child.id == MatroskaID.cueTrackPositions else { continue }
+                let positions = try reader.children(of: child)
+                let track = try positions.first { $0.id == MatroskaID.cueTrack }.map { try reader.integer($0) }
+                if track == video, let position = try positions.first(where: { $0.id == MatroskaID.cueClusterPosition }) {
+                    cluster = Int64(exactly: try reader.unsigned(position)).map { segmentDataStart + $0 }
+                }
+            }
+            reader.offset = point.end
+            if let time, let cluster, cluster >= firstCluster, cluster < source.size {
+                points.append((time, cluster))
+            }
+        }
+        return points.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    /// For files without cues: the last cluster timed at or before `target` whose first video
+    /// block is a keyframe, so decoding can start there and run forward to the target. Clusters
+    /// are read from the first one on; within each, only the elements up to its first video block.
+    private func scanClusters(through target: Int64, video: Int) throws -> Int64 {
+        let reader = EBMLReader(source: source, offset: firstCluster)
+        var best = firstCluster
+        while let element = try reader.nextElement(), element.id == MatroskaID.cluster, element.end != .max {
+            var timestamp: Int64?
+            var startsWithKeyframe = false
+            while let child = try reader.nextElement(endingBefore: element.end) {
+                if child.id == MatroskaID.timestamp {
+                    timestamp = Int64(exactly: try reader.unsigned(child))
+                    reader.offset = child.end
+                    continue
+                }
+                let block: MatroskaBlock?
+                switch child.id {
+                case MatroskaID.simpleBlock:
+                    block = try MatroskaBlock(try reader.payload(child, limit: EBMLReader.maximumBlockSize), simple: true)
+                case MatroskaID.blockGroup:
+                    block = try reader.blockGroup(child)
+                default:
+                    block = nil
+                    try reader.skip(child)
+                }
+                if let block, block.track == video {
+                    startsWithKeyframe = block.isKeyframe
+                    break
+                }
+                reader.offset = child.end
+            }
+            guard let timestamp, timestamp <= target else { break }
+            if startsWithKeyframe { best = element.start }
+            reader.offset = element.end
+        }
+        return best
     }
 
     /// A Matroska timestamp, scaled to nanoseconds by `scale`, as a 33-bit 90 kHz PTS.
@@ -238,6 +348,16 @@ enum MatroskaID {
     static let blockGroup: UInt32 = 0xA0
     static let block: UInt32 = 0xA1
     static let referenceBlock: UInt32 = 0xFB
+    static let seekHead: UInt32 = 0x114D_9B74
+    static let seek: UInt32 = 0x4DBB
+    static let seekID: UInt32 = 0x53AB
+    static let seekPosition: UInt32 = 0x53AC
+    static let cues: UInt32 = 0x1C53_BB6B
+    static let cuePoint: UInt32 = 0xBB
+    static let cueTime: UInt32 = 0xB3
+    static let cueTrackPositions: UInt32 = 0xB7
+    static let cueTrack: UInt32 = 0xF7
+    static let cueClusterPosition: UInt32 = 0xF1
     /// `mvcC`, the MVC decoder configuration block addition type.
     static let mvcConfigurationType: UInt64 = 0x6D76_6343
     /// Top-level Segment children; one of these ends a cluster of unknown size.
@@ -252,6 +372,10 @@ struct MatroskaHeader {
     let timestampScale: Int64
     let durationSeconds: Double
     let firstCluster: Int64
+    /// Where the Segment's data starts; seek and cue positions count from here.
+    let segmentDataStart: Int64
+    /// The Cues element, from the SeekHead or found before the first cluster.
+    let cuesPosition: Int64?
 
     init(source: ByteSource) throws {
         let reader = EBMLReader(source: source, offset: 0)
@@ -267,6 +391,7 @@ struct MatroskaHeader {
         var tracks: [MatroskaMVCSource.Track]?
         var scale: Int64 = 1_000_000
         var duration: Double = 0
+        var cues: Int64?
         while let element = try reader.nextElement(endingBefore: segment.end) {
             switch element.id {
             case MatroskaID.cluster:
@@ -275,7 +400,23 @@ struct MatroskaHeader {
                 timestampScale = scale
                 durationSeconds = duration * Double(scale) / 1_000_000_000
                 firstCluster = element.start
+                segmentDataStart = segment.dataStart
+                cuesPosition = cues
                 return
+            case MatroskaID.cues:
+                cues = element.start
+                try reader.skip(element)
+            case MatroskaID.seekHead:
+                for seek in try reader.children(of: element) where seek.id == MatroskaID.seek {
+                    let fields = try reader.children(of: seek)
+                    let id = try fields.first { $0.id == MatroskaID.seekID }.map { try reader.unsigned($0) }
+                    if id == UInt64(MatroskaID.cues),
+                       let position = try fields.first(where: { $0.id == MatroskaID.seekPosition }).map({ try reader.unsigned($0) }),
+                       let offset = Int64(exactly: position) {
+                        cues = cues ?? segment.dataStart + offset
+                    }
+                }
+                reader.offset = element.end
             case MatroskaID.info:
                 for child in try reader.children(of: element) {
                     if child.id == MatroskaID.timestampScale {

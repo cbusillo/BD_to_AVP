@@ -31,18 +31,6 @@ enum PlaybackSeekPolicy {
         }
         return min(lowerBound, duration)
     }
-
-    /// Why a Blu-ray 3D seek did not move: only the loaded part can be reached until seeking
-    /// anywhere arrives (#1113).
-    static func blurayOutsideLoadedNotice(target: TimeInterval, loaded: ClosedRange<TimeInterval>?) -> String {
-        guard let loaded else {
-            return "This part hasn't loaded yet. Seeking anywhere in Blu-ray 3D titles comes in a later update."
-        }
-        if target > loaded.upperBound {
-            return "Loaded through \(PlaybackTimeFormatter.string(for: loaded.upperBound)). Seeking further ahead comes in a later update."
-        }
-        return "Going back works from \(PlaybackTimeFormatter.string(for: loaded.lowerBound)) for now. Seeking further back comes in a later update."
-    }
 }
 
 /// The scrub bar's span and its loaded range. The span is the title's full length whenever that
@@ -648,13 +636,12 @@ enum ResumeWritePolicy {
         return "Live titles can't resume yet, so this starts from the beginning. You stopped at \(PlaybackTimeFormatter.string(for: savedPosition))."
     }
 
-    /// What a Blu-ray 3D title says when the wearer comes back to it, until resuming anywhere
-    /// arrives (#1113). The position is still saved for then.
-    static func blurayResumeNotice(savedPosition: TimeInterval) -> String? {
-        guard savedPosition.isFinite, savedPosition >= liveResumeNoticeMinimumPosition else {
-            return nil
-        }
-        return "Blu-ray 3D titles can't resume yet, so this starts from the beginning. You stopped at \(PlaybackTimeFormatter.string(for: savedPosition))."
+    /// Where a Blu-ray 3D title starts: the saved position, which the reader reaches through the
+    /// disc's entry points or the Matroska cues (#1113), or the beginning.
+    static func blurayStartSeconds(savedPosition: TimeInterval?, duration: TimeInterval) -> TimeInterval {
+        var resume = PlaybackPendingResumeState()
+        resume.store(savedPosition, duration: duration)
+        return resume.consume() ?? 0
     }
 
     static func allowsWrite(

@@ -37,6 +37,8 @@ enum Bluray3DUnsupportedReason: String, Codable, Hashable, Sendable {
     case encrypted
     case notStereo3D = "not-3d"
     case multipleAngles = "multiple-angles"
+    /// Only in records saved before titles made of several clips could play (#1142); kept so
+    /// those records still load, and Locations inspect such files again.
     case multipleClips = "multiple-clips"
     case partialClip = "partial-clip"
     case stereoStreamMissing = "ssif-missing"
@@ -52,7 +54,7 @@ enum Bluray3DUnsupportedReason: String, Codable, Hashable, Sendable {
         case .multipleClips:
             return "Titles made of several clips are not supported yet."
         case .partialClip:
-            return "Titles that play part of a clip are not supported yet."
+            return "This title starts or ends partway through a clip where playback can't join it yet."
         case .stereoStreamMissing:
             return "This title's 3D stream is missing from the disc."
         }
@@ -125,6 +127,14 @@ enum Bluray3DPacket: Sendable {
 /// order, and blocks while the sink does, so a sink can pace the reader; returning false stops it.
 protocol Bluray3DPacketSink: AnyObject {
     func receive(_ packet: Bluray3DPacket) -> Bool
+    /// Whether the read still wants packets. A reader waiting to retry a share read stops once
+    /// this turns false, as when a seek replaces the read, instead of retrying until the share
+    /// answers again.
+    var isWanted: Bool { get }
+}
+
+extension Bluray3DPacketSink {
+    var isWanted: Bool { true }
 }
 
 /// Forwards video to a closure and audio to the headset audio player's PES sink.
@@ -184,12 +194,28 @@ enum Bluray3DSourceError: Error, Equatable, LocalizedError {
 protocol Bluray3DSource: AnyObject {
     var info: Bluray3DSourceInfo { get }
 
-    /// Reads `title` from the start, delivering its MVC video plus the chosen audio and
-    /// subtitle tracks to `sink` until the end, an error, or the sink stops. Blocks the caller.
+    /// Reads `title` from `startTicks` on its timeline (90 kHz, zero at the title's start) to
+    /// the end, an error, or until the sink stops, delivering its MVC video plus the chosen audio
+    /// and subtitle tracks to `sink`. Video starts at the last random access unit at or before
+    /// `startTicks`, found through the disc's entry-point map or the Matroska cues. Blocks the
+    /// caller.
+    func read(
+        title: Bluray3DTitle,
+        from startTicks: Int64,
+        audioTrackIDs: [Int],
+        subtitleTrackIDs: [Int],
+        into sink: Bluray3DPacketSink
+    ) throws -> Bluray3DReadStatistics
+}
+
+extension Bluray3DSource {
+    /// Reads `title` from its start.
     func read(
         title: Bluray3DTitle,
         audioTrackIDs: [Int],
         subtitleTrackIDs: [Int],
         into sink: Bluray3DPacketSink
-    ) throws -> Bluray3DReadStatistics
+    ) throws -> Bluray3DReadStatistics {
+        try read(title: title, from: 0, audioTrackIDs: audioTrackIDs, subtitleTrackIDs: subtitleTrackIDs, into: sink)
+    }
 }
