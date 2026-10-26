@@ -73,6 +73,56 @@ final class BlurayTransportStreamTests: XCTestCase {
         XCTAssertEqual(sink.video.count, 2)
     }
 
+    private func fiveFrames() -> Data {
+        var stream = Data()
+        for frame in 0..<5 {
+            let time = UInt64(frame) * 3754
+            stream += M2TS.pes(pid: 0x1011, pts: time, dts: time, payload: slice)
+            stream += M2TS.pes(pid: 0x1012, pts: time, dts: time, payload: dependent)
+        }
+        return stream
+    }
+
+    func testReadsDroppedByAShareAreTriedAgainWithoutLosingAPacket() throws {
+        let stream = fiveFrames()
+        let clean = CollectingPacketSink()
+        _ = try BlurayTransportStream.demux(stream, chunkSize: 500, into: clean)
+        let monitor = ShareConnectionMonitor(timing: .init(lostAfter: 2, retryInterval: 0.01))
+        let sink = CollectingPacketSink()
+
+        let statistics = try BlurayTransportStream.demux(
+            stream, chunkSize: 500, failingReads: (after: 2, count: 5, error: ENOTCONN), reads: monitor, into: sink
+        )
+
+        XCTAssertEqual(sink.video.map(\.data), clean.video.map(\.data))
+        XCTAssertEqual(sink.video.map(\.pts), clean.video.map(\.pts))
+        XCTAssertEqual(statistics.bytes, UInt64(stream.count))
+        XCTAssertFalse(monitor.isConnectionLost)
+    }
+
+    func testADroppedReadEndsTheStreamWhenNothingRetriesIt() {
+        XCTAssertThrowsError(
+            try BlurayTransportStream.demux(
+                fiveFrames(), chunkSize: 500, failingReads: (after: 2, count: 1, error: ENOTCONN), into: CollectingPacketSink()
+            )
+        ) { error in
+            XCTAssertEqual(error as? Bluray3DSourceError, .readFailed)
+        }
+    }
+
+    func testADiscReadThatNoReconnectCanCureIsNotRetried() {
+        let monitor = ShareConnectionMonitor(timing: .init(lostAfter: 2, retryInterval: 0.01))
+
+        XCTAssertThrowsError(
+            try BlurayTransportStream.demux(
+                fiveFrames(), chunkSize: 500, failingReads: (after: 2, count: 1, error: EACCES), reads: monitor,
+                into: CollectingPacketSink()
+            )
+        ) { error in
+            XCTAssertEqual(error as? Bluray3DSourceError, .readFailed)
+        }
+    }
+
     func testDecodeTimesMayWrapPastThe33BitLimit() throws {
         let sink = CollectingPacketSink()
 

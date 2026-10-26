@@ -94,8 +94,20 @@ typedef struct {
 
 /// Returns nonzero to stop demuxing.
 typedef int (*bd3d_packet_fn)(void *context, const bd3d_packet *packet);
-/// Returns the bytes read, 0 at the end, or a negative value on failure.
+/// Returns the bytes read, 0 at the end, or a negative value on failure. A failed read leaves
+/// the stream where it was, so the same read can be tried again.
 typedef int64_t (*bd3d_read_fn)(void *context, uint8_t *buffer, int64_t size);
+
+typedef enum {
+    BD3D_READ_EVENT_STARTED,
+    BD3D_READ_EVENT_FAILED,
+    BD3D_READ_EVENT_FINISHED,
+} bd3d_read_event;
+
+/// Watches each read, for a source on a network share. On BD3D_READ_EVENT_FAILED, with the read's
+/// errno as `error`, it may wait, then returns nonzero to try the same read again or zero to give
+/// up. `error` is 0 and the return value is ignored for the other events.
+typedef int (*bd3d_read_monitor_fn)(void *context, bd3d_read_event event, int error);
 
 typedef struct bd3d_disc bd3d_disc;
 
@@ -105,10 +117,12 @@ void bd3d_disc_close(bd3d_disc *disc);
 bd3d_disc_info bd3d_disc_get_info(const bd3d_disc *disc);
 /// Fills `title` for the index-th title of at least 60 seconds. Returns false when unavailable.
 bool bd3d_disc_title(bd3d_disc *disc, uint32_t index, bd3d_title *title);
-/// Demuxes the SSIF of a single-clip title. PIDs not listed are skipped.
+/// Demuxes the SSIF of a single-clip title. PIDs not listed are skipped. `monitor` may be NULL.
 bd3d_result bd3d_disc_stream(
     bd3d_disc *disc,
     const char *clip_id,
+    bd3d_read_monitor_fn monitor,
+    void *monitor_context,
     const uint16_t *audio_pids,
     size_t audio_count,
     const uint16_t *subtitle_pids,
@@ -117,10 +131,12 @@ bd3d_result bd3d_disc_stream(
     void *emit_context,
     bd3d_stats *stats
 );
-/// Demuxes a 192-byte-packet M2TS stream from any reader.
+/// Demuxes a 192-byte-packet M2TS stream from any reader. `monitor` may be NULL.
 bd3d_result bd3d_demux(
     bd3d_read_fn read,
     void *read_context,
+    bd3d_read_monitor_fn monitor,
+    void *monitor_context,
     const uint16_t *audio_pids,
     size_t audio_count,
     const uint16_t *subtitle_pids,

@@ -65,6 +65,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     var willChangeClockRate: (@Sendable (Float) -> Void)?
 
     private let source: Bluray3DSource
+    /// The share reads the source retries through a dropped connection; stopping ends them.
+    private let reads: ShareConnectionMonitor?
     private let configuration: Configuration
     private let buffer: ReadAheadBuffer
     private let state: OSAllocatedUnfairLock<SharedState>
@@ -99,12 +101,14 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         source: Bluray3DSource,
         title: Bluray3DTitle,
         initialAudioTrackID: UInt16? = nil,
+        reads: ShareConnectionMonitor? = nil,
         configuration: Configuration = Configuration(),
         renderer: AVSampleBufferVideoRenderer = AVSampleBufferVideoRenderer(),
         locale: Locale = .current
     ) {
         self.renderer = renderer
         self.source = source
+        self.reads = reads
         self.title = title
         self.configuration = configuration
         buffer = ReadAheadBuffer(limits: configuration.buffer)
@@ -155,6 +159,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             synchronizer.rate = 0
         }
         buffer.cancel()
+        reads?.cancel()
         renderer.flush()
         state.withLock { $0.audioPlayer }?.discontinuity()
     }
@@ -453,6 +458,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             synchronizer.rate = 0
         }
         buffer.cancel()
+        reads?.cancel()
     }
 
     private func clockTicks() -> Int64 {
