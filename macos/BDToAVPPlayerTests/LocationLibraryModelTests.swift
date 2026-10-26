@@ -307,6 +307,62 @@ final class LocationLibraryModelTests: XCTestCase {
         XCTAssertTrue(listing.isTruncated)
     }
 
+    func testScannerLooksAgainWhenAShareFirstListsNothing() throws {
+        let root = try makeDirectory()
+        try Data().write(to: root.appendingPathComponent("Movie.mov"))
+        var looks = 0
+
+        let listing = try LocationScanner.scan(root: root, emptyRetryDelay: .zero) { url in
+            looks += 1
+            return looks == 1 ? [] : try LocationScanner.coordinatedContents(of: url)
+        }
+
+        XCTAssertEqual(listing.candidates.map(\.fileName), ["Movie.mov"])
+        XCTAssertFalse(listing.folderLooksEmpty)
+    }
+
+    func testScannerSaysWhatItCouldNotReadInsteadOfListingNothing() throws {
+        let root = try makeDirectory()
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Locked", isDirectory: true), withIntermediateDirectories: true
+        )
+        try Data().write(to: root.appendingPathComponent("Movie.mov"))
+
+        let listing = try LocationScanner.scan(root: root) { url in
+            guard url.lastPathComponent != "Locked" else { throw CocoaError(.fileReadNoPermission) }
+            return try LocationScanner.coordinatedContents(of: url)
+        }
+        XCTAssertEqual(listing.candidates.map(\.fileName), ["Movie.mov"])
+        XCTAssertEqual(listing.unreadableCount, 1)
+
+        let empty = try LocationScanner.scan(root: try makeDirectory(), emptyRetryDelay: .zero)
+        XCTAssertTrue(empty.folderLooksEmpty)
+    }
+
+    func testAnEmptyFolderIsShownAsEmptyRatherThanAsHavingNoMovies() async throws {
+        let fixture = makeFixture()
+        let locations = fixture.locations(inspector: Self.shareInspector)
+
+        let locationID = try await XCTUnwrapAsync(await locations.add(folderURL: try makeDirectory()))
+
+        XCTAssertEqual(locations.statuses[locationID], .available)
+        XCTAssertTrue(locations.emptyFolderLocations.contains(locationID))
+    }
+
+    func testLocationsAreNamedAsFilesNamesThem() {
+        // A share root is a mount folder with a random prefix; Files shows the share's name.
+        XCTAssertEqual(
+            LocationLibraryModel.displayName(folderName: "fHqWGQmedia", localizedName: "fHqWGQmedia", volumeName: "media"),
+            "media"
+        )
+        XCTAssertEqual(
+            LocationLibraryModel.displayName(folderName: "Testers", localizedName: "Testers", volumeName: nil),
+            "Testers"
+        )
+        XCTAssertEqual(LocationLibraryModel.displayName(folderName: "Movies", localizedName: nil, volumeName: ""), "Movies")
+        XCTAssertEqual(LocationLibraryModel.displayName(folderName: "/", localizedName: nil, volumeName: nil), "Location")
+    }
+
     // MARK: Fixtures
 
     /// Formats by file name, standing in for AVFoundation and libbluray.
