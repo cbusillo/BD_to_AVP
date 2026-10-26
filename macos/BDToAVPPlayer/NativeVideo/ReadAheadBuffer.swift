@@ -134,6 +134,9 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         case let .subtitle(packet):
             appendSubtitle(packet)
             return true
+        case let .clipStart(pts):
+            clearSubtitles(at: presentationTimeline.ticks(for: pts, near: latestVideoTicks ?? audioFloor ?? 0))
+            return true
         }
         condition.broadcast()
         while !cancelled, packetEpoch.map({ $0 == epoch }) ?? true, isFull {
@@ -357,13 +360,25 @@ final class ReadAheadBuffer: Bluray3DPacketSink, @unchecked Sendable {
         let displays = decoder.receive(packet.payload, ticks: ticks)
         subtitleDecoders[packet.pid] = decoder
         for display in displays {
-            subtitleSequence += 1
-            var entries = subtitleDisplays[packet.pid] ?? []
-            // Displays come in time order; one that does not replaces those it precedes.
-            entries.removeAll { $0.display.ticks >= display.ticks }
-            entries.append(SubtitleEntry(sequence: subtitleSequence, display: display))
-            subtitleDisplays[packet.pid] = entries
+            append(display, pid: packet.pid)
         }
+    }
+
+    /// A clip ends: every track's line clears, and its decoder starts over with the next clip.
+    private func clearSubtitles(at ticks: Int64) {
+        for pid in subtitleDecoders.keys {
+            subtitleDecoders[pid]?.reset()
+            append(PGSDisplay(ticks: ticks, videoWidth: 0, videoHeight: 0, objects: [], palette: []), pid: pid)
+        }
+    }
+
+    private func append(_ display: PGSDisplay, pid: UInt16) {
+        subtitleSequence += 1
+        var entries = subtitleDisplays[pid] ?? []
+        // Displays come in time order; one that does not replaces those it precedes.
+        entries.removeAll { $0.display.ticks >= display.ticks }
+        entries.append(SubtitleEntry(sequence: subtitleSequence, display: display))
+        subtitleDisplays[pid] = entries
     }
 
     /// Drops displays that ended before `ticks`, keeping the one that shows at `ticks`.

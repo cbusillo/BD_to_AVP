@@ -1021,6 +1021,10 @@ bd3d_result bd3d_demux_segment(
     if (result == BD3D_OK) {
         result = select_pids(&demux, subtitle_pids, subtitle_count, BD3D_PACKET_SUBTITLE);
     }
+    if (result == BD3D_OK && segment != NULL && subtitle_count > 0) {
+        bd3d_packet start = {.kind = BD3D_PACKET_CLIP_START, .pts = segment->playlist_time & TIMESTAMP_MASK};
+        result = emit(&demux, &start);
+    }
     uint8_t *buffer = result == BD3D_OK ? malloc(READ_CHUNK_SIZE) : NULL;
     if (result == BD3D_OK && buffer == NULL) {
         result = BD3D_OUT_OF_MEMORY;

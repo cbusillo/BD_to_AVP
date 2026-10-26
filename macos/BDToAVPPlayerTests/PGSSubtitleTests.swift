@@ -250,6 +250,39 @@ final class PGSSubtitleTests: XCTestCase {
         XCTAssertEqual(buffer.subtitleDisplay(pid: 0x1201, at: 7 * Self.second)?.display.objects.count, 1)
     }
 
+    /// A disc title's second clip: the line the first clip showed ends where the clip does, even
+    /// though its clear lay past the clip's end and was dropped with it.
+    func testAClipStartClearsTheLineTheClipBeforeLeftUp() throws {
+        let idr = Data([0, 0, 0, 1, 0x65]) + Data(repeating: 0xAB, count: 300)
+        let dependent = Data([0, 0, 0, 1, 0x14]) + Data(repeating: 0xEF, count: 250)
+        var clip = M2TS.pes(pid: 0x1011, pts: 900_000, dts: 900_000, payload: idr)
+        clip += M2TS.pes(pid: 0x1012, pts: 900_000, dts: 900_000, payload: dependent)
+        // The second clip's own first line comes ten seconds in.
+        for segment in PGS.block(x: 0, y: 0, width: 2, height: 2) {
+            clip += M2TS.pes(pid: 0x1200, pts: 1_800_000, payload: segment)
+        }
+        // The item plays this clip from 10 s (900,000) for 20 s, at 50 s on the playlist.
+        let segment = bd3d_segment(in_time: 900_000, duration: 1_800_000, playlist_time: 4_500_000, start_offset: .min, trim_end: false)
+        let sink = CollectingPacketSink()
+        _ = try BlurayTransportStream.demux(clip, segment: segment, subtitleTrackIDs: [0x1200], into: sink)
+        guard case let .clipStart(pts) = try XCTUnwrap(sink.packets.first) else { return XCTFail("no clip start first") }
+        XCTAssertEqual(pts, 4_500_000)
+        // Without subtitles there is nothing to clear, and the signal is not sent.
+        let silent = CollectingPacketSink()
+        _ = try BlurayTransportStream.demux(clip, segment: segment, into: silent)
+        XCTAssertFalse(silent.packets.contains { if case .clipStart = $0 { return true } else { return false } })
+
+        let buffer = ReadAheadBuffer()
+        // The first clip left a line up at 48 s.
+        XCTAssertTrue(buffer.receive(.video(MVCAccessUnit(pts: 4_320_000, dts: nil, isRandomAccess: true, data: Data(count: 10)))))
+        PGS.packets(PGS.block(x: 0, y: 0, width: 2, height: 2), pts: 4_320_000).forEach { _ = buffer.receive($0) }
+        sink.packets.forEach { _ = buffer.receive($0) }
+
+        XCTAssertEqual(buffer.subtitleDisplay(pid: 0x1200, at: 4_499_999)?.display.objects.count, 1)
+        XCTAssertEqual(buffer.subtitleDisplay(pid: 0x1200, at: 4_500_000)?.display.isEmpty, true)
+        XCTAssertEqual(buffer.subtitleDisplay(pid: 0x1200, at: 5_400_000)?.display.objects.count, 1)
+    }
+
     func testDisplaysKeepCountingAcrossThe33BitWrap() {
         let buffer = ReadAheadBuffer()
         let wrap = Int64(1) << 33
