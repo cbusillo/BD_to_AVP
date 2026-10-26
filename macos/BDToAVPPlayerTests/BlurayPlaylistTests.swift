@@ -1,7 +1,9 @@
 import XCTest
 @testable import BDToAVPPlayer
 
-/// Titles made of several clips (#1142). The fixtures are cut from real discs, read through
+/// Titles made of several clips (#1142). A title plays its playlist's items up to the first
+/// non-seamless connection, which on both discs below comes before a short trailing clip; the
+/// boundary fixtures still exercise how the reader joins two clips. The fixtures are cut from real discs, read through
 /// libbluray and libudfread from the disc images, which are never mounted. A cut keeps whole TS
 /// packets, in file order, of the PES packets in a time window:
 ///
@@ -76,9 +78,24 @@ final class BlurayPlaylistTests: XCTestCase {
         XCTAssertNil(try dependentClip("fastx-00000", item: 2))
     }
 
+    func testATitleEndsAtItsFirstNonSeamlessConnection() throws {
+        // Both discs append a short clip non-seamlessly (connection condition 1), as MakeMKV
+        // reports by listing it as a separate, too-short title.
+        XCTAssertEqual(try seamlessItems(fixture("oceandreams-00022", "mpls")), 1)
+        XCTAssertEqual(try seamlessItems(fixture("fastx-00000", "mpls")), 1)
+        // The same playlist with its second item joined seamlessly (condition 5) is one title.
+        var seamless = try fixture("oceandreams-00022", "mpls")
+        let list = Int(seamless[8]) << 24 | Int(seamless[9]) << 16 | Int(seamless[10]) << 8 | Int(seamless[11])
+        let first = list + 10
+        let second = first + 2 + (Int(seamless[first]) << 8 | Int(seamless[first + 1]))
+        seamless[second + 12] = (seamless[second + 12] & 0xF0) | 5
+        XCTAssertEqual(seamlessItems(seamless), 2)
+        XCTAssertEqual(seamlessItems(Data("not a playlist".utf8)), 0)
+    }
+
     // MARK: Clip boundaries
 
-    func testOceanDreamsClipBoundaryContinuesOnOnePlaylistTimeline() throws {
+    func testJoinedClipsContinueOnOnePlaylistTimeline() throws {
         let boundary: UInt64 = 506_778_772
         let tail = CollectingPacketSink()
         let head = CollectingPacketSink()
@@ -202,31 +219,54 @@ final class BlurayPlaylistTests: XCTestCase {
         XCTAssertEqual(sink.audio.map(\.payload), [Data(repeating: 2, count: 10)])
     }
 
+    func testLostSyncResumesAtTheNextPacketsAndDropsWhatTheGapCut() throws {
+        var stream = Data()
+        for index in 0..<3 {
+            let ticks = UInt64(index) * 3_754
+            stream += frame(pts: ticks, dts: ticks, index == 0 ? Self.iSlice : Self.pSlice)
+        }
+        // A damaged stretch, as Ocean Dreams' image has 13 zero sectors inside its feature: it cuts
+        // the next frame's base view and is not a whole number of packets long.
+        let cut = M2TS.pes(pid: 0x1011, pts: 11_262, dts: 11_262, payload: Self.pSlice)
+        stream += cut.prefix(100) + Data(count: 1_000)
+        stream += M2TS.pes(pid: 0x1012, pts: 11_262, dts: 11_262, payload: Self.dependent)
+        for index in 4..<6 {
+            let ticks = UInt64(index) * 3_754
+            stream += frame(pts: ticks, dts: ticks, Self.pSlice)
+        }
+        let sink = CollectingPacketSink()
+
+        _ = try BlurayTransportStream.demux(stream, segment: segment(inTime: 0, duration: 90_000, playlistTime: 0), into: sink)
+
+        XCTAssertEqual(sink.video.map(\.pts), [0, 3_754, 7_508, 15_016, 18_770])
+    }
+
     // MARK: Real discs
 
-    func testRealOceanDreamsPlaysAcrossItsClipBoundary() throws {
-        try Self.readAcrossBoundary(environment: "BD_TO_AVP_OCEAN_DREAMS_ISO", playlist: 22, boundary: 506_778_772)
+    func testRealOceanDreamsFeatureEndsWhereMakeMKVEndsIt() throws {
+        // The 12-second logo clip after the feature joins it non-seamlessly, so it is not part of it.
+        try Self.readToEnd(environment: "BD_TO_AVP_OCEAN_DREAMS_ISO", playlist: 22, end: 506_778_772)
     }
 
-    func testRealFastXPlaysAcrossItsClipBoundary() throws {
-        try Self.readAcrossBoundary(environment: "BD_TO_AVP_FAST_X_ISO", playlist: 0, boundary: 760_449_690)
+    func testRealFastXFeatureEndsWhereMakeMKVEndsIt() throws {
+        try Self.readToEnd(environment: "BD_TO_AVP_FAST_X_ISO", playlist: 0, end: 760_449_690)
     }
 
-    /// Opens a real disc, checks its multi-clip main feature is the title to play, and reads from
-    /// five seconds before the boundary to two seconds after it.
-    private static func readAcrossBoundary(environment name: String, playlist: UInt32, boundary: UInt64) throws {
+    /// Opens a real disc, checks its main feature is the title to play and ends at `end`, and reads
+    /// its last five seconds.
+    private static func readToEnd(environment name: String, playlist: UInt32, end: UInt64) throws {
         guard let path = ProcessInfo.processInfo.environment[name], !path.isEmpty else {
-            throw XCTSkip("Set \(name) to read a real multi-clip Blu-ray 3D disc.")
+            throw XCTSkip("Set \(name) to read a real Blu-ray 3D disc.")
         }
         let source = try BlurayDiscSource(path: path, container: .discImage)
         let title = try XCTUnwrap(source.info.mainTitle)
         XCTAssertEqual(title.playlist, playlist)
+        XCTAssertEqual(title.durationSeconds, Double(end) / 90_000, accuracy: 0.001)
         let sink = CollectingPacketSink()
-        sink.stopAfterPTS = boundary + 180_000
 
         _ = try source.read(
             title: title,
-            startingAt: boundary - 450_000,
+            startingAt: end - 450_000,
             audioTrackIDs: title.audioTracks.map(\.id),
             subtitleTrackIDs: [],
             into: sink
@@ -234,7 +274,8 @@ final class BlurayPlaylistTests: XCTestCase {
 
         XCTAssertEqual(sink.video.first?.isRandomAccess, true)
         let shown = sink.video.map(\.pts).sorted()
-        XCTAssertTrue(shown.contains(boundary))
+        XCTAssertLessThan(try XCTUnwrap(shown.last), end)
+        XCTAssertGreaterThan(try XCTUnwrap(shown.last), end - 3_754 * 2)
         XCTAssertEqual(zip(shown, shown.dropFirst()).filter { !frameTicks.contains($1 - $0) }.count, 0)
     }
 
@@ -278,6 +319,10 @@ final class BlurayPlaylistTests: XCTestCase {
         }
         defer { bd3d_clip_index_free(&index) }
         return try body(index)
+    }
+
+    private func seamlessItems(_ data: Data) -> UInt32 {
+        data.withUnsafeBytes { bd3d_seamless_items($0.bindMemory(to: UInt8.self).baseAddress, $0.count) }
     }
 
     private func dependentClip(_ name: String, item: UInt32) throws -> String? {

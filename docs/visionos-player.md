@@ -776,7 +776,10 @@ and the sink paces it by blocking. All timestamps are raw 33-bit 90 kHz values;
 `BluRayPresentationTimeline` maps them to playback time with the title's first video
 PTS as zero.
 
-A title plays its clips in playlist order (#1142). The reader rewrites every timestamp,
+A title plays its clips in playlist order (#1142), up to the playlist's first
+non-seamless connection. That is where MakeMKV ends a title too: Ocean Dreams and Fast X
+each append a short clip that way, a 12-second logo and a second of black, which MakeMKV
+lists as separate titles too short to keep, so both features end with their first clip. The reader rewrites every timestamp,
 including those in audio and subtitle PES headers, onto the playlist's own timeline,
 which starts at zero, so audio and video keep one clock across a clip boundary and
 `discontinuity()` stays reserved for seeks. Each clip is read as a segment: its video

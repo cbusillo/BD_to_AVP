@@ -13,7 +13,7 @@ from unittest.mock import patch
 from bd_to_avp import preflight
 from bd_to_avp.modules import container, disc, process, sub
 from bd_to_avp.modules.audio_mode import AudioMode
-from bd_to_avp.modules.bluray import READER_TOOL_ID, parse_titles_output
+from bd_to_avp.modules.bluray import READER_TOOL_ID, disc_reads_directly, parse_titles_output
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.video_mode import VideoMode
@@ -555,3 +555,104 @@ class TrueHDCoreLanguageTests(unittest.TestCase):
         self.assertEqual([stream["tags"].get("language") for stream in audio], ["deu", "deu", None])
         self.assertEqual(options["metadata:s:1"], "language=deu")
         self.assertNotIn("metadata:s:2", options)
+
+
+class MultiClipDirectReadTests(unittest.TestCase):
+    """Playlists made of several clips (#1142), read from real discs named by environment.
+
+    Both discs append a short clip non-seamlessly, which MakeMKV lists as a separate title too
+    short to keep, so their main feature is the first clip; Fast X's starts a second into it.
+    """
+
+    def check_disc(self, environment: str, playlist: str, seconds: float) -> None:
+        source = os.environ.get(environment)
+        if not source or not Path(source).is_file():
+            self.skipTest(f"Set {environment} to a readable disc image to run real-media tests")
+        reader = REPOSITORY_ROOT / "bd_to_avp/bin/bd3d_reader"
+        listing = json.loads(
+            subprocess.run(
+                [str(reader), "titles", source], capture_output=True, text=True, check=True, timeout=120
+            ).stdout
+        )
+        main = next(title for title in listing["titles"] if title["main_feature"])
+        self.assertEqual((str(main["playlist"]), main["clip_count"], main["readable"]), (playlist, 1, True))
+        self.assertAlmostEqual(main["duration_ticks"] / 90_000, seconds, places=2)
+        self.assertTrue(disc_reads_directly(parse_titles_output(json.dumps(listing), Path(source))))
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            framemd5 = Path(temporary_directory) / "first-48.framemd5"
+            stream = subprocess.Popen(
+                [str(reader), "stream", source, playlist, "--maximum-pairs", "48"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            assert stream.stdout is not None
+            edge264 = subprocess.Popen(
+                [str(config.EDGE264_TEST_PATH), "-", "-Osk"],
+                stdin=stream.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            stream.stdout.close()
+            assert edge264.stdout is not None
+            ffmpeg = subprocess.run(
+                [
+                    str(config.FFMPEG_PATH),
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "yuv4mpegpipe",
+                    "-i",
+                    "pipe:0",
+                    "-f",
+                    "framemd5",
+                    "-y",
+                    str(framemd5),
+                ],
+                stdin=edge264.stdout,
+                capture_output=True,
+                check=False,
+                timeout=300,
+            )
+            edge264.stdout.close()
+            edge264.communicate(timeout=30)
+            stream_stderr = stream.communicate(timeout=30)[1]
+
+            self.assertEqual(ffmpeg.returncode, 0, ffmpeg.stderr.decode())
+            self.assertEqual(stream.returncode, 0, stream_stderr.decode())
+            frames = [line for line in framemd5.read_text().splitlines() if not line.startswith("#")]
+            # Each stereo pair decodes to one side-by-side frame from the first one on, even where the
+            # playlist enters its clip partway through.
+            self.assertEqual(len(frames), 48)
+
+    def test_ocean_dreams_main_feature_reads_directly(self) -> None:
+        self.check_disc("BD_TO_AVP_OCEAN_DREAMS_ISO", "22", 5630.875)
+
+    def test_fast_x_main_feature_reads_directly(self) -> None:
+        self.check_disc("BD_TO_AVP_FAST_X_ISO", "0", 8449.441)
+
+    def stream_pairs(self, environment: str, playlist: str) -> int:
+        source = os.environ.get(environment)
+        if not source or not Path(source).is_file():
+            self.skipTest(f"Set {environment} to a readable disc image to run real-media tests")
+        reader = REPOSITORY_ROOT / "bd_to_avp/bin/bd3d_reader"
+        result = subprocess.run(
+            [str(reader), "stream", source, playlist],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=3600,
+        )
+        return int(json.loads(result.stderr.decode().strip().splitlines()[-1])["video_pairs"])
+
+    def test_ocean_dreams_main_feature_has_the_frame_count_makemkv_rips(self) -> None:
+        # MakeMKV's rip of 00022.mpls has 135,006 frames. The image has 13 zero sectors inside the
+        # feature; the reader finds the packets again after them and keeps every frame.
+        self.assertEqual(self.stream_pairs("BD_TO_AVP_OCEAN_DREAMS_ISO", "22"), 135_006)
+
+    def test_fast_x_main_feature_has_the_frame_count_makemkv_rips_after_its_in_point(self) -> None:
+        # The playlist plays clip 00000 from a second in, to its end, and not the one-second clip
+        # it joins non-seamlessly. MakeMKV's rip of the same title has 202,608 frames: these 202,584
+        # plus the 24 black frames before the playlist's in point, which it keeps.
+        self.assertEqual(self.stream_pairs("BD_TO_AVP_FAST_X_ISO", "0"), 202_584)

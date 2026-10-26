@@ -1,8 +1,8 @@
 """Direct reading of unencrypted Blu-ray 3D images and folders through the shared reader.
 
 ``bd3d_reader`` (native/bd3d_reader) compiles the headset's Blu-ray 3D demuxer against the
-bundled libbluray and libudfread. A source with an AACS or BD+ folder, a title that is not one
-complete 3D clip, or a missing reader keeps today's MakeMKV route.
+bundled libbluray and libudfread. A source with an AACS or BD+ folder, a main feature whose clips
+the reader cannot join, or a missing reader keeps today's MakeMKV route.
 """
 
 import json
@@ -165,7 +165,7 @@ def read_bluray_disc(
 
 
 def directly_readable_titles(disc: BlurayDisc) -> tuple[BlurayTitle, ...]:
-    """One readable title per clip, so a clip's 2D and 3D playlists are listed once."""
+    """One readable title per first clip, so a clip's 2D and 3D playlists are listed once."""
     by_clip: dict[str, BlurayTitle] = {}
     for title in disc.titles:
         if not title.readable:

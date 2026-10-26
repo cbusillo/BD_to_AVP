@@ -11,6 +11,8 @@
 #define READ_CHUNK_SIZE (6144 * 128)
 #define MAX_PES_BYTES (16 * 1024 * 1024)
 #define MAX_PENDING_BYTES (256 * 1024 * 1024)
+/// Bytes without packet sync before a stream counts as unreadable.
+#define MAX_UNSYNCED_BYTES (16 * 1024 * 1024)
 #define TITLES_MINIMUM_SECONDS 60
 #define TIMESTAMP_MASK ((UINT64_C(1) << 33) - 1)
 /// The EP map stores PTS without its low 9 bits.
@@ -70,6 +72,9 @@ typedef struct {
     /// The PTS of the random access unit delivery started at. Leading pictures after it in
     /// decode order, shown before it, reference pictures that were never read, so they drop.
     uint64_t start_pts;
+    /// Set once sync was lost: from then on each pair drops the views before it whose partner was
+    /// in the lost bytes, and views left unpaired at the end are not an error.
+    bool drop_unmatched;
     uint64_t last_dts;
     bd3d_stats stats;
     bd3d_packet_fn emit;
@@ -274,6 +279,45 @@ int64_t bd3d_ssif_offset(const bd3d_clip_index *base, const bd3d_clip_index *dep
     }
     uint64_t packets = (uint64_t)base->extent_starts[extent] + dependent->extent_starts[extent];
     return (int64_t)(packets * M2TS_PACKET_SIZE);
+}
+
+uint32_t bd3d_seamless_items(const uint8_t *mpls, size_t size) {
+    if (size < 20 || memcmp(mpls, "MPLS", 4) != 0) {
+        return 0;
+    }
+    size_t list = read_be32(mpls + 8);
+    if (!in_bounds(size, list, 10)) {
+        return 0;
+    }
+    uint16_t items = read_be16(mpls + list + 6);
+    size_t cursor = list + 10;
+    uint32_t joined = 0;
+    for (uint16_t index = 0; index < items; index++) {
+        if (!in_bounds(size, cursor, 13)) {
+            return joined;
+        }
+        uint8_t condition = mpls[cursor + 12] & 0x0f;
+        if (index > 0 && condition != 5 && condition != 6) {
+            break;
+        }
+        joined++;
+        cursor += 2 + read_be16(mpls + cursor);
+    }
+    return joined;
+}
+
+/// The play items of `playlist` that make its title, at least one.
+static uint32_t title_clip_count(BLURAY *bluray, uint32_t playlist, uint32_t clip_count) {
+    char path[64];
+    snprintf(path, sizeof(path), "BDMV/PLAYLIST/%05u.mpls", playlist);
+    void *data = NULL;
+    int64_t size = 0;
+    uint32_t joined = 0;
+    if (bd_read_file(bluray, path, &data, &size) && data != NULL && size > 0) {
+        joined = bd3d_seamless_items(data, (size_t)size);
+    }
+    free(data);
+    return joined == 0 || joined > clip_count ? clip_count : joined;
 }
 
 bool bd3d_dependent_clip_id(const uint8_t *mpls, size_t size, uint32_t play_item, char clip_id[6]) {
@@ -481,9 +525,13 @@ bool bd3d_disc_title(bd3d_disc *disc, uint32_t index, bd3d_title *title) {
     }
     memset(title, 0, sizeof(*title));
     title->playlist = info->playlist;
-    title->duration_ticks = info->duration;
     title->angle_count = info->angle_count;
-    title->clip_count = info->clip_count;
+    title->clip_count = info->clip_count == 0 ? 0 : title_clip_count(disc->bluray, info->playlist, info->clip_count);
+    title->duration_ticks = info->duration;
+    if (title->clip_count < info->clip_count) {
+        const BLURAY_CLIP_INFO *last = &info->clips[title->clip_count - 1];
+        title->duration_ticks = last->start_time + (last->out_time - last->in_time);
+    }
     title->main_feature = info->playlist == disc->main_playlist;
     title->base_view_right = info->mvc_base_view_r_flag;
     if (info->clip_count >= 1) {
@@ -498,11 +546,11 @@ bool bd3d_disc_title(bd3d_disc *disc, uint32_t index, bd3d_title *title) {
                      info->angle_count == 1 && info->clip_count >= 1;
     if (plausible) {
         title->ssif_available = true;
-        for (uint32_t clip = 0; clip < info->clip_count && title->ssif_available; clip++) {
+        for (uint32_t clip = 0; clip < title->clip_count && title->ssif_available; clip++) {
             title->ssif_available = ssif_available(disc->bluray, info->clips[clip].clip_id);
         }
         title->clips_readable = title->ssif_available;
-        for (uint32_t clip = 0; clip < info->clip_count && title->ssif_available && title->clips_readable; clip++) {
+        for (uint32_t clip = 0; clip < title->clip_count && title->ssif_available && title->clips_readable; clip++) {
             title->clips_readable = clip_readable(disc->bluray, info->playlist, clip, &info->clips[clip]);
         }
     }
@@ -726,6 +774,10 @@ static bd3d_result emit_pair(Demux *demux, PesItem *base, PesItem *dependent) {
             return SEGMENT_ENDED;
         }
     }
+    if (demux->drop_unmatched) {
+        drop_pending_before(&demux->base_pending, base->dts);
+        drop_pending_before(&demux->dependent_pending, base->dts);
+    }
     if (demux->stats.video_pairs > 0 && dts_before(base->dts, demux->last_dts)) {
         return BD3D_NON_MONOTONIC;
     }
@@ -921,7 +973,7 @@ static bd3d_result select_pids(
     return BD3D_OK;
 }
 
-static bd3d_result finish(Demux *demux) {
+static bd3d_result complete_builders(Demux *demux) {
     bd3d_result result = complete_pes(demux, BD3D_BASE_VIEW_PID, &demux->base_builder);
     if (result == BD3D_OK) {
         result = complete_pes(demux, BD3D_DEPENDENT_VIEW_PID, &demux->dependent_builder);
@@ -929,10 +981,16 @@ static bd3d_result finish(Demux *demux) {
     for (size_t index = 0; result == BD3D_OK && index < demux->selected_count; index++) {
         result = complete_pes(demux, demux->selected[index].pid, &demux->selected[index].builder);
     }
+    return result;
+}
+
+static bd3d_result finish(Demux *demux) {
+    bd3d_result result = complete_builders(demux);
     if (result == SEGMENT_ENDED) {
         return BD3D_OK;
     }
-    if (result == BD3D_OK && (demux->base_pending.count != 0 || demux->dependent_pending.count != 0)) {
+    if (result == BD3D_OK && !demux->drop_unmatched &&
+        (demux->base_pending.count != 0 || demux->dependent_pending.count != 0)) {
         result = BD3D_UNMATCHED_PES;
     }
     if (result == BD3D_OK && demux->stats.video_pairs == 0) {
@@ -966,6 +1024,8 @@ bd3d_result bd3d_demux_segment(
     }
     // Reads may end mid-packet; the remainder carries over to the next read.
     size_t carried = 0;
+    bool resyncing = false;
+    size_t unsynced = 0;
     while (result == BD3D_OK) {
         int64_t count = read(read_context, buffer + carried, (int64_t)(READ_CHUNK_SIZE - carried));
         if (count < 0) {
@@ -979,8 +1039,43 @@ bd3d_result bd3d_demux_segment(
         demux.stats.bytes += (uint64_t)count;
         size_t available = carried + (size_t)count;
         size_t offset = 0;
-        for (; result == BD3D_OK && offset + M2TS_PACKET_SIZE <= available; offset += M2TS_PACKET_SIZE) {
-            result = process_packet(&demux, buffer + offset);
+        while (result == BD3D_OK && offset + M2TS_PACKET_SIZE <= available) {
+            if (!resyncing && buffer[offset + 4] == 0x47) {
+                result = process_packet(&demux, buffer + offset);
+                if (result == BD3D_INVALID_PES) {
+                    // A packet with its sync byte but a damaged PES header: drop it, and with it
+                    // the PES packet it starts.
+                    result = BD3D_OK;
+                    demux.drop_unmatched = true;
+                    demux.stats.skipped_bytes += M2TS_PACKET_SIZE;
+                }
+                offset += M2TS_PACKET_SIZE;
+                continue;
+            }
+            // Sync is lost, as across a damaged or unrecorded stretch of a disc image: deliver the
+            // PES packets read so far, which may be cut short, and resume at the next two packets
+            // in a row. A decoder conceals a cut picture or skips a cut audio frame.
+            if (!resyncing) {
+                resyncing = true;
+                unsynced = 0;
+                result = complete_builders(&demux);
+                if (result != BD3D_OK) {
+                    break;
+                }
+            }
+            if (offset + M2TS_PACKET_SIZE + 5 > available) {
+                break;
+            }
+            if (buffer[offset + 4] == 0x47 && buffer[offset + M2TS_PACKET_SIZE + 4] == 0x47) {
+                resyncing = false;
+                demux.drop_unmatched = true;
+                continue;
+            }
+            offset++;
+            demux.stats.skipped_bytes++;
+            if (++unsynced > MAX_UNSYNCED_BYTES) {
+                result = BD3D_INVALID_PACKET;
+            }
         }
         carried = available - offset;
         if (result == BD3D_OK && carried > 0) {
@@ -1026,6 +1121,7 @@ static void add_stats(bd3d_stats *total, const bd3d_stats *clip) {
     total->bytes += clip->bytes;
     total->transport_packets += clip->transport_packets;
     total->video_pairs += clip->video_pairs;
+    total->skipped_bytes += clip->skipped_bytes;
     total->audio_packets += clip->audio_packets;
     total->subtitle_packets += clip->subtitle_packets;
     if (clip->maximum_pending_bytes > total->maximum_pending_bytes) {
@@ -1083,13 +1179,14 @@ bd3d_result bd3d_disc_stream(
         bd_free_title_info(info);
         return BD3D_TITLE_UNAVAILABLE;
     }
+    uint32_t clip_count = title_clip_count(disc->bluray, playlist, info->clip_count);
     uint32_t first = 0;
-    while (first + 1 < info->clip_count && info->clips[first + 1].start_time <= start_ticks) {
+    while (first + 1 < clip_count && info->clips[first + 1].start_time <= start_ticks) {
         first++;
     }
     bd3d_stats total = {0};
     bd3d_result result = BD3D_OK;
-    for (uint32_t index = first; result == BD3D_OK && index < info->clip_count; index++) {
+    for (uint32_t index = first; result == BD3D_OK && index < clip_count; index++) {
         const BLURAY_CLIP_INFO *clip = &info->clips[index];
         bd3d_segment segment = {
             .in_time = clip->in_time,
