@@ -735,6 +735,32 @@ provider-specific progress percentages, raw MVC playback, or source-side live
 conversion. Live Relay is limited to the authenticated EVENT-HLS contract; disc
 reading and just-in-time source production remain separate Mac-side work.
 
+### Lost and slow share connections
+
+A movie outside the app's own storage, such as one on an SMB share, plays through
+`ShareConnectionMonitor` (#1131). An MV-HEVC or packed-stereo file is read by
+`ShareFileResourceLoader`, an `AVAssetResourceLoader` delegate, rather than as a
+plain file URL: as a plain file, `AVPlayer` kept its clock running through a stalled
+share read and then jumped forward to catch up. Through the loader it buffers 20
+seconds ahead, stops its clock when the buffer runs out, and continues from the
+same frame when reads come back. A Blu-ray 3D title already stops its clock when its
+read-ahead buffer runs dry.
+
+A failed read on a share is tried again from the same place every half second
+instead of ending playback, for files, MKVs and disc images alike; the disc reader
+puts libbluray's file back where the read started before each retry. Only errors a
+reconnect can cure are retried: lost permission or a missing file fails at once. A
+read that keeps failing for a minute while the headset has a network gives up with
+**The movie's share stopped answering, so playback stopped.**; time with no network
+at all does not count. A request the player cancels, after a seek for example,
+stops retrying, and leaving the player stops every retry, including those of an MKV
+that is still opening. A read that has
+gone unanswered for two seconds, or no network at all while the movie's volume is
+remote, counts as a lost connection. The controls then stay up and say **Connection
+lost. Playing what has loaded while it reconnects.** while buffered video plays, or
+**Connection lost. Playback continues from here when it reconnects.** once it has
+stopped. A slow share that is still answering shows **Loading…** instead.
+
 ## Blu-ray 3D Sources
 
 Native Blu-ray playback (#711) reads Blu-ray 3D sources on the headset itself, with

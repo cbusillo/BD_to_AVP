@@ -215,8 +215,11 @@ final class MVHEVCPlayerSession: ObservableObject {
     @Published private(set) var liveNotice: String?
     /// Says why a title the wearer watched before starts from the beginning.
     @Published private(set) var resumeNotice: String?
-    /// Native Blu-ray 3D playback is waiting for more of the title to load.
+    /// Playback is waiting for more of the movie to load: a native Blu-ray 3D title's buffer ran
+    /// dry, or `AVPlayer` stopped its clock to wait for data.
     @Published private(set) var isBuffering = false
+    /// The share the movie plays from has stopped answering, or the headset has no network.
+    @Published private(set) var isConnectionLost = false
     /// Replaces the subtitle list's note, for a title whose subtitles cannot show yet.
     @Published private(set) var subtitleListNote: String?
     /// Why the chosen Blu-ray 3D audio is not playing while the video plays on.
@@ -224,10 +227,19 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     static let liveBusyNotice = "The Mac is busy converting; playback may pause."
     static let liveForwardBufferDuration: TimeInterval = 20
+    /// How far ahead a movie on a share is read, so a short drop in the connection never shows.
+    static let shareForwardBufferDuration: TimeInterval = 20
 
     private(set) var playerItem: AVPlayerItem?
 
     private var resourceLease: SecurityScopedResourceLease?
+    /// The reads of a movie outside the app, for saying when its share stops answering.
+    private var shareConnection: ShareConnectionMonitor?
+    private var shareConnectionTask: Task<Void, Never>?
+    /// Opens a Blu-ray 3D source; tests replace it to stand in for a share.
+    var nativeSourceOpener: @Sendable (URL, ShareConnectionMonitor?) throws -> Bluray3DSource = { url, reads in
+        try Bluray3DSourceOpener.open(url, reads: reads)
+    }
     /// Blu-ray 3D playback decoded on the headset, used instead of `player`.
     private var nativePlayback: NativeBlurayPlayback?
     private var nativeStatusTask: Task<Void, Never>?
@@ -245,6 +257,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var lastResumeSaveUptime: TimeInterval?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlStatusObservation: NSKeyValueObservation?
+    private var reasonForWaitingObservation: NSKeyValueObservation?
     private var timeObserver: Any?
     private var playbackFinishedObserver: NSObjectProtocol?
     private var audioGroup: AVMediaSelectionGroup?
@@ -273,15 +286,22 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var hasEstablishedPlayback = false
 
     init() {
+        reasonForWaitingObservation = player.observe(\.reasonForWaitingToPlay, options: [.new]) { [weak self] observedPlayer, _ in
+            let timeControl = PlayerTimeControl(observedPlayer)
+            Task { @MainActor in
+                self?.apply(timeControl)
+            }
+        }
         timeControlStatusObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] observedPlayer, change in
             let status = change.newValue ?? observedPlayer.timeControlStatus
+            let timeControl = PlayerTimeControl(observedPlayer, status: status)
 #if BD_TO_AVP_QUALIFICATION
             let capturedAt = Date()
             let capturedUptime = ProcessInfo.processInfo.systemUptime
             let playerTimeSeconds = observedPlayer.currentTime().seconds
 #endif
             Task { @MainActor in
-                self?.isPlaying = status == .playing
+                self?.apply(timeControl)
 #if BD_TO_AVP_QUALIFICATION
                 self?.qualificationRecorder?.recordTimeControlChanged(
                     status: status,
@@ -427,6 +447,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         let openedLease: SecurityScopedResourceLease
         let asset: AVURLAsset
         let makeAsset: () -> AVURLAsset
+        var openedConnection: ShareConnectionMonitor?
         do {
             if let sharedMovie {
                 let loader = try MovieResourceLoader(movie: sharedMovie.movie) { offset, count in
@@ -439,8 +460,34 @@ final class MVHEVCPlayerSession: ObservableObject {
                     loader.cancel()
                 })
             } else {
-                openedLease = try await bookmarkStore.open(id: mediaItem.id)
-                makeAsset = { AVURLAsset(url: openedLease.url) }
+                let bookmarkLease = try await bookmarkStore.open(id: mediaItem.id)
+                let url = bookmarkLease.url
+                // Held before anything touches the share, so leaving the player can stop it.
+                let connection = ShareConnectionMonitor.forMovie(at: url)
+                watchShareConnection(connection, generation: generation)
+                let shareLoader: ShareFileResourceLoader?
+                do {
+                    shareLoader = try await Task.detached(priority: .userInitiated) {
+                        try connection.map { connection in
+                            connection.watchNetworkIfRemote(url)
+                            return try ShareFileResourceLoader(url: url, connection: connection)
+                        }
+                    }.value
+                } catch {
+                    bookmarkLease.close()
+                    throw error
+                }
+                if let shareLoader {
+                    makeAsset = { shareLoader.makeAsset() }
+                    openedLease = SecurityScopedResourceLease(url: url, startAccessing: { true }, stopAccessing: {
+                        shareLoader.cancel()
+                        bookmarkLease.close()
+                    })
+                    openedConnection = shareLoader.connection
+                } else {
+                    makeAsset = { AVURLAsset(url: url) }
+                    openedLease = bookmarkLease
+                }
                 asset = makeAsset()
             }
         } catch {
@@ -491,6 +538,9 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
 
             let item = AVPlayerItem(asset: asset)
+            if openedConnection != nil {
+                item.preferredForwardBufferDuration = Self.shareForwardBufferDuration
+            }
             async let loadedDuration = asset.load(.duration)
             async let mediaSelections = prepareMediaSelections(for: asset, item: item)
             let preparedDuration = try await loadedDuration
@@ -948,6 +998,9 @@ final class MVHEVCPlayerSession: ObservableObject {
             do {
                 let replacementAsset = packedStereoSource.makeAsset()
                 let replacementItem = AVPlayerItem(asset: replacementAsset)
+                if shareConnection != nil {
+                    replacementItem.preferredForwardBufferDuration = Self.shareForwardBufferDuration
+                }
                 async let replacementComposition = PackedStereoComposition.make(
                     asset: replacementAsset,
                     format: packedStereoSource.format,
@@ -1093,9 +1146,17 @@ final class MVHEVCPlayerSession: ObservableObject {
         preparationPhase = .preparingMedia
 
         let url = openedLease.url
+        // Held before the source opens, since opening an MKV already reads the share, so leaving
+        // the player stops those reads too.
+        let reads = ShareConnectionMonitor.forMovie(at: url)
+        watchShareConnection(reads, generation: generation)
+        let openSource = nativeSourceOpener
         let source: Bluray3DSource
         do {
-            source = try await Task.detached(priority: .userInitiated) { try Bluray3DSourceOpener.open(url) }.value
+            source = try await Task.detached(priority: .userInitiated) {
+                reads?.watchNetworkIfRemote(url)
+                return try openSource(url, reads)
+            }.value
         } catch {
             guard generation == preparationGeneration, !Task.isCancelled else { return }
             presentFailure(.preparationFailed(
@@ -1103,7 +1164,10 @@ final class MVHEVCPlayerSession: ObservableObject {
             ))
             return
         }
-        guard generation == preparationGeneration, !Task.isCancelled else { return }
+        guard generation == preparationGeneration, !Task.isCancelled else {
+            reads?.cancel()
+            return
+        }
         let title = source.info.titles.first { $0.id == mediaItem.bluray3DTitle?.id } ?? source.info.mainTitle
         guard let title, title.isPlayable else {
             presentFailure(.preparationFailed(
@@ -1112,7 +1176,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             return
         }
 
-        let playback = NativeBlurayPlayback(source: source, title: title)
+        let playback = NativeBlurayPlayback(source: source, title: title, reads: reads)
         nativePlayback = playback
         resumeID = mediaItem.id
         resumeNotice = resumeStore.resumeTime(for: mediaItem.id).flatMap(ResumeWritePolicy.blurayResumeNotice(savedPosition:))
@@ -1177,6 +1241,43 @@ final class MVHEVCPlayerSession: ObservableObject {
             currentTime = target
         case let .outside(loaded):
             seekNotice = PlaybackSeekPolicy.blurayOutsideLoadedNotice(target: target, loaded: loaded)
+        }
+    }
+
+    // MARK: Share connection
+
+    /// Checks the share's reads four times a second, separately from the playback clock, which
+    /// stops while the player waits for them.
+    private func watchShareConnection(_ connection: ShareConnectionMonitor?, generation: Int) {
+        shareConnectionTask?.cancel()
+        shareConnection = connection
+        guard connection != nil else {
+            shareConnectionTask = nil
+            return
+        }
+        shareConnectionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.refreshShareConnection(generation: generation)
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+    }
+
+    private func refreshShareConnection(generation: Int) {
+        guard generation == preparationGeneration, let shareConnection else { return }
+        let isLost = shareConnection.isConnectionLost
+        if isConnectionLost != isLost {
+            isConnectionLost = isLost
+        }
+    }
+
+    /// `AVPlayer`'s play state. Waiting for data still counts as playing, so the play button
+    /// keeps offering Pause while the player buffers.
+    private func apply(_ timeControl: PlayerTimeControl) {
+        guard nativePlayback == nil else { return }
+        isPlaying = timeControl.wantsPlayback
+        if isBuffering != timeControl.isWaitingForData {
+            isBuffering = timeControl.isWaitingForData
         }
     }
 
@@ -1651,6 +1752,11 @@ final class MVHEVCPlayerSession: ObservableObject {
             playerEntity.components.remove(VideoPlayerComponent.self)
         }
         isBuffering = false
+        shareConnectionTask?.cancel()
+        shareConnectionTask = nil
+        shareConnection?.cancel()
+        shareConnection = nil
+        isConnectionLost = false
         subtitleListNote = nil
         audioWarning = nil
         itemStatusObservation = nil
@@ -2128,4 +2234,24 @@ private struct MediaSelectionRestorationState {
     let audioPropertyList: Any?
     let audioID: String?
     let subtitlePropertyList: Any?
+}
+
+/// What `AVPlayer`'s time control says about playback, read on the observing thread.
+struct PlayerTimeControl: Equatable, Sendable {
+    /// Playing, or about to play once enough data has loaded.
+    let wantsPlayback: Bool
+    /// The clock is stopped because data has not arrived in time, as from a slow or lost share.
+    let isWaitingForData: Bool
+
+    init(status: AVPlayer.TimeControlStatus, reasonForWaiting: AVPlayer.WaitingReason?) {
+        let isWaiting = status == .waitingToPlayAtSpecifiedRate
+        isWaitingForData = isWaiting && reasonForWaiting == .toMinimizeStalls
+        wantsPlayback = status == .playing
+            || isWaitingForData
+            || isWaiting && reasonForWaiting == .evaluatingBufferingRate
+    }
+
+    init(_ player: AVPlayer, status: AVPlayer.TimeControlStatus? = nil) {
+        self.init(status: status ?? player.timeControlStatus, reasonForWaiting: player.reasonForWaitingToPlay)
+    }
 }
