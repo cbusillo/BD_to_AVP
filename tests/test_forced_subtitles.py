@@ -55,6 +55,10 @@ class ForcedOnlyStreamTests(unittest.TestCase):
                 ("00:00:05,000", "00:00:06,000", caption_shape(forced_pgs.MIXED_FORCED)),
                 # Defined in an earlier display set that showed only the regular caption.
                 ("00:00:09,000", "00:00:10,000", caption_shape(forced_pgs.EARLY_FORCED)),
+                # Replaced by another forced caption without a new epoch; pgsrip reads one picture
+                # per epoch, so each picture starts its own.
+                ("00:00:11,000", "00:00:11,999", caption_shape(forced_pgs.FORCED_FIRST)),
+                ("00:00:12,000", "00:00:13,000", caption_shape(forced_pgs.FORCED_NEXT)),
             ],
         )
 
@@ -66,6 +70,7 @@ class ForcedOnlyStreamTests(unittest.TestCase):
                 caption_shape(forced_pgs.FORCED_ALONE),
                 caption_shape(forced_pgs.MIXED_REGULAR, forced_pgs.MIXED_FORCED),
                 caption_shape(forced_pgs.EARLY_REGULAR, forced_pgs.EARLY_FORCED),
+                caption_shape(forced_pgs.FORCED_FIRST),
             ],
         )
 
@@ -146,6 +151,8 @@ CAPTION_TEXT = {
         (forced_pgs.FORCED_ALONE,),
         (forced_pgs.MIXED_FORCED,),
         (forced_pgs.EARLY_FORCED,),
+        (forced_pgs.FORCED_FIRST,),
+        (forced_pgs.FORCED_NEXT,),
         (forced_pgs.MIXED_REGULAR, forced_pgs.MIXED_FORCED),
         (forced_pgs.EARLY_REGULAR, forced_pgs.EARLY_FORCED),
     )
@@ -206,7 +213,7 @@ class ForcedOnlyRipTests(unittest.TestCase):
             run_ffmpeg(
                 *video,
                 *("-i", english, "-i", french),
-                *("-map", "0:v", "-map", "1", "-map", "2", "-c:v", "mpeg4", "-c:s", "copy", "-t", "11"),
+                *("-map", "0:v", "-map", "1", "-map", "2", "-c:v", "mpeg4", "-c:s", "copy", "-t", "14"),
                 *("-metadata:s:s:0", "language=eng", "-metadata:s:s:1", "language=fra", "-y", sidecar),
             )
             # MakeMKV's file: each full track, followed by its forced-only track when it has one.
@@ -216,7 +223,7 @@ class ForcedOnlyRipTests(unittest.TestCase):
             run_ffmpeg(
                 *video,
                 *("-i", english, "-i", english_forced, "-i", french),
-                *("-map", "0:v", "-map", "1", "-map", "2", "-map", "3", "-c:v", "mpeg4", "-c:s", "copy", "-t", "11"),
+                *("-map", "0:v", "-map", "1", "-map", "2", "-map", "3", "-c:v", "mpeg4", "-c:s", "copy", "-t", "14"),
                 *("-metadata:s:s:0", "language=eng", "-metadata:s:s:1", "language=eng"),
                 *("-metadata:s:s:2", "language=fra", "-disposition:s:1", "forced", "-y", title),
             )
@@ -231,11 +238,13 @@ class ForcedOnlyRipTests(unittest.TestCase):
                 ("00:00:03,000 --> 00:00:04,000", "FORCED ALONE"),
                 ("00:00:05,000 --> 00:00:06,000", "MIXED FORCED"),
                 ("00:00:09,000 --> 00:00:10,000", "EARLY FORCED"),
+                ("00:00:11,000 --> 00:00:11,999", "FORCED FIRST"),
+                ("00:00:12,000 --> 00:00:13,000", "FORCED NEXT"),
             ],
         )
         self.assertEqual(
             [text for _, text in direct_srt[".en.srt"]],
-            ["REGULAR", "FORCED ALONE", "MIXED REGULAR MIXED FORCED", "EARLY REGULAR EARLY FORCED"],
+            ["REGULAR", "FORCED ALONE", "MIXED REGULAR MIXED FORCED", "EARLY REGULAR EARLY FORCED", "FORCED FIRST"],
         )
         self.assertEqual(sorted(direct_srt), ["-1.forced.en.srt", ".en.srt", ".fr.srt"])
 

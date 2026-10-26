@@ -547,16 +547,17 @@ def _composition(
 def forced_only_pgs(data: bytes, media_path: MediaPath) -> bytes:
     """A PG stream that shows only the objects flagged forced, like a player in forced-only mode.
 
-    Each showing of forced objects starts a new epoch carrying the windows, palette and object
-    data it needs, even when the disc defined them in an earlier display set that showed only
-    regular captions. A showing ends at the next composition without forced objects. The result
-    is empty when the stream has no forced objects.
+    Each new forced picture starts a new epoch carrying the window, palette and object data it
+    needs, even when the disc defined them in an earlier display set that showed only regular
+    captions or changed the picture without a new epoch; pgsrip reads one picture per epoch. A
+    showing ends at the next composition without forced objects. The result is empty when the
+    stream has no forced objects.
     """
     output = bytearray()
     objects: typing.Dict[int, typing.List[ObjectDefinitionSegment]] = {}
     palettes: typing.Dict[int, PaletteDefinitionSegment] = {}
     window: typing.Optional[WindowDefinitionSegment] = None
-    showing = False
+    shown: typing.Optional[typing.Set[int]] = None
     for display_set in PgsReader.decode(data, media_path):
         pcs = next((s for s in display_set.segments if isinstance(s, PresentationCompositionSegment)), None)
         if pcs is None or len(pcs.data) < 11:
@@ -578,7 +579,8 @@ def forced_only_pgs(data: bytes, media_path: MediaPath) -> bytes:
         forced = [o for o in pcs.composition_objects if o.forced]
         forced_ids = {o.object_id for o in forced}
         window_bytes = [window.bytes] if window is not None else []
-        if forced and not showing:
+        redefined = any(isinstance(s, ObjectDefinitionSegment) and s.id in forced_ids for s in display_set.segments)
+        if forced and (forced_ids != shown or redefined):
             palette = palettes.get(pcs.palette_id)
             output += _composition(pcs, forced, CompositionState.EPOCH_START.value)
             output += b"".join(window_bytes)
@@ -594,9 +596,9 @@ def forced_only_pgs(data: bytes, media_path: MediaPath) -> bytes:
                 ):
                     output += segment.bytes
             output += display_set.end.bytes
-        elif showing:
+        elif shown:
             output += _composition(pcs, [], CompositionState.NORMAL_CASE.value)
             output += b"".join(window_bytes)
             output += display_set.end.bytes
-        showing = bool(forced)
+        shown = forced_ids or None
     return bytes(output)

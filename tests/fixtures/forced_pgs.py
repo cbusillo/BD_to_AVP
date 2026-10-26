@@ -22,6 +22,8 @@ MIXED_REGULAR = ("MIXED REGULAR", 24, 2)
 MIXED_FORCED = ("MIXED FORCED", 24, 3)
 EARLY_REGULAR = ("EARLY REGULAR", 28, 2)
 EARLY_FORCED = ("EARLY FORCED", 28, 3)
+FORCED_FIRST = ("FORCED FIRST", 32, 2)
+FORCED_NEXT = ("FORCED NEXT", 34, 2)
 
 
 def segment(segment_type: int, milliseconds: int, payload: bytes) -> bytes:
@@ -97,6 +99,10 @@ def build() -> bytes:
             ),
             display_set(9000, 8, NORMAL_CASE, [(1, True)]),
             display_set(10000, 9, NORMAL_CASE, []),
+            # One forced caption replaced by another within the epoch, 11 to 12 and 12 to 13 s.
+            display_set(11000, 10, EPOCH_START, [(0, True)], palette(11000), picture(11000, 0, FORCED_FIRST)),
+            display_set(12000, 11, NORMAL_CASE, [(1, True)], picture(12000, 1, FORCED_NEXT)),
+            display_set(13000, 12, NORMAL_CASE, []),
         ]
     )
 
