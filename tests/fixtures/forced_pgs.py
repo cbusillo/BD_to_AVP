@@ -52,7 +52,7 @@ def palette(milliseconds: int) -> bytes:
 def picture(milliseconds: int, object_id: int, caption: tuple[str, int, int]) -> bytes:
     _, width, height = caption
     rle = bytes([0, 0x80 | width, 1, 0, 0]) * height
-    header = struct.pack(">HBB", object_id, 0, 0xC0) + (len(rle) + 4).to_bytes(3, "big")
+    header = struct.pack(">HBB", object_id, 0, 0xC0) + (len(rle) + 4).to_bytes(3)
     return segment(0x15, milliseconds, header + struct.pack(">HH", width, height) + rle)
 
 

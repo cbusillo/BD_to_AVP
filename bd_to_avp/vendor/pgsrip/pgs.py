@@ -529,7 +529,7 @@ def contains_forced_objects(data: bytes, media_path: MediaPath) -> bool:
 
 def _segment(template: BaseSegment, payload: bytes) -> bytes:
     """A segment with ``template``'s timestamps and type and a new payload."""
-    return template.bytes[:11] + len(payload).to_bytes(2, "big") + payload
+    return template.bytes[:11] + len(payload).to_bytes(2) + payload
 
 
 def _composition(
@@ -589,7 +589,8 @@ def forced_only_pgs(data: bytes, media_path: MediaPath) -> bytes:
             palette = palettes.get(pcs.palette_id)
             output += _composition(pcs, forced, CompositionState.EPOCH_START.value)
             output += b"".join(window_bytes)
-            output += palette.bytes if palette is not None else b""
+            if palette is not None:
+                output += palette.bytes
             for object_id in sorted(forced_ids):
                 output += b"".join(s.bytes for s in objects.get(object_id, []))
             output += display_set.end.bytes

@@ -247,17 +247,17 @@ class Mkv(Media):
         stream_file = self._stream_files.get(track_id)
         if stream_file is not None:
             return stream_file.read_bytes()
-        if self._stream_folder is None:
-            self._stream_folder = self.media_path.create_temp_folder()
+        stream_folder = self._stream_folder or self.media_path.create_temp_folder()
+        self._stream_folder = stream_folder
         data = MkvPgs.read_data(
             self.media_path,
             track_id,
-            self._stream_folder,
+            stream_folder,
             run_context=self.run_context,
             cancellation_event=self.cancellation_event,
             observability_context=self.observability_context,
         )
-        self._stream_files[track_id] = Path(self._stream_folder) / f"track-{track_id}.sup"
+        self._stream_files[track_id] = Path(stream_folder) / f"track-{track_id}.sup"
         return data
 
     def has_forced_captions(self, track_id: int) -> bool:

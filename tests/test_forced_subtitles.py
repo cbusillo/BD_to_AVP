@@ -92,7 +92,8 @@ def pgs_stream(index: int, language: str) -> dict[str, Any]:
 
 
 class ForcedOnlyTrackSelectionTests(unittest.TestCase):
-    def selected(self, *, forced_only_tracks: bool, languages: set[Any] | None = None) -> tuple[list[Any], list[int]]:
+    @staticmethod
+    def selected(*, forced_only_tracks: bool, languages: set[Any] | None = None) -> tuple[list[Any], list[int]]:
         streams = {2: FIXTURE, 3: regular_only_stream()}
         reads: list[int] = []
 
