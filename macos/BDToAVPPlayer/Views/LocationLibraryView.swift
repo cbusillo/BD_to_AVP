@@ -182,12 +182,11 @@ struct LocationLibraryView: View {
         } description: {
             Text("""
             Shiny 3D Cinema found nothing in \(name). If Files shows movies here, the server is \
-            probably a Samba-based NAS, such as Synology, QNAP, TrueNAS, UGreen or Unraid. Add \
-            these lines to this share's settings on the NAS, then try again:
+            probably a Samba-based NAS, such as Synology, QNAP, TrueNAS, UGreen or Unraid. With \
+            Apple compatibility on, Samba sends every file with an ID of zero, and Vision Pro then \
+            shows the folder as empty. Add this line to the share's settings on the NAS, then try again:
 
-            readdir_attr:aapl_rsize = no
-            readdir_attr:aapl_finder_info = no
-            readdir_attr:aapl_max_access = no
+            fruit:zero_file_id = no
             """)
         } actions: {
             Button("Try Again") {

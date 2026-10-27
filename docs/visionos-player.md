@@ -569,17 +569,16 @@ reported, so a partial listing is never shown as "No movies here yet".
 
 ### A Location that looks empty on a NAS
 
-visionOS lists nothing in a folder on some Samba servers even though Files shows its
-movies: the server's directory reply includes Mac-compatibility extras that the visionOS
-SMB client does not handle ([#1130](https://github.com/cbusillo/BD_to_AVP/issues/1130#issuecomment-6431083378)).
-The Location then says the folder looks empty. Most NAS systems use Samba, including
-Synology, QNAP, TrueNAS, UGreen and Unraid. Add these lines to the share's section of
-the Samba configuration (or the NAS's extra share options), then refresh the Location:
+A Samba-based NAS can make a Location look empty even though Files shows its movies.
+Most NAS systems use Samba, including Synology, QNAP, TrueNAS, UGreen and Unraid. With
+Apple compatibility on (`vfs_fruit`), Samba's default `fruit:zero_file_id = yes` sends
+every entry with a file ID of zero, and Vision Pro then shows the folder as empty. The
+Location says the folder looks empty. Add this line to the share's section of the Samba
+configuration, or to `[global]` (or the NAS's extra share options), then refresh the
+Location ([findings](https://github.com/cbusillo/BD_to_AVP/issues/1130#issuecomment-6431872622)):
 
 ```ini
-readdir_attr:aapl_rsize = no
-readdir_attr:aapl_finder_info = no
-readdir_attr:aapl_max_access = no
+fruit:zero_file_id = no
 ```
 
 A Mac's File Sharing does not need this.
