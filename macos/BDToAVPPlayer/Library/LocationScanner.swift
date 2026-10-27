@@ -28,7 +28,7 @@ struct LocationListing: Equatable, Sendable {
     let isTruncated: Bool
     /// Subfolders and entries that could not be read, so a partial listing is not shown as complete.
     var unreadableCount = 0
-    /// True when the Location's own folder listed nothing at all, even after a second look.
+    /// True when the Location's own folder listed nothing at all.
     var folderLooksEmpty = false
 }
 
@@ -49,15 +49,11 @@ enum LocationScanner {
     /// Throws when the Location's own folder cannot be listed; unreadable subfolders are skipped
     /// and counted. Folders are read breadth first. The scan stops, and says the listing is
     /// truncated, when `budget` runs out or `limit` candidates are found, checked before every
-    /// entry so one very wide folder cannot run past either. On an SMB share the first listing
-    /// of a folder can come back empty without an error (Apple DTS, developer forums thread
-    /// 831359), so an empty folder is listed once more: the Location's own folder after
-    /// `emptyRetryDelay`, a subfolder straight away.
+    /// entry so one very wide folder cannot run past either.
     static func scan(
         root: URL,
         budget: Duration = .seconds(15),
         limit: Int = maximumCandidates,
-        emptyRetryDelay: Duration = .seconds(1),
         fileManager: FileManager = .default,
         listDirectory: ((URL) throws -> [URL])? = nil
     ) throws -> LocationListing {
@@ -119,18 +115,12 @@ enum LocationScanner {
             }
         }
 
-        var rootEntries = try list(root)
-        if rootEntries.isEmpty, clock.now.advanced(by: emptyRetryDelay) < deadline {
-            Thread.sleep(forTimeInterval: emptyRetryDelay / .seconds(1))
-            rootEntries = try list(root)
-        }
+        let rootEntries = try list(root)
         visit(rootEntries, relativePath: "", depth: 1)
         while !pending.isEmpty, !mustStop() {
             let next = pending.removeFirst()
             do {
-                var entries = try list(next.url)
-                if entries.isEmpty { entries = try list(next.url) }
-                visit(entries, relativePath: next.relativePath, depth: next.depth)
+                visit(try list(next.url), relativePath: next.relativePath, depth: next.depth)
             } catch {
                 unreadableCount += 1
             }

@@ -29,11 +29,6 @@ final class SecurityScopedResourceLease: @unchecked Sendable {
         self.stopAccessing = stopAccessing
     }
 
-    /// Whether starting access succeeded and the lease is still open.
-    var isAccessing: Bool {
-        lock.withLock { isActive }
-    }
-
     func close() {
         lock.lock()
         let shouldStop = isActive
@@ -117,8 +112,7 @@ final class BookmarkStore {
     }
 
     func save(url: URL, for id: String) throws {
-        // Apple's "Providing access to directories" saves a picked folder as a minimal bookmark.
-        let data = try url.bookmarkData(options: .minimalBookmark)
+        let data = try url.bookmarkData(options: [])
         try save(bookmarkData: data, for: id)
     }
 

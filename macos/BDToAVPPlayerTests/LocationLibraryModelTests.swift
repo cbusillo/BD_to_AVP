@@ -307,31 +307,6 @@ final class LocationLibraryModelTests: XCTestCase {
         XCTAssertTrue(listing.isTruncated)
     }
 
-    func testScannerLooksAgainWhenAShareFirstListsNothing() throws {
-        let root = try makeDirectory()
-        try Data().write(to: root.appendingPathComponent("Movie.mov"))
-        var looks = 0
-
-        let listing = try LocationScanner.scan(root: root, emptyRetryDelay: .zero) { url in
-            looks += 1
-            return looks == 1 ? [] : try LocationScanner.coordinatedContents(of: url)
-        }
-
-        XCTAssertEqual(listing.candidates.map(\.fileName), ["Movie.mov"])
-        XCTAssertFalse(listing.folderLooksEmpty)
-
-        let nested = root.appendingPathComponent("Nested", isDirectory: true)
-        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
-        try Data().write(to: nested.appendingPathComponent("Deeper.mov"))
-        var nestedLooks = 0
-        let withSubfolder = try LocationScanner.scan(root: root) { url in
-            guard url.lastPathComponent == "Nested" else { return try LocationScanner.coordinatedContents(of: url) }
-            nestedLooks += 1
-            return nestedLooks == 1 ? [] : try LocationScanner.coordinatedContents(of: url)
-        }
-        XCTAssertEqual(withSubfolder.candidates.map(\.relativePath), ["Movie.mov", "Nested/Deeper.mov"])
-    }
-
     func testScannerSaysWhatItCouldNotReadInsteadOfListingNothing() throws {
         let root = try makeDirectory()
         try FileManager.default.createDirectory(
@@ -346,7 +321,7 @@ final class LocationLibraryModelTests: XCTestCase {
         XCTAssertEqual(listing.candidates.map(\.fileName), ["Movie.mov"])
         XCTAssertEqual(listing.unreadableCount, 1)
 
-        let empty = try LocationScanner.scan(root: try makeDirectory(), emptyRetryDelay: .zero)
+        let empty = try LocationScanner.scan(root: try makeDirectory())
         XCTAssertTrue(empty.folderLooksEmpty)
     }
 

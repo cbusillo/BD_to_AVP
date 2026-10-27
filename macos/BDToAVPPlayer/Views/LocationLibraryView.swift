@@ -141,28 +141,9 @@ struct LocationLibraryView: View {
                 .foregroundStyle(.secondary)
             }
             unplayableSection
-            diagnosticSection
         }
     }
 
-    /// Temporary #1130 diagnostic, shown when a listing came back empty or incomplete.
-    @ViewBuilder
-    private var diagnosticSection: some View {
-        if let report = locations.diagnostics[locationID] {
-            DisclosureGroup("Folder access details") {
-                Text(report)
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 8)
-                Button("Check Again") {
-                    Task { await locations.diagnose(locationID) }
-                }
-                .buttonStyle(.bordered)
-            }
-            .accessibilityIdentifier("location-diagnostics")
-        }
-    }
 
     private var unreachableState: some View {
         ContentUnavailableView {
@@ -199,7 +180,15 @@ struct LocationLibraryView: View {
         ContentUnavailableView {
             Label("This folder looks empty", systemImage: "folder")
         } description: {
-            Text("Shiny 3D Cinema found nothing at all in \(name). If Files shows movies here, open this folder in the Files app, then try again.")
+            Text("""
+            Shiny 3D Cinema found nothing in \(name). If Files shows movies here, the server is \
+            probably a Samba-based NAS, such as Synology, QNAP, TrueNAS, UGreen or Unraid. Add \
+            these lines to this share's settings on the NAS, then try again:
+
+            readdir_attr:aapl_rsize = no
+            readdir_attr:aapl_finder_info = no
+            readdir_attr:aapl_max_access = no
+            """)
         } actions: {
             Button("Try Again") {
                 Task { await locations.refresh(locationID) }
