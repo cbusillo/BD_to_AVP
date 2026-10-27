@@ -721,6 +721,8 @@ final class MVHEVCPlayerSession: ObservableObject {
 
                 preparationGeneration += 1
                 let replacementGeneration = preparationGeneration
+                // The share watcher follows the new generation, so it keeps reporting the connection.
+                watchShareConnection(shareConnection, generation: replacementGeneration)
                 self.playerItem = replacementItem
                 configureMediaSelections(preparedSelections)
                 pendingItemRestoration = restoration
@@ -897,6 +899,8 @@ final class MVHEVCPlayerSession: ObservableObject {
                 }
                 preparationGeneration += 1
                 let replacementGeneration = preparationGeneration
+                // The share watcher follows the new generation, so it keeps reporting the connection.
+                watchShareConnection(shareConnection, generation: replacementGeneration)
                 self.playerItem = replacementItem
                 configureMediaSelections(preparedSelections)
                 // Before the first item was ready, the saved resume position still applies.
