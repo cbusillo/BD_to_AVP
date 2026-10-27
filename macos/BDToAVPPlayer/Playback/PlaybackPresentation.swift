@@ -557,6 +557,14 @@ struct PlaybackFailurePresentation: Equatable {
         canLocate: true
     )
 
+    /// Playback kept being interrupted and rebuilding it did not stick (#1165).
+    static let interrupted = PlaybackFailurePresentation(
+        title: "Playback Stopped",
+        message: PlaybackErrorText.interruptedTooOften,
+        canRetry: true,
+        canLocate: false
+    )
+
     static func sourceMismatch(detectedFormat: StereoFormat, expectedFormat: StereoFormat) -> PlaybackFailurePresentation {
         PlaybackFailurePresentation(
             title: "Different Movie Found",

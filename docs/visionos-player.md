@@ -373,6 +373,18 @@ seconds, so a forced quit or a closed window that runs no end path loses only
 seconds. Completed or near-completed playback is cleared instead of resuming at
 the end.
 
+Leaving the app can make the system take the video decoder away, which
+AVFoundation reports as `AVErrorOperationInterrupted` (-11847) (#1165). The player
+treats that, a media services reset, and a decoder that is briefly unavailable as an
+interruption, not a failure. When the app is back in the foreground, a Blu-ray 3D
+title flushes its renderers and decodes again from the position where its clock
+stopped, and a file gets a new player item at the same position, audio and
+subtitles. Playback stays paused and ready, or keeps playing if the interruption
+came while the app was in front. The controls say **Loading…** meanwhile. Three
+interruptions within a minute end with **Playback was interrupted and could not
+restart.** and Try Again. A real failure is described in plain words; an error's
+domain, code and details go only to the log, never to the screen.
+
 Packed stereo playback uses a visionOS 26 custom video composition with one
 stable two-buffer output contract: output zero is always tagged as the left eye
 and output one as the right eye. The composition supplies and attaches one

@@ -699,6 +699,127 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(resumeStore.resumeTime(for: item.id)), 30, accuracy: 1)
     }
 
+    /// Closing the app during playback and reopening it returns to the same movie at the same
+    /// place, paused and ready, instead of showing the system's -11847 (#1165).
+    @MainActor
+    func testAFileInterruptedInTheBackgroundIsRebuiltAtTheSamePlaceOnReturn() async throws {
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        let session = MVHEVCPlayerSession()
+        _ = try await startFilePlayback(named: "Interrupted", session: session, resumeStore: resumeStore)
+        session.seek(to: 20)
+        for _ in 0 ..< 50 where session.currentTime < 19 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let position = session.currentTime
+
+        session.handleScenePhase(.inactive)
+        session.handleScenePhase(.background)
+        let interruptedItem = session.playerItem
+        session.handlePlayerItemFailure(PlaybackInterruptionTests.operationInterrupted)
+        // Nothing is rebuilt or reported while the app is away.
+        XCTAssertTrue(session.playerItem === interruptedItem)
+        XCTAssertNotEqual(session.state, .failed)
+        XCTAssertNil(session.failureMessage)
+
+        session.handleScenePhase(.active)
+        for _ in 0 ..< 100 where session.playerItem === interruptedItem || !session.canControlPlayback
+            || abs(session.currentTime - position) > 1
+        {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertFalse(session.playerItem === interruptedItem)
+        XCTAssertTrue(session.canControlPlayback, session.failureMessage ?? "The movie was not rebuilt.")
+        XCTAssertEqual(session.currentTime, position, accuracy: 1)
+        XCTAssertNil(session.failurePresentation)
+        XCTAssertEqual(session.player.rate, 0)
+
+        session.play()
+        for _ in 0 ..< 50 where session.player.rate == 0 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertGreaterThan(session.player.rate, 0)
+        session.finish()
+    }
+
+    @MainActor
+    func testAFileInterruptedWhilePlayingInTheForegroundKeepsPlayingFromTheSamePlace() async throws {
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        let session = MVHEVCPlayerSession()
+        _ = try await startFilePlayback(named: "Interrupted Foreground", session: session, resumeStore: resumeStore)
+        session.play()
+        session.seek(to: 15)
+        for _ in 0 ..< 50 where session.currentTime < 15 || session.player.rate == 0 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let interruptedItem = session.playerItem
+        let position = session.currentTime
+
+        session.handlePlayerItemFailure(PlaybackInterruptionTests.operationInterrupted)
+        for _ in 0 ..< 100 where session.playerItem === interruptedItem || session.player.rate == 0 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertFalse(session.playerItem === interruptedItem)
+        XCTAssertGreaterThan(session.player.rate, 0, session.failureMessage ?? "Playback did not continue.")
+        XCTAssertEqual(session.currentTime, position, accuracy: 2)
+        XCTAssertNotEqual(session.state, .failed)
+        session.finish()
+    }
+
+    @MainActor
+    func testAnInterruptionDuringAnEyeOrderChangeLeavesWorkingControlsAtTheSamePlace() async throws {
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        let session = MVHEVCPlayerSession()
+        _ = try await startFilePlayback(named: "Interrupted Eye Order", session: session, resumeStore: resumeStore)
+        session.seek(to: 12)
+        for _ in 0 ..< 50 where session.currentTime < 11.5 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let position = session.currentTime
+        let interruptedItem = session.playerItem
+
+        session.toggleEyeSwap()
+        XCTAssertTrue(session.isChangingEyeOrder)
+        session.handlePlayerItemFailure(PlaybackInterruptionTests.operationInterrupted)
+        for _ in 0 ..< 100 where session.playerItem === interruptedItem || !session.canControlPlayback {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        // Let an abandoned eye-order task finish if it was going to.
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertFalse(session.isChangingEyeOrder)
+        XCTAssertTrue(session.canControlPlayback, session.failureMessage ?? "Controls stayed disabled.")
+        XCTAssertFalse(session.isEyeSwapped)
+        XCTAssertEqual(session.currentTime, position, accuracy: 1)
+        XCTAssertNil(session.failurePresentation)
+
+        // The wearer can change the eye order again.
+        session.toggleEyeSwap()
+        for _ in 0 ..< 100 where session.isChangingEyeOrder || !session.isEyeSwapped {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(session.isEyeSwapped, session.failureMessage ?? "Eye order did not reverse.")
+        session.finish()
+    }
+
+    @MainActor
+    func testAFileThatReallyFailsSaysSoInPlainWords() async throws {
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        let session = MVHEVCPlayerSession()
+        _ = try await startFilePlayback(named: "Failed", session: session, resumeStore: resumeStore)
+
+        session.handlePlayerItemFailure(NSError(
+            domain: AVFoundationErrorDomain,
+            code: -11800,
+            userInfo: [NSLocalizedRecoverySuggestionErrorKey: "Stop other operations and try again."]
+        ))
+        XCTAssertEqual(session.state, .failed)
+        let message = try XCTUnwrap(session.failureMessage)
+        for raw in ["AVFoundationErrorDomain", "-11800", "Code=", "UserInfo", "Stop other operations"] {
+            XCTAssertFalse(message.contains(raw), raw)
+        }
+        session.finish()
+    }
+
     @MainActor
     func testInactiveSceneKeepsPlayingAndSavesThePositionWhileBackgroundPauses() async throws {
         let destinationDirectory = FileManager.default.temporaryDirectory

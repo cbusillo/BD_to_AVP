@@ -293,6 +293,51 @@ final class NativeBlurayPlaybackTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(playback.status.loadedRange?.lowerBound ?? 0, 4.5)
     }
 
+    /// Leaving the app makes the system fail the video renderer with -11847 (#1165). Playback
+    /// holds its place without a failure, and recovering plays on from there.
+    func testAnInterruptionHoldsThePositionAndRecoveryPlaysOnFromIt() throws {
+        let source = try FixtureSource(repetitions: 30)
+        let playback = makePlayback(source)
+        let interrupted = OSAllocatedUnfairLock(initialState: false)
+        playback.injectedVideoRendererFailure = {
+            interrupted.withLock { $0 } ? PlaybackInterruptionTests.operationInterrupted : nil
+        }
+        playback.start()
+        XCTAssertTrue(waitUntil(10) { playback.status.currentTime > 1 }, "status \(playback.status)")
+
+        interrupted.withLock { $0 = true }
+        XCTAssertTrue(waitUntil(5) { playback.status.isInterrupted }, "status \(playback.status)")
+        let heldAt = playback.status.currentTime
+        Thread.sleep(forTimeInterval: 0.4)
+        XCTAssertEqual(playback.status.currentTime, heldAt, accuracy: 0.001)
+        XCTAssertNil(playback.status.failure)
+
+        // The app is back: the renderer can decode again once flushed.
+        interrupted.withLock { $0 = false }
+        playback.recoverFromInterruption()
+        XCTAssertFalse(playback.status.isInterrupted)
+        XCTAssertEqual(playback.status.currentTime, heldAt, accuracy: 0.01)
+        XCTAssertTrue(waitUntil(10) { playback.status.currentTime > heldAt + 0.5 }, "status \(playback.status)")
+        XCTAssertNil(playback.status.failure)
+        XCTAssertTrue(playback.status.wantsPlayback)
+    }
+
+    func testAVideoRendererFailureThatIsNotAnInterruptionEndsPlaybackInPlainWords() throws {
+        let playback = makePlayback(try FixtureSource(repetitions: 30))
+        let failing = OSAllocatedUnfairLock(initialState: false)
+        playback.injectedVideoRendererFailure = {
+            failing.withLock { $0 } ? NSError(domain: AVFoundationErrorDomain, code: -11800) : nil
+        }
+        playback.start()
+        XCTAssertTrue(waitUntil(10) { playback.status.currentTime > 0.5 })
+        failing.withLock { $0 = true }
+        XCTAssertTrue(waitUntil(5) { playback.status.failure != nil }, "status \(playback.status)")
+        let failure = try XCTUnwrap(playback.status.failure)
+        XCTAssertFalse(failure.contains("AVFoundationErrorDomain"), failure)
+        XCTAssertFalse(failure.contains("-11800"), failure)
+        XCTAssertFalse(playback.status.isInterrupted)
+    }
+
     func testAStalledSourceStopsTheClockUntilItCatchesUp() throws {
         // About 1.3 s of video, then a 1.5 s stall.
         let source = try FixtureSource(repetitions: 8, stallAfter: 32, stall: 1.5)
