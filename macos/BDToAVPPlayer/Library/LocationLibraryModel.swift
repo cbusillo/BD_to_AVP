@@ -27,6 +27,10 @@ final class LocationLibraryModel: ObservableObject {
     @Published private(set) var titles: [UUID: [MediaItem]] = [:]
     @Published private(set) var unplayableFiles: [UUID: [UnplayableLocationFile]] = [:]
     @Published private(set) var truncatedLocations: Set<UUID> = []
+    /// Subfolders or entries the last listing could not read, per Location.
+    @Published private(set) var unreadableCounts: [UUID: Int] = [:]
+    /// Locations whose folder listed nothing at all last time.
+    @Published private(set) var emptyFolderLocations: Set<UUID> = []
     /// Files inspected so far while a Location is being checked.
     @Published private(set) var progress: [UUID: (inspected: Int, total: Int)] = [:]
     @Published var errorMessage: String?
@@ -109,7 +113,12 @@ final class LocationLibraryModel: ObservableObject {
     /// Adds the folder the wearer picked in Files and lists it. Returns the new Location's ID.
     @discardableResult
     func add(folderURL: URL) async -> UUID? {
-        let location = StoredLocation(id: UUID(), name: Self.displayName(for: folderURL), inspectedFiles: [])
+        // The name Files shows needs a read of the share, so the first refresh fills it in.
+        let location = StoredLocation(
+            id: UUID(),
+            name: Self.displayName(folderName: folderURL.lastPathComponent, localizedName: nil, volumeName: nil),
+            inspectedFiles: []
+        )
         guard saveBookmark(for: folderURL, locationID: location.id) else { return nil }
         locations.append(location)
         persist()
@@ -131,6 +140,8 @@ final class LocationLibraryModel: ObservableObject {
         titles.removeValue(forKey: locationID)
         unplayableFiles.removeValue(forKey: locationID)
         truncatedLocations.remove(locationID)
+        unreadableCounts.removeValue(forKey: locationID)
+        emptyFolderLocations.remove(locationID)
         progress.removeValue(forKey: locationID)
         try? bookmarkStore.remove(id: Self.bookmarkID(for: locationID))
         persist()
@@ -180,21 +191,22 @@ final class LocationLibraryModel: ObservableObject {
         let bookmarkStore = bookmarkStore
         let scanBudget = scanBudget
         let bookmarkID = Self.bookmarkID(for: locationID)
-        let listed: (SecurityScopedResourceLease, LocationListing)
+        let listed: (SecurityScopedResourceLease, LocationListing, String)
         do {
             listed = try await tracked(locationID, timeout: openTimeout) { @MainActor in
                 let lease = try await bookmarkStore.open(id: bookmarkID)
                 let root = lease.url
-                let listing = try await Task.detached(priority: .userInitiated) {
-                    try LocationScanner.scan(root: root, budget: scanBudget)
+                let (listing, name) = try await Task.detached(priority: .userInitiated) {
+                    (try LocationScanner.scan(root: root, budget: scanBudget), LocationLibraryModel.displayName(for: root))
                 }.value
-                return (lease, listing)
+                return (lease, listing, name)
             }
         } catch {
             if isCurrent() { markUnreachable(locationID) }
             return
         }
-        let (openedLease, listing) = listed
+        let (openedLease, listing, systemName) = listed
+        renameIfNamedByRawFolder(locationID, folderURL: openedLease.url, systemName: systemName)
         // Inspections that outlive a timeout keep the folder open until they really finish.
         let lease = SharedLease(openedLease)
         defer { lease.release() }
@@ -269,9 +281,25 @@ final class LocationLibraryModel: ObservableObject {
         } else {
             truncatedLocations.remove(locationID)
         }
+        unreadableCounts[locationID] = listing.unreadableCount > 0 ? listing.unreadableCount : nil
+        if listing.folderLooksEmpty {
+            emptyFolderLocations.insert(locationID)
+        } else {
+            emptyFolderLocations.remove(locationID)
+        }
         progress.removeValue(forKey: locationID)
         statuses[locationID] = .available
         saveInspectedFiles(inspected, for: locationID)
+    }
+
+    /// A Location starts out named by its raw folder, which for an SMB share root is the mount
+    /// folder with a random prefix, such as "fHqWGQmedia"; the name Files shows replaces it.
+    private func renameIfNamedByRawFolder(_ locationID: UUID, folderURL: URL, systemName: String) {
+        guard let index = locations.firstIndex(where: { $0.id == locationID }),
+              locations[index].name == folderURL.lastPathComponent, systemName != locations[index].name
+        else { return }
+        locations[index].name = systemName
+        persist()
     }
 
     private func saveInspectedFiles(_ files: [InspectedFile], for locationID: UUID) {
@@ -335,9 +363,24 @@ final class LocationLibraryModel: ObservableObject {
         )
     }
 
+    /// The name Files shows for the folder. A share's root is a mount folder whose own name
+    /// carries a random prefix, so it takes the volume's name instead.
     nonisolated static func displayName(for folderURL: URL) -> String {
-        let name = folderURL.lastPathComponent
-        return name.isEmpty || name == "/" ? "Location" : name
+        let values = try? folderURL.resourceValues(
+            forKeys: [.localizedNameKey, .isVolumeKey, .volumeLocalizedNameKey, .volumeNameKey]
+        )
+        return displayName(
+            folderName: folderURL.lastPathComponent,
+            localizedName: values?.localizedName,
+            volumeName: values?.isVolume == true ? values?.volumeLocalizedName ?? values?.volumeName : nil
+        )
+    }
+
+    nonisolated static func displayName(folderName: String, localizedName: String?, volumeName: String?) -> String {
+        for name in [volumeName, localizedName, folderName] {
+            if let name, !name.isEmpty, name != "/" { return name }
+        }
+        return "Location"
     }
 
     /// Runs `operation`, giving up after `timeout`. A share that stops answering can block a
