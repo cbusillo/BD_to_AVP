@@ -430,6 +430,10 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     /// After the last frame: wait for the clock to pass it, then report the end or the error.
     private func playOut(generation: Int, error: String?) {
         while isCurrent(generation) {
+            // An interruption while the last frames play waits for recovery in the decode loop.
+            if rendererStopped() {
+                return
+            }
             updateClock()
             let end = state.withLock { $0.lastQueuedEnd } ?? 0
             if clockTicks() >= end || !state.withLock({ $0.clockStarted }) && end == 0 {
