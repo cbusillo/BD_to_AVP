@@ -156,6 +156,7 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
         var enqueued: [EnqueuedRange] = []
         var lastError: String?
         var failure: String?
+        var isInterrupted = false
         var pendingCount = 0
     }
 
@@ -189,6 +190,9 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
     /// Why the selected track is not playing, in words for the wearer, or nil while it plays:
     /// its decoder could not start, its packets keep failing to decode, or the renderer failed.
     var failure: String? { state.withLock { $0.failure } }
+    /// The renderer stopped because the system interrupted it, as when the app leaves the
+    /// foreground. A `discontinuity()` restarts it, so this is not reported as a failure (#1165).
+    var isInterrupted: Bool { state.withLock { $0.isInterrupted } }
     /// Decoded chunks waiting for the renderer, for diagnostics and tests.
     var pendingCount: Int { state.withLock { $0.pendingCount } }
 
@@ -232,6 +236,7 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
             // A flush also clears a failed renderer, so audio can come back after a seek.
             renderer.flush()
             rendererFailure = nil
+            state.withLock { $0.isInterrupted = false }
             history.removeAll()
             pending.removeAll()
             decoder?.reset()
@@ -252,6 +257,7 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
             if rendererFailure != nil {
                 renderer.flush()
                 rendererFailure = nil
+                state.withLock { $0.isInterrupted = false }
             }
             install(track)
             pending.removeAll()
@@ -349,10 +355,7 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
     private func drain() {
         defer { state.withLock { $0.pendingCount = pending.count } }
         if rendererFailure == nil, renderer.status == .failed {
-            rendererFailure = renderer.error.map { "\($0.localizedDescription)" } ?? "renderer failed"
-            record(error: rendererFailure ?? "renderer failed")
-            pending.removeAll()
-            publishFailure()
+            recordRendererFailure()
         }
         guard !awaitingFlush, rendererFailure == nil else {
             return
@@ -375,11 +378,17 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
             shared.queuedEndTicks = ranges.last?.endTicks
         }
         if renderer.status == .failed {
-            rendererFailure = renderer.error.map { "\($0.localizedDescription)" } ?? "renderer failed"
-            record(error: rendererFailure ?? "renderer failed")
-            pending.removeAll()
-            publishFailure()
+            recordRendererFailure()
         }
+    }
+
+    private func recordRendererFailure() {
+        let error = renderer.error
+        rendererFailure = error.map { "\(($0 as NSError).domain) \(($0 as NSError).code)" } ?? "renderer failed"
+        record(error: rendererFailure ?? "renderer failed")
+        state.withLock { $0.isInterrupted = PlaybackInterruptionPolicy.isInterruption(error) }
+        pending.removeAll()
+        publishFailure()
     }
 
     private func publishFailure() {
@@ -388,7 +397,9 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
         if let decoderFailure {
             failure = decoderFailure
         } else if rendererFailure != nil {
-            failure = "Audio stopped playing. Seeking or choosing another track tries again."
+            // An interrupted renderer is restarted by the player without a word.
+            failure = state.withLock { $0.isInterrupted }
+                ? nil : "Audio stopped playing. Seeking or choosing another track tries again."
         } else if consecutiveDecodeFailures >= Self.decodeFailureLimit {
             failure = "\(label) could not be decoded."
         } else {
