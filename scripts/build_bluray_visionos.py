@@ -15,6 +15,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from scripts import framework_dsyms
 from scripts.build_bluray_reader_macos import (
     MANIFEST_PATH as READER_MANIFEST_PATH,
     NativeDependency,
@@ -32,7 +33,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORKS_DIRECTORY = REPOSITORY_ROOT / "macos/Vendor"
 PROVENANCE_PATH = FRAMEWORKS_DIRECTORY / "bluray-visionos-provenance.json"
 MINIMUM_VISIONOS = "26.0"
-LIBRARY_COMPILE_FLAGS = ("-O2", "-g0")
+LIBRARY_COMPILE_FLAGS = ("-O2", "-g")
 LIBBLURAY_HEADERS = (
     "bluray.h",
     "bluray-version.h",
@@ -89,12 +90,13 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def cross_file(path: Path, slice_: Slice, target: str, source_root: Path) -> None:
+def cross_file(path: Path, slice_: Slice, target: str, work: Path) -> None:
     sdk_path = command_output(["/usr/bin/xcrun", "--sdk", slice_.sdk, "--show-sdk-path"]).strip()
     # A non-darwin system name keeps libbluray off its macOS-only DiskArbitration mount code;
     # visionOS has no DiskArbitration, and the player opens files, not mounted discs.
     compiler = ["/usr/bin/clang", "-target", target, "-isysroot", sdk_path]
-    compile_flags = [*LIBRARY_COMPILE_FLAGS, f"-ffile-prefix-map={source_root}=."]
+    compile_flags = [*LIBRARY_COMPILE_FLAGS, *framework_dsyms.compile_flags(work)]
+    link_flags = ["-Wl,-headerpad_max_install_names", *framework_dsyms.link_flags(work)]
     path.write_text(
         "[binaries]\n"
         f"c = {compiler!r}\n"
@@ -102,7 +104,7 @@ def cross_file(path: Path, slice_: Slice, target: str, source_root: Path) -> Non
         "strip = '/usr/bin/strip'\n"
         "[built-in options]\n"
         f"c_args = {compile_flags!r}\n"
-        "c_link_args = ['-Wl,-headerpad_max_install_names']\n"
+        f"c_link_args = {link_flags!r}\n"
         "[host_machine]\n"
         "system = 'visionos'\n"
         "subsystem = 'visionos'\n"
@@ -130,8 +132,10 @@ def framework_info(framework: Framework, slice_: Slice) -> dict[str, object]:
 
 
 def package_framework(
-    framework: Framework, slice_: Slice, prefixes: list[Path], copying: Path, destination: Path
-) -> Path:
+    framework: Framework, slice_: Slice, prefixes: list[Path], copying: Path, work: Path
+) -> tuple[Path, Path]:
+    """Returns the framework and its dSYM."""
+    destination = work / "frameworks"
     bundle = destination / f"{framework.name}.framework"
     bundle.mkdir(parents=True)
     binary = bundle / framework.name
@@ -154,6 +158,10 @@ def package_framework(
                         str(binary),
                     ]
                 )
+    dsym = work / "dsyms" / f"{framework.name}.framework.dSYM"
+    framework_dsyms.write_dsym(binary, work, dsym)
+    # Drop only the debug map; the binary keeps the symbols it shipped with before it had a dSYM.
+    run(["/usr/bin/strip", "-S", str(binary)])
     if framework.headers:
         headers = bundle / "Headers"
         headers.mkdir()
@@ -162,7 +170,7 @@ def package_framework(
     shutil.copy2(copying, bundle / "COPYING")
     with (bundle / "Info.plist").open("wb") as file:
         plistlib.dump(framework_info(framework, slice_), file, fmt=plistlib.FMT_BINARY)
-    return bundle
+    return bundle, dsym
 
 
 def macho_dependencies(path: Path) -> list[str]:
@@ -173,16 +181,16 @@ def macho_dependencies(path: Path) -> list[str]:
 
 def build_slice(
     manifest: BlurayReaderManifest, slice_: Slice, temporary: Path, meson: Path, ninja: Path
-) -> dict[str, Path]:
+) -> dict[str, tuple[Path, Path]]:
     work = temporary / slice_.name
     work.mkdir()
     bluray_source, bluray_copying, udfread_copying = prepare_libbluray_source(work, manifest)
-    environment = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "NINJA": str(ninja), "HOME": str(work)}
+    environment = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "NINJA": str(ninja), "HOME": str(work), "ZERO_AR_DATE": "1"}
     prefixes = []
     for target in slice_.targets:
         architecture = target.split("-")[0]
         cross = work / f"cross-{architecture}.ini"
-        cross_file(cross, slice_, target, work / "sources")
+        cross_file(cross, slice_, target, work)
         build = work / f"build-{architecture}"
         prefix = work / f"prefix-{architecture}"
         setup = meson_setup_command(str(meson), bluray_source, build, prefix, manifest)
@@ -190,9 +198,8 @@ def build_slice(
         run([str(ninja), "-C", str(build), "install"], env=environment)
         prefixes.append(prefix)
     copying = {"libbluray": bluray_copying, "libudfread": udfread_copying}
-    output = work / "frameworks"
     return {
-        framework.name: package_framework(framework, slice_, prefixes, copying[framework.name], output)
+        framework.name: package_framework(framework, slice_, prefixes, copying[framework.name], work)
         for framework in frameworks(manifest)
     }
 
@@ -233,6 +240,7 @@ def verify(manifest: BlurayReaderManifest) -> None:
                 allowed.add("@rpath/libudfread.framework/libudfread")
             if set(macho_dependencies(binary)) - allowed:
                 raise RuntimeError(f"{binary} links an unapproved dependency")
+        framework_dsyms.verify(FRAMEWORKS_DIRECTORY / f"{framework.name}.xcframework")
 
 
 def build(manifest: BlurayReaderManifest) -> None:
@@ -243,7 +251,7 @@ def build(manifest: BlurayReaderManifest) -> None:
     if command_output([str(ninja), "--version"]).strip() != manifest.ninja_version:
         raise RuntimeError("Ninja version does not match the Blu-ray reader manifest; run uv sync")
     with tempfile.TemporaryDirectory(prefix="bluray-visionos-") as temporary_name:
-        temporary = Path(temporary_name)
+        temporary = Path(temporary_name).resolve()
         built = {slice_.name: build_slice(manifest, slice_, temporary, meson, ninja) for slice_ in SLICES}
         FRAMEWORKS_DIRECTORY.mkdir(parents=True, exist_ok=True)
         for framework in frameworks(manifest):
@@ -251,7 +259,8 @@ def build(manifest: BlurayReaderManifest) -> None:
             shutil.rmtree(output, ignore_errors=True)
             command = ["/usr/bin/xcrun", "xcodebuild", "-create-xcframework"]
             for slice_ in SLICES:
-                command += ["-framework", str(built[slice_.name][framework.name])]
+                bundle, dsym = built[slice_.name][framework.name]
+                command += ["-framework", str(bundle), "-debug-symbols", str(dsym)]
             run([*command, "-output", str(output)])
     write_provenance(manifest)
     verify(manifest)

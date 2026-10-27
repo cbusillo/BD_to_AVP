@@ -3,7 +3,7 @@
   "cross_host_system": "visionos",
   "library_compile_flags": [
     "-O2",
-    "-g0"
+    "-g"
   ],
   "meson_options": [
     "--prefix",
@@ -49,9 +49,9 @@
     "x86_64-apple-xros26.0-simulator"
   ],
   "unsigned_checksums": {
-    "macos/Vendor/libbluray.xcframework/xros-arm64/libbluray.framework/libbluray": "e0d8048b0ad7e2bd68e3a491e212c897c90e97513bebc3438b6fd3d2d11ac7b5",
-    "macos/Vendor/libbluray.xcframework/xros-arm64_x86_64-simulator/libbluray.framework/libbluray": "f092209848b64287a9db135292083996c3472bfe3c3da2e5e526117562bc56fe",
-    "macos/Vendor/libudfread.xcframework/xros-arm64/libudfread.framework/libudfread": "b930bad2b74a858d83f221d4f4aba86e0742051345e3021f30ce9281bd7e3d4d",
-    "macos/Vendor/libudfread.xcframework/xros-arm64_x86_64-simulator/libudfread.framework/libudfread": "c4f06c228983b03b0ef00e3fdd78a29846a0758726dd5d71bb7f6eceaa8fc1d3"
+    "macos/Vendor/libbluray.xcframework/xros-arm64/libbluray.framework/libbluray": "ac689eaa1393c25abd349d6c5e55636b61087ebd80d06e4e50b5ea5376fe1055",
+    "macos/Vendor/libbluray.xcframework/xros-arm64_x86_64-simulator/libbluray.framework/libbluray": "00550e909eea21b3e80da4f4a1fded9911b2b99e11836b0ec6cec1f0f885b6a4",
+    "macos/Vendor/libudfread.xcframework/xros-arm64/libudfread.framework/libudfread": "4ace913780121b101c5a2bbdce162a25d73f4da918258154f3087f41ac7f9a99",
+    "macos/Vendor/libudfread.xcframework/xros-arm64_x86_64-simulator/libudfread.framework/libudfread": "24d39a3e40bcce95de34eb22dd20dee772f091bcf872fc9afec7555b636a071c"
   }
 }

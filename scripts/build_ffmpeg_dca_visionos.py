@@ -20,6 +20,7 @@ import urllib.request
 
 from pathlib import Path
 
+from scripts import framework_dsyms
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPOSITORY_ROOT / "vendor/ffmpeg-dca-visionos.toml"
@@ -70,8 +71,31 @@ def extract_source(archive: Path, destination: Path, source_directory: str) -> P
     return destination / source_directory
 
 
+def rearchive_with_unique_names(build_directory: Path, library: str, destination: Path) -> Path:
+    """Returns a copy of FFmpeg's static library whose members all have different names.
+
+    libavutil.a holds two cpu.o and two crc.o, the generic and the per-architecture ones, and
+    dsymutil tells archive members apart only by name and date, so it would leave one of each
+    out of the dSYM. The copy holds the same objects, named by their build paths.
+    """
+    archive = build_directory / library / f"{library}.a"
+    members = sorted(name for name in run(["ar", "-t", str(archive)]).splitlines() if not name.startswith("__.SYMDEF"))
+    objects = sorted((build_directory / library).rglob("*.o"))
+    if sorted(path.name for path in objects) != members:
+        raise RuntimeError(f"the objects built in {library} are not the members of {archive}")
+    destination.mkdir(parents=True)
+    copies = []
+    for path in objects:
+        copy = destination / str(path.relative_to(build_directory)).replace("/", "-")
+        shutil.copy2(path, copy)
+        copies.append(str(copy))
+    unique = destination / archive.name
+    run(["ar", "rcs", str(unique), *copies], environment={**os.environ, "ZERO_AR_DATE": "1"})
+    return unique
+
+
 def build_architecture(manifest: dict, source: Path, work: Path, sdk: str, architecture: dict) -> Path:
-    """Builds FFmpeg and the wrapper for one architecture and returns the linked dylib."""
+    """Builds FFmpeg and the wrapper for one architecture and returns the linked, unstripped dylib."""
     target = architecture["target"]
     sdk_path = xcrun(sdk, "--show-sdk-path")
     compiler = xcrun(sdk, "--find", "clang")
@@ -89,7 +113,7 @@ def build_architecture(manifest: dict, source: Path, work: Path, sdk: str, archi
             f"--arch={architecture['arch']}",
             f"--cc={compiler}",
             f"--sysroot={sdk_path}",
-            f"--extra-cflags=-target {target}",
+            f"--extra-cflags=-target {target} {' '.join(framework_dsyms.compile_flags(work))}",
             f"--extra-ldflags=-target {target}",
             *manifest["ffmpeg"]["configure_flags"],
             *architecture.get("configure_flags", []),
@@ -110,6 +134,27 @@ def build_architecture(manifest: dict, source: Path, work: Path, sdk: str, archi
     run(["make", f"-j{os.cpu_count() or 4}", "install"], cwd=build_directory, environment=environment)
 
     header = REPOSITORY_ROOT / manifest["wrapper_header"]
+    common = ["-target", target, "-isysroot", sdk_path]
+    wrapper_objects = []
+    for wrapper_source in manifest["wrapper_sources"]:
+        wrapper_object = work / f"{Path(wrapper_source).stem}-{name}.o"
+        run(
+            [
+                compiler,
+                *common,
+                "-O2",
+                *framework_dsyms.compile_flags(work),
+                f"-I{prefix / 'include'}",
+                f"-I{header.parent}",
+                "-c",
+                str(REPOSITORY_ROOT / wrapper_source),
+                "-o",
+                str(wrapper_object),
+            ],
+            cwd=work,
+            environment=environment,
+        )
+        wrapper_objects.append(str(wrapper_object))
     exported = work / f"exported-{name}.txt"
     exported.write_text(f"{manifest['exported_symbol_prefix']}*\n")
     framework_name = manifest["framework"]
@@ -117,31 +162,29 @@ def build_architecture(manifest: dict, source: Path, work: Path, sdk: str, archi
     run(
         [
             compiler,
-            "-target",
-            target,
-            "-isysroot",
-            sdk_path,
+            *common,
             "-dynamiclib",
-            "-O2",
-            f"-I{prefix / 'include'}",
-            f"-I{header.parent}",
-            *[str(REPOSITORY_ROOT / path) for path in manifest["wrapper_sources"]],
-            str(prefix / "lib/libavcodec.a"),
-            str(prefix / "lib/libavutil.a"),
+            *wrapper_objects,
+            *[
+                str(rearchive_with_unique_names(build_directory, library, work / f"objects-{name}-{library}"))
+                for library in ("libavcodec", "libavutil")
+            ],
             "-install_name",
             f"@rpath/{framework_name}.framework/{framework_name}",
             "-Wl,-exported_symbols_list," + str(exported),
             "-Wl,-dead_strip",
+            *framework_dsyms.link_flags(work),
             "-o",
             str(dylib),
         ],
+        cwd=work,
         environment=environment,
     )
-    run(["strip", "-x", str(dylib)])
     return dylib
 
 
-def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> Path:
+def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> tuple[Path, Path]:
+    """Returns the framework and its dSYM."""
     sdk = slice_spec["sdk"]
     dylibs = [
         build_architecture(manifest, source, work, sdk, architecture) for architecture in slice_spec["architectures"]
@@ -156,7 +199,11 @@ def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> P
         f'framework module {framework_name} {{\n    umbrella header "{header.name}"\n    export *\n}}\n'
     )
     # One binary per slice; the simulator slice is universal (arm64 and x86_64).
-    run(["lipo", "-create", *[str(dylib) for dylib in dylibs], "-output", str(framework / framework_name)])
+    binary = framework / framework_name
+    run(["lipo", "-create", *[str(dylib) for dylib in dylibs], "-output", str(binary)])
+    dsym = work / f"dsyms-{sdk}" / f"{framework_name}.framework.dSYM"
+    framework_dsyms.write_dsym(binary, work, dsym)
+    run(["strip", "-x", str(binary)])
     info = {
         "CFBundleDevelopmentRegion": "en",
         "CFBundleExecutable": framework_name,
@@ -173,7 +220,7 @@ def build_slice(manifest: dict, source: Path, work: Path, slice_spec: dict) -> P
     info_path.write_text(json.dumps(info))
     run(["plutil", "-convert", "xml1", str(info_path)])
     shutil.copy2(source / manifest["ffmpeg"]["license_file"], framework / "LICENSE")
-    return framework
+    return framework, dsym
 
 
 def build(cache_directory: Path) -> None:
@@ -182,15 +229,16 @@ def build(cache_directory: Path) -> None:
     output = REPOSITORY_ROOT / manifest["output"]
     notices = REPOSITORY_ROOT / manifest["notices"]
     with tempfile.TemporaryDirectory(prefix="ffmpeg-dca-") as temporary:
-        work = Path(temporary)
+        work = Path(temporary).resolve()
         source = extract_source(archive, work, manifest["ffmpeg"]["source_directory"])
         frameworks = [build_slice(manifest, source, work, slice_spec) for slice_spec in manifest["slices"]]
         if output.exists():
             shutil.rmtree(output)
         command = ["xcodebuild", "-create-xcframework"]
-        for framework in frameworks:
-            command += ["-framework", str(framework)]
+        for framework, dsym in frameworks:
+            command += ["-framework", str(framework), "-debug-symbols", str(dsym)]
         run([*command, "-output", str(output)])
+        framework_dsyms.verify(output)
         notices.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / manifest["ffmpeg"]["license_file"], notices / manifest["ffmpeg"]["license_file"])
     binaries = sorted(output.glob(f"*/{manifest['framework']}.framework/{manifest['framework']}"))

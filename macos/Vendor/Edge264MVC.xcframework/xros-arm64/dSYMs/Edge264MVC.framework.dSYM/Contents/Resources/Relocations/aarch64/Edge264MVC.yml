@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     'frameworks-xros/Edge264MVC.framework/Edge264MVC'
+relocations:     []
+...
