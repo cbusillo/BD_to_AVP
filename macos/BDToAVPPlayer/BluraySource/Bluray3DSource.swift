@@ -46,7 +46,7 @@ enum Bluray3DUnsupportedReason: String, Codable, Hashable, Sendable {
     var message: String {
         switch self {
         case .encrypted:
-            return "This disc is encrypted. Play it through the Mac with your own MakeMKV."
+            return "This disc is encrypted. Rip it with the Mac app and your own MakeMKV, then play the rip here."
         case .notStereo3D:
             return "This source has no Blu-ray 3D video."
         case .multipleAngles:

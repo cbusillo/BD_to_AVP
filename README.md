@@ -32,9 +32,36 @@ decoder helper for video extraction, audio transcoding, and video stream
 merging to convert MPEG-4 MVC 3D video to MV-HEVC 3D video. It also injects
 360° metadata for spatial media playback.
 
-The default MV-HEVC videos play directly in the Files or
+The default MV-HEVC videos play in Shiny 3D Cinema, or directly in the Files or
 [Screenlit](https://apps.apple.com/us/app/screenlit/id6499478407) app on the AVP.
 See the feasibility record before choosing experimental AV1 output.
+
+## Watching on Vision Pro
+
+Shiny 3D Cinema plays converted MV-HEVC movies, and also plays Blu-ray 3D on the
+headset without converting: unencrypted ISOs and disc folders, and MKVs that keep
+the MVC 3D track. It shows Blu-ray subtitles, and you can seek and pick up where
+you stopped. It is in beta on TestFlight.
+
+### Playing from a NAS or Mac share
+
+1. In the Files app on Vision Pro, tap **More**, then **Connect to Server**. Enter
+   the server's name or address, such as `nas.local` or your Mac's name, and sign in.
+   A Mac shares folders through **System Settings → General → Sharing → File Sharing**.
+2. In Shiny 3D Cinema, choose **Add Location** and pick the share, or a folder in it.
+
+The Location lists the movies it can play and keeps them across relaunches. If
+the server goes away, the Location says so and offers **Try Again**.
+
+If a Location on a NAS looks empty while Files shows the movies, add
+`fruit:zero_file_id = no` to the share's Samba settings and refresh. Most NAS
+systems use Samba. A Mac doesn't need this.
+
+The headset can't play encrypted discs. To watch one, set **Output files** in the
+Mac app's Advanced Settings to **Just the 3D disc rip, not converted** and point the
+destination at the shared folder. Your own copy of MakeMKV saves the disc as an MKV that keeps both
+eyes, and the headset plays it from the Location. The
+[player guide](docs/visionos-player.md#locations) has the details.
 
 ## Screenshots
 
