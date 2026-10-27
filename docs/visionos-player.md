@@ -103,15 +103,13 @@ To withdraw a beta, open its build in App Store Connect's TestFlight tab and use
 version/build and reason, and select a known-good unexpired build for the internal
 group when available. See [Apple's withdrawal procedure](https://developer.apple.com/help/app-store-connect/test-a-beta-version/stop-testing-a-build/).
 
-Publish the compatible Mac companion with the repository's `publish-current`
-command. Keep its stable Current link and the commit-addressed build metadata;
-do not replace the production-signed app in `/Applications`.
-
-Use the internal build for wearer acceptance: install from TestFlight, pair,
-select a completed movie on Vision Pro, verify both eyes and audio, seek forward
-and backward, exercise audio/subtitles and eye order where supported, close and
-resume, then test Mac restart and Forget. Automated builds and decoded-frame
-checks do not establish physical stereo presentation or sustained playback.
+Use the internal build for wearer acceptance: install from TestFlight, run both
+built-in stereo checks, then add a Location for a network share and play a
+converted MV-HEVC movie, a Blu-ray 3D ISO or disc folder, and an MKV that keeps
+MVC from it. For each, verify both eyes and audio, seek forward and backward,
+switch audio and subtitles (PGS on Blu-ray titles), try eye order where offered,
+then close and resume. Automated builds and decoded-frame checks do not establish
+physical stereo presentation or sustained playback.
 
 ## External TestFlight delivery
 
@@ -387,15 +385,6 @@ interruptions within a minute end with **Playback was interrupted and could not
 restart.** and Try Again. A real failure is described in plain words; an error's
 domain, code and details go only to the log, never to the screen.
 
-A shared movie's position is keyed by the Mac's `resumeKey`: a digest of the
-file's name, size, and modification time. Unlike the movie's `id` (which digests
-the folder approval's ID and path) and its `revision` (which includes change time
-and generation), it survives removing and re-adding the folder, a Mac app rebuild,
-and metadata churn on a network share; editing or replacing the file changes it.
-A position saved under the older `shared:<id>:<revision>` key moves to the new key
-the first time the movie is opened while that key still matches. A Mac that does
-not send `resumeKey` keeps the older key.
-
 Packed stereo playback uses a visionOS 26 custom video composition with one
 stable two-buffer output contract: output zero is always tagged as the left eye
 and output one as the right eye. The composition supplies and attaches one
@@ -468,8 +457,10 @@ no Mac (#1110). It plays an unencrypted 3D ISO, a disc folder (the folder that h
 rip, from a [Location](#locations) or the app's Documents folder. Listing a source
 opens it, chooses its title and stores that title with the item; the
 details view shows the title's length, audio and subtitles, and **Play** plays it on
-the headset (see [Native Blu-ray Video](#native-blu-ray-video)). Encrypted discs still need the Mac and the user's
-own MakeMKV.
+the headset (see [Native Blu-ray Video](#native-blu-ray-video)). The player never decrypts. For an encrypted
+disc, the Mac app's **Just the 3D disc rip, not converted** output uses the user's own
+MakeMKV to save an MKV that keeps MVC into a shared folder, and the headset plays that
+MKV from a Location.
 
 The code is in `macos/BDToAVPPlayer/BluraySource`:
 
