@@ -18,6 +18,7 @@ import tomllib
 
 from pathlib import Path
 
+from scripts import framework_dsyms
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPOSITORY_ROOT / "vendor/edge264-mvc-visionos.toml"
@@ -57,26 +58,52 @@ def checkout_source(pin: dict, destination: Path) -> str:
 
 
 def build_target(manifest: dict, source: Path, version: str, work: Path, sdk: str, target: str) -> Path:
-    """Compiles edge264 and the wrapper for one target and returns the linked dylib."""
+    """Compiles edge264 and the wrapper for one target and returns the linked, unstripped dylib."""
     sdk_path = xcrun(sdk, "--show-sdk-path")
     compiler = xcrun(sdk, "--find", "clang")
     environment = {**os.environ, "ZERO_AR_DATE": "1"}
     common = ["-target", target, "-isysroot", sdk_path]
+    debug = framework_dsyms.compile_flags(work)
     decoder_object = work / f"edge264mvc-{target}.o"
     run(
         [
             compiler,
             *common,
             *manifest["compile_flags"],
+            *debug,
             f'-DEDGE264MVC_VERSION_STRING="{version}"',
             "-c",
             str(source / manifest["decoder_source"]),
             "-o",
             str(decoder_object),
         ],
+        cwd=work,
         environment=environment,
     )
     header = REPOSITORY_ROOT / manifest["wrapper_header"]
+    wrapper_objects = []
+    for wrapper_source in manifest["wrapper_sources"]:
+        wrapper_object = work / f"{Path(wrapper_source).stem}-{target}.o"
+        run(
+            [
+                compiler,
+                *common,
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                *debug,
+                f"-I{source}",
+                f"-I{header.parent}",
+                "-c",
+                str(REPOSITORY_ROOT / wrapper_source),
+                "-o",
+                str(wrapper_object),
+            ],
+            cwd=work,
+            environment=environment,
+        )
+        wrapper_objects.append(str(wrapper_object))
     exported = work / f"exported-{target}.txt"
     exported.write_text(f"{manifest['exported_symbol_prefix']}*\n")
     framework_name = manifest["framework"]
@@ -86,28 +113,24 @@ def build_target(manifest: dict, source: Path, version: str, work: Path, sdk: st
             compiler,
             *common,
             "-dynamiclib",
-            "-O2",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            f"-I{source}",
-            f"-I{header.parent}",
-            *[str(REPOSITORY_ROOT / path) for path in manifest["wrapper_sources"]],
+            *wrapper_objects,
             str(decoder_object),
             "-install_name",
             f"@rpath/{framework_name}.framework/{framework_name}",
             "-Wl,-exported_symbols_list," + str(exported),
             "-Wl,-dead_strip",
+            *framework_dsyms.link_flags(work),
             "-o",
             str(dylib),
         ],
+        cwd=work,
         environment=environment,
     )
-    run(["strip", "-x", str(dylib)])
     return dylib
 
 
-def build_slice(manifest: dict, source: Path, version: str, work: Path, slice_spec: dict) -> Path:
+def build_slice(manifest: dict, source: Path, version: str, work: Path, slice_spec: dict) -> tuple[Path, Path]:
+    """Returns the framework and its dSYM."""
     sdk = slice_spec["sdk"]
     dylibs = [build_target(manifest, source, version, work, sdk, target) for target in slice_spec["targets"]]
     framework_name = manifest["framework"]
@@ -119,7 +142,11 @@ def build_slice(manifest: dict, source: Path, version: str, work: Path, slice_sp
     (framework / "Modules/module.modulemap").write_text(
         f'framework module {framework_name} {{\n    umbrella header "{header.name}"\n    export *\n}}\n'
     )
-    run(["lipo", "-create", *[str(dylib) for dylib in dylibs], "-output", str(framework / framework_name)])
+    binary = framework / framework_name
+    run(["lipo", "-create", *[str(dylib) for dylib in dylibs], "-output", str(binary)])
+    dsym = work / f"dsyms-{sdk}" / f"{framework_name}.framework.dSYM"
+    framework_dsyms.write_dsym(binary, work, dsym)
+    run(["strip", "-x", str(binary)])
     info = {
         "CFBundleDevelopmentRegion": "en",
         "CFBundleExecutable": framework_name,
@@ -136,7 +163,7 @@ def build_slice(manifest: dict, source: Path, version: str, work: Path, slice_sp
     info_path.write_text(json.dumps(info))
     run(["plutil", "-convert", "xml1", str(info_path)])
     shutil.copy2(source / manifest["license_file"], framework / "LICENSE")
-    return framework
+    return framework, dsym
 
 
 def build() -> None:
@@ -145,16 +172,17 @@ def build() -> None:
     output = REPOSITORY_ROOT / manifest["output"]
     notices = REPOSITORY_ROOT / manifest["notices"]
     with tempfile.TemporaryDirectory(prefix="edge264-mvc-visionos-") as temporary:
-        work = Path(temporary)
+        work = Path(temporary).resolve()
         source = work / "edge264-mvc"
         version = checkout_source(pin, source)
         frameworks = [build_slice(manifest, source, version, work, slice_spec) for slice_spec in manifest["slices"]]
         if output.exists():
             shutil.rmtree(output)
         command = ["xcodebuild", "-create-xcframework"]
-        for framework in frameworks:
-            command += ["-framework", str(framework)]
+        for framework, dsym in frameworks:
+            command += ["-framework", str(framework), "-debug-symbols", str(dsym)]
         run([*command, "-output", str(output)])
+        framework_dsyms.verify(output)
         notices.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / manifest["license_file"], notices / manifest["license_file"])
     binaries = sorted(output.glob(f"*/{manifest['framework']}.framework/{manifest['framework']}"))

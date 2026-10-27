@@ -32,7 +32,6 @@ configure_flags = [
     "--disable-swscale",
     "--disable-swresample",
     "--disable-network",
-    "--disable-debug",
     "--enable-static",
     "--disable-shared",
     "--enable-pic",

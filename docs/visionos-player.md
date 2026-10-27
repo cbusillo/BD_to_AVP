@@ -56,6 +56,10 @@ Set and commit `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` for `BDToAVPPla
 in `macos/project.yml`, then build from that clean checkout. Use a higher build
 number than any previously accepted upload. Keep the source commit, Xcode build number, archive and dSYMs,
 export log and IPA SHA256 together with the delivery record.
+Each prebuilt framework in `macos/Vendor` carries dSYMs for its binaries, so the
+archive's `dSYMs` folder holds Edge264MVC, FFmpegDCA, libbluray and libudfread next to
+the app's and crashes inside them are readable. The framework build scripts write them,
+and `tests/test_framework_dsyms.py` checks that their UUIDs match the binaries.
 
 ```sh
 BD_TO_AVP_XCODE_DEVELOPER_DIR=/absolute/path/to/supported/Xcode.app/Contents/Developer

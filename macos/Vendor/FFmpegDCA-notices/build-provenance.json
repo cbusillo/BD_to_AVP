@@ -16,7 +16,6 @@
     "--disable-swscale",
     "--disable-swresample",
     "--disable-network",
-    "--disable-debug",
     "--enable-static",
     "--disable-shared",
     "--enable-pic",
@@ -31,7 +30,7 @@
     "xrsimulator": "27.0"
   },
   "binaries": {
-    "xros-arm64/FFmpegDCA.framework/FFmpegDCA": "faa68d46203963acc282f194ab1be3ce81fd48f4bc69361a8453b9a0a2a5bbf3",
-    "xros-arm64_x86_64-simulator/FFmpegDCA.framework/FFmpegDCA": "8a391c8e47e87a3380b03aad1dc1124fe7aa14c56bd861419c2d2f0765896025"
+    "xros-arm64/FFmpegDCA.framework/FFmpegDCA": "313e323fb804e5626de20b81eaf782bf1b61dbc5298296bf11c25a7ca5b92f79",
+    "xros-arm64_x86_64-simulator/FFmpegDCA.framework/FFmpegDCA": "81ba780131b10cf66370deea4e53a454716c4a2bcaeab333a8758ee63f49c46f"
   }
 }
