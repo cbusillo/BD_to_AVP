@@ -231,6 +231,9 @@ final class HeadsetAudioPlayer: BluRayPESPacketSink, @unchecked Sendable {
     }
 
     func discontinuity() {
+        // Cleared now, so a recovery that seeks is not taken for a new interruption before the
+        // flush below runs; the failed renderer takes nothing until then.
+        state.withLock { $0.isInterrupted = false }
         queue.async { [self] in
             generation += 1
             // A flush also clears a failed renderer, so audio can come back after a seek.

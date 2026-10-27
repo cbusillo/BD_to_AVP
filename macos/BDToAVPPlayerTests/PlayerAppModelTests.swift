@@ -766,6 +766,42 @@ final class PlayerAppModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAnInterruptionDuringAnEyeOrderChangeLeavesWorkingControlsAtTheSamePlace() async throws {
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        let session = MVHEVCPlayerSession()
+        _ = try await startFilePlayback(named: "Interrupted Eye Order", session: session, resumeStore: resumeStore)
+        session.seek(to: 12)
+        for _ in 0 ..< 50 where session.currentTime < 11.5 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let position = session.currentTime
+        let interruptedItem = session.playerItem
+
+        session.toggleEyeSwap()
+        XCTAssertTrue(session.isChangingEyeOrder)
+        session.handlePlayerItemFailure(PlaybackInterruptionTests.operationInterrupted)
+        for _ in 0 ..< 100 where session.playerItem === interruptedItem || !session.canControlPlayback {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        // Let an abandoned eye-order task finish if it was going to.
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertFalse(session.isChangingEyeOrder)
+        XCTAssertTrue(session.canControlPlayback, session.failureMessage ?? "Controls stayed disabled.")
+        XCTAssertFalse(session.isEyeSwapped)
+        XCTAssertEqual(session.currentTime, position, accuracy: 1)
+        XCTAssertNil(session.failurePresentation)
+
+        // The wearer can change the eye order again.
+        session.toggleEyeSwap()
+        for _ in 0 ..< 100 where session.isChangingEyeOrder || !session.isEyeSwapped {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(session.isEyeSwapped, session.failureMessage ?? "Eye order did not reverse.")
+        session.finish()
+    }
+
+    @MainActor
     func testAFileThatReallyFailsSaysSoInPlainWords() async throws {
         let resumeStore = ResumeStore(storageURL: temporaryURL())
         let session = MVHEVCPlayerSession()

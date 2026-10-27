@@ -157,11 +157,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         status.currentTime = max(0, Self.seconds(clockTicks()))
         status.loadedRange = buffer.loadedTicks.map { Self.seconds($0.lowerBound)...Self.seconds($0.upperBound) }
         status.statistics.secondsAhead = buffer.secondsAhead
-        let audio = audioPlayer
-        status.audioFailure = audio?.failure
-        if audio?.isInterrupted == true {
-            status.isInterrupted = true
-        }
+        status.audioFailure = audioPlayer?.failure
         return status
     }
 
@@ -557,11 +553,21 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         state.withLock { !$0.cancelled && $0.seekGeneration == generation && !$0.status.isInterrupted }
     }
 
-    /// Whether the video renderer has stopped taking frames. A system interruption, which the
-    /// renderer reports as a failure that a flush clears, stops the clock until
+    /// Whether the video renderer has stopped taking frames, or either renderer was interrupted.
+    /// A system interruption, which a renderer reports as a failure that a flush clears, stops
+    /// the clock until
     /// `recoverFromInterruption()`; any other failure ends playback.
     private func rendererStopped() -> Bool {
-        if state.withLock({ $0.status.isInterrupted }) {
+        let (interrupted, audio) = state.withLock { ($0.status.isInterrupted, $0.audioPlayer) }
+        if interrupted {
+            return true
+        }
+        // An interrupted audio renderer stops the clock too, so recovery resumes where it stopped.
+        if audio?.isInterrupted == true {
+            clockLock.withLock {
+                state.withLock { $0.status.isInterrupted = true }
+                applyRateLocked()
+            }
             return true
         }
         let error: Error?

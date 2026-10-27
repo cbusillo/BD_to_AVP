@@ -860,8 +860,22 @@ final class MVHEVCPlayerSession: ObservableObject {
         guard let failedItem = playerItem, makePlayerAsset != nil else {
             return
         }
-        let restoration = PlaybackItemRestorationState(
-            time: CMTime(seconds: currentTime, preferredTimescale: 600),
+        // An eye-order change in flight gives way: this replacement uses the eye order shown and
+        // the time the change started from.
+        let eyeOrderChangeTime = isChangingEyeOrder ? eyeOrderChangeResumeTime : nil
+        if isChangingEyeOrder {
+            abandonEyeOrderChange()
+        }
+        // A replacement that was itself interrupted before restoring keeps the original place.
+        let restoration = pendingItemRestoration.map {
+            PlaybackItemRestorationState(
+                time: $0.time,
+                wasPlaying: $0.wasPlaying,
+                mediaSelection: $0.mediaSelection,
+                reason: .interruption
+            )
+        } ?? PlaybackItemRestorationState(
+            time: CMTime(seconds: eyeOrderChangeTime ?? currentTime, preferredTimescale: 600),
             wasPlaying: playbackIntent.wantsPlayback,
             mediaSelection: currentMediaSelectionRestoration(),
             reason: .interruption
@@ -897,6 +911,22 @@ final class MVHEVCPlayerSession: ObservableObject {
                 presentFailure(.preparationFailed(PlaybackErrorText.message(for: error)))
             }
         }
+    }
+
+    /// Drops an eye-order change in flight. Moving to a new generation makes its task end
+    /// without touching playback.
+    private func abandonEyeOrderChange() {
+        eyeOrderChangeTask?.cancel()
+        eyeOrderChangeTask = nil
+        preparationGeneration += 1
+        isChangingEyeOrder = false
+        eyeOrderChangeResumeTime = nil
+#if BD_TO_AVP_QUALIFICATION
+        if pendingQualificationEyeOrderChange {
+            qualificationRecorder?.recordEyeOrderChangeFailed(player: player)
+        }
+        pendingQualificationEyeOrderChange = false
+#endif
     }
 
     /// Runs `body` as `recoveryTask`, which is cleared when it ends unless replaced first.
@@ -1233,20 +1263,27 @@ final class MVHEVCPlayerSession: ObservableObject {
         case .readyToPlay:
             state = .ready
             hasEstablishedPlayback = true
+            // A newer item already replaced one interrupted while the app was away.
+            awaitsInterruptionRecovery = false
             failurePresentation = nil
 #if BD_TO_AVP_QUALIFICATION
             qualificationRecorder?.recordReady(player: player)
 #endif
             apply(PlayerTimeControl(player))
             if let restoration = pendingItemRestoration, restoration.reason == .interruption {
-                pendingItemRestoration = nil
                 restoreMediaSelections(restoration.mediaSelection, on: item)
                 refreshSelectedMediaOptionIDs()
-                seek(to: restoration.time.seconds, origin: .resumeRestoration) { [weak self] _ in
-                    guard let self, self.playbackIntent.shouldPlay else {
+                seek(to: restoration.time.seconds, origin: .resumeRestoration) { [weak self] completed in
+                    guard let self else {
                         return
                     }
-                    self.player.play()
+                    // Kept until the seek lands, so an interruption before then restores the same place.
+                    if completed {
+                        self.pendingItemRestoration = nil
+                    }
+                    if self.playbackIntent.shouldPlay {
+                        self.player.play()
+                    }
                 }
                 return
             }
