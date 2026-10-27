@@ -17,16 +17,15 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = REPOSITORY_ROOT / "vendor/ssif-probe-macos-arm64.toml"
-SOURCE_PATH = REPOSITORY_ROOT / "native/ssif_probe/ssif_probe.c"
+MANIFEST_PATH = REPOSITORY_ROOT / "vendor/bluray-reader-macos-arm64.toml"
 READER_SOURCE_PATH = REPOSITORY_ROOT / "native/bd3d_reader/bd3d_reader.c"
 # The reader compiles the headset's Blu-ray 3D demuxer, so the Mac and the headset share one reader.
 SHARED_SOURCE_DIRECTORY = REPOSITORY_ROOT / "macos/BDToAVPPlayer/BluraySource"
 READER_VERSION_OUTPUT = "bd3d_reader contract 1\n"
 ARTIFACT_ROOT = REPOSITORY_ROOT / "bd_to_avp"
-BIN_PATH = ARTIFACT_ROOT / "bin/ssif_probe"
+BIN_DIRECTORY = ARTIFACT_ROOT / "bin"
 LIBRARY_DIRECTORY = ARTIFACT_ROOT / "lib"
-NOTICE_DIRECTORY = ARTIFACT_ROOT / "resources/notices/ssif-probe"
+NOTICE_DIRECTORY = ARTIFACT_ROOT / "resources/notices/bluray-reader"
 PROVENANCE_PATH = NOTICE_DIRECTORY / "build-provenance.json"
 RELINKING_NOTICE_PATH = NOTICE_DIRECTORY / "RELINKING.md"
 COMMAND_TIMEOUT_SECONDS = 300
@@ -61,7 +60,7 @@ class BuildOptions:
 
 
 @dataclass(frozen=True)
-class SsifProbeManifest:
+class BlurayReaderManifest:
     schema_version: int
     platform: str
     architecture: str
@@ -70,7 +69,7 @@ class SsifProbeManifest:
     rpath: str
     meson_version: str
     ninja_version: str
-    probe_compile_flags: tuple[str, ...]
+    reader_compile_flags: tuple[str, ...]
     system_link_allowlist: tuple[str, ...]
     build_options: BuildOptions
     libbluray: NativeDependency
@@ -156,7 +155,7 @@ def parse_build_options(value: object) -> BuildOptions:
     )
 
 
-def load_manifest(path: Path) -> SsifProbeManifest:
+def load_manifest(path: Path) -> BlurayReaderManifest:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     fields = {
         "schema_version",
@@ -167,7 +166,7 @@ def load_manifest(path: Path) -> SsifProbeManifest:
         "rpath",
         "meson_version",
         "ninja_version",
-        "probe_compile_flags",
+        "reader_compile_flags",
         "system_link_allowlist",
         "build_options",
         "libbluray",
@@ -175,26 +174,25 @@ def load_manifest(path: Path) -> SsifProbeManifest:
         "filenames",
         "unsigned_checksums",
     }
-    data = require_table(data, "SSIF probe manifest", fields)
+    data = require_table(data, "Blu-ray reader manifest", fields)
     schema_version = require_int(data["schema_version"], "schema_version")
-    if schema_version != 4:
-        raise RuntimeError("unsupported SSIF probe manifest schema")
+    if schema_version != 5:
+        raise RuntimeError("unsupported Blu-ray reader manifest schema")
     allowlist = data["system_link_allowlist"]
     if not isinstance(allowlist, list) or not all(isinstance(item, str) and item for item in allowlist):
         raise RuntimeError("system_link_allowlist is missing or invalid")
-    probe_compile_flags = data["probe_compile_flags"]
+    reader_compile_flags = data["reader_compile_flags"]
     if (
-        not isinstance(probe_compile_flags, list)
-        or not probe_compile_flags
-        or not all(isinstance(item, str) and item for item in probe_compile_flags)
+        not isinstance(reader_compile_flags, list)
+        or not reader_compile_flags
+        or not all(isinstance(item, str) and item for item in reader_compile_flags)
     ):
-        raise RuntimeError("probe_compile_flags is missing or invalid")
-    filenames = require_table(data["filenames"], "filenames", {"probe", "reader", "libbluray", "libudfread"})
+        raise RuntimeError("reader_compile_flags is missing or invalid")
+    filenames = require_table(data["filenames"], "filenames", {"reader", "libbluray", "libudfread"})
     checksums = require_table(
         data["unsigned_checksums"],
         "unsigned_checksums",
         {
-            "bd_to_avp/bin/ssif_probe",
             "bd_to_avp/bin/bd3d_reader",
             "bd_to_avp/lib/libbluray.3.dylib",
             "bd_to_avp/lib/libudfread.3.dylib",
@@ -203,7 +201,7 @@ def load_manifest(path: Path) -> SsifProbeManifest:
     for relative_path, checksum in checksums.items():
         if not SHA256_PATTERN.fullmatch(require_string(checksum, f"unsigned checksum for {relative_path}")):
             raise RuntimeError(f"unsigned checksum for {relative_path} must be 64 lowercase hexadecimal characters")
-    manifest = SsifProbeManifest(
+    manifest = BlurayReaderManifest(
         schema_version=schema_version,
         platform=require_string(data["platform"], "platform"),
         architecture=require_string(data["architecture"], "architecture"),
@@ -212,7 +210,7 @@ def load_manifest(path: Path) -> SsifProbeManifest:
         rpath=require_string(data["rpath"], "rpath"),
         meson_version=require_string(data["meson_version"], "meson_version"),
         ninja_version=require_string(data["ninja_version"], "ninja_version"),
-        probe_compile_flags=tuple(probe_compile_flags),
+        reader_compile_flags=tuple(reader_compile_flags),
         system_link_allowlist=tuple(allowlist),
         build_options=parse_build_options(data["build_options"]),
         libbluray=parse_dependency(data["libbluray"], "libbluray"),
@@ -223,13 +221,13 @@ def load_manifest(path: Path) -> SsifProbeManifest:
         },
     )
     if manifest.linkage != "private-shared":
-        raise RuntimeError(f"unsupported SSIF probe linkage: {manifest.linkage}")
+        raise RuntimeError(f"unsupported Blu-ray reader linkage: {manifest.linkage}")
     if manifest.rpath != "@loader_path/../lib":
-        raise RuntimeError("SSIF probe rpath must be @loader_path/../lib")
+        raise RuntimeError("Blu-ray reader rpath must be @loader_path/../lib")
     if manifest.architecture != "arm64":
-        raise RuntimeError("SSIF probe architecture must be arm64")
+        raise RuntimeError("Blu-ray reader architecture must be arm64")
     if manifest.build_options.default_library != "shared" or manifest.build_options.embed_udfread:
-        raise RuntimeError("SSIF probe must use shared libraries and a non-embedded libudfread fallback")
+        raise RuntimeError("Blu-ray reader must use shared libraries and a non-embedded libudfread fallback")
     return manifest
 
 
@@ -245,7 +243,7 @@ def build_environment(
     temporary_directory: Path,
     meson_path: str,
     ninja_path: str,
-    manifest: SsifProbeManifest,
+    manifest: BlurayReaderManifest,
 ) -> dict[str, str]:
     compiler_flags = " ".join(library_compile_flags(manifest))
     linker_flags = " ".join(library_link_flags(manifest))
@@ -271,7 +269,7 @@ def build_environment(
     }
 
 
-def library_compile_flags(manifest: SsifProbeManifest) -> tuple[str, ...]:
+def library_compile_flags(manifest: BlurayReaderManifest) -> tuple[str, ...]:
     return (
         "-arch",
         manifest.architecture,
@@ -281,7 +279,7 @@ def library_compile_flags(manifest: SsifProbeManifest) -> tuple[str, ...]:
     )
 
 
-def library_link_flags(manifest: SsifProbeManifest) -> tuple[str, ...]:
+def library_link_flags(manifest: BlurayReaderManifest) -> tuple[str, ...]:
     return (
         "-arch",
         manifest.architecture,
@@ -290,7 +288,7 @@ def library_link_flags(manifest: SsifProbeManifest) -> tuple[str, ...]:
     )
 
 
-def source_preparation_record(manifest: SsifProbeManifest) -> dict[str, object]:
+def source_preparation_record(manifest: BlurayReaderManifest) -> dict[str, object]:
     return {
         "libudfread_subproject_directory": (f"{manifest.libbluray.source_directory}/subprojects/libudfread"),
         "libbluray_meson_rewrite": {
@@ -301,7 +299,7 @@ def source_preparation_record(manifest: SsifProbeManifest) -> dict[str, object]:
 
 
 def notice_directory(artifact_root: Path = ARTIFACT_ROOT) -> Path:
-    return artifact_root / "resources/notices/ssif-probe"
+    return artifact_root / "resources/notices/bluray-reader"
 
 
 def source_archive_path(dependency: NativeDependency, artifact_root: Path = ARTIFACT_ROOT) -> Path:
@@ -313,7 +311,7 @@ def download_source_archive(dependency: NativeDependency) -> Path:
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     if archive_path.exists() and sha256(archive_path) == dependency.sha256:
         return archive_path
-    with tempfile.TemporaryDirectory(prefix="ssif-probe-download-") as temporary_directory:
+    with tempfile.TemporaryDirectory(prefix="bluray-reader-download-") as temporary_directory:
         downloaded_path = Path(temporary_directory) / dependency.source
         run(["/usr/bin/curl", "--fail", "--location", "--retry", "3", "--output", str(downloaded_path), dependency.url])
         if sha256(downloaded_path) != dependency.sha256:
@@ -331,7 +329,7 @@ def extract_source_archive(archive_path: Path, destination: Path, dependency: Na
     return source_path
 
 
-def prepare_libbluray_source(temporary_directory: Path, manifest: SsifProbeManifest) -> tuple[Path, Path, Path]:
+def prepare_libbluray_source(temporary_directory: Path, manifest: BlurayReaderManifest) -> tuple[Path, Path, Path]:
     bluray_archive = download_source_archive(manifest.libbluray)
     udfread_archive = download_source_archive(manifest.libudfread)
     sources_directory = temporary_directory / "sources"
@@ -359,7 +357,7 @@ def meson_setup_command(
     source_directory: Path,
     build_directory: Path,
     prefix: Path,
-    manifest: SsifProbeManifest,
+    manifest: BlurayReaderManifest,
 ) -> list[str]:
     options = manifest.build_options
     return [
@@ -406,7 +404,7 @@ def macho_rpaths(path: Path) -> list[str]:
     return rpaths
 
 
-def rewrite_install_names(prefix: Path, manifest: SsifProbeManifest) -> tuple[Path, Path]:
+def rewrite_install_names(prefix: Path, manifest: BlurayReaderManifest) -> tuple[Path, Path]:
     udfread_path = prefix / "lib" / manifest.libudfread.library_filename
     bluray_path = prefix / "lib" / manifest.libbluray.library_filename
     run(["/usr/bin/install_name_tool", "-id", manifest.libudfread.install_name, str(udfread_path)])
@@ -425,29 +423,11 @@ def rewrite_install_names(prefix: Path, manifest: SsifProbeManifest) -> tuple[Pa
     return bluray_path, udfread_path
 
 
-def compile_probe(prefix: Path, output_path: Path, manifest: SsifProbeManifest) -> None:
+def compile_reader(prefix: Path, output_path: Path, manifest: BlurayReaderManifest) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
         "/usr/bin/clang",
-        *manifest.probe_compile_flags,
-        f"-mmacosx-version-min={manifest.minimum_macos}",
-        f"-I{prefix / 'include'}",
-        str(SOURCE_PATH),
-        "-o",
-        str(output_path),
-        f"-L{prefix / 'lib'}",
-        "-lbluray",
-        "-Wl,-rpath,@loader_path/../lib",
-        "-Wl,-headerpad_max_install_names",
-    ]
-    run(command)
-
-
-def compile_reader(prefix: Path, output_path: Path, manifest: SsifProbeManifest) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        "/usr/bin/clang",
-        *manifest.probe_compile_flags,
+        *manifest.reader_compile_flags,
         f"-mmacosx-version-min={manifest.minimum_macos}",
         f"-I{prefix / 'include'}",
         f"-I{SHARED_SOURCE_DIRECTORY}",
@@ -464,9 +444,8 @@ def compile_reader(prefix: Path, output_path: Path, manifest: SsifProbeManifest)
     run(command)
 
 
-def artifact_paths(manifest: SsifProbeManifest, artifact_root: Path = ARTIFACT_ROOT) -> dict[str, Path]:
+def artifact_paths(manifest: BlurayReaderManifest, artifact_root: Path = ARTIFACT_ROOT) -> dict[str, Path]:
     return {
-        "bd_to_avp/bin/ssif_probe": artifact_root / "bin" / manifest.filenames["probe"],
         "bd_to_avp/bin/bd3d_reader": artifact_root / "bin" / manifest.filenames["reader"],
         "bd_to_avp/lib/libbluray.3.dylib": artifact_root / "lib" / manifest.filenames["libbluray"],
         "bd_to_avp/lib/libudfread.3.dylib": artifact_root / "lib" / manifest.filenames["libudfread"],
@@ -498,7 +477,7 @@ def verify_macho_artifact(path: Path, expected_architecture: str, minimum_macos:
 
 
 def verify_artifacts(
-    manifest: SsifProbeManifest,
+    manifest: BlurayReaderManifest,
     *,
     verify_checksums: bool,
     require_provenance: bool = True,
@@ -506,14 +485,12 @@ def verify_artifacts(
     artifact_root: Path = ARTIFACT_ROOT,
 ) -> dict[str, str]:
     artifacts = artifact_paths(manifest, artifact_root)
-    probe_path = artifacts["bd_to_avp/bin/ssif_probe"]
     reader_path = artifacts["bd_to_avp/bin/bd3d_reader"]
     for relative_path, path in artifacts.items():
         if not path.is_file():
-            raise RuntimeError(f"required SSIF probe artifact is missing: {relative_path}")
+            raise RuntimeError(f"required Blu-ray reader artifact is missing: {relative_path}")
         verify_macho_artifact(path, "arm64", manifest.minimum_macos)
     expected_dependencies = {
-        probe_path: {manifest.libbluray.install_name},
         reader_path: {manifest.libbluray.install_name, manifest.libudfread.install_name},
         artifacts["bd_to_avp/lib/libbluray.3.dylib"]: {manifest.libudfread.install_name},
         artifacts["bd_to_avp/lib/libudfread.3.dylib"]: set(),
@@ -537,9 +514,8 @@ def verify_artifacts(
     ).splitlines()[1:]
     if udfread_install_names != [manifest.libudfread.install_name]:
         raise RuntimeError("libudfread does not have the required private install name")
-    for executable in (probe_path, reader_path):
-        if macho_rpaths(executable) != [manifest.rpath]:
-            raise RuntimeError(f"{executable.name} does not have the required private-library rpath")
+    if macho_rpaths(reader_path) != [manifest.rpath]:
+        raise RuntimeError(f"{reader_path.name} does not have the required private-library rpath")
     for dependency in (manifest.libbluray, manifest.libudfread):
         archive_path = source_archive_path(dependency, artifact_root)
         if not archive_path.is_file() or sha256(archive_path) != dependency.sha256:
@@ -552,29 +528,28 @@ def verify_artifacts(
     if require_provenance:
         required_notices.append(notice_directory(artifact_root) / "build-provenance.json")
     if any(not path.is_file() or path.stat().st_size == 0 for path in required_notices):
-        raise RuntimeError("SSIF probe notices or provenance are missing")
+        raise RuntimeError("Blu-ray reader notices or provenance are missing")
     actual_checksums = {relative_path: sha256(path) for relative_path, path in artifacts.items()}
     if verify_checksums:
         for relative_path, checksum in actual_checksums.items():
             if checksum != manifest.unsigned_checksums[relative_path]:
                 raise RuntimeError(f"unsigned checksum does not match for {relative_path}")
     if run_runtime_probe:
-        verify_runtime(probe_path, "ssif_probe contract 2\n")
         verify_runtime(reader_path, READER_VERSION_OUTPUT)
     if require_provenance:
         verify_provenance(notice_directory(artifact_root) / "build-provenance.json", manifest)
     return actual_checksums
 
 
-def verify_runtime(probe_path: Path, expected_output: str) -> None:
-    with tempfile.TemporaryDirectory(prefix="ssif-probe-runtime-") as temporary_directory:
+def verify_runtime(executable_path: Path, expected_output: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="bluray-reader-runtime-") as temporary_directory:
         environment = {
             "HOME": temporary_directory,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "TMPDIR": temporary_directory,
         }
         completed = subprocess.run(
-            [str(probe_path), "--version"],
+            [str(executable_path), "--version"],
             cwd=temporary_directory,
             env=environment,
             check=False,
@@ -583,40 +558,40 @@ def verify_runtime(probe_path: Path, expected_output: str) -> None:
             timeout=30,
         )
     if completed.returncode != 0 or completed.stdout != expected_output or completed.stderr:
-        raise RuntimeError(f"{probe_path.name} could not resolve its private libraries at runtime")
+        raise RuntimeError(f"{executable_path.name} could not resolve its private libraries at runtime")
 
 
-def verify_provenance(path: Path, manifest: SsifProbeManifest) -> None:
+def verify_provenance(path: Path, manifest: BlurayReaderManifest) -> None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError("SSIF probe build provenance is invalid") from error
+        raise RuntimeError("Blu-ray reader build provenance is invalid") from error
     if (
         data.get("schema_version") != 1
         or data.get("architecture") != manifest.architecture
         or data.get("minimum_macos") != manifest.minimum_macos
         or data.get("meson_version") != manifest.meson_version
         or data.get("ninja_version") != manifest.ninja_version
-        or data.get("probe_compile_flags") != list(manifest.probe_compile_flags)
+        or data.get("reader_compile_flags") != list(manifest.reader_compile_flags)
         or data.get("library_compile_flags") != list(library_compile_flags(manifest))
         or data.get("library_link_flags") != list(library_link_flags(manifest))
         or data.get("source_preparation") != source_preparation_record(manifest)
         or data.get("unsigned_checksums") != manifest.unsigned_checksums
     ):
-        raise RuntimeError("SSIF probe build provenance does not match the manifest")
+        raise RuntimeError("Blu-ray reader build provenance does not match the manifest")
 
 
-def write_provenance(manifest: SsifProbeManifest, checksums: dict[str, str]) -> None:
+def write_provenance(manifest: BlurayReaderManifest, checksums: dict[str, str]) -> None:
     data = {
         "schema_version": 1,
-        "builder": "scripts/build_ssif_probe_macos.py",
+        "builder": "scripts/build_bluray_reader_macos.py",
         "platform": manifest.platform,
         "architecture": manifest.architecture,
         "minimum_macos": manifest.minimum_macos,
         "linkage": manifest.linkage,
         "meson_version": manifest.meson_version,
         "ninja_version": manifest.ninja_version,
-        "probe_compile_flags": list(manifest.probe_compile_flags),
+        "reader_compile_flags": list(manifest.reader_compile_flags),
         "library_compile_flags": list(library_compile_flags(manifest)),
         "library_link_flags": list(library_link_flags(manifest)),
         "meson_options": meson_setup_command("meson", Path("libbluray"), Path("build"), Path("prefix"), manifest)[4:],
@@ -632,24 +607,24 @@ def write_provenance(manifest: SsifProbeManifest, checksums: dict[str, str]) -> 
             for dependency in (manifest.libbluray, manifest.libudfread)
         ],
         "install_names": {"libbluray": manifest.libbluray.install_name, "libudfread": manifest.libudfread.install_name},
-        "probe_rpath": manifest.rpath,
+        "reader_rpath": manifest.rpath,
         "system_link_allowlist": list(manifest.system_link_allowlist),
         "unsigned_checksums": checksums,
     }
     PROVENANCE_PATH.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def build_ssif_probe(manifest: SsifProbeManifest) -> None:
+def build_bluray_reader(manifest: BlurayReaderManifest) -> None:
     tool_directory = Path(sys.executable).parent
     meson_path = tool_directory / "meson"
     ninja_path = tool_directory / "ninja"
     if not meson_path.is_file() or not ninja_path.is_file():
         raise RuntimeError("Pinned Meson and Ninja tools are missing; run uv sync before building")
     if command_output([str(meson_path), "--version"]).strip() != manifest.meson_version:
-        raise RuntimeError("Meson version does not match the SSIF probe manifest")
+        raise RuntimeError("Meson version does not match the Blu-ray reader manifest")
     if command_output([str(ninja_path), "--version"]).strip() != manifest.ninja_version:
-        raise RuntimeError("Ninja version does not match the SSIF probe manifest")
-    with tempfile.TemporaryDirectory(prefix="ssif-probe-build-") as temporary_directory_name:
+        raise RuntimeError("Ninja version does not match the Blu-ray reader manifest")
+    with tempfile.TemporaryDirectory(prefix="bluray-reader-build-") as temporary_directory_name:
         temporary_directory = Path(temporary_directory_name)
         environment = build_environment(temporary_directory, str(meson_path), str(ninja_path), manifest)
         for directory in (Path(environment["HOME"]), Path(environment["TMPDIR"])):
@@ -660,15 +635,12 @@ def build_ssif_probe(manifest: SsifProbeManifest) -> None:
         run(meson_setup_command(str(meson_path), bluray_source, build_directory, prefix, manifest), env=environment)
         run([str(ninja_path), "-C", str(build_directory), "install"], env=environment)
         bluray_path, udfread_path = rewrite_install_names(prefix, manifest)
-        staged_probe = temporary_directory / manifest.filenames["probe"]
-        compile_probe(prefix, staged_probe, manifest)
         staged_reader = temporary_directory / manifest.filenames["reader"]
         compile_reader(prefix, staged_reader, manifest)
-        BIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        BIN_DIRECTORY.mkdir(parents=True, exist_ok=True)
         LIBRARY_DIRECTORY.mkdir(parents=True, exist_ok=True)
         NOTICE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(staged_probe, BIN_PATH)
-        shutil.copy2(staged_reader, BIN_PATH.parent / manifest.filenames["reader"])
+        shutil.copy2(staged_reader, BIN_DIRECTORY / manifest.filenames["reader"])
         shutil.copy2(bluray_path, LIBRARY_DIRECTORY / manifest.filenames["libbluray"])
         shutil.copy2(udfread_path, LIBRARY_DIRECTORY / manifest.filenames["libudfread"])
         shutil.copy2(bluray_copying, NOTICE_DIRECTORY / "libbluray-COPYING")
@@ -677,7 +649,7 @@ def build_ssif_probe(manifest: SsifProbeManifest) -> None:
     write_provenance(manifest, checksums)
 
 
-def record_checksums(manifest: SsifProbeManifest) -> dict[str, str]:
+def record_checksums(manifest: BlurayReaderManifest) -> dict[str, str]:
     checksums = verify_artifacts(manifest, verify_checksums=False, require_provenance=False)
     manifest_text = MANIFEST_PATH.read_text(encoding="utf-8")
     for relative_path, checksum in checksums.items():
@@ -690,15 +662,15 @@ def record_checksums(manifest: SsifProbeManifest) -> dict[str, str]:
     return checksums
 
 
-def require_macos_arm64(parser: argparse.ArgumentParser, manifest: SsifProbeManifest) -> None:
+def require_macos_arm64(parser: argparse.ArgumentParser, manifest: BlurayReaderManifest) -> None:
     if manifest.platform != "macOS arm64":
-        raise RuntimeError(f"unsupported SSIF probe platform: {manifest.platform}")
+        raise RuntimeError(f"unsupported Blu-ray reader platform: {manifest.platform}")
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         parser.error(f"this build script requires {manifest.platform}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build and verify the bundled macOS SSIF probe.")
+    parser = argparse.ArgumentParser(description="Build and verify the bundled macOS Blu-ray reader.")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument(
         "--verify-only",
@@ -715,14 +687,14 @@ def main() -> int:
     require_macos_arm64(parser, manifest)
     if args.verify_only:
         verify_artifacts(manifest, verify_checksums=True)
-        print("Verified bundled SSIF probe artifacts")
+        print("Verified bundled Blu-ray reader artifacts")
         return 0
     if args.record_checksums:
         checksums = record_checksums(manifest)
         print(json.dumps(checksums, sort_keys=True))
         return 0
-    build_ssif_probe(manifest)
-    print(f"Built {BIN_PATH.relative_to(REPOSITORY_ROOT)}")
+    build_bluray_reader(manifest)
+    print(f"Built {(BIN_DIRECTORY / manifest.filenames['reader']).relative_to(REPOSITORY_ROOT)}")
     return 0
 
 

@@ -140,7 +140,6 @@ enum NativePlaybackQualification {
             if second == seekBackAt {
                 report.events.append("seek_back from=\(status.currentTime) to=\(status.currentTime - 10)")
                 player.seek(to: status.currentTime - 10)
-                if let notice = player.seekNotice { report.events.append("seek_notice \(notice)") }
             }
 
             let cpu = cpuSeconds()

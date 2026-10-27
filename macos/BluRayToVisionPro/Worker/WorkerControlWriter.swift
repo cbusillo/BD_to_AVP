@@ -15,30 +15,6 @@ enum WorkerControlError: Error, LocalizedError {
     }
 }
 
-/// The latest live viewer playhead for a `start_live_hls` job. Sent only to a worker that
-/// advertises `viewer_position_v1`; the worker keeps the latest value and does not acknowledge it.
-struct WorkerViewerPositionCommand: Encodable, Equatable, Sendable {
-    static let capability = "viewer_position_v1"
-    static let maximumPositionMicroseconds: Int64 = 1 << 53
-
-    let protocolVersion = WorkerJobSpec.protocolVersion
-    let type = "job.viewer_position"
-    let jobID: UUID
-    let positionMicroseconds: Int64
-
-    init(jobID: UUID, positionMicroseconds: Int64) {
-        self.jobID = jobID
-        self.positionMicroseconds = min(max(positionMicroseconds, 0), Self.maximumPositionMicroseconds)
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case protocolVersion = "protocol_version"
-        case type
-        case jobID = "job_id"
-        case positionMicroseconds = "position_microseconds"
-    }
-}
-
 /// Each control is smaller than PIPE_BUF and is written atomically without
 /// blocking. All file operations run off the main thread, in one serial queue.
 final class WorkerControlWriter: @unchecked Sendable {

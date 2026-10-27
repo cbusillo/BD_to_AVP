@@ -112,8 +112,8 @@ jobs:
         working-directory: support-diagnostics
         run: npm run deploy:dry-run
 
-      - name: Verify committed SSIF probe artifacts
-        run: uv run python scripts/build_ssif_probe_macos.py --verify-only
+      - name: Verify committed Blu-ray reader artifacts
+        run: uv run python scripts/build_bluray_reader_macos.py --verify-only
 
       - name: Validate committed release metadata
         run: uv run python -m scripts.release validate

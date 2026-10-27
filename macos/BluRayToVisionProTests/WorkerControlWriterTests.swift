@@ -23,38 +23,6 @@ final class WorkerControlWriterTests: XCTestCase {
         XCTAssertEqual(object.count, 6)
     }
 
-    func testViewerPositionIsOneSmallFrameWithTheSharedShape() async throws {
-        let pipe = Pipe()
-        let writer = try WorkerControlWriter(handle: pipe.fileHandleForWriting)
-        defer { writer.close() }
-        let fixture = try JSONSerialization.jsonObject(with: sharedFixtureData("native_worker_viewer_position")) as? NSDictionary
-        let jobID = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(fixture?["job_id"] as? String)))
-        let position = try XCTUnwrap(fixture?["position_microseconds"] as? Int64)
-        try await writer.send(WorkerViewerPositionCommand(jobID: jobID, positionMicroseconds: position))
-        // The largest position still fits one atomic control frame.
-        try await writer.send(WorkerViewerPositionCommand(jobID: jobID, positionMicroseconds: .max))
-        writer.close()
-
-        let data = try pipe.fileHandleForReading.readToEnd() ?? Data()
-        let frames = data.split(separator: 0x0A)
-        XCTAssertEqual(frames.count, 2)
-        XCTAssertTrue(frames.allSatisfy { $0.count < 512 })
-        var first = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(frames[0])) as? [String: Any])
-        first["job_id"] = (first["job_id"] as? String)?.lowercased()
-        XCTAssertEqual(first as NSDictionary, fixture)
-        let largest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(frames[1])) as? [String: Any])
-        XCTAssertEqual(largest["position_microseconds"] as? Int64, WorkerViewerPositionCommand.maximumPositionMicroseconds)
-    }
-
-    private func sharedFixtureData(_ family: String) throws -> Data {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/\(family)_v\(WorkerJobSpec.protocolVersion).json")
-        return try XCTUnwrap(FileManager.default.contents(atPath: url.path))
-    }
-
     func testClosedChildInputThrowsWithoutSIGPIPE() async throws {
         let pipe = Pipe()
         let writer = try WorkerControlWriter(handle: pipe.fileHandleForWriting)

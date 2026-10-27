@@ -4,14 +4,12 @@ import SwiftUI
 struct BDToAVPPlayerApp: App {
     @StateObject private var model: PlayerAppModel
     @StateObject private var playerSession: MVHEVCPlayerSession
-    @StateObject private var relayCoordinator: RelaySessionCoordinator
     private let resumeStore: ResumeStore
 
     init() {
         let bookmarkStore = BookmarkStore()
         _model = StateObject(wrappedValue: PlayerAppModel(bookmarkStore: bookmarkStore))
         _playerSession = StateObject(wrappedValue: MVHEVCPlayerSession())
-        _relayCoordinator = StateObject(wrappedValue: RelaySessionCoordinator())
         resumeStore = ResumeStore()
     }
 
@@ -20,7 +18,6 @@ struct BDToAVPPlayerApp: App {
             AppShellView(
                 model: model,
                 playerSession: playerSession,
-                relayCoordinator: relayCoordinator,
                 resumeStore: resumeStore
             )
         }

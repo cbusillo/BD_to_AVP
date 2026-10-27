@@ -58,7 +58,7 @@ from scripts.native_app import (
     PACKAGED_BLURAY_HELPERS,
     smoke_packaged_bluray_helpers,
     smoke_packaged_worker,
-    ssif_required_paths,
+    reader_required_paths,
     validate_smoke_events,
     verify_native_binary_paths,
     verify_native_framework_links,
@@ -67,13 +67,16 @@ from scripts.native_app import (
     verify_layout,
     xcodebuild,
     verify_package_paths,
-    verify_committed_ssif_artifacts,
+    verify_committed_reader_artifacts,
     verify_product_identity,
     verify_product_source_copy,
-    verify_ssif_artifact_tree,
+    verify_reader_artifact_tree,
 )
 from scripts.verify_packaged_mv_hevc_routes import app_tree_sha256 as qualification_app_tree_sha256
-from scripts.build_ssif_probe_macos import MANIFEST_PATH as SSIF_MANIFEST_PATH, load_manifest as load_ssif_manifest
+from scripts.build_bluray_reader_macos import (
+    MANIFEST_PATH as READER_MANIFEST_PATH,
+    load_manifest as load_reader_manifest,
+)
 from scripts.production_identity import PRODUCTION_BUNDLE_IDENTIFIER
 from scripts.tier3_clean_machine import BUNDLE_IDENTIFIER as TIER3_BUNDLE_IDENTIFIER
 
@@ -505,36 +508,36 @@ Load command 3
         self.assertEqual(args.sign_identity, "Developer ID Application: Example")
         self.assertEqual(args.sign_keychain, "/tmp/release.keychain-db")
 
-    def test_ssif_package_tree_rejects_missing_dylib_and_notice(self) -> None:
-        manifest = load_ssif_manifest(SSIF_MANIFEST_PATH)
+    def test_reader_package_tree_rejects_missing_dylib_and_notice(self) -> None:
+        manifest = load_reader_manifest(READER_MANIFEST_PATH)
         for missing_name in ("libbluray.3.dylib", "RELINKING.md"):
             with self.subTest(missing_name=missing_name), tempfile.TemporaryDirectory() as temporary_directory:
                 artifact_root = Path(temporary_directory) / "bd_to_avp"
-                paths = ssif_required_paths(artifact_root, manifest)
+                paths = reader_required_paths(artifact_root, manifest)
                 for path in paths:
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(b"artifact")
                 missing_path = next(path for path in paths if path.name == missing_name)
                 missing_path.unlink()
 
-                with self.assertRaisesRegex(RuntimeError, "SSIF probe package artifacts are missing"):
-                    verify_ssif_artifact_tree(artifact_root, verify_checksums=False)
+                with self.assertRaisesRegex(RuntimeError, "Blu-ray reader package artifacts are missing"):
+                    verify_reader_artifact_tree(artifact_root, verify_checksums=False)
 
-    def test_committed_ssif_checksum_failure_is_blocking(self) -> None:
+    def test_committed_reader_checksum_failure_is_blocking(self) -> None:
         with patch.object(
             importlib.import_module("scripts.native_app"),
-            "verify_ssif_artifacts",
-            side_effect=RuntimeError("unsigned checksum does not match for bd_to_avp/bin/ssif_probe"),
+            "verify_reader_artifacts",
+            side_effect=RuntimeError("unsigned checksum does not match for bd_to_avp/bin/bd3d_reader"),
         ) as verify:
             with self.assertRaisesRegex(RuntimeError, "unsigned checksum does not match"):
-                verify_committed_ssif_artifacts()
+                verify_committed_reader_artifacts()
 
         verify.assert_called_once()
         self.assertTrue(verify.call_args.kwargs["verify_checksums"])
         self.assertEqual(verify.call_args.kwargs["artifact_root"], REPO_ROOT / "bd_to_avp")
 
-    def test_layout_propagates_invalid_ssif_linkage_and_rpath(self) -> None:
-        manifest = load_ssif_manifest(SSIF_MANIFEST_PATH)
+    def test_layout_propagates_invalid_reader_linkage_and_rpath(self) -> None:
+        manifest = load_reader_manifest(READER_MANIFEST_PATH)
         for failure in ("links an unapproved dependency", "does not have the required private-library rpath"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary_directory:
                 app_path = Path(temporary_directory) / NATIVE_APP_NAME
@@ -552,7 +555,7 @@ Load command 3
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(b"artifact")
                 (contents / "Resources" / "app_packages").mkdir(parents=True)
-                for path in ssif_required_paths(contents / "Resources" / "app" / "bd_to_avp", manifest):
+                for path in reader_required_paths(contents / "Resources" / "app" / "bd_to_avp", manifest):
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(b"artifact")
 
@@ -565,13 +568,13 @@ Load command 3
                     patch("scripts.native_app.verify_native_binary_paths"),
                     patch("scripts.native_app.verify_package_paths"),
                     patch(
-                        "scripts.native_app.verify_ssif_artifacts",
+                        "scripts.native_app.verify_reader_artifacts",
                         side_effect=RuntimeError(failure),
-                    ) as verify_ssif,
+                    ) as verify_reader,
                 ):
                     with self.assertRaisesRegex(RuntimeError, failure):
                         verify_layout(app_path)
-                    self.assertFalse(verify_ssif.call_args.kwargs["run_runtime_probe"])
+                    self.assertFalse(verify_reader.call_args.kwargs["run_runtime_probe"])
 
     def test_bluray_helper_smoke_uses_packaged_binaries_and_clean_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -620,7 +623,7 @@ Load command 3
 
         with (
             patch(
-                "scripts.native_app.verify_committed_ssif_artifacts",
+                "scripts.native_app.verify_committed_reader_artifacts",
                 side_effect=lambda: record("verify"),
             ) as verify_source,
             patch(
@@ -1670,7 +1673,6 @@ Load command 3
                     '{"metalfx_2x_mv_hevc_supported":true,'
                     '"metalfx_spatial_scaling_supported":true,'
                     '"pixel_transfer_2x_mv_hevc_supported":true,'
-                    '"segmented_hls_mv_hevc_encode_supported":true,'
                     '"schema_version":1,"stereo_mv_hevc_encode_supported":true}\n'
                 ),
                 stderr="",
@@ -1719,23 +1721,6 @@ Load command 3
                 '{"metalfx_2x_mv_hevc_supported":true,'
                 '"metalfx_spatial_scaling_supported":false,'
                 '"schema_version":1,"stereo_mv_hevc_encode_supported":true}\n'
-            ),
-            stderr="",
-        )
-        with (
-            patch("scripts.native_app.smoke_environment", return_value={}),
-            patch("scripts.native_app.subprocess.run", return_value=completed),
-            self.assertRaisesRegex(RuntimeError, "capability probe failed"),
-        ):
-            smoke_packaged_mv_hevc_encoder(Path("/tmp") / NATIVE_APP_NAME)
-
-    def test_mv_hevc_encoder_smoke_rejects_hls_support_without_stereo_support(self) -> None:
-        completed = subprocess.CompletedProcess(
-            args=[],
-            returncode=2,
-            stdout=(
-                '{"schema_version":1,"segmented_hls_mv_hevc_encode_supported":true,'
-                '"stereo_mv_hevc_encode_supported":false}\n'
             ),
             stderr="",
         )

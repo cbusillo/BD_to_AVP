@@ -60,5 +60,5 @@ Here, release workflow structure is checked by rule in
 ## What 3D Blu-ray to Vision Pro does
 
 The Mac app converts supported 3D Blu-ray sources into spatial movies; physical discs require MakeMKV for title extraction.
-The Movie Sharing beta pairs the Mac with the Shiny 3D Cinema app on Vision Pro, which plays completed movies from Files or compatible Mac shared folders.
-Evidence: [README.md](README.md) and the [Movie Sharing beta guide](docs/movie-sharing-beta.md).
+The Shiny 3D Cinema app on Vision Pro plays movies from its own storage and from network shares added as Locations.
+Evidence: [README.md](README.md) and the [player guide](docs/visionos-player.md).

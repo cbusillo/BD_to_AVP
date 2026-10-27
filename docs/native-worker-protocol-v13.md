@@ -5,7 +5,11 @@ mapping, source requests, conversion results, signals, cancellation, cleanup,
 and unattended retry policy retain their [v12 behavior](native-worker-protocol-v12.md).
 Version 12 requests/events are incompatible; historical v12 fixtures remain
 rejection evidence. Shared current fixtures use the `native_worker_*_v13.json`
-names in `tests/fixtures`.
+names in `tests/fixtures`. The live operations (`start_live_source`,
+`start_live_hls`, `inspect_live_title`), source `identity` and
+`descriptor_handoff`, and the `job.viewer_position` control left with Movie
+Sharing (#1117); requests that use them are rejected like any unknown operation
+or field.
 
 ## Input and readiness
 
@@ -44,46 +48,6 @@ for the worker's actual `sys.stdin`, not for arbitrary caller/test descriptors.
 Explicit media-pipeline stdin and explicit file inputs are preserved. In-memory
 StringIO provides the finite test equivalent; arbitrary blocking TextIO inputs
 are unsupported.
-
-## Live source identity and descriptor handoff
-
-`start_live_hls` and `inspect_live_title` accept two optional `source` fields;
-every other operation rejects them with `invalid_source`:
-
-```json
-{
-  "source": {
-    "kind": "disc_image",
-    "path": "/Volumes/media/Movies/Rainforest.iso",
-    "identity": {"device": 16777234, "inode": 123456789, "size_bytes": 41234567168,
-                 "modification_seconds": 1760000000, "modification_nanoseconds": 123456789},
-    "descriptor_handoff": {"socket_path": "/var/folders/xx/T/bdtoavp-Ab12Cd/s",
-                           "token": "64 lowercase hex characters"}
-  }
-}
-```
-
-- `identity` is what the Mac saw when it authorized the file: device (low 32
-  bits), inode, size, and modification time. It replaces the former
-  `live_hls.source_identity`, which is now an unknown key.
-- `descriptor_handoff` requires `identity` and a `disc_image` source. Its
-  `socket_path` is absolute and at most 103 bytes (`sun_path`).
-
-With a handoff, the worker never touches `path`: it is used for its `.iso`
-suffix and diagnostics only, with no `stat`, mounted-image lookup, or
-`resolve()`. The worker connects to `socket_path`, sends the 64 token bytes,
-and receives one data byte and one descriptor with `SCM_RIGHTS`, all within
-10 seconds; any failure is `live_source_handoff_failed`. It sets close-on-exec,
-and a descriptor that is not a regular file or does not match `identity` is
-closed and fails `live_source_changed`. One owner holds the descriptor for the
-job and closes it on rejection, cancellation, failure, and completion. Only the
-`ssif_probe` `inspect`, `titles`, and `stream-service` runs inherit it, as
-`/dev/fd/N`; `--version`, the decoder, FFmpeg, and the encoder do not.
-
-Without a handoff, `identity` is checked against a no-follow open of `path`,
-which must not be a symbolic link. The shared request shapes are
-`native_worker_start_live_hls_v13.json` and
-`native_worker_inspect_live_title_v13.json`.
 
 ## Keep Waiting command
 
@@ -131,28 +95,6 @@ progress time and the existing timeout duration.
 The runner refreshes monotonic time after probing output files and immediately
 before each grant. Slow filesystem probes or earlier acknowledgement delivery
 cannot reuse an older poll timestamp to bypass the extension window.
-
-## Viewer position command
-
-```json
-{
-  "protocol_version":13,
-  "type":"job.viewer_position",
-  "job_id":"c1ebce77-0460-462b-bd7e-8498c0355267",
-  "position_microseconds":42000000
-}
-```
-
-These are the only allowed fields. `position_microseconds` is an integer from
-0 through 2^53 giving a live viewer's playhead. The latest position wins and an
-accepted position has no acknowledgement; a rejection uses the `control.result`
-codes below. The worker capability is `viewer_position_v1`, and a host sends
-this command only to a worker whose `worker.ready` lists it. The worker lists
-`keep_waiting_v1` and `viewer_position_v1`. A wrong `job_id` is rejected with
-`wrong_job`, and any other malformed frame with `invalid_control`; the last
-accepted position stays in effect. The `start_live_hls` operation uses the
-position for viewer pacing (see [live-hls-service.md](live-hls-service.md)).
-The shape is in `tests/fixtures/native_worker_viewer_position_v13.json`.
 
 ## Reliable result event
 

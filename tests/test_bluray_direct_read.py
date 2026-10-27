@@ -27,7 +27,7 @@ RAINFOREST_ISO_ENV = "BD_TO_AVP_RAINFOREST_ISO"
 RAINFOREST_MAIN_CLIP = "00007"
 RAINFOREST_MAIN_PLAYLIST = "1005"
 RAINFOREST_SHORT_TITLE_ID = "bluray:5"
-# Decoded frames of the first 100 Rainforest stereo pairs, shared with the ssif_probe test.
+# Decoded frames of the first 100 Rainforest stereo pairs.
 RAINFOREST_FIRST_100_FRAME_LINES_SHA256 = "186a33d0a66c39619b94d354f77fbe364ee24c2e441ee25d90a8902b75199166"
 
 

@@ -70,7 +70,7 @@ def lanes_for(changed_paths: Iterable[str], player_prefixes: Iterable[str]) -> d
             return dict.fromkeys(ALL_LANES, True)
         if is_under(path, player_prefixes):
             lanes["player"] = True
-            # RelaySessionCore and the shared relay file also build into the Mac app.
+            # A player input outside the player's own folders may also build into the Mac app.
             if not path.startswith(f"macos/{PLAYER_TARGET}"):
                 lanes["native"] = True
             continue

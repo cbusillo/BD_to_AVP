@@ -25,15 +25,15 @@ from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.artifact_identity import app_tree_sha256
 from scripts.build_mv_hevc_encoder_macos import build_encoder as build_mv_hevc_encoder
-from scripts.build_ssif_probe_macos import (
-    MANIFEST_PATH as SSIF_MANIFEST_PATH,
+from scripts.build_bluray_reader_macos import (
+    MANIFEST_PATH as READER_MANIFEST_PATH,
     READER_VERSION_OUTPUT,
-    SsifProbeManifest,
-    artifact_paths as ssif_artifact_paths,
-    load_manifest as load_ssif_manifest,
-    notice_directory as ssif_notice_directory,
-    source_archive_path as ssif_source_archive_path,
-    verify_artifacts as verify_ssif_artifacts,
+    BlurayReaderManifest,
+    artifact_paths as reader_artifact_paths,
+    load_manifest as load_reader_manifest,
+    notice_directory as reader_notice_directory,
+    source_archive_path as reader_source_archive_path,
+    verify_artifacts as verify_reader_artifacts,
 )
 from scripts.embedded_python import RUNTIME_ROOT as EMBEDDED_PYTHON_ROOT
 from scripts.embedded_python import prepare_runtime as prepare_embedded_python
@@ -201,8 +201,8 @@ def verify_product_source_copy() -> None:
 
 def xcodebuild(action: str, configuration: str) -> None:
     generate_project()
-    # A team-signed Debug app keeps its keychain trust, Vision Pro pairing and folder
-    # approvals across rebuilds; an ad hoc one looks like a new app each time.
+    # A team-signed Debug app keeps its folder approvals across rebuilds; an ad hoc one
+    # looks like a new app each time.
     allow_signing = action == "build" and configuration == "Debug" and development_signing_available(os.environ)
     build_settings = native_build_settings(configuration, os.environ, allow_signing=allow_signing)
     with native_test_home(action) as test_home:
@@ -391,34 +391,34 @@ def install_mv_hevc_encoder(app_path: Path, source_path: Path) -> Path:
     return destination
 
 
-def ssif_required_paths(artifact_root: Path, manifest: SsifProbeManifest) -> list[Path]:
-    artifacts = ssif_artifact_paths(manifest, artifact_root)
-    notices = ssif_notice_directory(artifact_root)
+def reader_required_paths(artifact_root: Path, manifest: BlurayReaderManifest) -> list[Path]:
+    artifacts = reader_artifact_paths(manifest, artifact_root)
+    notices = reader_notice_directory(artifact_root)
     return [
         *artifacts.values(),
         notices / "RELINKING.md",
         notices / "libbluray-COPYING",
         notices / "libudfread-COPYING",
         notices / "build-provenance.json",
-        ssif_source_archive_path(manifest.libbluray, artifact_root),
-        ssif_source_archive_path(manifest.libudfread, artifact_root),
+        reader_source_archive_path(manifest.libbluray, artifact_root),
+        reader_source_archive_path(manifest.libudfread, artifact_root),
     ]
 
 
-def verify_ssif_artifact_tree(artifact_root: Path, *, verify_checksums: bool) -> None:
-    manifest = load_ssif_manifest(SSIF_MANIFEST_PATH)
-    missing = [path for path in ssif_required_paths(artifact_root, manifest) if not path.is_file()]
+def verify_reader_artifact_tree(artifact_root: Path, *, verify_checksums: bool) -> None:
+    manifest = load_reader_manifest(READER_MANIFEST_PATH)
+    missing = [path for path in reader_required_paths(artifact_root, manifest) if not path.is_file()]
     if missing:
-        raise RuntimeError("SSIF probe package artifacts are missing:\n" + "\n".join(str(path) for path in missing))
-    verify_ssif_artifacts(
+        raise RuntimeError("Blu-ray reader package artifacts are missing:\n" + "\n".join(str(path) for path in missing))
+    verify_reader_artifacts(
         manifest,
         verify_checksums=verify_checksums,
         artifact_root=artifact_root,
     )
 
 
-def verify_committed_ssif_artifacts() -> None:
-    verify_ssif_artifact_tree(REPO_ROOT / "bd_to_avp", verify_checksums=True)
+def verify_committed_reader_artifacts() -> None:
+    verify_reader_artifact_tree(REPO_ROOT / "bd_to_avp", verify_checksums=True)
 
 
 def assemble_package(mv_hevc_encoder_path: Path) -> Path:
@@ -474,8 +474,8 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
     worker_executable = app_path / "Contents" / "MacOS" / WORKER_EXECUTABLE_NAME
     ffprobe_executable = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ffprobe"
     mv_hevc_encoder = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME
-    ssif_artifact_root = app_path / "Contents" / "Resources" / "app" / "bd_to_avp"
-    ssif_manifest = load_ssif_manifest(SSIF_MANIFEST_PATH)
+    reader_artifact_root = app_path / "Contents" / "Resources" / "app" / "bd_to_avp"
+    reader_manifest = load_reader_manifest(READER_MANIFEST_PATH)
     required_paths = [
         native_executable,
         worker_executable,
@@ -486,7 +486,7 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
         app_path / "Contents" / "Resources" / "app_icon.icns",
         ffprobe_executable,
         mv_hevc_encoder,
-        *ssif_required_paths(ssif_artifact_root, ssif_manifest),
+        *reader_required_paths(reader_artifact_root, reader_manifest),
     ]
     missing = [path for path in required_paths if not path.exists()]
     if missing:
@@ -499,11 +499,11 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
     verify_exact_minimum_system_version(mv_hevc_encoder, "MV-HEVC encoder")
     verify_native_binary_paths(native_executable)
     verify_package_paths(app_path)
-    verify_ssif_artifacts(
-        ssif_manifest,
+    verify_reader_artifacts(
+        reader_manifest,
         verify_checksums=False,
         run_runtime_probe=False,
-        artifact_root=ssif_artifact_root,
+        artifact_root=reader_artifact_root,
     )
 
 
@@ -761,7 +761,7 @@ def smoke_packaged_mv_hevc_encoder(app_path: Path) -> None:
         print("Packaged MV-HEVC encoder is valid but unavailable on this build host.")
 
 
-PACKAGED_BLURAY_HELPERS = {"ssif_probe": "ssif_probe contract 2\n", "bd3d_reader": READER_VERSION_OUTPUT}
+PACKAGED_BLURAY_HELPERS = {"bd3d_reader": READER_VERSION_OUTPUT}
 
 
 def smoke_packaged_bluray_helpers(app_path: Path) -> None:
@@ -800,7 +800,6 @@ def validate_mv_hevc_capability_probe(
         "metalfx_2x_mv_hevc_supported",
         "metalfx_spatial_scaling_supported",
         "pixel_transfer_2x_mv_hevc_supported",
-        "segmented_hls_mv_hevc_encode_supported",
     }
     if (
         not isinstance(payload, dict)
@@ -820,11 +819,9 @@ def validate_mv_hevc_capability_probe(
     metalfx_supported = payload.get("metalfx_2x_mv_hevc_supported", False)
     metalfx_device_supported = payload.get("metalfx_spatial_scaling_supported", False)
     pixel_transfer_supported = payload.get("pixel_transfer_2x_mv_hevc_supported", False)
-    segmented_hls_supported = payload.get("segmented_hls_mv_hevc_encode_supported", False)
     contract_is_consistent = not (
         (metalfx_supported and (not supported or not metalfx_device_supported))
         or (pixel_transfer_supported and not supported)
-        or (segmented_hls_supported and not supported)
     )
     expected_returncode = 0 if supported else 2
     if contract_is_consistent and completed.returncode == expected_returncode:
@@ -957,7 +954,7 @@ def validate_smoke_events(events: list[object], job_id: str, *, expected_worker_
 
 
 def package(identity: str, keychain: str | None = None) -> Path:
-    verify_committed_ssif_artifacts()
+    verify_committed_reader_artifacts()
     mv_hevc_encoder_path = build_packaged_mv_hevc_encoder()
     prepare_embedded_python_runtime()
     xcodebuild("build", NATIVE_PACKAGE_CONFIGURATION)
@@ -1373,7 +1370,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "test":
         xcodebuild("test", "Debug")
     elif args.command == "build":
-        # A Debug worker resolves tools from the checkout, so live playback needs the encoder there.
+        # A Debug worker resolves tools from the checkout, so direct MV-HEVC conversion needs the encoder there.
         build_packaged_mv_hevc_encoder(DEVELOPMENT_MV_HEVC_ENCODER)
         xcodebuild("build", "Debug")
     elif args.command == "publish-current":
