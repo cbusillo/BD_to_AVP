@@ -92,7 +92,15 @@ struct LocationLibraryView: View {
             unreachableState
         } else if titles.isEmpty {
             if status == .available {
-                emptyState
+                if locations.emptyFolderLocations.contains(locationID) {
+                    folderLooksEmptyState
+                } else if locations.truncatedLocations.contains(locationID)
+                    || locations.unreadableCounts[locationID] != nil {
+                    // A partial look found nothing yet; the notes below say why.
+                    EmptyView()
+                } else {
+                    emptyState
+                }
             }
         } else {
             LazyVGrid(
@@ -122,9 +130,20 @@ struct LocationLibraryView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             }
+            if let count = locations.unreadableCounts[locationID] {
+                Label(
+                    count == 1
+                        ? "1 folder or file here couldn't be read, so it isn't listed. Refresh to try again."
+                        : "\(count) folders or files here couldn't be read, so they aren't listed. Refresh to try again.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
             unplayableSection
         }
     }
+
 
     private var unreachableState: some View {
         ContentUnavailableView {
@@ -155,6 +174,32 @@ struct LocationLibraryView: View {
         }
         .frame(maxWidth: .infinity, minHeight: 300)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+    }
+
+    private var folderLooksEmptyState: some View {
+        ContentUnavailableView {
+            Label("This folder looks empty", systemImage: "folder")
+        } description: {
+            Text("""
+            Shiny 3D Cinema found nothing in \(name). If Files shows movies here, the server is \
+            probably a Samba-based NAS, such as Synology, QNAP, TrueNAS, UGreen or Unraid. Add \
+            these lines to this share's settings on the NAS, then try again:
+
+            readdir_attr:aapl_rsize = no
+            readdir_attr:aapl_finder_info = no
+            readdir_attr:aapl_max_access = no
+            """)
+        } actions: {
+            Button("Try Again") {
+                Task { await locations.refresh(locationID) }
+            }
+            .buttonStyle(.borderedProminent)
+            Button("Choose Folder Again", action: chooseFolderAgain)
+                .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, minHeight: 300)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .accessibilityIdentifier("location-folder-empty")
     }
 
     @ViewBuilder
