@@ -187,6 +187,15 @@ final class MVHEVCPlayerSession: ObservableObject {
     private var audioSelectionByID: [String: AVMediaSelectionOption] = [:]
     private var subtitleSelectionByID: [String: AVMediaSelectionOption] = [:]
     private var packedStereoSource: PackedStereoSource?
+    /// Makes a fresh asset for the open movie, so its player item can be replaced.
+    private var makePlayerAsset: (() -> AVURLAsset)?
+    /// The system interrupted playback while the app was in the background; it is rebuilt when
+    /// the app returns (#1165).
+    private var awaitsInterruptionRecovery = false
+    private var recoveryBudget = PlaybackRecoveryBudget()
+    private var recoveryTask: Task<Void, Never>?
+    /// Identifies `recoveryTask`, so a finished task clears only itself.
+    private var recoveryTaskID = 0
     private var pendingItemRestoration: PlaybackItemRestorationState?
     private var playbackIntent = PlaybackIntentState()
     private var eyeOrderChangeResumeTime: TimeInterval?
@@ -432,7 +441,6 @@ final class MVHEVCPlayerSession: ObservableObject {
                 )
                 item.seekingWaitsForVideoCompositionRendering = true
                 preparedPackedStereo = PackedStereoSource(
-                    makeAsset: makeAsset,
                     format: mediaItem.format,
                     duration: preparedDuration,
                     spatialMetadataFallback: spatialMetadataFallback
@@ -451,6 +459,7 @@ final class MVHEVCPlayerSession: ObservableObject {
 
             playerItem = item
             packedStereoSource = preparedPackedStereo
+            makePlayerAsset = makeAsset
             duration = preparedDuration.seconds.isFinite ? max(0, preparedDuration.seconds) : 0
             configureMediaSelections(preparedSelections)
             pendingResume.store(resumeStore.resumeTime(for: mediaItem.id), duration: duration)
@@ -472,9 +481,9 @@ final class MVHEVCPlayerSession: ObservableObject {
             guard generation == preparationGeneration else {
                 return
             }
-            presentFailure(
-                .preparationFailed("The movie could not be prepared: \(Self.playbackFailureMessage(for: error))")
-            )
+            presentFailure(.preparationFailed(
+                PlaybackErrorText.message(for: error, fallback: "The movie could not be prepared. Try again.")
+            ))
         }
     }
 
@@ -663,7 +672,7 @@ final class MVHEVCPlayerSession: ObservableObject {
     }
 
     func toggleEyeSwap() {
-        guard let packedStereoSource,
+        guard packedStereoSource != nil,
               let playerItem,
               canControlPlayback,
               !isChangingEyeOrder
@@ -675,7 +684,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         let restoration = PlaybackItemRestorationState(
             time: player.currentTime(),
             wasPlaying: player.timeControlStatus == .playing,
-            mediaSelection: currentMediaSelectionRestoration()
+            mediaSelection: currentMediaSelectionRestoration(),
+            reason: .eyeOrder
         )
         let generation = preparationGeneration
         eyeOrderChangeResumeTime = restoration.time.seconds.isFinite
@@ -695,25 +705,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
             defer { eyeOrderChangeTask = nil }
             do {
-                let replacementAsset = packedStereoSource.makeAsset()
-                let replacementItem = AVPlayerItem(asset: replacementAsset)
-                if shareConnection != nil {
-                    replacementItem.preferredForwardBufferDuration = Self.shareForwardBufferDuration
-                }
-                async let replacementComposition = PackedStereoComposition.make(
-                    asset: replacementAsset,
-                    format: packedStereoSource.format,
-                    duration: packedStereoSource.duration,
-                    eyeOrder: targetEyeOrder,
-                    spatialMetadataFallback: packedStereoSource.spatialMetadataFallback
-                )
-                async let replacementSelections = prepareMediaSelections(
-                    for: replacementAsset,
-                    item: replacementItem
-                )
-                replacementItem.videoComposition = try await replacementComposition
-                replacementItem.seekingWaitsForVideoCompositionRendering = true
-                let preparedSelections = try await replacementSelections
+                let (replacementItem, preparedSelections) = try await makeReplacementItem(eyeOrder: targetEyeOrder)
 
                 guard generation == preparationGeneration,
                       playerItem === self.playerItem,
@@ -729,6 +721,8 @@ final class MVHEVCPlayerSession: ObservableObject {
 
                 preparationGeneration += 1
                 let replacementGeneration = preparationGeneration
+                // The share watcher follows the new generation, so it keeps reporting the connection.
+                watchShareConnection(shareConnection, generation: replacementGeneration)
                 self.playerItem = replacementItem
                 configureMediaSelections(preparedSelections)
                 pendingItemRestoration = restoration
@@ -747,7 +741,8 @@ final class MVHEVCPlayerSession: ObservableObject {
                 qualificationRecorder?.recordEyeOrderChangeFailed(player: player)
                 pendingQualificationEyeOrderChange = false
 #endif
-                failureMessage = "Eye order could not be changed: \(error.localizedDescription)"
+                PlaybackErrorText.log(error, context: "eye order")
+                failureMessage = "Eye order could not be changed."
                 if playbackIntent.shouldPlay {
                     player.play()
                 }
@@ -801,6 +796,9 @@ final class MVHEVCPlayerSession: ObservableObject {
 
     func applicationBecameActive() {
         playbackIntent.sceneBecameActive()
+        if awaitsInterruptionRecovery {
+            recoverFromInterruption()
+        }
 #if BD_TO_AVP_QUALIFICATION
         qualificationRecorder?.recordSceneActive(player: player)
 #endif
@@ -816,6 +814,183 @@ final class MVHEVCPlayerSession: ObservableObject {
         failureMessage = nil
         failurePresentation = nil
         preparationPhase = .openingSource
+    }
+
+    // MARK: Interruptions
+
+    /// Rebuilds playback at the same position after the system interrupted it, as it does when
+    /// the app leaves the foreground (#1165). It waits for the app to be in the foreground, and
+    /// after a few attempts in a short time says playback stopped and offers Try Again.
+    private func recoverFromInterruption() {
+        guard recoveryTask == nil else {
+            return
+        }
+        guard playbackIntent.isSceneActive else {
+            awaitsInterruptionRecovery = true
+            return
+        }
+        awaitsInterruptionRecovery = false
+        switch recoveryBudget.decision(now: ProcessInfo.processInfo.systemUptime) {
+        case .recover:
+            break
+        case let .wait(seconds):
+            let generation = preparationGeneration
+            startRecoveryTask { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                guard let self, !Task.isCancelled, generation == self.preparationGeneration else {
+                    return
+                }
+                self.recoveryTask = nil
+                self.recoverFromInterruption()
+            }
+            return
+        case .giveUp:
+            persistResume()
+            presentFailure(.interrupted)
+            return
+        }
+        if let nativePlayback {
+            nativePlayback.recoverFromInterruption()
+            return
+        }
+        rebuildPlayerItem()
+    }
+
+    /// Replaces a player item the system interrupted with a fresh one at the same position, audio
+    /// and subtitles. Playback continues only if it was playing and the app is in the foreground.
+    private func rebuildPlayerItem() {
+        guard let failedItem = playerItem, makePlayerAsset != nil else {
+            return
+        }
+        // An eye-order change in flight gives way: this replacement uses the eye order shown and
+        // the time the change started from.
+        let eyeOrderChangeTime = isChangingEyeOrder ? eyeOrderChangeResumeTime : nil
+        if isChangingEyeOrder {
+            abandonEyeOrderChange()
+        }
+        // A replacement that was itself interrupted before restoring keeps the original place.
+        let restoration = pendingItemRestoration.map {
+            PlaybackItemRestorationState(
+                time: $0.time,
+                wasPlaying: $0.wasPlaying,
+                mediaSelection: $0.mediaSelection,
+                reason: .interruption
+            )
+        } ?? PlaybackItemRestorationState(
+            time: CMTime(seconds: eyeOrderChangeTime ?? currentTime, preferredTimescale: 600),
+            wasPlaying: playbackIntent.wantsPlayback,
+            mediaSelection: currentMediaSelectionRestoration(),
+            reason: .interruption
+        )
+        let eyeOrder: PackedStereoEyeOrder = isEyeSwapped ? .reversed : .normal
+        let generation = preparationGeneration
+        startRecoveryTask { [weak self, weak failedItem] in
+            guard let self else {
+                return
+            }
+            do {
+                let (replacementItem, preparedSelections) = try await makeReplacementItem(eyeOrder: eyeOrder)
+                // A newer movie, or leaving the player, already let go of this task.
+                guard generation == preparationGeneration,
+                      failedItem === self.playerItem,
+                      !Task.isCancelled
+                else {
+                    return
+                }
+                preparationGeneration += 1
+                let replacementGeneration = preparationGeneration
+                // The share watcher follows the new generation, so it keeps reporting the connection.
+                watchShareConnection(shareConnection, generation: replacementGeneration)
+                self.playerItem = replacementItem
+                configureMediaSelections(preparedSelections)
+                // Before the first item was ready, the saved resume position still applies.
+                pendingItemRestoration = hasEstablishedPlayback ? restoration : nil
+                observe(replacementItem, generation: replacementGeneration)
+                player.replaceCurrentItem(with: replacementItem)
+            } catch {
+                guard generation == preparationGeneration, !Task.isCancelled else {
+                    return
+                }
+                persistResume()
+                presentFailure(.preparationFailed(PlaybackErrorText.message(for: error)))
+            }
+        }
+    }
+
+    /// Drops an eye-order change in flight. Moving to a new generation makes its task end
+    /// without touching playback.
+    private func abandonEyeOrderChange() {
+        eyeOrderChangeTask?.cancel()
+        eyeOrderChangeTask = nil
+        preparationGeneration += 1
+        isChangingEyeOrder = false
+        eyeOrderChangeResumeTime = nil
+#if BD_TO_AVP_QUALIFICATION
+        if pendingQualificationEyeOrderChange {
+            qualificationRecorder?.recordEyeOrderChangeFailed(player: player)
+        }
+        pendingQualificationEyeOrderChange = false
+#endif
+    }
+
+    /// Runs `body` as `recoveryTask`, which is cleared when it ends unless replaced first.
+    private func startRecoveryTask(_ body: @escaping @MainActor () async -> Void) {
+        recoveryTaskID += 1
+        let id = recoveryTaskID
+        recoveryTask = Task { [weak self] in
+            await body()
+            if let self, self.recoveryTaskID == id {
+                self.recoveryTask = nil
+            }
+        }
+    }
+
+    /// Handles the current player item failing with `error`: a system interruption rebuilds the
+    /// item at the same position, and anything else is reported in plain words. Tests call it to
+    /// fail an item the way the system does.
+    func handlePlayerItemFailure(_ error: Error?) {
+        guard playerItem != nil else {
+            return
+        }
+        if PlaybackInterruptionPolicy.isInterruption(error), makePlayerAsset != nil {
+            isBuffering = true
+            recoverFromInterruption()
+            return
+        }
+        let message = PlaybackErrorText.message(for: error)
+        if BuiltInStereoChecks.contains(mediaItem) {
+            presentFailure(.builtInStereoCheckUnavailable(message))
+        } else {
+            presentFailure(.preparationFailed(message))
+        }
+    }
+
+    /// A new player item for the open movie, with its packed-stereo composition in `eyeOrder`.
+    private func makeReplacementItem(
+        eyeOrder: PackedStereoEyeOrder
+    ) async throws -> (AVPlayerItem, PreparedMediaSelections) {
+        guard let makePlayerAsset else {
+            throw CancellationError()
+        }
+        let asset = makePlayerAsset()
+        let item = AVPlayerItem(asset: asset)
+        if shareConnection != nil {
+            item.preferredForwardBufferDuration = Self.shareForwardBufferDuration
+        }
+        guard let packedStereoSource else {
+            return (item, try await prepareMediaSelections(for: asset, item: item))
+        }
+        async let composition = PackedStereoComposition.make(
+            asset: asset,
+            format: packedStereoSource.format,
+            duration: packedStereoSource.duration,
+            eyeOrder: eyeOrder,
+            spatialMetadataFallback: packedStereoSource.spatialMetadataFallback
+        )
+        async let selections = prepareMediaSelections(for: asset, item: item)
+        item.videoComposition = try await composition
+        item.seekingWaitsForVideoCompositionRendering = true
+        return (item, try await selections)
     }
 
     // MARK: Native Blu-ray 3D
@@ -857,7 +1032,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         } catch {
             guard generation == preparationGeneration, !Task.isCancelled else { return }
             presentFailure(.preparationFailed(
-                (error as? LocalizedError)?.errorDescription ?? Bluray3DSourceError.openFailed.localizedDescription
+                PlaybackErrorText.message(for: error, fallback: Bluray3DSourceError.openFailed.localizedDescription)
             ))
             return
         }
@@ -903,6 +1078,13 @@ final class MVHEVCPlayerSession: ObservableObject {
     private func refreshNativeStatus(generation: Int) {
         guard generation == preparationGeneration, let nativePlayback else { return }
         let status = nativePlayback.status
+        if status.isInterrupted, status.failure == nil {
+            if !isBuffering {
+                isBuffering = true
+            }
+            recoverFromInterruption()
+            return
+        }
         if let failure = status.failure {
             nativeStatusTask?.cancel()
             nativeStatusTask = nil
@@ -1085,10 +1267,30 @@ final class MVHEVCPlayerSession: ObservableObject {
         case .readyToPlay:
             state = .ready
             hasEstablishedPlayback = true
+            // A newer item already replaced one interrupted while the app was away.
+            awaitsInterruptionRecovery = false
             failurePresentation = nil
 #if BD_TO_AVP_QUALIFICATION
             qualificationRecorder?.recordReady(player: player)
 #endif
+            apply(PlayerTimeControl(player))
+            if let restoration = pendingItemRestoration, restoration.reason == .interruption {
+                restoreMediaSelections(restoration.mediaSelection, on: item)
+                refreshSelectedMediaOptionIDs()
+                seek(to: restoration.time.seconds, origin: .resumeRestoration) { [weak self] completed in
+                    guard let self else {
+                        return
+                    }
+                    // Kept until the seek lands, so an interruption before then restores the same place.
+                    if completed {
+                        self.pendingItemRestoration = nil
+                    }
+                    if self.playbackIntent.shouldPlay {
+                        self.player.play()
+                    }
+                }
+                return
+            }
             if let restoration = pendingItemRestoration {
                 pendingItemRestoration = nil
                 restoreMediaSelections(restoration.mediaSelection, on: item)
@@ -1135,34 +1337,12 @@ final class MVHEVCPlayerSession: ObservableObject {
                 player.play()
             }
         case .failed:
-            let message = Self.playbackFailureMessage(for: item.error)
-            if BuiltInStereoChecks.contains(mediaItem) {
-                presentFailure(.builtInStereoCheckUnavailable(message))
-            } else {
-                presentFailure(.preparationFailed(message))
-            }
+            handlePlayerItemFailure(item.error)
         @unknown default:
             presentFailure(
                 .preparationFailed("The player returned an unknown playback status.")
             )
         }
-    }
-
-    private static func playbackFailureMessage(for error: Error?) -> String {
-        guard let error else {
-            return "The player failed without an error description."
-        }
-
-        var messages: [String] = []
-        var currentError: NSError? = error as NSError
-        while let unwrappedError = currentError {
-            let message = unwrappedError.localizedDescription
-            if !messages.contains(message) {
-                messages.append(message)
-            }
-            currentError = unwrappedError.userInfo[NSUnderlyingErrorKey] as? NSError
-        }
-        return messages.joined(separator: " ")
     }
 
     private func prepareMediaSelections(
@@ -1452,6 +1632,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         audioSelectionByID = [:]
         subtitleSelectionByID = [:]
         packedStereoSource = nil
+        makePlayerAsset = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        awaitsInterruptionRecovery = false
+        recoveryBudget.reset()
         pendingItemRestoration = nil
         playbackIntent.reset()
         eyeOrderChangeResumeTime = nil
@@ -1499,7 +1684,8 @@ final class MVHEVCPlayerSession: ObservableObject {
                 failureMessage = nil
             }
         } catch {
-            failureMessage = "Playback position could not be saved: \(error.localizedDescription)"
+            PlaybackErrorText.log(error, context: "resume position")
+            failureMessage = "Playback position could not be saved."
         }
     }
 
@@ -1516,7 +1702,11 @@ final class MVHEVCPlayerSession: ObservableObject {
         failurePresentation = presentation
         isPlaying = false
         isChangingEyeOrder = false
+        isBuffering = false
         pendingItemRestoration = nil
+        awaitsInterruptionRecovery = false
+        recoveryTask?.cancel()
+        recoveryTask = nil
         playbackIntent.reset()
         eyeOrderChangeResumeTime = nil
         pendingResume.clear()
@@ -1710,16 +1900,22 @@ private struct PreparedMediaSelections {
 }
 
 private struct PackedStereoSource {
-    let makeAsset: () -> AVURLAsset
     let format: StereoFormat
     let duration: CMTime
     let spatialMetadataFallback: PackedStereoSpatialMetadata?
 }
 
 private struct PlaybackItemRestorationState {
+    enum Reason {
+        case eyeOrder
+        /// The previous item failed because the system interrupted playback (#1165).
+        case interruption
+    }
+
     let time: CMTime
     let wasPlaying: Bool
     let mediaSelection: MediaSelectionRestorationState
+    let reason: Reason
 }
 
 private struct MediaSelectionRestorationState {

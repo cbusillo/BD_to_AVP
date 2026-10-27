@@ -39,6 +39,9 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         /// What can be played without reading again.
         var loadedRange: ClosedRange<TimeInterval>?
         var hasEnded = false
+        /// The system took the video decoder away, as when the app leaves the foreground. The
+        /// clock is stopped until `recoverFromInterruption()` (#1165).
+        var isInterrupted = false
         var failure: String?
         /// Why the chosen audio is not playing while the video goes on, from the audio player.
         var audioFailure: String?
@@ -71,6 +74,9 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     /// Called on the video thread with each unit it decodes: the seek generation it decodes it
     /// for, the unit's ticks and whether decoding can start there. For tests.
     var didTakeVideoUnit: (@Sendable (_ generation: Int, _ ticks: Int64, _ isRandomAccess: Bool) -> Void)?
+    /// A failure to report for the video renderer instead of its own status, for tests that fail
+    /// it the way the system does when the app leaves the foreground.
+    var injectedVideoRendererFailure: (@Sendable () -> Error?)?
 
     private let source: Bluray3DSource
     /// The share reads the source retries through a dropped connection; stopping ends them.
@@ -229,6 +235,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                 shared.lastQueuedEnd = nil
                 shared.videoEnded = false
                 shared.status.hasEnded = false
+                shared.status.isInterrupted = false
                 shared.status.isBuffering = true
             }
             synchronizer.setRate(0, time: Self.time(ticks))
@@ -237,6 +244,13 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                 spawn("reader", qos: .userInitiated) { [self] in readSource(from: ticks, into: feed) }
             }
         }
+    }
+
+    /// Continues after a system interruption from where the clock stopped. Seeking there flushes
+    /// both renderers, which clears their failure, and decodes again from the random access unit
+    /// before that point, as a flushed renderer needs.
+    func recoverFromInterruption() {
+        seek(to: status.currentTime)
     }
 
     func selectAudio(trackID: UInt16) {
@@ -271,7 +285,7 @@ final class NativeBlurayPlayback: @unchecked Sendable {
             )
             buffer.finish(feed: feed)
         } catch {
-            buffer.finish(error: (error as? LocalizedError)?.errorDescription ?? "\(error)", feed: feed)
+            buffer.finish(error: PlaybackErrorText.message(for: error, fallback: "The movie could not be read."), feed: feed)
         }
     }
 
@@ -323,6 +337,11 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                     return
                 }
             }
+            // An interrupted renderer waits here for the seek that recovers it.
+            if rendererStopped() {
+                usleep(20_000)
+                continue
+            }
             switch buffer.nextVideo(timeout: 0.05, epoch: epoch) {
             case let .unit(entry):
                 didTakeVideoUnit?(generation, entry.ticks, entry.isRandomAccess)
@@ -331,7 +350,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                         present(frame, factory: factory, subtitles: subtitles, generation: generation, skipBefore: &skipBefore)
                     }
                 } catch {
-                    fail("The 3D video could not be decoded: \(error).")
+                    PlaybackErrorText.log(error, context: "video decoder")
+                    fail("The 3D video could not be decoded.")
                     return
                 }
                 record(decoder.statistics)
@@ -367,15 +387,15 @@ final class NativeBlurayPlayback: @unchecked Sendable {
                 for: frame, presentationTime: Self.time(ticks), subtitle: subtitleOverlay(at: ticks, cache: subtitles)
             )
         } catch {
-            fail("A 3D video frame could not be prepared: \(error).")
+            PlaybackErrorText.log(error, context: "video frame")
+            fail("A 3D video frame could not be prepared.")
             return false
         }
         let leadTicks = Int64(configuration.videoLeadSeconds * Double(BluRayPresentationTimeline.ticksPerSecond))
         while isCurrent(generation) {
             updateClock()
             let clockStarted = state.withLock { $0.clockStarted }
-            if renderer.status == .failed {
-                fail("The video renderer stopped: \(renderer.error.map { "\($0)" } ?? "unknown error").")
+            if rendererStopped() {
                 return false
             }
             if renderer.isReadyForMoreMediaData, !clockStarted || ticks - clockTicks() <= leadTicks {
@@ -410,13 +430,17 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     /// After the last frame: wait for the clock to pass it, then report the end or the error.
     private func playOut(generation: Int, error: String?) {
         while isCurrent(generation) {
+            // An interruption while the last frames play waits for recovery in the decode loop.
+            if rendererStopped() {
+                return
+            }
             updateClock()
             let end = state.withLock { $0.lastQueuedEnd } ?? 0
             if clockTicks() >= end || !state.withLock({ $0.clockStarted }) && end == 0 {
                 clockLock.withLock {
                     state.withLock { shared in
                         if let error {
-                            shared.status.failure = "Playback stopped: \(error)"
+                            shared.status.failure = error
                         }
                         shared.status.hasEnded = true
                         shared.status.wantsPlayback = false
@@ -505,7 +529,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
     /// Sets the clock's rate from the current state. Call with `clockLock` held.
     private func applyRateLocked() {
         let rate: Float = state.withLock { shared in
-            shared.clockStarted && shared.status.wantsPlayback && !shared.status.isBuffering && !shared.cancelled ? 1 : 0
+            shared.clockStarted && shared.status.wantsPlayback && !shared.status.isBuffering
+                && !shared.status.isInterrupted && !shared.cancelled ? 1 : 0
         }
         if synchronizer.rate != rate {
             willChangeClockRate?(rate)
@@ -527,8 +552,49 @@ final class NativeBlurayPlayback: @unchecked Sendable {
 
     private var isCancelled: Bool { state.withLock { $0.cancelled } }
 
+    /// Whether a pass may go on: not stopped, not replaced by a seek, and not interrupted.
     private func isCurrent(_ generation: Int) -> Bool {
-        state.withLock { !$0.cancelled && $0.seekGeneration == generation }
+        state.withLock { !$0.cancelled && $0.seekGeneration == generation && !$0.status.isInterrupted }
+    }
+
+    /// Whether the video renderer has stopped taking frames, or either renderer was interrupted.
+    /// A system interruption, which a renderer reports as a failure that a flush clears, stops
+    /// the clock until
+    /// `recoverFromInterruption()`; any other failure ends playback.
+    private func rendererStopped() -> Bool {
+        let (interrupted, audio) = state.withLock { ($0.status.isInterrupted, $0.audioPlayer) }
+        if interrupted {
+            return true
+        }
+        // An interrupted audio renderer stops the clock too, so recovery resumes where it stopped.
+        if audio?.isInterrupted == true {
+            clockLock.withLock {
+                state.withLock { $0.status.isInterrupted = true }
+                applyRateLocked()
+            }
+            return true
+        }
+        let error: Error?
+        if let injected = injectedVideoRendererFailure?() {
+            error = injected
+        } else {
+            guard renderer.status == .failed else {
+                return false
+            }
+            error = renderer.error
+        }
+        if PlaybackInterruptionPolicy.isInterruption(error) {
+            clockLock.withLock {
+                state.withLock { $0.status.isInterrupted = true }
+                applyRateLocked()
+            }
+        } else {
+            if let error {
+                PlaybackErrorText.log(error, context: "video renderer")
+            }
+            fail("The video stopped playing.")
+        }
+        return true
     }
 
     private func record(_ statistics: BDAVPMVCStatistics) {
