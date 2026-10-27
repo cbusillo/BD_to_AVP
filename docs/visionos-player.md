@@ -254,7 +254,8 @@ Location ([findings](https://github.com/cbusillo/BD_to_AVP/issues/1130#issuecomm
 fruit:zero_file_id = no
 ```
 
-A Mac's File Sharing does not need this.
+A Mac's File Sharing does not need this. The visionOS behavior is reported to Apple as
+FB25336451.
 
 ## Source Access
 
