@@ -234,6 +234,28 @@ then says it stopped looking before reaching every folder and suggests adding a 
 closer to the movies. A disc folder counts as changed when any file in `BDMV`, its
 `PLAYLIST`, `CLIPINF`, `STREAM` or `STREAM/SSIF` folders changes name, size or date.
 
+Each folder is listed inside a coordinated read, as Apple asks for folders picked in
+Files ([Providing access to directories](https://developer.apple.com/documentation/uikit/providing-access-to-directories)).
+A Location takes the name Files shows; for a share's root that is the share's name, not
+the mount folder's random-prefixed name. Folders that could not be read are counted and
+reported, so a partial listing is never shown as "No movies here yet".
+
+### A Location that looks empty on a NAS
+
+A Samba-based NAS can make a Location look empty even though Files shows its movies.
+Most NAS systems use Samba, including Synology, QNAP, TrueNAS, UGreen and Unraid. With
+Apple compatibility on (`vfs_fruit`), Samba's default `fruit:zero_file_id = yes` sends
+every entry with a file ID of zero, and Vision Pro then shows the folder as empty. The
+Location says the folder looks empty. Add this line to the share's section of the Samba
+configuration, or to `[global]` (or the NAS's extra share options), then refresh the
+Location ([findings](https://github.com/cbusillo/BD_to_AVP/issues/1130#issuecomment-6431872622)):
+
+```ini
+fruit:zero_file_id = no
+```
+
+A Mac's File Sharing does not need this.
+
 ## Source Access
 
 Local files receive persistent bookmark data. Playback resolves the bookmark
