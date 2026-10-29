@@ -60,6 +60,24 @@ final class MVCDecoderTests: XCTestCase {
         XCTAssertEqual(delivered, 1)
     }
 
+    func testRejects422BeforeDeliveringFramesToTheNV12Consumer() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "edge264-unsupported-422", withExtension: "264"))
+        let stream = try Data(contentsOf: url)
+        let decoder = try MVCDecoder(threads: 1)
+        var delivered = 0
+        let collect: MVCDecoder.FrameHandler = { _ in
+            delivered += 1
+            return true
+        }
+        XCTAssertThrowsError(try {
+            try decoder.decode(stream, ticks: 0, onFrame: collect)
+            try decoder.finish(onFrame: collect)
+        }()) { error in
+            XCTAssertEqual(error as? MVCDecoderError, .unsupportedFormat)
+        }
+        XCTAssertEqual(delivered, 0)
+    }
+
     func testSampleBufferTagsEachEyeAndHonorsARightEyeBaseView() throws {
         for baseViewIsRightEye in [false, true] {
             let factory = StereoSampleBufferFactory(baseViewIsRightEye: baseViewIsRightEye)

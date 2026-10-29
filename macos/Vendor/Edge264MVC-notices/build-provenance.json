@@ -2,8 +2,8 @@
   "schema_version": 1,
   "framework": "Edge264MVC",
   "repository": "https://github.com/jens-duttke/edge264-mvc.git",
-  "revision": "272694e4ca7a7309176c03394e1da8e9fc612af8",
-  "version": "v2026.10.17",
+  "revision": "f181792e842ce4e99e2ef4a41bfd30c1c1514b42",
+  "version": "v2026.10.19",
   "license": "BSD-3-Clause",
   "compile_flags": [
     "-std=gnu11",
@@ -22,7 +22,7 @@
     "xrsimulator": "27.0"
   },
   "binaries": {
-    "xros-arm64/Edge264MVC.framework/Edge264MVC": "e02af1bb1a4b4f6fb2d4dddc298ae41aa6cd4238c8dd14d2ef40f7a868e728a7",
-    "xros-arm64_x86_64-simulator/Edge264MVC.framework/Edge264MVC": "e9000a18b8aff756817f37c2eca8344be32d531f72e372b79b1ba63f38bf8159"
+    "xros-arm64/Edge264MVC.framework/Edge264MVC": "efed382e2b1575dbac3beb7df397e0c12dfe015fe54b6b5b842a87ade7e84c09",
+    "xros-arm64_x86_64-simulator/Edge264MVC.framework/Edge264MVC": "ecb40e8b364e3474e51ab1d37d1e1b710d82cf1bff6233df33dc134c8f1a27e4"
   }
 }

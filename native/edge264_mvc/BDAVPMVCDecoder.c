@@ -47,7 +47,8 @@ static int32_t drain(BDAVPMVCDecoder *decoder, bdavp_mvc_frame_fn emit, void *co
             return BDAVP_MVC_OK;
         }
         if (result != EDGE264MVC_OK) return BDAVP_MVC_OK;
-        if (out.bit_depth_Y != 8 || out.bit_depth_C != 8 || out.width_C * 2 != out.width_Y) {
+        if (out.bit_depth_Y != 8 || out.bit_depth_C != 8 ||
+            out.width_C * 2 != out.width_Y || out.height_C * 2 != out.height_Y) {
             edge264mvc_release_frame(decoder->decoder, &out);
             return BDAVP_MVC_UNSUPPORTED_FORMAT;
         }
