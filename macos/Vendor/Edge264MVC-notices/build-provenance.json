@@ -22,7 +22,7 @@
     "xrsimulator": "27.0"
   },
   "binaries": {
-    "xros-arm64/Edge264MVC.framework/Edge264MVC": "f64a054a745809b88ebb260c442ce4c7680161f5ad2b34386601b4865e0fdca4",
-    "xros-arm64_x86_64-simulator/Edge264MVC.framework/Edge264MVC": "153e2fc1ca9f9e6eb58eeded2bd5087b928a498c4e30a3185974ed8d979d1c6d"
+    "xros-arm64/Edge264MVC.framework/Edge264MVC": "efed382e2b1575dbac3beb7df397e0c12dfe015fe54b6b5b842a87ade7e84c09",
+    "xros-arm64_x86_64-simulator/Edge264MVC.framework/Edge264MVC": "ecb40e8b364e3474e51ab1d37d1e1b710d82cf1bff6233df33dc134c8f1a27e4"
   }
 }
