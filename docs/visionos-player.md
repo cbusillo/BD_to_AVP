@@ -314,8 +314,19 @@ Together the controls provide:
 - audio-track selection;
 - subtitle selection, including Off;
 - eye-order swapping for side-by-side and over-under playback;
-- retry and locate recovery when Files-backed preparation fails; and
+- retry and locate recovery when Files-backed preparation fails;
+- Stats for Nerds, described below; and
 - Done, which persists progress and releases the session.
+
+**Stats for Nerds** opens from the controls' chart button, or from the packed-stereo
+player's contextual actions, as its own small window beside the movie rather than
+text over the 3D picture (#1181). Once a second it shows the file's name, size,
+storage and average bit rate; the video codec, picture size per eye, frame rate and
+bit rate where the file or decoder reports them; the chosen audio and subtitles;
+position, how far ahead playback is loaded, and frame and stall counts; and, for a
+movie on a share, the current read speed and the bytes read so far. Every share
+read counts once, retries included, through `ShareConnectionMonitor`. Done closes
+the window with the player.
 
 The MV-HEVC ornament remains fully visible while playback is paused, loading,
 failed, or being scrubbed, while a pointer hovers over it, and while its audio

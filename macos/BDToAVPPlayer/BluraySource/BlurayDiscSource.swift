@@ -144,7 +144,7 @@ enum BlurayDemuxCallback {
         }
     }
 
-    private static let watchRead: bd3d_read_monitor_fn = { context, event, error in
+    private static let watchRead: bd3d_read_monitor_fn = { context, event, value in
         guard let context else { return 0 }
         let watch = Unmanaged<ReadWatch>.fromOpaque(context).takeUnretainedValue()
         switch event {
@@ -152,13 +152,14 @@ enum BlurayDemuxCallback {
             watch.readID = watch.monitor.beginRead()
             watch.retry = ShareConnectionMonitor.Retry()
         case BD3D_READ_EVENT_FAILED:
-            let code = POSIXErrorCode(rawValue: error) ?? .EIO
+            let code = POSIXErrorCode(rawValue: value) ?? .EIO
             // A read that a seek replaced stops instead of waiting for the share.
             guard watch.sink.isWanted, watch.monitor.waitToRetry(after: POSIXError(code), &watch.retry) else { return 0 }
             return watch.sink.isWanted ? 1 : 0
         default:
             if let id = watch.readID { watch.monitor.endRead(id) }
             watch.readID = nil
+            watch.monitor.recordRead(bytes: Int(value))
         }
         return 0
     }

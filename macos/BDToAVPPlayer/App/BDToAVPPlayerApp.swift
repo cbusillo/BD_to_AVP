@@ -23,5 +23,10 @@ struct BDToAVPPlayerApp: App {
         }
         .windowStyle(.plain)
         .defaultSize(width: 1.25, height: 0.78, depth: 0.08, in: .meters)
+
+        WindowGroup(id: PlaybackStatsView.windowID, for: String.self) { _ in
+            PlaybackStatsView(session: playerSession)
+        }
+        .defaultSize(width: 460, height: 640)
     }
 }

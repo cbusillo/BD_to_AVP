@@ -56,6 +56,9 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         var corruptUnits: UInt64 = 0
         var stalls = 0
         var secondsAhead: Double = 0
+        /// One eye's decoded size, 0 until the first frame.
+        var frameWidth: Int32 = 0
+        var frameHeight: Int32 = 0
     }
 
     /// Takes frames only once RealityKit's `VideoPlayerComponent` (or another video target)
@@ -408,6 +411,8 @@ final class NativeBlurayPlayback: @unchecked Sendable {
         renderer.enqueue(sample)
         state.withLock { shared in
             shared.status.statistics.framesQueued += 1
+            shared.status.statistics.frameWidth = frame.pointee.width
+            shared.status.statistics.frameHeight = frame.pointee.height
             if late { shared.status.statistics.lateFrames += 1 }
             shared.lastQueuedEnd = max(shared.lastQueuedEnd ?? 0, ticks + Self.frameTicks)
         }

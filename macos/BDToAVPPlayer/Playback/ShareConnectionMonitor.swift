@@ -43,6 +43,7 @@ final class ShareConnectionMonitor: @unchecked Sendable {
     /// When each unfinished read started, including the time its retries took.
     private var readStarts: [Int: TimeInterval] = [:]
     private var nextReadID = 0
+    private var bytesReadTotal: UInt64 = 0
     private var isNetworkUnavailable = false
     private var cancelled = false
     private var pathMonitor: NWPathMonitor?
@@ -95,6 +96,14 @@ final class ShareConnectionMonitor: @unchecked Sendable {
     }
 
     var isCancelled: Bool { condition.withLock { cancelled } }
+
+    /// Bytes that reads have brought back from the share so far, for the player's stats.
+    var bytesRead: UInt64 { condition.withLock { bytesReadTotal } }
+
+    func recordRead(bytes: Int) {
+        guard bytes > 0 else { return }
+        condition.withLock { bytesReadTotal += UInt64(bytes) }
+    }
 
     /// Stops retrying; a read waiting to retry gives up with its last error.
     func cancel() {

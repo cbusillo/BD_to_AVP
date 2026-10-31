@@ -110,6 +110,7 @@ final class ShareFileResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @u
                 // A request the player cancels, say after a seek during an outage, stops retrying,
                 // so it neither holds a worker nor keeps the connection reported lost.
                 let data = try connection.read(while: { isOpen(id) }) { try read(offset, count) }
+                connection.recordRead(bytes: data.count)
                 // The file ended before its recorded length: it changed under the player.
                 guard !data.isEmpty else { throw CocoaError(.fileReadUnknown) }
                 guard deliver(data, to: loading, id: id) else { return }

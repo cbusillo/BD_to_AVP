@@ -18,6 +18,8 @@ struct PlayerView: View {
     private let onLocate: () -> Void
     private let onDone: () -> Void
 
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.accessibilityVoiceOverEnabled) private var isVoiceOverEnabled
     @Environment(\.accessibilitySwitchControlEnabled) private var isSwitchControlEnabled
     @State private var hudVisibility = PlaybackHUDVisibilityState()
@@ -44,6 +46,7 @@ struct PlayerView: View {
                     session: session,
                     onRetry: onRetry,
                     onLocate: onLocate,
+                    onShowStats: showStats,
                     onDone: done
                 )
             } else {
@@ -136,6 +139,7 @@ struct PlayerView: View {
                         trackPicker: $trackPicker,
                         onRetry: onRetry,
                         onLocate: onLocate,
+                        onShowStats: showStats,
                         onDone: done,
                         onHoldChanged: { hold, isActive in
                             if hold == .hover, isActive {
@@ -199,8 +203,13 @@ struct PlayerView: View {
     }
 
     private func done() {
+        dismissWindow(id: PlaybackStatsView.windowID, value: PlaybackStatsView.windowValue)
         session.finish()
         onDone()
+    }
+
+    private func showStats() {
+        openWindow(id: PlaybackStatsView.windowID, value: PlaybackStatsView.windowValue)
     }
 
     /// While the movie loads more or its share is unreachable, the controls stay up so the
@@ -294,11 +303,13 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
     @ObservedObject var session: MVHEVCPlayerSession
     let onRetry: () -> Void
     let onLocate: () -> Void
+    let onShowStats: () -> Void
     let onDone: () -> Void
 
     @MainActor
     final class Coordinator: NSObject {
         private struct ActionState: Equatable {
+            let isReady: Bool
             let eyeOrder: PackedStereoEyeOrder
             let isChangingEyeOrder: Bool
             let canControlPlayback: Bool
@@ -310,6 +321,7 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
         var session: MVHEVCPlayerSession
         var onRetry: () -> Void
         var onLocate: () -> Void
+        var onShowStats: () -> Void
         var onDone: () -> Void
         weak var statusLabel: UILabel?
         private var actionState: ActionState?
@@ -318,11 +330,13 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
             session: MVHEVCPlayerSession,
             onRetry: @escaping () -> Void,
             onLocate: @escaping () -> Void,
+            onShowStats: @escaping () -> Void,
             onDone: @escaping () -> Void
         ) {
             self.session = session
             self.onRetry = onRetry
             self.onLocate = onLocate
+            self.onShowStats = onShowStats
             self.onDone = onDone
         }
 
@@ -364,6 +378,7 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
             )
 
             let newState = ActionState(
+                isReady: session.isReady,
                 eyeOrder: session.isEyeSwapped ? .reversed : .normal,
                 isChangingEyeOrder: session.isChangingEyeOrder,
                 canControlPlayback: session.canControlPlayback,
@@ -413,6 +428,13 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
                     }
                 )
             }
+            if newState.isReady {
+                actions.append(
+                    UIAction(title: "Stats for Nerds", image: UIImage(systemName: "chart.bar.xaxis")) { [weak self] _ in
+                        self?.onShowStats()
+                    }
+                )
+            }
             actions.append(doneAction)
             viewController.contextualActions = actions
         }
@@ -423,6 +445,7 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
             session: session,
             onRetry: onRetry,
             onLocate: onLocate,
+            onShowStats: onShowStats,
             onDone: onDone
         )
     }
@@ -444,6 +467,7 @@ private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
         context.coordinator.session = session
         context.coordinator.onRetry = onRetry
         context.coordinator.onLocate = onLocate
+        context.coordinator.onShowStats = onShowStats
         context.coordinator.onDone = onDone
         context.coordinator.update(viewController: viewController)
     }
@@ -465,6 +489,7 @@ private struct PlayerOrnamentView: View {
     @Binding var trackPicker: PlaybackTrackPickerState
     let onRetry: () -> Void
     let onLocate: () -> Void
+    let onShowStats: () -> Void
     let onDone: () -> Void
     let onHoldChanged: (PlaybackHUDVisibilityState.Hold, Bool) -> Void
     let onInteraction: () -> Void
@@ -646,6 +671,7 @@ private struct PlayerOrnamentView: View {
             }
             audioMenu
             subtitleMenu
+            statsButton
             doneButton
         }
     }
@@ -710,6 +736,20 @@ private struct PlayerOrnamentView: View {
         .buttonStyle(.bordered)
         .accessibilityIdentifier(identifier)
         .accessibilityLabel(title)
+    }
+
+    private var statsButton: some View {
+        Button {
+            onInteraction()
+            onShowStats()
+        } label: {
+            Label("Stats for Nerds", systemImage: "chart.bar.xaxis")
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 60, minHeight: 60)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("player-stats-button")
+        .accessibilityLabel("Stats for Nerds")
     }
 
     private var doneButton: some View {
