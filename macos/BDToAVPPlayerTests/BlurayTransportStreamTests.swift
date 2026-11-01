@@ -107,6 +107,8 @@ final class BlurayTransportStreamTests: XCTestCase {
         XCTAssertEqual(sink.video.map(\.data), clean.video.map(\.data))
         XCTAssertEqual(sink.video.map(\.pts), clean.video.map(\.pts))
         XCTAssertEqual(statistics.bytes, UInt64(stream.count))
+        // The stats window's read speed counts each byte once, retries included.
+        XCTAssertEqual(monitor.bytesRead, UInt64(stream.count))
         XCTAssertFalse(monitor.isConnectionLost)
     }
 

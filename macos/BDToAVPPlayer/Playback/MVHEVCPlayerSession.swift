@@ -161,6 +161,10 @@ final class MVHEVCPlayerSession: ObservableObject {
     static let shareForwardBufferDuration: TimeInterval = 20
 
     private(set) var playerItem: AVPlayerItem?
+    /// The open movie's file size, or nil for a disc folder or before it is read.
+    private var sourceByteCount: Int64?
+    /// The AVPlayer movie's video coding, read once it opens.
+    private var videoDetails: PlaybackVideoDetails?
 
     private var resourceLease: SecurityScopedResourceLease?
     /// The reads of a movie outside the app, for saying when its share stops answering.
@@ -357,11 +361,12 @@ final class MVHEVCPlayerSession: ObservableObject {
             watchShareConnection(connection, generation: generation)
             let shareLoader: ShareFileResourceLoader?
             do {
-                shareLoader = try await Task.detached(priority: .userInitiated) {
-                    try connection.map { connection in
+                (shareLoader, sourceByteCount) = try await Task.detached(priority: .userInitiated) {
+                    let loader = try connection.map { connection in
                         connection.watchNetworkIfRemote(url)
                         return try ShareFileResourceLoader(url: url, connection: connection)
                     }
+                    return (loader, Self.fileByteCount(at: url))
                 }.value
             } catch {
                 bookmarkLease.close()
@@ -425,8 +430,10 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
             async let loadedDuration = asset.load(.duration)
             async let mediaSelections = prepareMediaSelections(for: asset, item: item)
+            async let loadedVideoDetails = Self.videoDetails(of: asset, format: mediaItem.format)
             let preparedDuration = try await loadedDuration
             let preparedSelections = try await mediaSelections
+            let preparedVideoDetails = await loadedVideoDetails
             let preparedPackedStereo: PackedStereoSource?
             switch mediaItem.format {
             case .sideBySide, .overUnder:
@@ -458,6 +465,7 @@ final class MVHEVCPlayerSession: ObservableObject {
             }
 
             playerItem = item
+            videoDetails = preparedVideoDetails
             packedStereoSource = preparedPackedStereo
             makePlayerAsset = makeAsset
             duration = preparedDuration.seconds.isFinite ? max(0, preparedDuration.seconds) : 0
@@ -1025,9 +1033,9 @@ final class MVHEVCPlayerSession: ObservableObject {
         let openSource = nativeSourceOpener
         let source: Bluray3DSource
         do {
-            source = try await Task.detached(priority: .userInitiated) {
+            (source, sourceByteCount) = try await Task.detached(priority: .userInitiated) {
                 reads?.watchNetworkIfRemote(url)
-                return try openSource(url, reads)
+                return (try openSource(url, reads), Self.fileByteCount(at: url))
             }.value
         } catch {
             guard generation == preparationGeneration, !Task.isCancelled else { return }
@@ -1121,6 +1129,88 @@ final class MVHEVCPlayerSession: ObservableObject {
         let target = PlaybackSeekPolicy.clampedTime(requestedTime, duration: duration)
         nativePlayback.seek(to: target)
         currentTime = target
+    }
+
+    // MARK: Stats for Nerds
+
+    /// What the stats window shows right now, or nil while no movie is open.
+    func statsSample() -> PlaybackStatsSample? {
+        guard let mediaItem, state == .ready else { return nil }
+        var sample = PlaybackStatsSample(
+            title: mediaItem.title,
+            fileName: mediaItem.fileName,
+            format: mediaItem.format,
+            fileByteCount: sourceByteCount,
+            isOnShare: shareConnection != nil,
+            shareBytesRead: shareConnection?.bytesRead,
+            isConnectionLost: isConnectionLost,
+            currentTime: currentTime,
+            duration: duration,
+            loadedThrough: bufferedRange?.upperBound,
+            video: videoDetails,
+            audioTrack: audioOptions.first { $0.id == selectedAudioID }?.displayName,
+            subtitleTrack: subtitleOptions.first { $0.id == selectedSubtitleID && $0.id != "off" }?.displayName
+        )
+        if let nativePlayback {
+            let statistics = nativePlayback.status.statistics
+            sample.video = PlaybackVideoDetails(
+                codec: "H.264 MVC",
+                width: statistics.frameWidth > 0 ? Int(statistics.frameWidth) : nil,
+                height: statistics.frameHeight > 0 ? Int(statistics.frameHeight) : nil
+            )
+            sample.frames = PlaybackFrameCounters(
+                shown: statistics.framesQueued,
+                late: statistics.lateFrames,
+                missingRightEye: statistics.framesWithoutDependentView,
+                damaged: statistics.corruptUnits,
+                stalls: statistics.stalls
+            )
+        } else if let event = playerItem?.accessLog()?.events.last {
+            sample.frames = PlaybackFrameCounters(
+                late: event.numberOfDroppedVideoFrames >= 0 ? UInt64(event.numberOfDroppedVideoFrames) : nil,
+                stalls: event.numberOfStalls >= 0 ? event.numberOfStalls : nil
+            )
+        }
+        return sample
+    }
+
+    /// The file's size, or nil for a folder or a file that cannot be read. Touches the file.
+    nonisolated private static func fileByteCount(at url: URL) -> Int64? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
+              values.isDirectory != true,
+              let size = values.fileSize else {
+            return nil
+        }
+        return Int64(size)
+    }
+
+    /// The first video track's codec, picture size, frame rate and bit rate, or nil if the
+    /// asset does not say. Never fails playback.
+    nonisolated private static func videoDetails(of asset: AVURLAsset, format: StereoFormat) async -> PlaybackVideoDetails? {
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let (descriptions, size, frameRate, dataRate) = try? await track.load(
+                  .formatDescriptions, .naturalSize, .nominalFrameRate, .estimatedDataRate
+              ) else {
+            return nil
+        }
+        let codec = descriptions.first.map {
+            PlaybackStatsPresentation.codecName(fourCC: CMFormatDescriptionGetMediaSubType($0), format: format)
+        } ?? "Unknown"
+        // Side-by-side and over-under files carry both eyes in one picture.
+        var width = Int(size.width.rounded())
+        var height = Int(size.height.rounded())
+        switch format {
+        case .sideBySide: width /= 2
+        case .overUnder: height /= 2
+        case .mvHEVC, .bluray3D, .unsupported: break
+        }
+        return PlaybackVideoDetails(
+            codec: codec,
+            width: width,
+            height: height,
+            frameRate: Double(frameRate),
+            bitsPerSecond: Double(dataRate)
+        )
     }
 
     // MARK: Share connection
@@ -1616,6 +1706,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         audioWarning = nil
         itemStatusObservation = nil
         playerItem = nil
+        sourceByteCount = nil
+        videoDetails = nil
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
             self.timeObserver = nil

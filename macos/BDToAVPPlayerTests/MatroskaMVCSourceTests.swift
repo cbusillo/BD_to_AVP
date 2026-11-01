@@ -86,6 +86,7 @@ final class MatroskaMVCSourceTests: XCTestCase {
         XCTAssertEqual(dropping.failuresLeft, 0)
         XCTAssertEqual(sink.video.map(\.data), clean.video.map(\.data))
         XCTAssertEqual(sink.audio.map(\.payload), clean.audio.map(\.payload))
+        XCTAssertGreaterThan(monitor.bytesRead, 0)
     }
 
     func testClustersOfUnknownSizeEndAtTheNextCluster() throws {

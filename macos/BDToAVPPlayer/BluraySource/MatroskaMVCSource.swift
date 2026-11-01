@@ -45,7 +45,9 @@ final class ShareRetryingByteSource: ByteSource {
     }
 
     func read(at offset: Int64, count: Int) throws -> Data {
-        try reads.read(while: isWanted) { try base.read(at: offset, count: count) }
+        let data = try reads.read(while: isWanted) { try base.read(at: offset, count: count) }
+        reads.recordRead(bytes: data.count)
+        return data
     }
 }
 

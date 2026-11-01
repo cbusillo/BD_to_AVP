@@ -1046,7 +1046,7 @@ bd3d_result bd3d_demux_segment(
             }
         }
         if (monitor != NULL) {
-            monitor(monitor_context, BD3D_READ_EVENT_FINISHED, 0);
+            monitor(monitor_context, BD3D_READ_EVENT_FINISHED, count > 0 ? (int)count : 0);
         }
         if (count < 0) {
             result = BD3D_READ_FAILED;
