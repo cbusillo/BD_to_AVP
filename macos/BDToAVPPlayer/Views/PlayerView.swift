@@ -3,7 +3,6 @@ import RealityKit
 import SwiftUI
 
 struct PlayerView: View {
-    private static let playerScaleInset: Float = 0.86
     private static let unsizedVideoScale: Float = 0.001
     private static let playerDepthOffset: Float = -0.14
     private static let trackListAttachmentID = "player-track-list"
@@ -255,7 +254,10 @@ struct PlayerView: View {
             return
         }
 
-        let scale = min(frameSize.x / screenSize.x, frameSize.y / screenSize.y) * Self.playerScaleInset
+        // The video fills the window. A smaller inset hid the window's resize handle and wasted
+        // picture at the largest window visionOS allows; the push-back alone keeps near stereo
+        // content behind the controls (checked on a Vision Pro, cbusillo/BD_to_AVP#1187).
+        let scale = min(frameSize.x / screenSize.x, frameSize.y / screenSize.y)
         guard scale.isFinite, scale > 0 else {
             return
         }
