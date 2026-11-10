@@ -438,6 +438,20 @@ Files-provider sources may be backed by SMB or other network storage, but the ap
 does not implement direct `smb://` transport, offline pinning,
 or provider-specific progress percentages.
 
+### Cinema
+
+visionOS caps a window's size, and the largest player window shows less than 1080p of
+detail. The Cinema button in the controls moves the MV-HEVC video entity from the window to
+an immersive space (`CinemaMode.swift`). There it plays on a screen 8 m away that spans 70
+degrees of view by default; the size buttons change that from 40 to 110 degrees. The window
+stays behind as the controls only. Cinema opens fully dark, and the Digital Crown brings the
+room back up to 80% of the way. Leaving Cinema, or pressing the Digital Crown, puts the
+video back in the window at the same position. The library window is the only window the
+app opens at launch; Stats never opens or restores on its own.
+
+Large screens widen the on-screen gap between the eyes for distant content. Very large
+sizes still need a comfort check on far-background shots.
+
 ### Lost and slow share connections
 
 A movie outside the app's own storage, such as one on an SMB share, plays through

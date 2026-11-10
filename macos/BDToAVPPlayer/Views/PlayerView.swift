@@ -25,6 +25,8 @@ struct PlayerView: View {
     @State private var trackPicker = PlaybackTrackPickerState()
     /// The video's screen size from RealityKit's size event, before `playerScreenSize` has it.
     @State private var reportedVideoSize: SIMD2<Float>?
+    @EnvironmentObject private var cinema: CinemaState
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
     init(
         session: MVHEVCPlayerSession,
@@ -170,6 +172,9 @@ struct PlayerView: View {
             Color.clear
         case .failed:
             Color.clear
+        case .ready where cinema.isActive:
+            // The one video entity is on the Cinema screen; only the window's controls show.
+            Color.clear
         case .ready:
             let reportedSize = reportedVideoSize
             RealityView { content, attachments in
@@ -202,6 +207,9 @@ struct PlayerView: View {
     }
 
     private func done() {
+        if cinema.isActive {
+            Task { await dismissImmersiveSpace() }
+        }
         dismissWindow(id: PlaybackStatsView.windowID, value: PlaybackStatsView.windowValue)
         session.finish()
         onDone()
@@ -497,6 +505,9 @@ private struct PlayerOrnamentView: View {
     let onInteraction: () -> Void
 
     @State private var scrubState = PlaybackScrubState()
+    @EnvironmentObject private var cinema: CinemaState
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
     var body: some View {
         Group {
@@ -673,6 +684,10 @@ private struct PlayerOrnamentView: View {
             }
             audioMenu
             subtitleMenu
+            if cinema.isActive {
+                cinemaSizeButtons
+            }
+            cinemaButton
             statsButton
             doneButton
         }
@@ -738,6 +753,50 @@ private struct PlayerOrnamentView: View {
         .buttonStyle(.bordered)
         .accessibilityIdentifier(identifier)
         .accessibilityLabel(title)
+    }
+
+    private var cinemaButton: some View {
+        Button {
+            onInteraction()
+            Task {
+                if cinema.isActive {
+                    await dismissImmersiveSpace()
+                } else {
+                    _ = await openImmersiveSpace(id: CinemaState.spaceID)
+                }
+            }
+        } label: {
+            Label(cinema.isActive ? "Leave Cinema" : "Cinema", systemImage: cinema.isActive ? "rectangle.inset.filled" : "theatermasks")
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 60, minHeight: 60)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("player-cinema-button")
+        .accessibilityLabel(cinema.isActive ? "Leave Cinema" : "Watch in Cinema")
+    }
+
+    private var cinemaSizeButtons: some View {
+        HStack(spacing: 8) {
+            Button {
+                onInteraction()
+                cinema.smaller()
+            } label: {
+                Label("Smaller screen", systemImage: "minus.magnifyingglass")
+                    .labelStyle(.iconOnly)
+                    .frame(minWidth: 60, minHeight: 60)
+            }
+            .disabled(cinema.screenAngle <= CinemaState.screenAngleRange.lowerBound)
+            Button {
+                onInteraction()
+                cinema.larger()
+            } label: {
+                Label("Larger screen", systemImage: "plus.magnifyingglass")
+                    .labelStyle(.iconOnly)
+                    .frame(minWidth: 60, minHeight: 60)
+            }
+            .disabled(cinema.screenAngle >= CinemaState.screenAngleRange.upperBound)
+        }
+        .buttonStyle(.bordered)
     }
 
     private var statsButton: some View {
