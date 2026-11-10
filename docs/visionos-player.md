@@ -759,10 +759,10 @@ xcodebuild build \
 
 Simulator tests and screenshots do not prove stereoscopic depth, eye order,
 comfort, long-session thermals, or headset-visible interaction. The accepted
-physical layout keeps the RealityKit video surface at the playback probe's
-conservative scale and depth offset so foreground stereo content remains behind
-the native ornament; changes to that geometry still require physical Vision Pro
-validation. Nothing is drawn behind the video, so where the window's shape and
+physical layout fills the window with the RealityKit video surface and keeps the
+playback probe's depth offset, so foreground stereo content remains behind the
+native ornament and the window's resize handle stays reachable (#1187); changes to
+that geometry still require physical Vision Pro validation. Nothing is drawn behind the video, so where the window's shape and
 the video's differ the room shows through instead of a black frame (#1132). The visionOS Simulator can expose the AVKit surface and contextual
 actions but displays an unsupported-content placeholder for tagged stereo
 output. The automated suite therefore also prepares each bundled fixture through
