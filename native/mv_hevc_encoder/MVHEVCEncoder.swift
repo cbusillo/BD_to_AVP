@@ -27,6 +27,11 @@ private enum EncoderFailure: Error, CustomStringConvertible {
     }
 }
 
+private enum OutputColor: String {
+    case sdr
+    case hdr10
+}
+
 private struct EncoderOptions {
     let outputURL: URL
     let bitrateMbps: Double
@@ -38,6 +43,9 @@ private struct EncoderOptions {
     let upscaleMode: FrameUpscaleMode?
     let swapEyes: Bool
     let overwrite: Bool
+    var color: OutputColor = .sdr
+    var masteringDisplay: Data? = nil
+    var contentLightLevel: Data? = nil
 
     static func parse(arguments: [String]) throws -> EncoderOptions {
         var outputPath: String?
@@ -51,6 +59,9 @@ private struct EncoderOptions {
         var upscaleMode: FrameUpscaleMode?
         var swapEyes = false
         var overwrite = false
+        var color = OutputColor.sdr
+        var masteringDisplay: Data?
+        var contentLightLevel: Data?
 
         var index = 0
         while index < arguments.count {
@@ -79,6 +90,20 @@ private struct EncoderOptions {
                     )
                 }
                 upscaleMode = parsedMode
+            case "--color":
+                let rawColor = try value(after: argument, arguments: arguments, index: &index)
+                guard let parsedColor = OutputColor(rawValue: rawColor) else {
+                    throw EncoderFailure.invalidArguments("--color must be sdr or hdr10.")
+                }
+                color = parsedColor
+            case "--mastering-display":
+                masteringDisplay = try parseMasteringDisplay(
+                    try value(after: argument, arguments: arguments, index: &index)
+                )
+            case "--max-cll":
+                contentLightLevel = try parseContentLightLevel(
+                    try value(after: argument, arguments: arguments, index: &index)
+                )
             case "--swap-eyes":
                 swapEyes = true
             case "--overwrite":
@@ -121,8 +146,11 @@ private struct EncoderOptions {
         if let expectedFrameCount, expectedFrameCount <= 0 {
             throw EncoderFailure.invalidArguments("--expected-frames must be greater than 0.")
         }
+        if color != .hdr10, masteringDisplay != nil || contentLightLevel != nil {
+            throw EncoderFailure.invalidArguments("--mastering-display and --max-cll require --color hdr10.")
+        }
 
-        return EncoderOptions(
+        var options = EncoderOptions(
             outputURL: URL(fileURLWithPath: outputPath).standardizedFileURL,
             bitrateMbps: bitrateMbps,
             quality: quality,
@@ -134,6 +162,51 @@ private struct EncoderOptions {
             swapEyes: swapEyes,
             overwrite: overwrite
         )
+        options.color = color
+        options.masteringDisplay = masteringDisplay
+        options.contentLightLevel = contentLightLevel
+        return options
+    }
+
+    /// x265 syntax, G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min), chromaticity in 0.00002 and luminance in
+    /// 0.0001 cd/m2 units; returns the 24-byte big-endian SEI payload VideoToolbox expects.
+    private static func parseMasteringDisplay(_ text: String) throws -> Data {
+        let failure = EncoderFailure.invalidArguments(
+            "--mastering-display must look like G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)."
+        )
+        var values: [UInt32] = []
+        for label in ["G", "B", "R", "WP", "L"] {
+            guard let start = text.range(of: "\(label)("),
+                  let end = text[start.upperBound...].firstIndex(of: ")")
+            else { throw failure }
+            let parts = text[start.upperBound ..< end].split(separator: ",")
+            guard parts.count == 2, let first = UInt32(parts[0]), let second = UInt32(parts[1]) else {
+                throw failure
+            }
+            values += [first, second]
+        }
+        var data = Data()
+        for (index, value) in values.enumerated() {
+            if index < 8 {
+                guard value <= UInt32(UInt16.max) else { throw failure }
+                withUnsafeBytes(of: UInt16(value).bigEndian) { data.append(contentsOf: $0) }
+            } else {
+                withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) }
+            }
+        }
+        return data
+    }
+
+    /// MaxCLL,MaxFALL in cd/m2; returns the 4-byte big-endian SEI payload.
+    private static func parseContentLightLevel(_ text: String) throws -> Data {
+        let parts = text.split(separator: ",")
+        guard parts.count == 2, let maxCLL = UInt16(parts[0]), let maxFALL = UInt16(parts[1]) else {
+            throw EncoderFailure.invalidArguments("--max-cll must be MaxCLL,MaxFALL in cd/m2.")
+        }
+        var data = Data()
+        withUnsafeBytes(of: maxCLL.bigEndian) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: maxFALL.bigEndian) { data.append(contentsOf: $0) }
+        return data
     }
 
     private static func value(
@@ -177,7 +250,7 @@ private struct EncoderOptions {
             """
             Usage: mv-hevc-encoder --output FILE [options]
 
-            Reads progressive, 8-bit 4:2:0 side-by-side Y4M from standard input and writes MV-HEVC MOV.
+            Reads progressive 8-bit or 10-bit 4:2:0 side-by-side Y4M from standard input and writes MV-HEVC MOV.
 
               --output FILE                  MOV output path.
               --bitrate-mbps VALUE           Final MV-HEVC average bitrate (default: 8).
@@ -187,6 +260,9 @@ private struct EncoderOptions {
               --disparity-adjustment VALUE    Fraction of image width, -1 through 1 (default: 0).
               --expected-frames COUNT         Fail unless exactly this many frames are received.
               --upscale-mode MODE             Prototype 2x scaler: metalfx or pixel-transfer.
+              --color MODE                    sdr (BT.709, default) or hdr10 (BT.2020 PQ, needs 10-bit input).
+              --mastering-display VALUE       HDR10 mastering display, x265 syntax G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min).
+              --max-cll MAXCLL,MAXFALL        HDR10 content light level in cd/m2.
               --swap-eyes                     Treat the right half as the left eye.
               --overwrite                     Replace an existing output file.
               --capability-probe              Report stereo MV-HEVC encode support and exit.
@@ -201,12 +277,14 @@ private struct Y4MHeader {
     let frameRateNumerator: Int32
     let frameRateDenominator: Int32
     let chromaLocation: CFString
+    var bitDepth = 8
 
+    var bytesPerSample: Int { bitDepth > 8 ? 2 : 1 }
     var eyeWidth: Int { frameWidth / 2 }
-    var lumaBytes: Int { frameWidth * frameHeight }
+    var lumaBytes: Int { frameWidth * frameHeight * bytesPerSample }
     var chromaWidth: Int { frameWidth / 2 }
     var chromaHeight: Int { frameHeight / 2 }
-    var chromaBytes: Int { chromaWidth * chromaHeight }
+    var chromaBytes: Int { chromaWidth * chromaHeight * bytesPerSample }
     var frameBytes: Int { lumaBytes + (2 * chromaBytes) }
     var frameRate: Double { Double(frameRateNumerator) / Double(frameRateDenominator) }
 
@@ -260,20 +338,27 @@ private struct Y4MHeader {
             throw EncoderFailure.unsupported("Interlaced Y4M must be deinterlaced before direct MV-HEVC encoding.")
         }
         let supportedChromaModes = ["420", "420jpeg", "420mpeg2", "420paldv"]
-        guard supportedChromaModes.contains(chroma) else {
-            throw EncoderFailure.unsupported("Direct MV-HEVC encoding currently requires 8-bit 4:2:0 Y4M.")
+        let bitDepth: Int
+        if supportedChromaModes.contains(chroma) {
+            bitDepth = 8
+        } else if chroma == "420p10" {
+            bitDepth = 10
+        } else {
+            throw EncoderFailure.unsupported("Direct MV-HEVC encoding requires 8-bit or 10-bit 4:2:0 Y4M.")
         }
         let chromaLocation = chroma.hasPrefix("420mpeg2")
             ? kCVImageBufferChromaLocation_Left
             : kCVImageBufferChromaLocation_Center
 
-        return Y4MHeader(
+        var header = Y4MHeader(
             frameWidth: width,
             frameHeight: height,
             frameRateNumerator: frameRate.0,
             frameRateDenominator: frameRate.1,
             chromaLocation: chromaLocation
         )
+        header.bitDepth = bitDepth
+        return header
     }
 }
 
@@ -398,9 +483,17 @@ private func makeCompressionProperties(options: EncoderOptions, header: Y4MHeade
             (options.disparityAdjustment * 10_000).rounded()
         ),
         kVTCompressionPropertyKey_ExpectedFrameRate as String: header.frameRate,
-        kVTCompressionPropertyKey_ProfileLevel as String: kVTProfileLevel_HEVC_Main_AutoLevel,
+        kVTCompressionPropertyKey_ProfileLevel as String: header.bitDepth > 8
+            ? kVTProfileLevel_HEVC_Main10_AutoLevel
+            : kVTProfileLevel_HEVC_Main_AutoLevel,
         kVTCompressionPropertyKey_AllowFrameReordering as String: true,
     ]
+    if let masteringDisplay = options.masteringDisplay {
+        properties[kVTCompressionPropertyKey_MasteringDisplayColorVolume as String] = masteringDisplay
+    }
+    if let contentLightLevel = options.contentLightLevel {
+        properties[kVTCompressionPropertyKey_ContentLightLevelInfo as String] = contentLightLevel
+    }
     if let quality = options.quality {
         properties[kVTCompressionPropertyKey_Quality as String] = quality
     } else {
@@ -428,33 +521,50 @@ private func makeOutputSettings(options: EncoderOptions, header: Y4MHeader) thro
         AVVideoWidthKey: outputDimensions.width,
         AVVideoHeightKey: outputDimensions.height,
         AVVideoCompressionPropertiesKey: try makeCompressionProperties(options: options, header: header),
-        AVVideoColorPropertiesKey: [
-            AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-            AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-            AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
-        ],
+        AVVideoColorPropertiesKey: options.color == .hdr10
+            ? [
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_2020,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_SMPTE_ST_2084_PQ,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_2020,
+            ]
+            : [
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+            ],
     ]
 }
 
+private func validateColor(options: EncoderOptions, header: Y4MHeader) throws {
+    if options.color == .hdr10, header.bitDepth < 10 {
+        throw EncoderFailure.unsupported("--color hdr10 requires 10-bit 4:2:0 Y4M input.")
+    }
+    if header.bitDepth > 8, options.upscaleMode != nil {
+        throw EncoderFailure.unsupported("--upscale-mode supports 8-bit Y4M input only.")
+    }
+}
+
 private func isStereoMVHEVCOutputConfigurationSupported(
-    upscaleMode: FrameUpscaleMode? = nil
+    upscaleMode: FrameUpscaleMode? = nil,
+    color: OutputColor = .sdr
 ) throws -> Bool {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         return false
     }
-    let header = Y4MHeader(
+    var header = Y4MHeader(
         frameWidth: 3_840,
         frameHeight: 1_080,
         frameRateNumerator: 24_000,
         frameRateDenominator: 1_001,
         chromaLocation: kCVImageBufferChromaLocation_Center
     )
+    header.bitDepth = color == .hdr10 ? 10 : 8
     for quality in [Double?.none, 0.7] {
         let probeURL = FileManager.default.temporaryDirectory.appendingPathComponent(
             ".mv-hevc-capability-\(UUID().uuidString).mov"
         )
         defer { try? FileManager.default.removeItem(at: probeURL) }
-        let options = EncoderOptions(
+        var options = EncoderOptions(
             outputURL: probeURL,
             bitrateMbps: 8.0,
             quality: quality,
@@ -466,6 +576,7 @@ private func isStereoMVHEVCOutputConfigurationSupported(
             swapEyes: false,
             overwrite: true
         )
+        options.color = color
         let outputSettings = try makeOutputSettings(options: options, header: header)
         let writer = try AVAssetWriter(outputURL: probeURL, fileType: .mov)
         if !writer.canApply(outputSettings: outputSettings, forMediaType: .video) {
@@ -478,26 +589,28 @@ private func isStereoMVHEVCOutputConfigurationSupported(
 private func fillPixelBuffer(
     _ pixelBuffer: inout CVMutablePixelBuffer,
     header: Y4MHeader,
+    color: OutputColor,
     frame: Data,
     eyeIndex: Int
 ) throws {
+    let hdr10 = color == .hdr10
     pixelBuffer.withUnsafeBuffer { unsafeBuffer in
         CVBufferSetAttachment(
             unsafeBuffer,
             kCVImageBufferColorPrimariesKey,
-            kCVImageBufferColorPrimaries_ITU_R_709_2,
+            hdr10 ? kCVImageBufferColorPrimaries_ITU_R_2020 : kCVImageBufferColorPrimaries_ITU_R_709_2,
             .shouldPropagate
         )
         CVBufferSetAttachment(
             unsafeBuffer,
             kCVImageBufferTransferFunctionKey,
-            kCVImageBufferTransferFunction_ITU_R_709_2,
+            hdr10 ? kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ : kCVImageBufferTransferFunction_ITU_R_709_2,
             .shouldPropagate
         )
         CVBufferSetAttachment(
             unsafeBuffer,
             kCVImageBufferYCbCrMatrixKey,
-            kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+            hdr10 ? kCVImageBufferYCbCrMatrix_ITU_R_2020 : kCVImageBufferYCbCrMatrix_ITU_R_709_2,
             .shouldPropagate
         )
         CVBufferSetAttachment(
@@ -514,10 +627,23 @@ private func fillPixelBuffer(
         guard planes.count == 2 else {
             throw EncoderFailure.writer("Allocated pixel buffer has an unexpected plane layout.")
         }
-        let lumaDestination = planes[0].bytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
-        let chromaDestination = planes[1].bytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
         let lumaDestinationStride = planes[0].properties.bytesPerRow
         let chromaDestinationStride = planes[1].properties.bytesPerRow
+        if header.bitDepth > 8 {
+            try fillTenBitPlanes(
+                lumaDestination: planes[0].bytes.baseAddress!,
+                chromaDestination: planes[1].bytes.baseAddress!,
+                lumaDestinationStride: lumaDestinationStride,
+                chromaDestinationStride: chromaDestinationStride,
+                header: header,
+                frame: frame,
+                lumaEyeOffset: lumaEyeOffset,
+                chromaEyeOffset: chromaEyeOffset
+            )
+            return
+        }
+        let lumaDestination = planes[0].bytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
+        let chromaDestination = planes[1].bytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
 
         try frame.withUnsafeBytes { rawFrame in
             guard let frameBase = rawFrame.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
@@ -547,8 +673,48 @@ private func fillPixelBuffer(
     }
 }
 
+/// Y4M 10-bit samples are little-endian in the low bits; the biplanar 10-bit buffer keeps them in the high bits.
+private func fillTenBitPlanes(
+    lumaDestination: UnsafeMutableRawPointer,
+    chromaDestination: UnsafeMutableRawPointer,
+    lumaDestinationStride: Int,
+    chromaDestinationStride: Int,
+    header: Y4MHeader,
+    frame: Data,
+    lumaEyeOffset: Int,
+    chromaEyeOffset: Int
+) throws {
+    try frame.withUnsafeBytes { rawFrame in
+        guard let base = rawFrame.baseAddress else {
+            throw EncoderFailure.invalidInput("Y4M frame has no readable bytes.")
+        }
+        let luma = base.assumingMemoryBound(to: UInt16.self)
+        let uPlane = base.advanced(by: header.lumaBytes).assumingMemoryBound(to: UInt16.self)
+        let vPlane = base.advanced(by: header.lumaBytes + header.chromaBytes).assumingMemoryBound(to: UInt16.self)
+        for row in 0 ..< header.frameHeight {
+            let destination = lumaDestination.advanced(by: row * lumaDestinationStride)
+                .assumingMemoryBound(to: UInt16.self)
+            let source = luma.advanced(by: (row * header.frameWidth) + lumaEyeOffset)
+            for column in 0 ..< header.eyeWidth {
+                destination[column] = UInt16(littleEndian: source[column]) << 6
+            }
+        }
+        let eyeChromaWidth = header.eyeWidth / 2
+        for row in 0 ..< header.chromaHeight {
+            let destination = chromaDestination.advanced(by: row * chromaDestinationStride)
+                .assumingMemoryBound(to: UInt16.self)
+            let sourceOffset = (row * header.chromaWidth) + chromaEyeOffset
+            for column in 0 ..< eyeChromaWidth {
+                destination[column * 2] = UInt16(littleEndian: uPlane[sourceOffset + column]) << 6
+                destination[(column * 2) + 1] = UInt16(littleEndian: vPlane[sourceOffset + column]) << 6
+            }
+        }
+    }
+}
+
 private func makePixelBuffer(
     header: Y4MHeader,
+    color: OutputColor,
     frame: Data,
     eyeIndex: Int,
     sourcePool: SourcePixelBufferPool?
@@ -558,18 +724,23 @@ private func makePixelBuffer(
         pixelBuffer = try sourcePool.makePixelBuffer()
     } else {
         var attributes = CVPixelBufferCreationAttributes(
-            pixelFormatType: CVPixelFormatType(rawValue: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+            pixelFormatType: CVPixelFormatType(
+                rawValue: header.bitDepth > 8
+                    ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+                    : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            ),
             size: CVImageSize(width: header.eyeWidth, height: header.frameHeight)
         )
         attributes.backing = .ioSurface
         pixelBuffer = try CVMutablePixelBuffer(attributes)
     }
-    try fillPixelBuffer(&pixelBuffer, header: header, frame: frame, eyeIndex: eyeIndex)
+    try fillPixelBuffer(&pixelBuffer, header: header, color: color, frame: frame, eyeIndex: eyeIndex)
     return CVReadOnlyPixelBuffer(pixelBuffer)
 }
 
 private func makeTaggedBuffers(
     header: Y4MHeader,
+    color: OutputColor,
     frame: Data,
     swapEyes: Bool,
     sourcePool: SourcePixelBufferPool?,
@@ -581,6 +752,7 @@ private func makeTaggedBuffers(
     let sourceBuffers = try sourceIndices.map {
         try makePixelBuffer(
             header: header,
+            color: color,
             frame: frame,
             eyeIndex: $0,
             sourcePool: sourcePool
@@ -647,6 +819,7 @@ private func encode(
         throw EncoderFailure.invalidInput("Y4M input is empty.")
     }
     let header = try Y4MHeader.parse(headerLine)
+    try validateColor(options: options, header: header)
     let fileManager = FileManager.default
     let outputURL = options.outputURL
     if fileManager.fileExists(atPath: outputURL.path) {
@@ -703,6 +876,7 @@ private func encode(
             let frame = try input.readExactly(header.frameBytes)
             let taggedBuffers = try makeTaggedBuffers(
                 header: header,
+                color: options.color,
                 frame: frame,
                 swapEyes: options.swapEyes,
                 sourcePool: sourcePool,
@@ -805,6 +979,8 @@ private struct MVHEVCEncoder {
                 "frame_count": frameCount,
                 "frame_rate_denominator": header.frameRateDenominator,
                 "frame_rate_numerator": header.frameRateNumerator,
+                "bit_depth": header.bitDepth,
+                "color": options.color.rawValue,
                 "has_camera_baseline": options.baselineMillimeters != nil,
                 "output_mode": "mov",
                 "schema_version": 1,

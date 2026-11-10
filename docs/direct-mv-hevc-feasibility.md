@@ -9,7 +9,9 @@ fallback.
 ## Decision
 
 Use a native Swift helper built on `AVAssetWriter` and tagged pixel-buffer groups. The helper accepts normalized,
-progressive, side-by-side 8-bit 4:2:0 Y4M on standard input and writes one MV-HEVC MOV. Keep FFmpeg immediately
+progressive, side-by-side 8-bit 4:2:0 Y4M on standard input and writes one MV-HEVC MOV. It also accepts 10-bit
+4:2:0 Y4M; with `--color hdr10` it writes Main10 HEVC tagged BT.2020 PQ, with optional `--mastering-display` and
+`--max-cll` HDR10 metadata. Upscaling stays 8-bit only. Keep FFmpeg immediately
 upstream for the existing crop, deinterlace, eye-swap, resolution, and frame-rate transforms.
 
 The proposed normal path is:
