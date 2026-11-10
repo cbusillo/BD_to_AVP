@@ -44,6 +44,16 @@ def y4m_frame(frame_index: int = 0, *, width: int = 128, height: int = 64) -> by
     return b"FRAME\n" + bytes(luma) + (bytes([96]) * chroma_plane_bytes) + (bytes([160]) * chroma_plane_bytes)
 
 
+def y4m_frame_10bit(frame_index: int = 0, *, width: int = 128, height: int = 64) -> bytes:
+    """Little-endian 10-bit samples, left eye darker than right, as `y4m_frame` does in 8 bits."""
+    eye_width = width // 2
+    left = (192 + 4 * frame_index).to_bytes(2, "little")
+    right = (704 - 4 * frame_index).to_bytes(2, "little")
+    luma = (left * eye_width + right * eye_width) * height
+    chroma_samples = (width // 2) * (height // 2)
+    return b"FRAME\n" + luma + (512).to_bytes(2, "little") * (2 * chroma_samples)
+
+
 class MVHEVCEncoderBuilderTests(unittest.TestCase):
     def test_build_command_pins_swift_target_and_frameworks(self) -> None:
         command = build_mv_hevc_encoder_macos.build_command(
@@ -188,8 +198,9 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         overwrite: bool = False,
         quality: float | None = None,
         upscale_mode: str | None = None,
+        extra_arguments: list[str] | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
-        command = [str(self.encoder), "--output", str(output_path)]
+        command = [str(self.encoder), "--output", str(output_path), *(extra_arguments or [])]
         if bitrate_mbps is not None:
             command.extend(["--bitrate-mbps", str(bitrate_mbps)])
         if quality is not None:
@@ -457,13 +468,83 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         self.assertIn(b"between 0 and 1", completed.stderr)
         self.assertFalse(output_path.exists())
 
-    def test_rejects_high_bit_depth_y4m_before_writing_output(self) -> None:
-        output_path = self.output_path("high-bit-depth.mov")
+    def test_encodes_ten_bit_hdr10_with_pq_tags_and_mastering_metadata(self) -> None:
+        assert FFPROBE is not None
+        output_path = self.output_path("hdr10.mov")
 
-        completed = self.run_encoder(output_path, y4m_header(chroma="420p10"))
+        completed = self.run_encoder(
+            output_path,
+            y4m_header(chroma="420p10") + y4m_frame_10bit() + y4m_frame_10bit(1),
+            expected_frames=2,
+            extra_arguments=[
+                "--color",
+                "hdr10",
+                "--mastering-display",
+                "G(8500,39850)B(6550,2300)R(35400,14600)WP(15635,16450)L(10000000,1)",
+                "--max-cll",
+                "1000,400",
+            ],
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        summary = json.loads(completed.stdout)
+        self.assertEqual((summary["bit_depth"], summary["color"]), (10, "hdr10"))
+        probe = json.loads(
+            subprocess.run(
+                [
+                    FFPROBE,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-read_intervals",
+                    "%+#1",
+                    "-show_streams",
+                    "-show_frames",
+                    "-of",
+                    "json",
+                    str(output_path),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            ).stdout
+        )
+        stream = probe["streams"][0]
+        self.assertEqual(
+            (stream["profile"], stream["pix_fmt"], stream["color_primaries"], stream["color_transfer"]),
+            ("Main 10", "yuv420p10le", "bt2020", "smpte2084"),
+        )
+        side_data = {item["side_data_type"]: item for item in probe["frames"][0].get("side_data_list", [])}
+        self.assertEqual(side_data["Mastering display metadata"]["max_luminance"], "10000000/10000")
+        self.assertEqual(side_data["Content light level metadata"]["max_content"], 1000)
+        # Left-eye video-range luma 192 is (192 - 64) / 876 * 255 = 37 in full-range gray;
+        # a lost or doubled 10-bit shift lands far from it.
+        self.assertAlmostEqual(self.first_frame_gray_value(output_path), 37, delta=3)
+        self.assert_no_partial_output(output_path)
+
+    def test_rejects_hdr10_from_eight_bit_input_before_writing_output(self) -> None:
+        output_path = self.output_path("hdr10-from-8-bit.mov")
+
+        completed = self.run_encoder(output_path, y4m_header() + y4m_frame(), extra_arguments=["--color", "hdr10"])
 
         self.assertEqual(completed.returncode, 1)
-        self.assertIn(b"requires 8-bit 4:2:0 Y4M", completed.stderr)
+        self.assertIn(b"requires 10-bit", completed.stderr)
+        self.assertFalse(output_path.exists())
+        self.assert_no_partial_output(output_path)
+
+    def test_rejects_upscaling_ten_bit_input_before_writing_output(self) -> None:
+        output_path = self.output_path("upscale-10-bit.mov")
+
+        completed = self.run_encoder(
+            output_path,
+            y4m_header(chroma="420p10") + y4m_frame_10bit(),
+            upscale_mode="pixel-transfer",
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(b"8-bit Y4M input only", completed.stderr)
         self.assertFalse(output_path.exists())
         self.assert_no_partial_output(output_path)
 
