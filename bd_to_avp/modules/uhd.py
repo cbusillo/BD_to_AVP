@@ -38,6 +38,7 @@ from bd_to_avp.modules.uhd_padding import (
     picture_extent,
     read_luma_maxima,
     reference_picture_start,
+    reference_window_stream,
 )
 from bd_to_avp.modules.video import (
     Edge264DamageCollector,
@@ -216,35 +217,15 @@ def read_reference_window(
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
 ) -> dict[int, FloatImage]:
-    rate = float(info.frame_rate)
-    first_time = info.start_seconds + (window.start - 0.5) / rate
-    last_time = info.start_seconds + (window.stop - 0.5) / rate
-    command = [
-        config.FFMPEG_PATH,
-        "-v",
-        "error",
-        "-ss",
-        f"{max(0, window.start / rate - 1):.9f}",
-        "-t",
-        f"{len(window) / rate + 3:.9f}",
-        "-copyts",
-        "-i",
-        reference,
-        "-map",
-        "0:v:0",
-        "-vf",
-        f"select='between(t,{first_time:.9f},{last_time:.9f})',"
-        "scale=960:540:flags=area:in_color_matrix=bt2020:in_range=tv:out_range=pc",
-        "-fps_mode",
-        "passthrough",
-        "-frames:v",
-        str(len(window) + 1),
-        "-pix_fmt",
-        "rgb48le",
-        "-f",
-        "rawvideo",
-        "pipe:1",
-    ]
+    stream = reference_window_stream(reference, info, window).filter(
+        "scale", 960, 540, flags="area", in_color_matrix="bt2020", in_range="tv", out_range="pc"
+    )
+    command = ffmpeg.compile(
+        ffmpeg.output(
+            stream, "pipe:1", format="rawvideo", pix_fmt="rgb48le", vframes=len(window) + 1, fps_mode="passthrough"
+        ),
+        cmd=str(config.FFMPEG_PATH),
+    )
     frames = {}
     frame_bytes = SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 6
     with tempfile.TemporaryFile(dir=workspace) as destination:
@@ -275,6 +256,7 @@ def collect_matched_frames(
     indices: tuple[int, ...],
     stereo: list[tuple[FloatImage, FloatImage]],
     *,
+    source_frame_count: int,
     initial_offset: int = 0,
     workspace: Path,
     run_context: RunContext | None,
@@ -323,7 +305,9 @@ def collect_matched_frames(
                 frame = corrected_frame
             corrected.append(frame)
         matched = corrected
-    checked_bins = {min(SAMPLE_BINS - 1, int(frame.source_index / info.frame_count * SAMPLE_BINS)) for frame in matched}
+    checked_bins = {
+        min(SAMPLE_BINS - 1, int(frame.source_index / source_frame_count * SAMPLE_BINS)) for frame in matched
+    }
     if (
         frame_offset is None
         or len(checked_bins) < SAMPLE_BINS - 2
@@ -353,7 +337,7 @@ def prepare_uhd_conversion(
     if disc_info.resolution != "1920x1080" or disc_info.is_interlaced or disc_info.color_depth != 8:
         raise VideoRoutePreflightError("The 3D source must be progressive 1920 by 1080 Blu-ray MVC video.")
     check_reference_frame_rate(info, disc_info.frame_rate)
-    duration = min(disc_info.duration_seconds, info.duration_seconds)
+    duration = disc_info.duration_seconds
     indices = source_sample_indices(duration, info.frame_rate)
     cli_message("Checking the cut, matching eye and HDR color across the whole film.", run_context=run_context)
     samples = collect_stereo_samples(
@@ -373,6 +357,7 @@ def prepare_uhd_conversion(
         info,
         indices,
         samples.eyes,
+        source_frame_count=samples.extent.frame_count,
         initial_offset=initial_offset,
         workspace=workspace,
         run_context=run_context,

@@ -41,7 +41,7 @@ spatial movie with `bd-to-avp --source 3d.mkv --uhd-reference 4k.mkv`. It checks
 the cut, left-eye match and HDR color across the whole film before encoding.
 The 4K copy supplies the left eye. Only rows or columns masked in the 3D release
 are changed to black; the rest of that eye is unchanged before compression.
-the real 3D right eye is upscaled and mapped to HDR. See the [pipeline contract](docs/direct-pipeline-contracts.md#matched-4k-hdr10-reference)
+The real 3D right eye is upscaled and mapped to HDR. See the [pipeline contract](docs/direct-pipeline-contracts.md#matched-4k-hdr10-reference)
 for accepted inputs and refusal conditions. Head or tail differences made only
 of black frames are accepted. The 3D timeline is kept, with black in both eyes
 where the 4K copy has no frame. Differences containing picture are refused.

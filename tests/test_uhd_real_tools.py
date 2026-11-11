@@ -183,10 +183,10 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
     reference_count = 4 + (4 if padding == "reference" else -1 if padding == "tail" else 0)
     with reference.open("wb") as destination:
         destination.write(f"YUV4MPEG2 W{width} H{height} F24000:1001 Ip C420p10\n".encode())
-        for _ in range(reference_count):
+        for reference_index in range(reference_count):
             destination.write(b"FRAME\n")
             for plane in reference_planes:
-                destination.write(plane.tobytes())
+                destination.write(np.roll(plane, reference_index * 137, axis=1).tobytes())
     coefficients = np.zeros((13, 3), dtype=np.float32)
     coefficients[:3] = np.eye(3, dtype=np.float32)
     coefficients[-1] = 0.03
@@ -243,7 +243,8 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
                 keep_left = left_mask if channel == 0 else left_mask[1::2, 1::2]
                 keep_right = right_mask if channel == 0 else right_mask[1::2, 1::2]
                 left_plane, right_plane = np.split(plane, 2, axis=1)
-                assert np.array_equal(left_plane[keep_left], original[keep_left])
+                expected_reference = np.roll(original, (index + plan.frame_offset) * 137, axis=1)
+                assert np.array_equal(left_plane[keep_left], expected_reference[keep_left])
                 assert np.all(left_plane[~keep_left] == (64 if channel == 0 else 512))
                 assert np.all(right_plane[~keep_right] == (64 if channel == 0 else 512))
         assert not frames.read(1)
@@ -251,21 +252,26 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
 
 
 def test_reference_black_scan_keeps_a_single_bright_pixel_and_counts_every_frame(tmp_path: Path) -> None:
-    from bd_to_avp.modules.uhd_padding import read_reference_luma
+    from bd_to_avp.modules.uhd_padding import read_reference_luma, reference_picture_start
 
+    tmp_path = tmp_path / "quote'path"
+    tmp_path.mkdir()
     reference = tmp_path / "black-edges.y4m"
     width, height = 32, 18
     with reference.open("wb") as stream:
         stream.write(f"YUV4MPEG2 W{width} H{height} F24000:1001 Ip C420p10\n".encode())
-        for index in range(6):
+        for index in range(250):
             luma = np.full((height, width), 64, dtype="<u2")
-            if index == 3:
+            if index == 243:
                 luma[7, 8] = 940
             stream.write(b"FRAME\n")
             stream.write(luma.tobytes())
             stream.write(np.full((height // 2, width // 2), 512, dtype="<u2").tobytes() * 2)
-    info = replace(read_hdr_reference_info(hdr_probe()), frame_count=6)
+    info = replace(read_hdr_reference_info(hdr_probe()), frame_count=250)
     maxima = read_reference_luma(
-        reference, info, range(2, 6), workspace=tmp_path, run_context=None, cancellation_event=None
+        reference, info, range(242, 246), workspace=tmp_path, run_context=None, cancellation_event=None
     )
     assert maxima == [64, 940, 64, 64]
+    assert (
+        reference_picture_start(reference, info, workspace=tmp_path, run_context=None, cancellation_event=None) == 243
+    )

@@ -5,6 +5,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import ffmpeg
+
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.uhd_color import HDRReferenceInfo
@@ -39,6 +41,18 @@ def picture_extent(maxima: list[int], black_level: int) -> PictureExtent:
     return PictureExtent(len(maxima), picture[0], picture[-1] + 1)
 
 
+def reference_window_stream(reference: Path, info: HDRReferenceInfo, frames: range) -> ffmpeg.nodes.FilterableStream:
+    rate = float(info.frame_rate)
+    first_time = info.start_seconds + (frames.start - 0.5) / rate
+    last_time = info.start_seconds + (frames.stop - 0.5) / rate
+    return ffmpeg.input(
+        str(reference),
+        ss=f"{max(0, frames.start / rate - 1):.9f}",
+        t=f"{len(frames) / rate + 3:.9f}",
+        copyts=None,
+    ).video.filter("select", f"between(t,{first_time:.9f},{last_time:.9f})")
+
+
 def read_reference_luma(
     reference: Path,
     info: HDRReferenceInfo,
@@ -50,36 +64,19 @@ def read_reference_luma(
 ) -> list[int]:
     if not frames:
         return []
-    rate = float(info.frame_rate)
-    first_time = info.start_seconds + (frames.start - 0.5) / rate
-    last_time = info.start_seconds + (frames.stop - 0.5) / rate
     with tempfile.TemporaryDirectory(dir=workspace, prefix="uhd-black-") as directory:
         metrics = Path(directory) / "luma.txt"
+        stream = (
+            reference_window_stream(reference, info, frames)
+            .filter("signalstats")
+            .filter("metadata", mode="print", key="lavfi.signalstats.YMAX", file=str(metrics))
+        )
+        command = ffmpeg.compile(
+            ffmpeg.output(stream, "-", format="null", vframes=len(frames) + 1, fps_mode="passthrough"),
+            cmd=str(config.FFMPEG_PATH),
+        )
         run_process_capture(
-            [
-                config.FFMPEG_PATH,
-                "-v",
-                "error",
-                "-ss",
-                f"{max(0, frames.start / rate - 1):.9f}",
-                "-t",
-                f"{len(frames) / rate + 3:.9f}",
-                "-copyts",
-                "-i",
-                reference,
-                "-map",
-                "0:v:0",
-                "-vf",
-                f"select='between(t,{first_time:.9f},{last_time:.9f})',signalstats,"
-                f"metadata=mode=print:key=lavfi.signalstats.YMAX:file='{metrics}'",
-                "-frames:v",
-                str(len(frames) + 1),
-                "-fps_mode",
-                "passthrough",
-                "-f",
-                "null",
-                "-",
-            ],
+            command,
             "Check 4K black padding",
             tool_id="ffmpeg",
             run_context=run_context,
