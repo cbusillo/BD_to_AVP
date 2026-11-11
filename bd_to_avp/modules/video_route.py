@@ -7,12 +7,14 @@ import threading
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Callable, Mapping
 
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_quality_defaults import (
+    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
     AUTOMATIC_GENERATED_MERGE_QUALITY as _AUTOMATIC_GENERATED_MERGE_QUALITY,
 )
@@ -34,6 +36,7 @@ AUTOMATIC_GENERATED_MERGE_QUALITY = _AUTOMATIC_GENERATED_MERGE_QUALITY
 
 class VideoRouteKind(StrEnum):
     DIRECT_MV_HEVC = "direct_mv_hevc"
+    UHD_HDR_MV_HEVC = "uhd_hdr_mv_hevc"
     GENERATED_MV_HEVC = "generated_mv_hevc"
     AV1 = "av1"
     EXISTING_ARTIFACT = "existing_artifact"
@@ -98,6 +101,8 @@ class ResolvedVideoRoute:
     fallback_reason: str | None = None
     direct_upscale_mode: DirectUpscaleMode | None = None
     upscale_quality: int | None = None
+
+    uhd_reference: Path | None = None
 
     @property
     def uses_in_process_upscale(self) -> bool:
@@ -278,7 +283,64 @@ def resolve_video_route(
     )
 
 
+def validate_uhd_route_options(
+    *,
+    mode: VideoMode,
+    start_stage: Stage,
+    swap_eyes: bool,
+    frame_rate: str,
+    resolution: str,
+    crop: bool,
+    upscale: bool,
+    software_encoder: bool,
+) -> None:
+    if mode is not VideoMode.MV_HEVC:
+        raise VideoRoutePreflightError("A matching 4K copy requires MV-HEVC output.")
+    if start_stage is not Stage.CREATE_MKV:
+        raise VideoRoutePreflightError("Start the 4K HDR route at stage 1 so both copies can be checked together.")
+    if swap_eyes or frame_rate or resolution or crop or upscale or software_encoder:
+        raise VideoRoutePreflightError(
+            "4K HDR conversion preserves the reference picture. Turn off eye swapping, frame-rate, "
+            "resolution, crop, FX upscale and software-encoder overrides."
+        )
+
+
+def require_uhd_encoder(capability: DirectMVHEVCCapability) -> None:
+    if not capability.supported:
+        raise VideoRoutePreflightError("4K HDR conversion requires the direct MV-HEVC encoder on this Mac.")
+
+
+def uhd_video_route(reference: Path, bitrate: int | None, quality: float | None) -> ResolvedVideoRoute:
+    return ResolvedVideoRoute(
+        intent=VideoRouteIntent.AUTOMATIC,
+        selected=VideoRouteKind.UHD_HDR_MV_HEVC,
+        reason="matching_uhd_reference_requested",
+        output_mode=VideoMode.MV_HEVC,
+        uhd_reference=reference,
+        direct_bitrate_mbps=bitrate,
+        direct_quality=quality,
+        requested_settings=VideoRouteSettings(
+            route=VideoRouteKind.UHD_HDR_MV_HEVC, direct_bitrate_mbps=bitrate, direct_quality=quality
+        ),
+    )
+
+
 def legacy_video_route() -> ResolvedVideoRoute:
+    if config.uhd_reference is not None:
+        validate_uhd_route_options(
+            mode=config.video_mode,
+            start_stage=config.start_stage,
+            swap_eyes=config.swap_eyes,
+            frame_rate=config.frame_rate,
+            resolution=config.resolution,
+            crop=config.crop_black_bars,
+            upscale=config.fx_upscale,
+            software_encoder=config.software_encoder,
+        )
+        if config.preview_range is not None or config.source_folder_path is not None:
+            raise VideoRoutePreflightError("Use one full 3D movie with --source when adding a matching 4K copy.")
+        require_uhd_encoder(probe_direct_mv_hevc_capability())
+        return uhd_video_route(config.uhd_reference, None, AUTOMATIC_DIRECT_UPSCALE_QUALITY)
     if config.start_stage.value > Stage.COMBINE_TO_MV_HEVC.value:
         return ResolvedVideoRoute(
             intent=VideoRouteIntent.EXISTING_ARTIFACT,

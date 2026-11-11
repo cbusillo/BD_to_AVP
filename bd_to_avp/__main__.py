@@ -2,6 +2,7 @@ import signal
 
 from bd_to_avp.modules.process import CLIBatchProcessingError, start_process
 from bd_to_avp.modules.config import config
+from bd_to_avp.modules.video_route import VideoRoutePreflightError
 from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr
 
 
@@ -37,7 +38,7 @@ def main() -> None:
     else:
         try:
             start_process(cli_batch=True)
-        except CLIBatchProcessingError as error:
+        except (CLIBatchProcessingError, VideoRoutePreflightError) as error:
             raise SystemExit(str(error)) from None
 
 
