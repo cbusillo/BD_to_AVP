@@ -28,6 +28,7 @@ from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.uhd_color import TitleColorMap, read_hdr_reference_info
 from tests.test_uhd_route import hdr_probe
 from bd_to_avp.modules.video_route import uhd_video_route
+from bd_to_avp.modules.video import generate_native_mvc_splitter_command
 from scripts.build_mv_hevc_encoder_macos import build_encoder
 
 
@@ -84,10 +85,32 @@ def test_real_mvc_to_hdr_main10_copies_reference_mastering_metadata(tmp_path: Pa
     coefficients[:3] = np.eye(3, dtype=np.float32) * 0.5
     coefficients[-1] = 0.1
     source = Path(__file__).resolve().parents[1] / "macos/BDToAVPPlayerTests/Fixtures/edge264-mvc-display-ordering.264"
-    _, source_count = collect_stereo_samples(
-        source, (0, 2, 6), workspace=tmp_path, mvc_producer=None, run_context=None, cancellation_event=None
+    indices = (0, 2, 6)
+    samples, source_count = collect_stereo_samples(
+        source, indices, workspace=tmp_path, mvc_producer=None, run_context=None, cancellation_event=None
     )
     assert info.frame_count == source_count
+    decoded = subprocess.run(generate_native_mvc_splitter_command(source), capture_output=True, check=True, timeout=30)
+    for eye in range(2):
+        graph = ffmpeg.input("pipe:0", format="yuv4mpegpipe").video.filter(
+            "crop", "iw/2", "ih", "iw/2" if eye else 0, 0
+        )
+        graph = graph.filter("scale", 960, 540, flags="lanczos", in_color_matrix="bt709", in_range="tv", out_range="pc")
+        expected_decode = subprocess.run(
+            ffmpeg.compile(
+                ffmpeg.output(graph, "pipe:1", format="rawvideo", pix_fmt="rgb48le", fps_mode="passthrough"),
+                cmd=str(config.FFMPEG_PATH),
+            ),
+            input=decoded.stdout,
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        expected = np.frombuffer(expected_decode.stdout, "<u2").reshape(source_count, 540, 960, 3).astype(
+            np.float32
+        ) / np.float32(65535)
+        for position, index in enumerate(indices):
+            assert np.array_equal(samples[position][eye], expected[index])
     plan = UHDConversionPlan(
         reference, info, 0, TitleColorMap(coefficients, {}), np.eye(2, 3, dtype=np.float32), 0, source_count
     )
@@ -127,7 +150,10 @@ def test_real_mvc_to_hdr_main10_copies_reference_mastering_metadata(tmp_path: Pa
     assert np.max(np.abs(actual - expected)) * 1023 < 1
 
 
-def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_precision(tmp_path: Path) -> None:
+@pytest.mark.parametrize("shift", [3, 4])
+def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_precision(
+    tmp_path: Path, shift: int
+) -> None:
     width, height = 3840, 2160
     source_width, source_height = 32, 18
     left = np.full((4, source_height, source_width), 80, dtype=np.uint8)
@@ -160,7 +186,7 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
     coefficients[:3] = np.eye(3, dtype=np.float32)
     coefficients[-1] = 0.03
     registration = np.eye(2, 3, dtype=np.float32)
-    registration[0, 2] = 1
+    registration[0, 2] = shift / 4
     plan = UHDConversionPlan(
         reference,
         replace(read_hdr_reference_info(hdr_probe()), frame_count=len(left)),
@@ -192,7 +218,7 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
             mask[rows[0] : rows[-1] + 1, columns[0] : columns[-1] + 1] = True
         mask = np.repeat(np.repeat(mask, height // source_height, axis=0), width // source_width, axis=1)
         shifted = np.zeros_like(mask)
-        shifted[:, :-4] = mask[:, 4:]
+        shifted[:, :-shift] = mask[:, shift:]
         return shifted
 
     with normalized.open("rb") as frames:
@@ -209,8 +235,8 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
             left_mask = expected_mask(left[index])
             right_mask = expected_mask(right[index])
             for channel, (plane, original) in enumerate(zip(planes, reference_planes, strict=True)):
-                keep_left = left_mask if channel == 0 else left_mask[::2, ::2]
-                keep_right = right_mask if channel == 0 else right_mask[::2, ::2]
+                keep_left = left_mask if channel == 0 else left_mask[1::2, 1::2]
+                keep_right = right_mask if channel == 0 else right_mask[1::2, 1::2]
                 left_plane, right_plane = np.split(plane, 2, axis=1)
                 assert np.array_equal(left_plane[keep_left], original[keep_left])
                 assert np.all(left_plane[~keep_left] == (64 if channel == 0 else 512))

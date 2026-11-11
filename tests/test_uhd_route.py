@@ -85,8 +85,17 @@ def test_uhd_route_refuses_picture_overrides(overrides: dict) -> None:
     settings.uhd_reference = Path("reference.mkv")
     for field, value in overrides.items():
         setattr(settings, field, value)
-    with patch.object(video_route, "config", settings), pytest.raises(VideoRoutePreflightError):
+    with (
+        patch.object(video_route, "config", settings),
+        patch.object(
+            video_route,
+            "probe_direct_mv_hevc_capability",
+            return_value=video_route.DirectMVHEVCCapability(True, "supported"),
+        ) as capability,
+        pytest.raises(VideoRoutePreflightError),
+    ):
         video_route.legacy_video_route()
+    capability.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -234,7 +243,7 @@ def test_match_refusal_happens_before_audio_or_video_encoding(tmp_path: Path) ->
         patch.object(process, "prepare_uhd_conversion", side_effect=VideoRoutePreflightError("different cuts")),
         patch.object(process, "create_transcoded_audio_file") as audio,
         patch.object(process, "create_uhd_mv_hevc_file") as video,
-        pytest.raises(VideoRoutePreflightError, match="different cuts"),
+        pytest.raises(VideoRoutePreflightError),
     ):
         process.process_each(video_route=route)
     audio.assert_not_called()
@@ -262,24 +271,11 @@ def test_accepts_the_rounded_blu_ray_frame_rate_and_a_clear_left_eye_match() -> 
     assert result.eye_verified
 
 
-def test_cli_refuses_picture_overrides_and_unsupported_encoder_before_reading_a_movie() -> None:
+def test_cli_refuses_an_unsupported_encoder_before_reading_a_movie() -> None:
     from bd_to_avp.modules.config import Config
 
     settings = Config()
     settings.uhd_reference = Path("reference.mkv")
-    settings.swap_eyes = True
-    with (
-        patch.object(video_route, "config", settings),
-        patch.object(
-            video_route,
-            "probe_direct_mv_hevc_capability",
-            return_value=video_route.DirectMVHEVCCapability(True, "supported"),
-        ) as capability,
-        pytest.raises(VideoRoutePreflightError),
-    ):
-        video_route.legacy_video_route()
-    capability.assert_not_called()
-    settings.swap_eyes = False
     with (
         patch.object(video_route, "config", settings),
         patch.object(

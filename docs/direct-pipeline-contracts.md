@@ -10,9 +10,7 @@ The design constraint is DRY: automatic minimum-materialization and
 is whether an eligible stage output is streamed/reused or materialized as a
 named restartable file.
 
-## Current Stage Contracts
-
-### Matched 4K HDR10 Reference
+## Matched 4K HDR10 Reference
 
 `--uhd-reference PATH` selects `uhd_hdr_mv_hevc` for a new conversion at stage 1.
 The 3D source remains the source of audio, subtitles and stereo perspective. The
@@ -35,6 +33,8 @@ each eye on every frame. The left eye receives the 3D left eye's mask, and the
 right eye retains its own mask after color mapping. This follows changing
 letterboxes and stereo floating windows. Black includes up to two luma levels
 above Blu-ray black; internal dark rows or columns are not treated as borders.
+The chroma mask uses its half-resolution grid, so a registered border can round
+by one UHD luma pixel at a chroma boundary.
 
 One cubic RGB standard-to-PQ map is learned per title from alternating matched
 left-eye frames. The other frames are held out. The report includes held-out RMS
@@ -54,6 +54,9 @@ PQ BT.2020 YUV. The encoder receives `--color hdr10`, plus `--mastering-display`
 Missing metadata is left absent, never replaced by invented mastering values.
 Both inputs receive the same exact frame clock before stacking, so rounded
 Matroska timestamps cannot duplicate stereo frames.
+The reference must have continuous constant-rate picture timestamps, as in a
+Blu-ray remux. The sampled windows do not qualify damaged timestamp sequences
+between those windows.
 Dolby Vision enhancement metadata is not copied; the HDR10 base picture is used.
 
 Sampling and encoding use the existing native MVC pipelines, including their splitter retry,
@@ -64,7 +67,9 @@ final-mux paths run afterward using the 3D source. Existing video routes retain
 their selection and processing behavior.
 As on the direct route, damaged MVC units are concealed and reported as a warning.
 
-## `CREATE_MKV`
+## Current Stage Contracts
+
+### `CREATE_MKV`
 
 - Input: disc, ISO/image, MKV, MTS, or M2TS source plus selected title metadata.
 - Output: the selected MKV/MTS/M2TS source in default mode; a copy in the

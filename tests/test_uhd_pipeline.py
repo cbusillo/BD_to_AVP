@@ -14,6 +14,7 @@ from bd_to_avp.modules.uhd_color import TitleColorMap, read_hdr_reference_info
 from bd_to_avp.modules.uhd_match import EyeRegistration, MatchedFrame, source_sample_indices
 from bd_to_avp.modules.video_route import VideoRoutePreflightError
 from tests.test_uhd_route import hdr_probe
+from tests.test_uhd_route import texture, stereo_pair
 
 
 def plan_for_test(reference: Path, frame_count: int = 3000) -> uhd.UHDConversionPlan:
@@ -80,6 +81,37 @@ def test_missing_reference_tail_is_refused_before_color_fit_or_encoding(tmp_path
     ):
         uhd.prepare_uhd_conversion(source, reference, disc, workspace=tmp_path)
     fit.assert_not_called()
+
+
+def test_an_ambiguous_opening_is_rechecked_against_the_later_frame_offset(tmp_path: Path) -> None:
+    plan = plan_for_test(tmp_path / "reference.mkv", 3000)
+    indices = source_sample_indices(plan.info.duration_seconds, plan.info.frame_rate)
+    left = texture()
+    right = stereo_pair(left)
+    unrelated = left[::-1].copy()
+    opening = indices[0]
+
+    def candidates(_reference, _info, window, **_kwargs):
+        if len(window) == 1:
+            return {window.start: unrelated}
+        source_index = min(indices, key=lambda index: abs(index - (window.start + window.stop - 1) / 2))
+        if source_index == opening:
+            return {opening: left, opening + 1: left, opening + 2: unrelated}
+        return {source_index + 1: unrelated, source_index + 2: left}
+
+    with (
+        patch.object(uhd, "read_reference_window", side_effect=candidates),
+        pytest.raises(VideoRoutePreflightError, match="drift"),
+    ):
+        uhd.collect_matched_frames(
+            plan.reference_path,
+            plan.info,
+            indices,
+            [(left, right)] * len(indices),
+            workspace=tmp_path,
+            run_context=None,
+            cancellation_event=None,
+        )
 
 
 def test_failed_encode_removes_a_finalized_movie_and_its_own_lut(tmp_path: Path) -> None:

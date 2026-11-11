@@ -14,6 +14,7 @@ from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_quality_defaults import (
+    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
     AUTOMATIC_GENERATED_MERGE_QUALITY as _AUTOMATIC_GENERATED_MERGE_QUALITY,
 )
@@ -326,8 +327,6 @@ def uhd_video_route(reference: Path, bitrate: int | None, quality: float | None)
 
 def legacy_video_route() -> ResolvedVideoRoute:
     if config.uhd_reference is not None:
-        from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_UPSCALE_QUALITY
-
         validate_uhd_route_options(
             mode=config.video_mode,
             start_stage=config.start_stage,

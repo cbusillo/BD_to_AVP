@@ -118,46 +118,33 @@ def generate_stereo_sample_command(
     counter_path: Path,
 ) -> list[str]:
     selection = "+".join(f"eq(n,{index})" for index in indices)
-    return [
-        str(config.FFMPEG_PATH),
-        "-v",
-        "error",
-        "-y",
-        "-f",
-        "yuv4mpegpipe",
-        "-probesize",
-        "32",
-        "-analyzeduration",
-        "0",
-        "-i",
-        "-",
-        "-map",
-        "0:v:0",
-        "-vf",
-        "scale=1:1:flags=neighbor,format=gray",
-        "-fps_mode",
-        "passthrough",
-        "-c:v",
-        "rawvideo",
-        "-threads:v",
-        "1",
-        "-f",
-        "rawvideo",
-        "-flush_packets",
-        "1",
+    source = ffmpeg.input("pipe:0", f="yuv4mpegpipe", probesize=32, analyzeduration=0).video.filter_multi_output(
+        "split", 2
+    )
+    counter = ffmpeg.output(
+        source[0].filter("scale", 1, 1, flags="neighbor"),
         str(counter_path),
-        "-map",
-        "0:v:0",
-        "-vf",
-        f"select='{selection}',scale=1920:540:flags=lanczos:in_color_matrix=bt709:in_range=tv:out_range=pc",
-        "-fps_mode",
-        "passthrough",
-        "-pix_fmt",
-        "rgb48le",
-        "-f",
-        "rawvideo",
-        str(samples_path),
+        format="rawvideo",
+        pix_fmt="gray",
+        vcodec="rawvideo",
+        **{"threads:v": 1, "fps_mode": "passthrough", "flush_packets": 1},
+    )
+    eyes = source[1].filter("select", selection).filter_multi_output("split", 2)
+    scaled = [
+        eyes[index]
+        .filter("crop", "iw/2", "ih", "iw/2" if index else 0, 0)
+        .filter("scale", *SAMPLE_SIZE, flags="lanczos", in_color_matrix="bt709", in_range="tv", out_range="pc")
+        .filter("format", "rgb48le")
+        for index in range(2)
     ]
+    samples = ffmpeg.output(
+        ffmpeg.filter(scaled, "hstack", inputs=2),
+        str(samples_path),
+        format="rawvideo",
+        pix_fmt="rgb48le",
+        fps_mode="passthrough",
+    )
+    return ffmpeg.compile(ffmpeg.merge_outputs(counter, samples), cmd=str(config.FFMPEG_PATH), overwrite_output=True)
 
 
 def collect_stereo_samples(
@@ -276,7 +263,6 @@ def collect_matched_frames(
     radius = round(float(info.frame_rate) * MAX_OFFSET_SECONDS)
     matched: list[MatchedFrame] = []
     frame_offset = None
-    checked_bins: set[int] = set()
     for source_index, eyes in zip(indices, stereo, strict=True):
         window = range(max(0, source_index - radius), min(info.frame_count, source_index + radius + 1))
         candidates = read_reference_window(
@@ -290,7 +276,33 @@ def collect_matched_frames(
             if frame_offset < 0:
                 raise VideoRoutePreflightError("The 4K copy is missing the beginning of the 3D source.")
         matched.append(result)
-        checked_bins.add(min(SAMPLE_BINS - 1, int(source_index / info.frame_count * SAMPLE_BINS)))
+    if frame_offset is not None:
+        corrected = []
+        for frame in matched:
+            expected_index = frame.source_index + frame_offset
+            if frame.reference_index != expected_index:
+                reference_frame = read_reference_window(
+                    reference,
+                    info,
+                    range(expected_index, expected_index + 1),
+                    workspace=workspace,
+                    run_context=run_context,
+                    cancellation_event=cancellation_event,
+                )[expected_index]
+                left, right = stereo[indices.index(frame.source_index)]
+                corrected_frame = match_frame(
+                    frame.source_index,
+                    left,
+                    right,
+                    {frame.reference_index: frame.reference, expected_index: reference_frame},
+                    expected_offset=frame_offset,
+                )
+                if corrected_frame is None:
+                    continue
+                frame = corrected_frame
+            corrected.append(frame)
+        matched = corrected
+    checked_bins = {min(SAMPLE_BINS - 1, int(frame.source_index / info.frame_count * SAMPLE_BINS)) for frame in matched}
     if (
         frame_offset is None
         or len(checked_bins) < SAMPLE_BINS - 2
