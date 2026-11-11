@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from fractions import Fraction
 from unittest.mock import patch
 
 import numpy as np
@@ -59,11 +60,14 @@ def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(
             missing != "temporal",
         )
 
+    observed_windows = []
+
     def read_window(
         _reference: Path, _info: HDRReferenceInfo, window: range, **_kwargs: object
     ) -> dict[int, FloatImage]:
         center = min(indices, key=lambda index: abs(index + offset - (window.start + window.stop - 1) / 2))
         assert center + offset in window
+        observed_windows.append(window)
         return {}
 
     with (
@@ -71,19 +75,19 @@ def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(
         patch.object(uhd, "match_frame", side_effect=match),
         pytest.raises(VideoRoutePreflightError) if missing is not None else nullcontext(),
     ):
-        matched, offset = uhd.collect_matched_frames(
+        matched, found = uhd.collect_matched_frames(
             plan.reference_path,
             info,
             indices,
             stereo,
             source_frame_count=plan.source_frame_count,
-            initial_offset=offset,
+            initial_offset=offset + 5,
             workspace=tmp_path,
             run_context=None,
             cancellation_event=None,
         )
-        assert len(matched) >= len(indices) - 2
-        assert offset == matched[0].reference_index - matched[0].source_index
+        assert len(matched) == len(observed_windows)
+        assert found == offset
 
 
 def test_missing_reference_tail_is_refused_before_color_fit_or_encoding(tmp_path: Path) -> None:
@@ -97,7 +101,7 @@ def test_missing_reference_tail_is_refused_before_color_fit_or_encoding(tmp_path
             uhd, "collect_stereo_samples", return_value=uhd.StereoSamples([], uhd.PictureExtent(3100, 0, 3100))
         ) as collected,
         patch.object(uhd, "collect_matched_frames", return_value=([], 0)),
-        patch.object(uhd, "reference_picture_start", return_value=0),
+        patch.object(uhd, "reference_picture_extent", return_value=uhd.PictureExtent(3000, 0, 3000)),
         patch.object(uhd, "fit_title_color_map") as fit,
         pytest.raises(VideoRoutePreflightError),
     ):
@@ -175,44 +179,28 @@ def test_failed_encode_removes_only_this_attempts_finalized_movie_and_its_own_lu
 
 
 @pytest.mark.parametrize(
-    "offset,source_start,source_stop,reference_extra,picture",
+    "source,reference,offset,refused",
     [
-        (0, 0, 2980, 0, False),
-        (-96, 100, 3090, 0, False),
-        (96, 0, 2900, 0, False),
-        (0, 0, 3100, 0, True),
-        (-96, 95, 3090, 0, True),
-        (96, 0, 2900, 1, True),
+        ((1000, 10, 1000), (1000, 0, 990), -10, False),
+        ((1000, 9, 1000), (1000, 0, 990), -10, True),
+        ((1000, 0, 990), (1000, 10, 1000), 10, False),
+        ((1000, 0, 991), (1000, 10, 1000), 10, True),
+        ((1000, 0, 990), (1000, 9, 1000), 10, True),
+        ((1000, 10, 1000), (1000, 0, 991), -10, True),
+        ((1200, 200, 1100), (950, 0, 900), -200, False),
+        ((1000, 0, 900), (1400, 300, 1200), 300, False),
+        ((1000, 100, 900), (1000, 90, 920), 0, False),
+        ((1000, 100, 900), (1000, 100, 924), 0, False),
+        ((1000, 100, 900), (1000, 100, 925), 0, True),
+        ((2880, 0, 2760), (3000, 0, 2880), 0, True),
+        ((3000, 0, 2880), (2880, 0, 2760), 0, True),
     ],
 )
-def test_only_black_head_and_tail_differences_are_accepted(
-    tmp_path: Path,
+def test_only_black_padding_passes_and_a_changed_ending_cannot_hide_in_black(
+    source: tuple[int, int, int],
+    reference: tuple[int, int, int],
     offset: int,
-    source_start: int,
-    source_stop: int,
-    reference_extra: int,
-    picture: bool,
+    refused: bool,
 ) -> None:
-    from bd_to_avp.modules import uhd_padding
-
-    plan = plan_for_test(tmp_path / "reference.mkv")
-    source = uhd_padding.PictureExtent(3100, source_start, source_stop)
-    with (
-        patch.object(
-            uhd_padding,
-            "read_reference_luma",
-            side_effect=lambda _path, _info, frames, **kwargs: (
-                [uhd_padding.BLACK_LUMA_8BIT * 4 + reference_extra] * len(frames)
-            ),
-        ),
-        pytest.raises(VideoRoutePreflightError) if picture else nullcontext(),
-    ):
-        uhd_padding.check_black_padding(
-            plan.reference_path,
-            plan.info,
-            source,
-            offset,
-            workspace=tmp_path,
-            run_context=None,
-            cancellation_event=None,
-        )
+    with pytest.raises(VideoRoutePreflightError) if refused else nullcontext():
+        uhd.check_black_padding(uhd.PictureExtent(*source), uhd.PictureExtent(*reference), offset, Fraction(24))

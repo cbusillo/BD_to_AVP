@@ -37,7 +37,7 @@ from bd_to_avp.modules.uhd_padding import (
     check_black_padding,
     picture_extent,
     read_luma_maxima,
-    reference_picture_start,
+    reference_picture_extent,
     reference_window_stream,
 )
 from bd_to_avp.modules.video import (
@@ -348,10 +348,10 @@ def prepare_uhd_conversion(
         run_context=run_context,
         cancellation_event=cancellation_event,
     )
-    beginning = reference_picture_start(
+    reference_extent = reference_picture_extent(
         reference, info, workspace=workspace, run_context=run_context, cancellation_event=cancellation_event
     )
-    initial_offset = beginning - samples.extent.first
+    initial_offset = reference_extent.first - samples.extent.first
     matched, offset = collect_matched_frames(
         reference,
         info,
@@ -363,15 +363,7 @@ def prepare_uhd_conversion(
         run_context=run_context,
         cancellation_event=cancellation_event,
     )
-    check_black_padding(
-        reference,
-        info,
-        samples.extent,
-        offset,
-        workspace=workspace,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-    )
+    check_black_padding(samples.extent, reference_extent, offset, info.frame_rate)
     color_map = fit_title_color_map(
         [aligned_color_pixels(frame) for frame in matched[::2]],
         [aligned_color_pixels(frame) for frame in matched[1::2]],

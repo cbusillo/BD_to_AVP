@@ -252,7 +252,7 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
 
 
 def test_reference_black_scan_keeps_a_single_bright_pixel_and_counts_every_frame(tmp_path: Path) -> None:
-    from bd_to_avp.modules.uhd_padding import read_reference_luma, reference_picture_start
+    from bd_to_avp.modules.uhd_padding import read_reference_luma, reference_picture_extent
 
     tmp_path = tmp_path / "quote'path"
     tmp_path.mkdir()
@@ -260,18 +260,17 @@ def test_reference_black_scan_keeps_a_single_bright_pixel_and_counts_every_frame
     width, height = 32, 18
     with reference.open("wb") as stream:
         stream.write(f"YUV4MPEG2 W{width} H{height} F24000:1001 Ip C420p10\n".encode())
-        for index in range(250):
+        for index in range(500):
             luma = np.full((height, width), 64, dtype="<u2")
             if index == 243:
                 luma[7, 8] = 940
             stream.write(b"FRAME\n")
             stream.write(luma.tobytes())
             stream.write(np.full((height // 2, width // 2), 512, dtype="<u2").tobytes() * 2)
-    info = replace(read_hdr_reference_info(hdr_probe()), frame_count=250)
+    info = replace(read_hdr_reference_info(hdr_probe()), frame_count=500)
     maxima = read_reference_luma(
         reference, info, range(242, 246), workspace=tmp_path, run_context=None, cancellation_event=None
     )
     assert maxima == [64, 940, 64, 64]
-    assert (
-        reference_picture_start(reference, info, workspace=tmp_path, run_context=None, cancellation_event=None) == 243
-    )
+    extent = reference_picture_extent(reference, info, workspace=tmp_path, run_context=None, cancellation_event=None)
+    assert (extent.first, extent.stop) == (243, 244)

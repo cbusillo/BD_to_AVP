@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import tempfile
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 import ffmpeg
@@ -10,6 +11,7 @@ import ffmpeg
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.uhd_color import HDRReferenceInfo
+from bd_to_avp.modules.uhd_match import MAX_OFFSET_SECONDS
 from bd_to_avp.modules.video_route import VideoRoutePreflightError
 from bd_to_avp.runtime import RunContext
 
@@ -22,9 +24,6 @@ class PictureExtent:
     first: int
     stop: int
 
-    def contains_only_black(self, frames: range) -> bool:
-        return not frames or frames.stop <= self.first or frames.start >= self.stop
-
 
 def read_luma_maxima(path: Path, frame_count: int) -> list[int]:
     prefix = "lavfi.signalstats.YMAX="
@@ -34,8 +33,12 @@ def read_luma_maxima(path: Path, frame_count: int) -> list[int]:
     return values
 
 
+def picture_indices(maxima: list[int], black_level: int) -> list[int]:
+    return [index for index, maximum in enumerate(maxima) if maximum > black_level]
+
+
 def picture_extent(maxima: list[int], black_level: int) -> PictureExtent:
-    picture = [index for index, maximum in enumerate(maxima) if maximum > black_level]
+    picture = picture_indices(maxima, black_level)
     if not picture:
         raise VideoRoutePreflightError("The video contains no clear picture to match.")
     return PictureExtent(len(maxima), picture[0], picture[-1] + 1)
@@ -85,15 +88,16 @@ def read_reference_luma(
         return read_luma_maxima(metrics, len(frames))
 
 
-def reference_picture_start(
+def reference_picture_extent(
     reference: Path,
     info: HDRReferenceInfo,
     *,
     workspace: Path,
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
-) -> int:
+) -> PictureExtent:
     chunk = max(1, round(float(info.frame_rate) * 10))
+    first = None
     for start in range(0, info.frame_count, chunk):
         maxima = read_reference_luma(
             reference,
@@ -103,40 +107,38 @@ def reference_picture_start(
             run_context=run_context,
             cancellation_event=cancellation_event,
         )
-        for index, maximum in enumerate(maxima):
-            if maximum > BLACK_LUMA_8BIT * 4:
-                return start + index
-    raise VideoRoutePreflightError("The 4K copy contains no clear picture to match.")
-
-
-def check_black_padding(
-    reference: Path,
-    info: HDRReferenceInfo,
-    source: PictureExtent,
-    offset: int,
-    *,
-    workspace: Path,
-    run_context: RunContext | None,
-    cancellation_event: threading.Event | None,
-) -> None:
-    source_edges = (
-        range(0, min(source.frame_count, max(0, -offset))),
-        range(max(0, min(source.frame_count, info.frame_count - offset)), source.frame_count),
-    )
-    if any(not source.contains_only_black(frames) for frames in source_edges):
-        raise VideoRoutePreflightError("The 4K copy is missing pictures at the beginning or end of the 3D movie.")
-    reference_edges = (
-        range(0, min(info.frame_count, max(0, offset))),
-        range(max(0, min(info.frame_count, source.frame_count + offset)), info.frame_count),
-    )
-    for frames in reference_edges:
+        picture = picture_indices(maxima, BLACK_LUMA_8BIT * 4)
+        if picture:
+            first = start + picture[0]
+            break
+    if first is None:
+        raise VideoRoutePreflightError("The 4K copy contains no clear picture to match.")
+    for stop in range(info.frame_count, first, -chunk):
+        start = max(first, stop - chunk)
         maxima = read_reference_luma(
             reference,
             info,
-            frames,
+            range(start, stop),
             workspace=workspace,
             run_context=run_context,
             cancellation_event=cancellation_event,
         )
-        if any(maximum > BLACK_LUMA_8BIT * 4 for maximum in maxima):
-            raise VideoRoutePreflightError("The 3D source is missing pictures at the beginning or end of the 4K movie.")
+        picture = picture_indices(maxima, BLACK_LUMA_8BIT * 4)
+        if picture:
+            return PictureExtent(info.frame_count, first, start + picture[-1] + 1)
+    raise VideoRoutePreflightError("The 4K picture ending could not be checked.")
+
+
+def check_black_padding(source: PictureExtent, reference: PictureExtent, offset: int, rate: Fraction) -> None:
+    if source.first + offset < 0 or source.stop + offset > reference.frame_count:
+        raise VideoRoutePreflightError("The 4K copy is missing pictures at the beginning or end of the 3D movie.")
+    if reference.first < offset or reference.stop > source.frame_count + offset:
+        raise VideoRoutePreflightError("The 3D source is missing pictures at the beginning or end of the 4K movie.")
+    tolerance = float(rate) * MAX_OFFSET_SECONDS
+    if (
+        abs(reference.first - source.first - offset) > tolerance
+        or abs(reference.stop - source.stop - offset) > tolerance
+    ):
+        raise VideoRoutePreflightError(
+            "The picture begins or ends differently in the two copies. They may be different cuts."
+        )
