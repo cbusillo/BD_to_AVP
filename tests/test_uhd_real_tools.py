@@ -152,7 +152,7 @@ def test_real_mvc_to_hdr_main10_copies_reference_mastering_metadata(tmp_path: Pa
         command = [str(config.FFMPEG_PATH), "-v", "error", "-i", str(path), "-map", "0:v:0"]
         if crop:
             command += ["-vf", "crop=3840:2160:0:0"]
-        result = subprocess.run(
+        hashes = subprocess.run(
             [*command, "-pix_fmt", "yuv420p10le", "-f", "framemd5", "-"],
             check=True,
             capture_output=True,
@@ -160,7 +160,7 @@ def test_real_mvc_to_hdr_main10_copies_reference_mastering_metadata(tmp_path: Pa
             timeout=60,
         )
         return [
-            line.rsplit(",", 1)[-1].strip() for line in result.stdout.splitlines() if line and not line.startswith("#")
+            line.rsplit(",", 1)[-1].strip() for line in hashes.stdout.splitlines() if line and not line.startswith("#")
         ]
 
     assert frame_hashes(normalized, True) == frame_hashes(reference, False)

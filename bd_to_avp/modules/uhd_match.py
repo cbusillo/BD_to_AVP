@@ -95,13 +95,13 @@ def register_eye(reference: FloatImage, eye: FloatImage) -> EyeRegistration | No
     transform = np.asarray(matrix, dtype=np.float64)
     projected = np.hstack((source_points, np.ones((len(good), 1), dtype=np.float32))).astype(np.float64) @ transform.T
     residuals = np.linalg.norm(projected - target_points, axis=1)
-    aligned = residuals <= 1
+    aligned = np.asarray(residuals <= 1, dtype=np.bool_)
     cells = {
         (int(point[0] * 4 / reference.shape[1]), int(point[1] * 3 / reference.shape[0]))
         for point in source_points[aligned]
     }
     return EyeRegistration(
-        transform, len(good), float(np.count_nonzero(aligned) / len(aligned)), float(np.median(residuals)), len(cells)
+        transform, len(good), float(np.count_nonzero(aligned) / aligned.size), float(np.median(residuals)), len(cells)
     )
 
 

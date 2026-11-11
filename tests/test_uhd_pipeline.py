@@ -45,7 +45,7 @@ def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(tmp_p
         registration = EyeRegistration(matrix, 100, 0.99, 0.1, 8)
         return MatchedFrame(
             index,
-            index - (1 if missing == "beginning" else 0),
+            index + (expected_offset or 0) - (1 if missing == "beginning" else 0),
             left,
             left,
             registration,

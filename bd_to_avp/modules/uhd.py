@@ -6,7 +6,6 @@ import tempfile
 import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import BinaryIO
 
 import ffmpeg
 import numpy as np
@@ -126,7 +125,7 @@ def probe_hdr_reference(
 def mvc_sample_stages(
     source: Path,
     indices: tuple[int, ...],
-    destination: BinaryIO,
+    destination: int,
     *,
     mvc_producer: MvcProducer | None,
     damage: Edge264DamageCollector,
@@ -134,10 +133,10 @@ def mvc_sample_stages(
 ) -> tuple[ProcessPipelineStage, ...]:
     stages = []
 
-    def stage(command: list[str | Path], tool_id: str, *, stdout: BinaryIO | None = None) -> ProcessPipelineStage:
+    def stage(arguments: list[str | Path], tool_id: str, *, stdout: int | None = None) -> ProcessPipelineStage:
         return ProcessPipelineStage(
             ProcessSpec(
-                argv=tuple(command),
+                argv=tuple(arguments),
                 tool_id=tool_id,
                 display_name="Check matching 3D frames",
                 merge_stderr=False,
@@ -207,7 +206,9 @@ def collect_stereo_samples(
     damage = Edge264DamageCollector()
     samples = []
     with tempfile.TemporaryFile(dir=workspace) as destination:
-        stages = mvc_sample_stages(source, indices, destination, mvc_producer=mvc_producer, damage=damage, count=count)
+        stages = mvc_sample_stages(
+            source, indices, destination.fileno(), mvc_producer=mvc_producer, damage=damage, count=count
+        )
         try:
             ProcessPipelineRunner().run(stages, run_context=run_context, cancellation_event=cancellation_event)
         except ProcessPipelineError as error:
@@ -283,7 +284,7 @@ def read_reference_window(
             command,
             "Check matching 4K frames",
             tool_id="ffmpeg",
-            stdout=destination,
+            stdout=destination.fileno(),
             run_context=run_context,
             cancellation_event=cancellation_event,
         )
