@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import tempfile
 import threading
-from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import BinaryIO
 
-import cv2
+import ffmpeg
 import numpy as np
 
-from bd_to_avp.modules.command import run_ffprobe
+from bd_to_avp.modules.command import run_ffprobe, run_process_capture
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.uhd_color import (
@@ -18,8 +20,8 @@ from bd_to_avp.modules.uhd_color import (
     SAMPLE_SIZE,
     UHD_SIZE,
     TitleColorMap,
+    color_features,
     fit_title_color_map,
-    pack_hdr_stereo,
     read_hdr_reference_info,
 )
 from bd_to_avp.modules.uhd_match import (
@@ -28,23 +30,31 @@ from bd_to_avp.modules.uhd_match import (
     MatchedFrame,
     aligned_color_pixels,
     check_reference_timing,
+    check_reference_frame_rate,
     match_frame,
     source_sample_indices,
 )
-from bd_to_avp.modules.uhd_stream import FrameStream, binary_process_spec, encode_frame_stream
 from bd_to_avp.modules.video import (
     Edge264DamageCollector,
     MvcProducer,
     generate_direct_mv_hevc_encoder_command,
     generate_mvc_annex_b_stream_command,
     generate_native_mvc_splitter_command,
+    prepare_native_mvc_input,
     remove_direct_mv_hevc_attempt_artifacts,
-    resolve_direct_mv_hevc_artifact,
+    run_direct_mv_hevc_encoding,
+    select_native_pipeline_error,
 )
 from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRoutePreflightError
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.presentation import cli_message
-from bd_to_avp.process_runner import ProcessArtifactProbe, ProcessSpec
+from bd_to_avp.process_runner import (
+    CaptureOverflowPolicy,
+    ProcessPipelineError,
+    ProcessPipelineRunner,
+    ProcessPipelineStage,
+    ProcessSpec,
+)
 from bd_to_avp.runtime import RunContext
 
 
@@ -56,11 +66,13 @@ class UHDConversionPlan:
     color_map: TitleColorMap
     registration: FloatImage
     sampled_frames: int
-    source_duration_seconds: float = 0
+    source_frame_count: int
 
     def report(self) -> dict[str, object]:
         return {
             "sampled_frames": self.sampled_frames,
+            "source_frames": self.source_frame_count,
+            "reference_frames": self.info.frame_count,
             "frame_offset": self.frame_offset,
             "registration": self.registration.tolist(),
             "color_validation": self.color_map.validation,
@@ -69,114 +81,223 @@ class UHDConversionPlan:
         }
 
 
-def mvc_frame_specs(
-    source: Path, *, filters: str, mvc_producer: MvcProducer | None, width: int, height: int
-) -> tuple[ProcessSpec, ...]:
-    specs = []
-    if mvc_producer is not None:
-        specs.append(binary_process_spec(mvc_producer.command, mvc_producer.tool_id))
-    elif source.suffix.lower() in {".mkv", ".mts", ".m2ts"}:
-        specs.append(binary_process_spec(tuple(generate_mvc_annex_b_stream_command(source)), "ffmpeg"))
-    splitter_input = Path("-") if specs else source
-    specs.append(binary_process_spec(tuple(generate_native_mvc_splitter_command(splitter_input)), "edge264"))
-    specs.append(
-        binary_process_spec(
-            (
-                str(config.FFMPEG_PATH),
-                "-v",
-                "error",
-                "-f",
-                "yuv4mpegpipe",
-                "-i",
-                "-",
-                "-vf",
-                f"{filters}scale={width}:{height}:flags=lanczos:in_color_matrix=bt709:in_range=tv:out_range=pc",
-                "-fps_mode",
-                "passthrough",
-                "-pix_fmt",
-                "rgb24",
-                "-f",
-                "rawvideo",
-                "-",
+def probe_video_frame_count(
+    path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+) -> int:
+    result = run_ffprobe(
+        path,
+        select_streams="v:0",
+        count_packets=None,
+        show_entries="stream=nb_read_packets",
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+    )
+    try:
+        count = int(result["streams"][0]["nb_read_packets"])
+        if count <= 0:
+            raise ValueError
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise VideoRoutePreflightError("The video frame count could not be checked before encoding.") from error
+    return count
+
+
+def probe_hdr_reference(
+    path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+) -> HDRReferenceInfo:
+    probe = run_ffprobe(
+        path,
+        select_streams="v:0",
+        read_intervals="%+1",
+        show_frames=None,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+    )
+    info = read_hdr_reference_info(probe)
+    count = probe_video_frame_count(path, run_context=run_context, cancellation_event=cancellation_event)
+    return replace(info, frame_count=count, duration_seconds=count / float(info.frame_rate))
+
+
+def mvc_sample_stages(
+    source: Path,
+    indices: tuple[int, ...],
+    destination: BinaryIO,
+    *,
+    mvc_producer: MvcProducer | None,
+    damage: Edge264DamageCollector,
+    count: list[int],
+) -> tuple[ProcessPipelineStage, ...]:
+    stages = []
+
+    def stage(command: list[str | Path], tool_id: str, *, stdout: BinaryIO | None = None) -> ProcessPipelineStage:
+        return ProcessPipelineStage(
+            ProcessSpec(
+                argv=tuple(command),
+                tool_id=tool_id,
+                display_name="Check matching 3D frames",
+                merge_stderr=False,
+                capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+                stdout=stdout if stdout is not None else subprocess.PIPE,
             ),
-            "ffmpeg",
+            line_handler=observe,
         )
-    )
-    return tuple(specs)
 
+    def observe(stream: object, line: str) -> None:
+        damage.handle_line(stream, line)
+        if line.startswith("frame="):
+            count[0] = int(line.partition("=")[2].strip())
 
-def reference_frame_spec(reference: Path, filters: str, *, sample: bool) -> ProcessSpec:
-    output_filters = (
-        f"{filters}scale={SAMPLE_SIZE[0]}:{SAMPLE_SIZE[1]}:flags=area:in_color_matrix=bt2020:in_range=tv:out_range=pc"
-        if sample
-        else filters.rstrip(",") or "null"
-    )
-    return binary_process_spec(
-        (
-            str(config.FFMPEG_PATH),
-            "-v",
-            "error",
-            "-i",
-            str(reference),
-            "-map",
-            "0:v:0",
-            "-vf",
-            output_filters,
-            "-fps_mode",
-            "passthrough",
-            "-pix_fmt",
-            "rgb48le" if sample else "yuv420p10le",
-            "-f",
-            "rawvideo",
-            "-",
-        ),
-        "ffmpeg",
-    )
+    if mvc_producer is not None:
+        stages.append(stage(list(mvc_producer.command), mvc_producer.tool_id))
+    elif source.suffix.lower() in {*config.MTS_EXTENSIONS, ".mkv"}:
+        stages.append(stage(generate_mvc_annex_b_stream_command(source), "ffmpeg"))
+    splitter_input = Path("-") if stages else prepare_native_mvc_input(source)
+    stages.append(stage(generate_native_mvc_splitter_command(splitter_input), "edge264"))
+    selection = "+".join(f"eq(n,{index})" for index in indices)
+    command: list[str | Path] = [
+        config.FFMPEG_PATH,
+        "-v",
+        "error",
+        "-y",
+        "-f",
+        "yuv4mpegpipe",
+        "-i",
+        "-",
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "copy",
+        "-f",
+        "null",
+        "/dev/null",
+        "-map",
+        "0:v:0",
+        "-vf",
+        f"select='{selection}',scale=1920:540:flags=lanczos:in_color_matrix=bt709:in_range=tv:out_range=pc",
+        "-fps_mode",
+        "passthrough",
+        "-pix_fmt",
+        "rgb48le",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+        "-progress",
+        "pipe:2",
+        "-nostats",
+    ]
+    stages.append(stage(command, "ffmpeg", stdout=destination))
+    return tuple(stages)
 
 
 def collect_stereo_samples(
     source: Path,
     indices: tuple[int, ...],
     *,
+    workspace: Path,
     mvc_producer: MvcProducer | None,
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
-) -> list[tuple[FloatImage, FloatImage]]:
-    selection = "+".join(f"eq(n,{index})" for index in indices)
-    specs = mvc_frame_specs(
-        source,
-        filters=f"select='{selection}',",
-        mvc_producer=mvc_producer,
-        width=SAMPLE_SIZE[0] * 2,
-        height=SAMPLE_SIZE[1],
-    )
-    samples = []
+) -> tuple[list[tuple[FloatImage, FloatImage]], int]:
+    count = [0]
     damage = Edge264DamageCollector()
-    with FrameStream(
-        specs,
-        SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 6,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        line_handler=damage.handle_line,
-        timeout_seconds=900,
-    ) as stream:
+    samples = []
+    with tempfile.TemporaryFile(dir=workspace) as destination:
+        stages = mvc_sample_stages(source, indices, destination, mvc_producer=mvc_producer, damage=damage, count=count)
+        try:
+            ProcessPipelineRunner().run(stages, run_context=run_context, cancellation_event=cancellation_event)
+        except ProcessPipelineError as error:
+            selected = select_native_pipeline_error(error, producer_present=len(stages) == 3)
+            if selected is not None:
+                raise selected from error
+            raise
+        finally:
+            splitter_argument = stages[-2].spec.argv[1]
+            splitter_path = Path(
+                splitter_argument.decode() if isinstance(splitter_argument, bytes) else splitter_argument
+            )
+            if splitter_path not in {source, Path("-")}:
+                splitter_path.unlink(missing_ok=True)
+        destination.seek(0)
         for _ in indices:
-            payload = stream.read()
-            if payload is None:
+            payload = destination.read(SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12)
+            if len(payload) != SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12:
                 raise VideoRoutePreflightError(
-                    "The 3D source ends before its stated runtime. Its cut cannot be checked."
+                    "The 3D source ends before its stated video runtime. Its cut cannot be checked."
                 )
-            image = np.frombuffer(payload, np.uint8).reshape(SAMPLE_SIZE[1], SAMPLE_SIZE[0] * 2, 3).astype(
+            image = np.frombuffer(payload, "<u2").reshape(SAMPLE_SIZE[1], SAMPLE_SIZE[0] * 2, 3).astype(
                 np.float32
-            ) / np.float32(255)
+            ) / np.float32(65535)
             samples.append((image[:, : SAMPLE_SIZE[0]], image[:, SAMPLE_SIZE[0] :]))
-        if stream.read() is not None:
-            raise RuntimeError("The MVC sample reader returned unexpected pictures.")
-    if damage.skipped_count:
-        raise VideoRoutePreflightError(
-            "The 3D source has damaged pictures. A frame-accurate 4K match cannot be checked."
+    if count[0] <= indices[-1]:
+        raise VideoRoutePreflightError("The 3D decoder did not confirm the whole movie's frame count.")
+    return samples, count[0]
+
+
+def read_reference_window(
+    reference: Path,
+    info: HDRReferenceInfo,
+    window: range,
+    *,
+    workspace: Path,
+    run_context: RunContext | None,
+    cancellation_event: threading.Event | None,
+) -> dict[int, FloatImage]:
+    rate = float(info.frame_rate)
+    first_time = info.start_seconds + (window.start - 0.5) / rate
+    last_time = info.start_seconds + (window.stop - 0.5) / rate
+    command = [
+        config.FFMPEG_PATH,
+        "-v",
+        "error",
+        "-ss",
+        f"{max(0, window.start / rate - 1):.9f}",
+        "-t",
+        f"{len(window) / rate + 3:.9f}",
+        "-copyts",
+        "-i",
+        reference,
+        "-map",
+        "0:v:0",
+        "-vf",
+        f"select='between(t,{first_time:.9f},{last_time:.9f})',"
+        "scale=960:540:flags=area:in_color_matrix=bt2020:in_range=tv:out_range=pc",
+        "-fps_mode",
+        "passthrough",
+        "-frames:v",
+        str(len(window) + 1),
+        "-pix_fmt",
+        "rgb48le",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]
+    frames = {}
+    frame_bytes = SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 6
+    with tempfile.TemporaryFile(dir=workspace) as destination:
+        run_process_capture(
+            command,
+            "Check matching 4K frames",
+            tool_id="ffmpeg",
+            stdout=destination,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
         )
-    return samples
+        destination.seek(0)
+        for index in window:
+            payload = destination.read(frame_bytes)
+            if len(payload) != frame_bytes:
+                raise VideoRoutePreflightError("The 4K copy has missing or unevenly timed pictures near its end.")
+            frames[index] = np.frombuffer(payload, "<u2").reshape(SAMPLE_SIZE[1], SAMPLE_SIZE[0], 3).astype(
+                np.float32
+            ) / np.float32(65535)
+        if destination.read(1):
+            raise VideoRoutePreflightError("The 4K copy does not have a constant matching frame rate.")
+    return frames
 
 
 def collect_matched_frames(
@@ -185,57 +306,28 @@ def collect_matched_frames(
     indices: tuple[int, ...],
     stereo: list[tuple[FloatImage, FloatImage]],
     *,
+    workspace: Path,
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
 ) -> tuple[list[MatchedFrame], int]:
     radius = round(float(info.frame_rate) * MAX_OFFSET_SECONDS)
-    last_reference_frame = int(info.duration_seconds * info.frame_rate) - 1
-    windows = [range(max(0, index - radius), min(last_reference_frame, index + radius) + 1) for index in indices]
-    selection = "+".join(f"between(n,{window.start},{window.stop - 1})" for window in windows)
-    selected_indices = sorted({index for window in windows for index in window})
     matched: list[MatchedFrame] = []
     frame_offset = None
     checked_bins: set[int] = set()
-    with FrameStream(
-        (reference_frame_spec(reference, f"select='{selection}',", sample=True),),
-        SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 6,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        timeout_seconds=900,
-    ) as stream:
-        pending: dict[int, FloatImage] = {}
-        position = 0
-        for sample_position, (source_index, eyes, window) in enumerate(zip(indices, stereo, windows, strict=True)):
-            while position < len(selected_indices) and selected_indices[position] < window.stop:
-                payload = stream.read()
-                if payload is None:
-                    raise VideoRoutePreflightError(
-                        "The 4K copy ends before the matching pictures. Choose the same cut."
-                    )
-                pending[selected_indices[position]] = np.frombuffer(payload, "<u2").reshape(
-                    SAMPLE_SIZE[1], SAMPLE_SIZE[0], 3
-                ).astype(np.float32) / np.float32(65535)
-                position += 1
-            candidates = {index: pending[index] for index in window if index in pending}
-            result = match_frame(source_index, eyes[0], eyes[1], candidates, expected_offset=frame_offset)
-            if result is not None:
-                if frame_offset is None and result.temporal_verified:
-                    frame_offset = result.reference_index - source_index
-                    if frame_offset < 0:
-                        raise VideoRoutePreflightError("The 4K copy is missing the beginning of the 3D source.")
-                matched.append(result)
-                checked_bins.add(
-                    min(
-                        SAMPLE_BINS - 1,
-                        int(source_index / float(info.frame_rate) / info.duration_seconds * SAMPLE_BINS),
-                    )
-                )
-            next_start = (
-                windows[sample_position + 1].start if sample_position + 1 < len(windows) else last_reference_frame + 1
-            )
-            pending = {index: image for index, image in pending.items() if index >= next_start}
-        if stream.read() is not None:
-            raise RuntimeError("The 4K sample reader returned unexpected pictures.")
+    for source_index, eyes in zip(indices, stereo, strict=True):
+        window = range(max(0, source_index - radius), min(info.frame_count, source_index + radius + 1))
+        candidates = read_reference_window(
+            reference, info, window, workspace=workspace, run_context=run_context, cancellation_event=cancellation_event
+        )
+        result = match_frame(source_index, eyes[0], eyes[1], candidates, expected_offset=frame_offset)
+        if result is None:
+            continue
+        if frame_offset is None and result.temporal_verified:
+            frame_offset = result.reference_index - source_index
+            if frame_offset < 0:
+                raise VideoRoutePreflightError("The 4K copy is missing the beginning of the 3D source.")
+        matched.append(result)
+        checked_bins.add(min(SAMPLE_BINS - 1, int(source_index / info.frame_count * SAMPLE_BINS)))
     if (
         frame_offset is None
         or len(checked_bins) < SAMPLE_BINS - 2
@@ -256,102 +348,112 @@ def prepare_uhd_conversion(
     reference: Path,
     disc_info: DiscInfo,
     *,
+    workspace: Path,
     mvc_producer: MvcProducer | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
 ) -> UHDConversionPlan:
-    info = read_hdr_reference_info(
-        run_ffprobe(reference, run_context=run_context, cancellation_event=cancellation_event)
-    )
-    check_reference_timing(info, disc_info.frame_rate, disc_info.duration_seconds)
+    info = probe_hdr_reference(reference, run_context=run_context, cancellation_event=cancellation_event)
     if disc_info.resolution != "1920x1080" or disc_info.is_interlaced or disc_info.color_depth != 8:
         raise VideoRoutePreflightError("The 3D source must be progressive 1920 by 1080 Blu-ray MVC video.")
-    indices = source_sample_indices(disc_info.duration_seconds, info.frame_rate)
-    cli_message(
-        "Checking the cut, matching eye and HDR color across the whole film. This decodes both copies once.",
+    check_reference_frame_rate(info, disc_info.frame_rate)
+    duration = min(disc_info.duration_seconds, info.duration_seconds)
+    indices = source_sample_indices(duration, info.frame_rate)
+    cli_message("Checking the cut, matching eye and HDR color across the whole film.", run_context=run_context)
+    stereo, decoded_count = collect_stereo_samples(
+        source,
+        indices,
+        workspace=workspace,
+        mvc_producer=mvc_producer,
         run_context=run_context,
+        cancellation_event=cancellation_event,
     )
-    stereo = collect_stereo_samples(
-        source, indices, mvc_producer=mvc_producer, run_context=run_context, cancellation_event=cancellation_event
+    check_reference_timing(info, disc_info.frame_rate, decoded_count / float(info.frame_rate))
+    matched, offset = collect_matched_frames(
+        reference,
+        info,
+        indices,
+        stereo,
+        workspace=workspace,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
     )
-    matched, frame_offset = collect_matched_frames(
-        reference, info, indices, stereo, run_context=run_context, cancellation_event=cancellation_event
+    if decoded_count + offset > info.frame_count:
+        raise VideoRoutePreflightError("The matching 4K copy is missing the last pictures of the 3D movie.")
+    color_map = fit_title_color_map(
+        [aligned_color_pixels(frame) for frame in matched[::2]],
+        [aligned_color_pixels(frame) for frame in matched[1::2]],
     )
-    training = [aligned_color_pixels(frame) for frame in matched[::2]]
-    validation = [aligned_color_pixels(frame) for frame in matched[1::2]]
-    if info.duration_seconds + 0.1 < disc_info.duration_seconds + frame_offset / float(info.frame_rate):
-        raise VideoRoutePreflightError("The matching 4K copy does not cover the whole 3D movie.")
-    color_map = fit_title_color_map(training, validation)
     registration = np.median(np.stack([frame.registration.matrix for frame in matched]), axis=0).astype(np.float32)
-    plan = UHDConversionPlan(
-        reference, info, frame_offset, color_map, registration, len(matched), disc_info.duration_seconds
-    )
-    cli_message(
-        f"4K match accepted: {len(matched)} frames across the film. "
-        f"HDR color check: {json.dumps(color_map.validation)}",
-        run_context=run_context,
-    )
+    plan = UHDConversionPlan(reference, info, offset, color_map, registration, len(matched), decoded_count)
+    cli_message(f"4K match accepted: {json.dumps(plan.report())}", run_context=run_context)
     return plan
 
 
-def hdr_stereo_frames(
-    source: Path,
-    plan: UHDConversionPlan,
-    *,
-    mvc_producer: MvcProducer | None,
-    stop: threading.Event,
-    run_context: RunContext | None,
-    cancellation_event: threading.Event | None,
-) -> Generator[bytes, None, None]:
-    width, height = UHD_SIZE
-    rate = plan.info.frame_rate
-    yield (
-        f"YUV4MPEG2 W{width * 2} H{height} F{rate.numerator}:{rate.denominator} Ip A0:0 C420p10 XCOLORRANGE=LIMITED\n"
-    ).encode()
-    source_specs = mvc_frame_specs(source, filters="", mvc_producer=mvc_producer, width=3840, height=1080)
-    reference_spec = reference_frame_spec(plan.reference_path, f"trim=start_frame={plan.frame_offset},", sample=False)
+def write_title_lut(color_map: TitleColorMap, path: Path) -> None:
+    axis = np.linspace(0, 1, 65, dtype=np.float32)
+    coordinates = np.stack(np.meshgrid(axis, axis, axis, indexing="ij"), axis=-1)[..., ::-1].reshape(-1, 3)
+    mapped = np.clip(color_features(coordinates) @ color_map.coefficients, 0, 1)
+    with path.open("w") as output:
+        output.write("LUT_3D_SIZE 65\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n")
+        np.savetxt(output, mapped, fmt="%.9f")
+
+
+def generate_uhd_normalizer_command(plan: UHDConversionPlan, lut_path: Path) -> list[str]:
+    rate = str(plan.info.frame_rate)
+    clock = f"1/{plan.info.frame_rate.numerator}"
+    frame_time = f"N*{plan.info.frame_rate.denominator}"
     matrix = plan.registration.copy()
-    matrix[:, 2] *= width / SAMPLE_SIZE[0]
-    damage = Edge264DamageCollector()
-    frame_count = 0
-    with (
-        FrameStream(
-            source_specs,
-            3840 * 1080 * 3,
-            run_context=run_context,
-            cancellation_event=stop,
-            line_handler=damage.handle_line,
-        ) as original,
-        FrameStream(
-            (reference_spec,), width * height * 3, run_context=run_context, cancellation_event=stop
-        ) as reference,
-    ):
-        while True:
-            if cancellation_event is not None and cancellation_event.is_set():
-                stop.set()
-            stereo = original.read()
-            if stereo is None:
-                break
-            left_hdr = reference.read()
-            if left_hdr is None:
-                raise RuntimeError("The 4K copy ended before the 3D source. No movie was completed.")
-            if damage.skipped_count:
-                raise RuntimeError("The 3D decoder found damaged pictures. The matching 4K encode was stopped.")
-            right = np.frombuffer(stereo, np.uint8).reshape(1080, 3840, 3)[:, 1920:].astype(np.float32) / np.float32(
-                255
-            )
-            upscaled = cv2.resize(right, UHD_SIZE, interpolation=cv2.INTER_LANCZOS4)
-            aligned = cv2.warpAffine(
-                upscaled,
-                matrix,
-                UHD_SIZE,
-                flags=cv2.INTER_LANCZOS4 | cv2.WARP_INVERSE_MAP,
-                borderMode=cv2.BORDER_REPLICATE,
-            )
-            yield pack_hdr_stereo(left_hdr, plan.color_map.apply(np.clip(aligned, 0, 1)))
-            frame_count += 1
-        if plan.source_duration_seconds and abs(frame_count / float(rate) - plan.source_duration_seconds) > 1:
-            raise RuntimeError("The 3D decoder ended at a different runtime. No 4K HDR movie was completed.")
+    matrix[:, 2] *= UHD_SIZE[0] / SAMPLE_SIZE[0]
+    corners = np.array([[0, 0, 1], [3840, 0, 1], [0, 2160, 1], [3840, 2160, 1]], dtype=np.float32)
+    registered = corners @ matrix.T
+    needs_registration = np.max(np.abs(registered - corners[:, :2])) > 0.25
+    source = ffmpeg.input("pipe:0", f="yuv4mpegpipe", r=rate)
+    reference = ffmpeg.input(str(plan.reference_path))
+    right = (
+        source.video.filter("crop", "iw/2", "ih", "iw/2", 0)
+        .filter(
+            "scale",
+            *UHD_SIZE,
+            flags="lanczos",
+            in_color_matrix="bt709",
+            in_range="tv",
+            out_range="pc",
+        )
+        .filter("format", "gbrp16le")
+    )
+    if needs_registration:
+        perspective = {
+            f"{coordinate}{index}": float(point[axis])
+            for index, point in enumerate(registered)
+            for axis, coordinate in enumerate(("x", "y"))
+        }
+        right = right.filter("perspective", **perspective, sense="source", interpolation="cubic")
+    right = (
+        right.filter("lut3d", file=str(lut_path), interp="tetrahedral")
+        .filter(
+            "scale",
+            in_range="pc",
+            out_color_matrix="bt2020",
+            out_range="tv",
+        )
+        .filter("format", "yuv420p10le")
+        .filter("settb", expr=clock)
+        .filter("setpts", frame_time)
+    )
+    left = (
+        reference.video.filter("trim", start_frame=plan.frame_offset)
+        .filter("settb", expr=clock)
+        .filter("setpts", frame_time)
+        .filter("format", "yuv420p10le")
+    )
+    packed = ffmpeg.filter([left, right], "hstack", inputs=2, shortest=1)
+    output = ffmpeg.output(
+        packed, "pipe:1", format="yuv4mpegpipe", pix_fmt="yuv420p10le", strict=-1, fps_mode="passthrough"
+    )
+    return [
+        argument if argument != "pipe:0" else "-" for argument in ffmpeg.compile(output, cmd=str(config.FFMPEG_PATH))
+    ]
 
 
 def create_uhd_mv_hevc_file(
@@ -364,38 +466,33 @@ def create_uhd_mv_hevc_file(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    damage_collector: Edge264DamageCollector | None = None,
 ) -> Path:
-    from dataclasses import replace
-
+    lut_path = output.with_suffix(".cube")
+    write_title_lut(plan.color_map, lut_path)
     command = generate_direct_mv_hevc_encoder_command(output, route.direct_bitrate_mbps, route.direct_quality)
-    command.extend(["--color", "hdr10"])
+    command.extend(["--color", "hdr10", "--expected-frames", str(plan.source_frame_count)])
     if plan.info.mastering_display is not None:
         command.extend(["--mastering-display", plan.info.mastering_display])
     if plan.info.max_cll is not None:
         command.extend(["--max-cll", plan.info.max_cll])
-    spec = replace(
-        binary_process_spec(tuple(command), "mv_hevc_encoder"),
-        event_context=observability_context or ObservabilityContext(),
-        artifacts=(
-            ProcessArtifactProbe("stereo_video_output", resolver=lambda: resolve_direct_mv_hevc_artifact(output)),
-        ),
-        artifact_no_growth_timeout_seconds=120,
-    )
     try:
-        encode_frame_stream(
-            spec,
-            lambda stop: hdr_stereo_frames(
-                source,
-                plan,
-                mvc_producer=mvc_producer,
-                stop=stop,
-                run_context=run_context,
-                cancellation_event=cancellation_event,
-            ),
+        run_direct_mv_hevc_encoding(
+            source,
+            output,
+            generate_uhd_normalizer_command(plan, lut_path),
+            command,
+            mvc_producer=mvc_producer,
             run_context=run_context,
             cancellation_event=cancellation_event,
+            observability_context=observability_context,
+            damage_collector=damage_collector,
         )
     except BaseException:
         remove_direct_mv_hevc_attempt_artifacts(output)
+        output.unlink(missing_ok=True)
         raise
+    finally:
+        if not config.keep_files:
+            lut_path.unlink(missing_ok=True)
     return output

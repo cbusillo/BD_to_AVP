@@ -37,13 +37,17 @@ class EyeRegistration:
         )
 
 
-def check_reference_timing(reference: HDRReferenceInfo, source_rate: str, source_duration: float) -> None:
+def check_reference_frame_rate(reference: HDRReferenceInfo, source_rate: str) -> None:
     try:
         rate = Fraction(source_rate)
     except (ValueError, ZeroDivisionError) as error:
         raise VideoRoutePreflightError("The 3D source needs a known frame rate to match a 4K copy.") from error
     if abs(float(rate - reference.frame_rate)) > 0.0001:
         raise VideoRoutePreflightError("The 3D source and 4K copy have different frame rates. Choose matching copies.")
+
+
+def check_reference_timing(reference: HDRReferenceInfo, source_rate: str, source_duration: float) -> None:
+    check_reference_frame_rate(reference, source_rate)
     if source_duration <= 0 or not np.isfinite(source_duration):
         raise VideoRoutePreflightError("The 3D source needs a known runtime to check the cut.")
     if abs(reference.duration_seconds - source_duration) > MAX_OFFSET_SECONDS:
@@ -69,7 +73,10 @@ def source_sample_indices(duration: float, rate: Fraction) -> tuple[int, ...]:
 
 def register_eye(reference: FloatImage, eye: FloatImage) -> EyeRegistration | None:
     def gray(image: FloatImage) -> NDArray[np.uint8]:
-        return np.rint(cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) * 255).clip(0, 255).astype(np.uint8)
+        return np.asarray(
+            cv2.equalizeHist(np.rint(cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) * 255).clip(0, 255).astype(np.uint8)),
+            dtype=np.uint8,
+        )
 
     detector = cv2.SIFT.create(nfeatures=2500)
     reference_keys, reference_descriptors = detector.detectAndCompute(gray(reference), None)
@@ -162,7 +169,9 @@ def match_frame(
         raise VideoRoutePreflightError(
             "The 4K copy matches the right eye. This route needs a copy matching the left eye."
         )
-    if left_match is None or not left_match.is_pixel_aligned:
+    if left_match is None:
+        return None
+    if not left_match.is_pixel_aligned:
         raise VideoRoutePreflightError(
             f"The 4K picture cannot be lined up with the 3D left eye near frame {source_index}. "
             "The scale, rotation, position or framing differs."

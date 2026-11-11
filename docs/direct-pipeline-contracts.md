@@ -20,10 +20,11 @@ reference must be progressive 3840x2160 10-bit PQ BT.2020 video at the same cons
 frame rate and within one second of the 3D source's runtime. Eye swapping, crop,
 resolution, frame-rate, FX upscale and software-encoder overrides are refused.
 
-Before audio or video encoding, the route decodes both whole sources once. It
-checks 50 sampled frame positions spread over 24 sections, including both ends,
-searches a one-second temporal window, and checks left and right eyes with feature
-registration. A consistent frame offset and matching scale, rotation, position
+Before audio or video encoding, the route counts the UHD video access units and
+decodes the whole 3D source once, retaining its decoded frame count. It checks
+50 sampled frame positions spread over 24 sections, including both ends,
+searches a one-second UHD window by original presentation time, and checks left
+and right eyes with contrast-normalized feature registration. A consistent frame offset and matching scale, rotation, position
 and image coverage are required. An ambiguous eye cannot establish the match.
 A right-eye reference, changing edit, reframing, damaged MVC picture or insufficient
 whole-film evidence is refused in plain words. Black or featureless pictures
@@ -34,20 +35,25 @@ One cubic RGB standard-to-PQ map is learned per title from alternating matched
 left-eye frames. The other frames are held out. The report includes held-out RMS
 and 99th-percentile errors, highlight, dark and saturated-color tails, and the
 worst frame. A poor fit stops the conversion. Training error cannot qualify a map.
+Frame counts must show that the UHD covers every source frame before encoding.
 
-The right eye is the actual MVC right eye, Lanczos-upscaled in floating point to
-3840x2160 and mapped through that fixed title map. It contains no warped UHD detail,
+The right eye is the actual MVC right eye, converted directly from decoded YUV to
+16-bit RGB, Lanczos-upscaled to 3840x2160 and mapped through a fixed 65-cube title
+LUT in FFmpeg. It contains no warped UHD detail,
 frame-dependent sharpness switch, or 8-bit MetalFX step. The UHD is decoded as
 10-bit YUV; its left-eye planes are copied unchanged into each packed 10-bit Y4M
 frame. Only the MV-HEVC encode compresses that eye. The right eye uses limited-range
 PQ BT.2020 YUV. The encoder receives `--color hdr10`, plus `--mastering-display` and
 `--max-cll` read from the reference's stream or first decoded frame when present.
 Missing metadata is left absent, never replaced by invented mastering values.
+Both inputs receive the same exact frame clock before stacking, so rounded
+Matroska timestamps cannot duplicate stereo frames.
 Dolby Vision enhancement metadata is not copied; the HDR10 base picture is used.
 
-Decoder and encoder processes use the existing managed process runners. The raw
-frame queues are bounded, cancellation stops all readers and the encoder, and a
-failed conversion removes its incomplete movie. The standard audio, subtitle and
+Encoding uses the existing direct MVC pipeline, including its splitter retry,
+cancellation and process-error selection. The encoder checks the preflight frame
+count; a failed conversion removes its incomplete movie, including a file that
+finalized just before a producer failure. The standard audio, subtitle and
 final-mux paths run afterward using the 3D source. Existing video routes retain
 their selection and processing behavior.
 

@@ -551,19 +551,6 @@ def _process_each(
         excerpt_path = output_folder / f"{disc_info.name}_excerpt.m2ts"
         video_probe_path = excerpt_path
         crop_start_seconds = 0
-    uhd_plan = None
-    if video_route.selected is VideoRouteKind.UHD_HDR_MV_HEVC:
-        assert video_route.uhd_reference is not None
-        uhd_plan = prepare_uhd_conversion(
-            source_media_path,
-            video_route.uhd_reference,
-            disc_info,
-            mvc_producer=mvc_producer,
-            run_context=run_context,
-            cancellation_event=cancellation_event,
-        )
-        if activity:
-            activity.log("4K source match and HDR color accepted", stage="inspect_source", uhd_match=uhd_plan.report())
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("probe_color", "Reading video color depth")
@@ -583,6 +570,20 @@ def _process_each(
         cancellation_event=cancellation_event,
         observability_context=stage_observability_context("probe_color"),
     )
+    uhd_plan = None
+    if video_route.selected is VideoRouteKind.UHD_HDR_MV_HEVC:
+        assert video_route.uhd_reference is not None
+        uhd_plan = prepare_uhd_conversion(
+            source_media_path,
+            video_route.uhd_reference,
+            disc_info,
+            workspace=tmp_folder,
+            mvc_producer=mvc_producer,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+        )
+        if activity:
+            activity.log("4K source match and HDR color accepted", stage="inspect_source", uhd_match=uhd_plan.report())
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("detect_crop", "Checking frame crop parameters")
@@ -687,7 +688,9 @@ def _process_each(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("create_left_right_files"),
+            damage_collector=damage_collector,
         )
+        report_damaged_source(activity, damage_collector, disc_info, "create_left_right_files")
     elif video_route.selected is VideoRouteKind.DIRECT_MV_HEVC:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
             message = (

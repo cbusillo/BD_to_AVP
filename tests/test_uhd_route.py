@@ -12,7 +12,6 @@ import pytest
 from bd_to_avp.modules import process, video_route
 from bd_to_avp.modules.uhd_color import (
     fit_title_color_map,
-    pack_hdr_stereo,
     read_hdr_reference_info,
 )
 from bd_to_avp.modules.uhd_match import check_reference_timing, match_frame, source_sample_indices
@@ -98,6 +97,7 @@ def test_uhd_route_refuses_picture_overrides(overrides: dict) -> None:
             replace(mv_hevc_encoding(), **overrides),
             job_options(),
             uhd_reference=Path("reference.mkv"),
+            capability_probe=lambda: video_route.DirectMVHEVCCapability(True, "supported"),
         )
 
 
@@ -180,27 +180,6 @@ def test_color_fit_scores_only_held_out_frames_and_refuses_highlight_tail_failur
         fit_title_color_map(training, changed)
 
 
-def test_packed_ten_bit_left_eye_is_byte_exact_and_right_eye_has_sub_eight_bit_steps() -> None:
-    width, height = 32, 16
-    rng = np.random.default_rng(7)
-    left_planes = [
-        rng.integers(64, 941, (height, width), dtype="<u2"),
-        rng.integers(64, 961, (height // 2, width // 2), dtype="<u2"),
-        rng.integers(64, 961, (height // 2, width // 2), dtype="<u2"),
-    ]
-    right = np.full((height, width, 3), 0.4, dtype=np.float32)
-    right[:, :, :] += np.arange(width, dtype=np.float32)[None, :, None] / 1023
-    packed = pack_hdr_stereo(b"".join(plane.tobytes() for plane in left_planes), right)
-    values = np.frombuffer(packed[len(b"FRAME\n") :], dtype="<u2")
-    luma = values[: width * height * 2].reshape(height, width * 2)
-    blue = values[width * height * 2 : width * height * 5 // 2].reshape(height // 2, width)
-    red = values[width * height * 5 // 2 :].reshape(height // 2, width)
-    assert np.array_equal(luma[:, :width], left_planes[0])
-    assert np.array_equal(blue[:, : width // 2], left_planes[1])
-    assert np.array_equal(red[:, : width // 2], left_planes[2])
-    assert len(np.unique(luma[:, width:])) > width // 2
-
-
 def test_frame_mastering_metadata_is_copied_when_the_container_has_none() -> None:
     probe = hdr_probe()
     original = read_hdr_reference_info(probe)
@@ -218,7 +197,14 @@ def test_cli_passes_the_reference_to_route_selection() -> None:
     settings = Config()
     with patch.object(sys, "argv", ["bd-to-avp", "--source", "3d.mkv", "--uhd-reference", "uhd.mkv"]):
         settings.parse_args()
-    with patch.object(video_route, "config", settings):
+    with (
+        patch.object(video_route, "config", settings),
+        patch.object(
+            video_route,
+            "probe_direct_mv_hevc_capability",
+            return_value=video_route.DirectMVHEVCCapability(True, "supported"),
+        ),
+    ):
         route = video_route.legacy_video_route()
     assert route.selected is video_route.VideoRouteKind.UHD_HDR_MV_HEVC
     assert route.uhd_reference == Path("uhd.mkv")
@@ -240,6 +226,7 @@ def test_match_refusal_happens_before_audio_or_video_encoding(tmp_path: Path) ->
         patch.object(process.preflight, "verify_runtime_ready"),
         patch.object(process, "get_disc_and_mvc_video_info", return_value=DiscInfo(name="Movie")),
         patch.object(process, "create_mkv_file", return_value=source),
+        patch.object(process, "get_video_color_depth", return_value=8),
         patch.object(process, "prepare_uhd_conversion", side_effect=VideoRoutePreflightError("different cuts")),
         patch.object(process, "create_transcoded_audio_file") as audio,
         patch.object(process, "create_uhd_mv_hevc_file") as video,
@@ -269,3 +256,33 @@ def test_accepts_the_rounded_blu_ray_frame_rate_and_a_clear_left_eye_match() -> 
     assert result is not None
     assert result.reference_index == 100
     assert result.eye_verified
+
+
+def test_cli_refuses_picture_overrides_and_unsupported_encoder_before_reading_a_movie() -> None:
+    from bd_to_avp.modules.config import Config
+
+    settings = Config()
+    settings.uhd_reference = Path("reference.mkv")
+    settings.swap_eyes = True
+    with (
+        patch.object(video_route, "config", settings),
+        patch.object(
+            video_route,
+            "probe_direct_mv_hevc_capability",
+            return_value=video_route.DirectMVHEVCCapability(True, "supported"),
+        ) as capability,
+        pytest.raises(VideoRoutePreflightError),
+    ):
+        video_route.legacy_video_route()
+    capability.assert_not_called()
+    settings.swap_eyes = False
+    with (
+        patch.object(video_route, "config", settings),
+        patch.object(
+            video_route,
+            "probe_direct_mv_hevc_capability",
+            return_value=video_route.DirectMVHEVCCapability(False, "unsupported"),
+        ),
+        pytest.raises(VideoRoutePreflightError),
+    ):
+        video_route.legacy_video_route()

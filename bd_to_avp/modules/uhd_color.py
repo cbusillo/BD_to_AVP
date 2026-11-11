@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any
 
-import cv2
 import numpy as np
 from numpy.typing import NDArray
 
@@ -25,6 +24,8 @@ class HDRReferenceInfo:
     duration_seconds: float
     mastering_display: str | None
     max_cll: str | None
+    frame_count: int = 0
+    start_seconds: float = 0
 
 
 def read_hdr_reference_info(probe: dict[str, Any]) -> HDRReferenceInfo:
@@ -102,7 +103,16 @@ def read_hdr_reference_info(probe: dict[str, Any]) -> HDRReferenceInfo:
                 max_cll = f"{maximum_content},{maximum_average}"
     except (KeyError, ValueError, ZeroDivisionError, TypeError) as error:
         raise VideoRoutePreflightError("The 4K copy contains invalid HDR mastering metadata.") from error
-    return HDRReferenceInfo(frame_rate, duration, mastering_display, max_cll)
+    first_frame_time = (frames[0] if frames else {}).get("best_effort_timestamp_time", stream.get("start_time", "0"))
+    try:
+        if not isinstance(first_frame_time, (str, int, float)):
+            raise ValueError
+        start = float(first_frame_time)
+        if not np.isfinite(start):
+            raise ValueError
+    except (ValueError, TypeError) as error:
+        raise VideoRoutePreflightError("The 4K copy has no usable starting picture time.") from error
+    return HDRReferenceInfo(frame_rate, duration, mastering_display, max_cll, start_seconds=start)
 
 
 def color_features(pixels: FloatImage) -> FloatImage:
@@ -178,36 +188,3 @@ def fit_title_color_map(
             "in 10-bit levels). Choose copies with matching color grades."
         )
     return TitleColorMap(coefficients.astype(np.float32), report)
-
-
-def rgb_to_hdr_yuv420(image: FloatImage) -> tuple[NDArray[np.uint16], ...]:
-    red, green, blue = (image[:, :, index] for index in range(3))
-    luma = 0.2627 * red + 0.6780 * green + 0.0593 * blue
-    chroma_blue = cv2.resize(
-        (blue - luma) / 1.8814, (image.shape[1] // 2, image.shape[0] // 2), interpolation=cv2.INTER_AREA
-    )
-    chroma_red = cv2.resize(
-        (red - luma) / 1.4746, (image.shape[1] // 2, image.shape[0] // 2), interpolation=cv2.INTER_AREA
-    )
-    return (
-        np.rint(64 + 876 * luma).clip(64, 940).astype("<u2"),
-        np.rint(512 + 896 * chroma_blue).clip(64, 960).astype("<u2"),
-        np.rint(512 + 896 * chroma_red).clip(64, 960).astype("<u2"),
-    )
-
-
-def pack_hdr_stereo(left_yuv: bytes, right_rgb: FloatImage) -> bytes:
-    height, width = right_rgb.shape[:2]
-    left = np.frombuffer(left_yuv, dtype="<u2")
-    expected_samples = width * height * 3 // 2
-    if left.size != expected_samples:
-        raise ValueError("The HDR left eye has an incomplete frame.")
-    left_planes = (
-        left[: width * height].reshape(height, width),
-        left[width * height : width * height * 5 // 4].reshape(height // 2, width // 2),
-        left[width * height * 5 // 4 :].reshape(height // 2, width // 2),
-    )
-    return b"FRAME\n" + b"".join(
-        np.concatenate((left_plane, right_plane), axis=1).tobytes()
-        for left_plane, right_plane in zip(left_planes, rgb_to_hdr_yuv420(right_rgb), strict=True)
-    )

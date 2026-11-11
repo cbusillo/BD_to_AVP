@@ -186,8 +186,7 @@ def resolve_video_route(
                 observability_context=observability_context,
             )
         )
-        if not capability.supported:
-            raise VideoRoutePreflightError("4K HDR conversion requires the direct MV-HEVC encoder on this Mac.")
+        require_uhd_encoder(capability)
         bitrate, quality = _resolve_direct_rate_control(video.direct_bitrate, direct_quality=video.direct_quality)
         return uhd_video_route(uhd_reference, bitrate, quality)
 
@@ -332,6 +331,11 @@ def validate_uhd_route_options(
         )
 
 
+def require_uhd_encoder(capability: DirectMVHEVCCapability) -> None:
+    if not capability.supported:
+        raise VideoRoutePreflightError("4K HDR conversion requires the direct MV-HEVC encoder on this Mac.")
+
+
 def uhd_video_route(reference: Path, bitrate: int | None, quality: float | None) -> ResolvedVideoRoute:
     return ResolvedVideoRoute(
         intent=VideoRouteIntent.AUTOMATIC,
@@ -361,6 +365,9 @@ def legacy_video_route() -> ResolvedVideoRoute:
             upscale=config.fx_upscale,
             software_encoder=config.software_encoder,
         )
+        if config.preview_range is not None or config.source_folder_path is not None:
+            raise VideoRoutePreflightError("Use one full 3D movie with --source when adding a matching 4K copy.")
+        require_uhd_encoder(probe_direct_mv_hevc_capability())
         return uhd_video_route(config.uhd_reference, None, AUTOMATIC_DIRECT_UPSCALE_QUALITY)
     if config.start_stage.value > Stage.COMBINE_TO_MV_HEVC.value:
         return ResolvedVideoRoute(
