@@ -49,14 +49,6 @@ def check_reference_frame_rate(reference: HDRReferenceInfo, source_rate: str) ->
         raise VideoRoutePreflightError("The 3D source and 4K copy have different frame rates. Choose matching copies.")
 
 
-def check_reference_timing(reference: HDRReferenceInfo, source_rate: str, source_duration: float) -> None:
-    check_reference_frame_rate(reference, source_rate)
-    if source_duration <= 0 or not np.isfinite(source_duration):
-        raise VideoRoutePreflightError("The 3D source needs a known runtime to check the cut.")
-    if abs(reference.duration_seconds - source_duration) > MAX_OFFSET_SECONDS:
-        raise VideoRoutePreflightError("The 3D source and 4K copy have different runtimes and may be different cuts.")
-
-
 def source_sample_indices(duration: float, rate: Fraction) -> tuple[int, ...]:
     frame_count = int(duration * rate)
     if frame_count < SAMPLE_BINS * 4:

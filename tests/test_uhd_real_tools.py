@@ -86,9 +86,10 @@ def test_real_mvc_to_hdr_main10_copies_reference_mastering_metadata(tmp_path: Pa
     coefficients[-1] = 0.1
     source = Path(__file__).resolve().parents[1] / "macos/BDToAVPPlayerTests/Fixtures/edge264-mvc-display-ordering.264"
     indices = (0, 2, 6)
-    samples, source_count = collect_stereo_samples(
+    collected = collect_stereo_samples(
         source, indices, workspace=tmp_path, mvc_producer=None, run_context=None, cancellation_event=None
     )
+    samples, source_count = collected.eyes, collected.extent.frame_count
     assert info.frame_count == source_count
     decoded = subprocess.run(generate_native_mvc_splitter_command(source), capture_output=True, check=True, timeout=30)
     for eye in range(2):
@@ -150,9 +151,9 @@ def test_real_mvc_to_hdr_main10_copies_reference_mastering_metadata(tmp_path: Pa
     assert np.max(np.abs(actual - expected)) * 1023 < 1
 
 
-@pytest.mark.parametrize("shift", [3, 4])
+@pytest.mark.parametrize("shift,padding", [(3, "none"), (4, "none"), (3, "head"), (3, "tail"), (3, "reference")])
 def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_precision(
-    tmp_path: Path, shift: int
+    tmp_path: Path, shift: int, padding: str
 ) -> None:
     width, height = 3840, 2160
     source_width, source_height = 32, 18
@@ -164,6 +165,9 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
     left[2] = 16
     left[2, 7, 8] = 80
     left[3] = right[3] = 16
+    if padding == "head":
+        left = np.concatenate((np.full_like(left[:2], 16), left))
+        right = np.concatenate((np.full_like(right[:2], 16), right))
     source = bytearray(f"YUV4MPEG2 W{source_width * 2} H{source_height} F24000:1001 Ip C420jpeg\n".encode())
     for left_y, right_y in zip(left, right, strict=True):
         source.extend(b"FRAME\n")
@@ -176,9 +180,10 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
         rng.integers(64, 961, (height // 2, width // 2), dtype="<u2"),
     )
     reference = tmp_path / "reference.y4m"
+    reference_count = 4 + (4 if padding == "reference" else -1 if padding == "tail" else 0)
     with reference.open("wb") as destination:
         destination.write(f"YUV4MPEG2 W{width} H{height} F24000:1001 Ip C420p10\n".encode())
-        for _ in left:
+        for _ in range(reference_count):
             destination.write(b"FRAME\n")
             for plane in reference_planes:
                 destination.write(plane.tobytes())
@@ -189,8 +194,8 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
     registration[0, 2] = shift / 4
     plan = UHDConversionPlan(
         reference,
-        replace(read_hdr_reference_info(hdr_probe()), frame_count=len(left)),
-        0,
+        replace(read_hdr_reference_info(hdr_probe()), frame_count=reference_count),
+        -2 if padding == "head" else 2 if padding == "reference" else 0,
         TitleColorMap(coefficients, {}),
         registration,
         0,
@@ -230,7 +235,7 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
                 np.frombuffer(frames.read(height * width), "<u2").reshape(height // 2, width),
                 np.frombuffer(frames.read(height * width), "<u2").reshape(height // 2, width),
             )
-            if index == 0:
+            if index == (2 if padding == "head" else 0):
                 assert len(np.unique(planes[0][height // 2, width + 200 : -200])) > 300
             left_mask = expected_mask(left[index])
             right_mask = expected_mask(right[index])
@@ -243,3 +248,24 @@ def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_
                 assert np.all(right_plane[~keep_right] == (64 if channel == 0 else 512))
         assert not frames.read(1)
     normalized.unlink()
+
+
+def test_reference_black_scan_keeps_a_single_bright_pixel_and_counts_every_frame(tmp_path: Path) -> None:
+    from bd_to_avp.modules.uhd_padding import read_reference_luma
+
+    reference = tmp_path / "black-edges.y4m"
+    width, height = 32, 18
+    with reference.open("wb") as stream:
+        stream.write(f"YUV4MPEG2 W{width} H{height} F24000:1001 Ip C420p10\n".encode())
+        for index in range(6):
+            luma = np.full((height, width), 64, dtype="<u2")
+            if index == 3:
+                luma[7, 8] = 940
+            stream.write(b"FRAME\n")
+            stream.write(luma.tobytes())
+            stream.write(np.full((height // 2, width // 2), 512, dtype="<u2").tobytes() * 2)
+    info = replace(read_hdr_reference_info(hdr_probe()), frame_count=6)
+    maxima = read_reference_luma(
+        reference, info, range(2, 6), workspace=tmp_path, run_context=None, cancellation_event=None
+    )
+    assert maxima == [64, 940, 64, 64]

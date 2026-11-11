@@ -17,7 +17,7 @@ from bd_to_avp.modules.uhd_match import (
     EyeRegistration,
     MatchedFrame,
     aligned_color_pixels,
-    check_reference_timing,
+    check_reference_frame_rate,
     match_frame,
     source_sample_indices,
 )
@@ -126,10 +126,9 @@ def test_copies_mastering_and_content_light_metadata_in_encoder_units() -> None:
     assert missing.max_cll is None
 
 
-@pytest.mark.parametrize("rate,duration,words", [("24", 120, "frame rates"), ("24000/1001", 125, "different cuts")])
-def test_refuses_wrong_rate_or_runtime(rate: str, duration: float, words: str) -> None:
-    with pytest.raises(VideoRoutePreflightError, match=words):
-        check_reference_timing(read_hdr_reference_info(hdr_probe()), rate, duration)
+def test_refuses_wrong_frame_rate() -> None:
+    with pytest.raises(VideoRoutePreflightError, match="frame rates"):
+        check_reference_frame_rate(read_hdr_reference_info(hdr_probe()), "24")
 
 
 def test_sampling_spans_the_film_including_both_tails() -> None:
@@ -262,7 +261,7 @@ def test_decoded_frame_color_tags_qualify_hdr_when_container_omits_them() -> Non
 
 
 def test_accepts_the_rounded_blu_ray_frame_rate_and_a_clear_left_eye_match() -> None:
-    check_reference_timing(read_hdr_reference_info(hdr_probe()), "23.976", 120)
+    check_reference_frame_rate(read_hdr_reference_info(hdr_probe()), "23.976")
     left = texture()
     right = stereo_pair(left)
     result = match_frame(100, left, right, {99: np.roll(left, 5, axis=0), 100: left}, expected_offset=0)
