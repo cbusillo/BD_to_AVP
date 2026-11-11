@@ -192,11 +192,11 @@ def applied_uhd_registration(registration: FloatImage) -> FloatImage:
     return registration
 
 
-def aligned_color_pixels(frame: MatchedFrame, registration: FloatImage | None = None) -> tuple[FloatImage, FloatImage]:
+def aligned_color_pixels(frame: MatchedFrame, registration: FloatImage) -> tuple[FloatImage, FloatImage]:
     width, height = SAMPLE_SIZE
     aligned = cv2.warpAffine(
         frame.left,
-        registration if registration is not None else frame.registration.matrix,
+        registration,
         (width, height),
         flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
     )

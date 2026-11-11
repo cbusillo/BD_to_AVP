@@ -19,6 +19,7 @@ from bd_to_avp.modules.uhd import (
     collect_stereo_samples,
     create_uhd_mv_hevc_file,
     generate_uhd_normalizer_command,
+    generate_stereo_sample_command,
     probe_hdr_reference,
     write_title_lut,
 )
@@ -274,3 +275,30 @@ def test_reference_black_scan_keeps_a_single_bright_pixel_and_counts_every_frame
     assert maxima == [64, 940, 64, 64]
     extent = reference_picture_extent(reference, info, workspace=workspace, run_context=None, cancellation_event=None)
     assert (extent.first, extent.stop) == (243, 244)
+
+
+def test_full_stereo_black_scan_counts_a_bright_pixel_in_either_eye(tmp_path: Path) -> None:
+    from bd_to_avp.modules.uhd_padding import BLACK_LUMA_8BIT, read_luma_maxima, picture_extent
+
+    width, height = 64, 18
+    frames = np.full((4, height, width), 16, dtype=np.uint8)
+    frames[1, 7, width - 3] = 235
+    frames[2, 7, 3] = 235
+    source = bytearray(f"YUV4MPEG2 W{width} H{height} F24000:1001 Ip C420jpeg\n".encode())
+    for luma in frames:
+        source.extend(b"FRAME\n")
+        source.extend(luma.tobytes())
+        source.extend(np.full((height // 2, width // 2), 128, dtype=np.uint8).tobytes() * 2)
+    samples, counter, metrics = (tmp_path / name for name in ("samples.rgb48", "count.raw", "luma.txt"))
+    subprocess.run(
+        generate_stereo_sample_command(tuple(range(len(frames))), samples, counter, metrics),
+        input=source,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    assert counter.stat().st_size == len(frames)
+    maxima = read_luma_maxima(metrics, len(frames))
+    assert maxima == [16, 235, 235, 16]
+    extent = picture_extent(maxima, BLACK_LUMA_8BIT)
+    assert (extent.first, extent.stop) == (1, 3)

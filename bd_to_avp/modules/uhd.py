@@ -258,7 +258,7 @@ def collect_matched_frames(
     stereo: list[tuple[FloatImage, FloatImage]],
     *,
     source_frame_count: int,
-    initial_offset: int = 0,
+    initial_offset: int,
     workspace: Path,
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
@@ -364,7 +364,7 @@ def prepare_uhd_conversion(
         run_context=run_context,
         cancellation_event=cancellation_event,
     )
-    check_black_padding(samples.extent, reference_extent, offset, info.frame_rate)
+    check_black_padding(samples.extent, reference_extent, offset)
     registration = applied_uhd_registration(
         np.median(np.stack([frame.registration.matrix for frame in matched]), axis=0).astype(np.float32)
     )

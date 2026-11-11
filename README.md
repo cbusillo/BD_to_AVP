@@ -36,15 +36,10 @@ The default MV-HEVC videos play in Shiny 3D Cinema, or directly in the Files or
 [Screenlit](https://apps.apple.com/us/app/screenlit/id6499478407) app on the AVP.
 See the feasibility record before choosing experimental AV1 output.
 
-For a matching 3D Blu-ray source and 4K HDR10 copy, the CLI can create a 4K HDR
-spatial movie with `bd-to-avp --source 3d.mkv --uhd-reference 4k.mkv`. It checks
-the cut, left-eye match and HDR color across the whole film before encoding.
-The 4K copy supplies the left eye. Only rows or columns masked in the 3D release
-are changed to black; the rest of that eye is unchanged before compression.
-The real 3D right eye is upscaled and mapped to HDR. See the [pipeline contract](docs/direct-pipeline-contracts.md#matched-4k-hdr10-reference)
-for accepted inputs and refusal conditions. Head or tail differences made only
-of black frames are accepted. The 3D timeline is kept, with black in both eyes
-where the 4K copy has no frame. Differences containing picture are refused.
+For a matching 3D Blu-ray source and 4K HDR10 copy, run
+`bd-to-avp --source 3d.mkv --uhd-reference 4k.mkv`. See the
+[pipeline contract](docs/direct-pipeline-contracts.md#matched-4k-hdr10-reference)
+for qualification, the approved 3D mask and black-only padding.
 
 ## Watching on Vision Pro
 

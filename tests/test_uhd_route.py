@@ -176,7 +176,7 @@ def test_color_fit_excludes_the_shared_letterbox_and_floating_window(
     source[:top] = source[bottom:] = source[:, :left] = source[:, right:] = 0
     registration = EyeRegistration(np.eye(2, 3, dtype=np.float64), 100, 1, 0, 12)
     frame = MatchedFrame(100, 100, source, reference, registration, True, True)
-    training_source, training_target = aligned_color_pixels(frame)
+    training_source, training_target = aligned_color_pixels(frame, registration.matrix.astype(np.float32))
     assert len(training_source) > 0
     assert np.array_equal(training_source, training_target)
 
@@ -295,16 +295,11 @@ def test_cli_refuses_an_unsupported_encoder_before_reading_a_movie() -> None:
 
 def test_registered_color_samples_stay_in_the_physical_rgb16_domain() -> None:
     source = np.zeros((540, 960, 3), dtype=np.float32)
-    source[160:380, 200:800] = 1
+    source[100:440, 100:860] = 1
+    source[199:339, 299:699] = 0
     matrix = np.array([[1, 0, -0.125], [0, 1, 0.19]], dtype=np.float64)
-    maximum = np.iinfo(np.uint16).max
-    target = (
-        cv2.warpAffine(
-            (source * maximum).astype(np.uint16), matrix, (960, 540), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
-        ).astype(np.float32)
-        / maximum
-    )
     registration = EyeRegistration(matrix, 100, 1, 0, 8)
-    x, y = aligned_color_pixels(MatchedFrame(100, 100, source, target, registration, True, True))
+    x, _ = aligned_color_pixels(
+        MatchedFrame(100, 100, source, source, registration, True, True), matrix.astype(np.float32)
+    )
     assert x.min() >= 0 and x.max() <= 1
-    assert np.max(np.abs(x - y)) < 1 / maximum

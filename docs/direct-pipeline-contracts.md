@@ -23,8 +23,8 @@ Before audio or video encoding, the route counts the UHD video access units and
 decodes the whole 3D source once, retaining its decoded frame count and the
 full-resolution maximum luma of every stereo frame. It checks
 50 sampled frame positions spread over 24 sections, including both ends,
-uses the first picture in each video to center the initial one-second UHD search
-window by original presentation time, then follows the verified frame offset, and checks left
+uses the first picture in each video to center an initial UHD search over one
+second on either side by original presentation time, then follows the verified frame offset, and checks left
 and right eyes with contrast-normalized feature registration. A consistent frame offset and matching scale, rotation, position
 and image coverage are required. An ambiguous eye cannot establish the match.
 A right-eye reference, changing edit, reframing or insufficient
@@ -42,19 +42,19 @@ by one UHD luma pixel at a chroma boundary.
 One cubic RGB standard-to-PQ map is learned per title from alternating matched
 left-eye frames. The other frames are held out. The report includes held-out RMS
 and 99th-percentile errors, highlight, dark and saturated-color tails, and the
-worst frame. A poor fit stops the conversion. Training error cannot qualify a map. Matched credits and other narrow pictures
-remain in the fit and held-out validation. Their common picture bounds exclude
+worst frame. A poor fit stops the conversion. Training error cannot qualify a map.
+Matched credits and other narrow pictures remain in the fit and held-out validation. Their common picture bounds exclude
 borders while retaining dark background and bright detail. Calibration uses the
-same steady registration, identity fast path and bilinear sampling as encoding,
-so interpolation noise is not mistaken for a color difference.
+same steady matrix and identity decision as encoding. Both paths use bilinear
+registration at their respective image resolutions.
 Before encoding, unmatched head and tail ranges in either input are checked at
 full resolution. A bright detail in either 3D eye prevents a frame being counted
 as black. A difference containing picture is refused. Black-only padding may
 differ by more than one second. The output keeps the 3D frame count and timeline.
-The visible picture boundaries must agree within the existing one-second cut
-tolerance after applying the verified offset. This keeps a changed ending from
-hiding before a black tail. Extra UHD padding is trimmed and missing UHD frames
-are filled with limited-range black in both output eyes. Audio and subtitles retain the 3D timeline.
+The detected picture boundaries must agree after applying the verified offset.
+A short picture addition cannot hide inside a timing allowance or before a black
+tail. Extra UHD padding is trimmed and missing UHD frames are filled with
+limited-range black in both output eyes. Audio and subtitles retain the 3D timeline.
 
 The right eye is the actual MVC right eye, converted directly from decoded YUV to
 16-bit RGB, Lanczos-upscaled to 3840x2160 and mapped through a fixed 65-cube title

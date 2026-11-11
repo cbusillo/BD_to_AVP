@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from fractions import Fraction
 from unittest.mock import patch
 
 import numpy as np
@@ -139,6 +138,7 @@ def test_an_ambiguous_opening_is_rechecked_against_the_later_frame_offset(tmp_pa
             indices,
             [(left, right)] * len(indices),
             source_frame_count=plan.source_frame_count,
+            initial_offset=0,
             workspace=tmp_path,
             run_context=None,
             cancellation_event=None,
@@ -189,9 +189,10 @@ def test_failed_encode_removes_only_this_attempts_finalized_movie_and_its_own_lu
         ((1000, 10, 1000), (1000, 0, 991), -10, True),
         ((1200, 200, 1100), (950, 0, 900), -200, False),
         ((1000, 0, 900), (1400, 300, 1200), 300, False),
-        ((1000, 100, 900), (1000, 90, 920), 0, False),
-        ((1000, 100, 900), (1000, 100, 924), 0, False),
-        ((1000, 100, 900), (1000, 100, 925), 0, True),
+        ((1000, 100, 900), (1000, 90, 920), 0, True),
+        ((1000, 100, 900), (1000, 100, 924), 0, True),
+        ((1000, 100, 900), (1000, 100, 901), 0, True),
+        ((1000, 100, 900), (1000, 99, 900), 0, True),
         ((2880, 0, 2760), (3000, 0, 2880), 0, True),
         ((3000, 0, 2880), (2880, 0, 2760), 0, True),
     ],
@@ -203,7 +204,7 @@ def test_only_black_padding_passes_and_a_changed_ending_cannot_hide_in_black(
     refused: bool,
 ) -> None:
     with pytest.raises(VideoRoutePreflightError) if refused else nullcontext():
-        uhd.check_black_padding(uhd.PictureExtent(*source), uhd.PictureExtent(*reference), offset, Fraction(24))
+        uhd.check_black_padding(uhd.PictureExtent(*source), uhd.PictureExtent(*reference), offset)
 
 
 def test_color_qualification_uses_the_same_steady_registration_as_the_encoder(tmp_path: Path) -> None:

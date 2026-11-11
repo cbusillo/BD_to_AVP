@@ -3,7 +3,6 @@ from __future__ import annotations
 import threading
 import tempfile
 from dataclasses import dataclass
-from fractions import Fraction
 from pathlib import Path
 
 import ffmpeg
@@ -11,7 +10,6 @@ import ffmpeg
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.uhd_color import HDRReferenceInfo
-from bd_to_avp.modules.uhd_match import MAX_OFFSET_SECONDS
 from bd_to_avp.modules.video_route import VideoRoutePreflightError
 from bd_to_avp.runtime import RunContext
 
@@ -129,16 +127,12 @@ def reference_picture_extent(
     raise VideoRoutePreflightError("The 4K picture ending could not be checked.")
 
 
-def check_black_padding(source: PictureExtent, reference: PictureExtent, offset: int, rate: Fraction) -> None:
+def check_black_padding(source: PictureExtent, reference: PictureExtent, offset: int) -> None:
     if source.first + offset < 0 or source.stop + offset > reference.frame_count:
         raise VideoRoutePreflightError("The 4K copy is missing pictures at the beginning or end of the 3D movie.")
     if reference.first < offset or reference.stop > source.frame_count + offset:
         raise VideoRoutePreflightError("The 3D source is missing pictures at the beginning or end of the 4K movie.")
-    tolerance = float(rate) * MAX_OFFSET_SECONDS
-    if (
-        abs(reference.first - source.first - offset) > tolerance
-        or abs(reference.stop - source.stop - offset) > tolerance
-    ):
+    if reference.first != source.first + offset or reference.stop != source.stop + offset:
         raise VideoRoutePreflightError(
             "The picture begins or ends differently in the two copies. They may be different cuts."
         )
