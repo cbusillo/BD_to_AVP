@@ -204,3 +204,24 @@ def test_only_black_padding_passes_and_a_changed_ending_cannot_hide_in_black(
 ) -> None:
     with pytest.raises(VideoRoutePreflightError) if refused else nullcontext():
         uhd.check_black_padding(uhd.PictureExtent(*source), uhd.PictureExtent(*reference), offset, Fraction(24))
+
+
+def test_color_qualification_uses_the_same_steady_registration_as_the_encoder(tmp_path: Path) -> None:
+    plan = plan_for_test(tmp_path / "reference.mkv")
+    image = texture()
+    matches = []
+    for index in range(48):
+        matrix = np.eye(2, 3, dtype=np.float64)
+        matrix[0, 2] = 0.03 if index % 2 else 0.07
+        matches.append(MatchedFrame(index, index, image, image, EyeRegistration(matrix, 100, 1, 0, 8), True, True))
+    samples = uhd.StereoSamples([], uhd.PictureExtent(plan.source_frame_count, 0, plan.source_frame_count))
+    disc = DiscInfo(frame_rate=str(plan.info.frame_rate), duration_seconds=plan.info.duration_seconds)
+    with (
+        patch.object(uhd, "probe_hdr_reference", return_value=plan.info),
+        patch.object(uhd, "collect_stereo_samples", return_value=samples),
+        patch.object(uhd, "reference_picture_extent", return_value=samples.extent),
+        patch.object(uhd, "collect_matched_frames", return_value=(matches, 0)),
+    ):
+        result = uhd.prepare_uhd_conversion(tmp_path / "source.mkv", plan.reference_path, disc, workspace=tmp_path)
+    assert np.array_equal(result.registration, np.eye(2, 3))
+    assert result.color_map.validation["held_out"]["rms_codes"] < 0.01

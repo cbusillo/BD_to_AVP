@@ -27,6 +27,7 @@ from bd_to_avp.modules.uhd_match import (
     SAMPLE_BINS,
     MatchedFrame,
     aligned_color_pixels,
+    applied_uhd_registration,
     check_reference_frame_rate,
     match_frame,
     source_sample_indices,
@@ -364,11 +365,13 @@ def prepare_uhd_conversion(
         cancellation_event=cancellation_event,
     )
     check_black_padding(samples.extent, reference_extent, offset, info.frame_rate)
-    color_map = fit_title_color_map(
-        [aligned_color_pixels(frame) for frame in matched[::2]],
-        [aligned_color_pixels(frame) for frame in matched[1::2]],
+    registration = applied_uhd_registration(
+        np.median(np.stack([frame.registration.matrix for frame in matched]), axis=0).astype(np.float32)
     )
-    registration = np.median(np.stack([frame.registration.matrix for frame in matched]), axis=0).astype(np.float32)
+    color_map = fit_title_color_map(
+        [aligned_color_pixels(frame, registration) for frame in matched[::2]],
+        [aligned_color_pixels(frame, registration) for frame in matched[1::2]],
+    )
     plan = UHDConversionPlan(reference, info, offset, color_map, registration, len(matched), samples.extent.frame_count)
     cli_message(f"4K match accepted: {json.dumps(plan.report())}", run_context=run_context)
     return plan
@@ -386,13 +389,10 @@ def write_title_lut(color_map: TitleColorMap, path: Path) -> None:
 def register_uhd_stream(
     stream: ffmpeg.nodes.FilterableStream, registration: FloatImage, *, mask: bool = False
 ) -> ffmpeg.nodes.FilterableStream:
-    matrix = registration.copy()
-    matrix[:, 2] *= UHD_SIZE[0] / SAMPLE_SIZE[0]
-    corners = np.array([[0, 0, 1], [3840, 0, 1], [0, 2160, 1], [3840, 2160, 1]], dtype=np.float32)
-    registered = corners @ matrix.T
-    needs_registration = np.max(np.abs(registered - corners[:, :2])) > 0.25
-    if not needs_registration:
+    matrix = applied_uhd_registration(registration).copy()
+    if np.array_equal(matrix, np.eye(2, 3, dtype=np.float32)):
         return stream
+    matrix[:, 2] *= UHD_SIZE[0] / SAMPLE_SIZE[0]
     x = f"{matrix[0, 0]:.10f}*X+{matrix[0, 1]:.10f}*Y+{matrix[0, 2]:.10f}"
     y = f"{matrix[1, 0]:.10f}*X+{matrix[1, 1]:.10f}*Y+{matrix[1, 2]:.10f}"
     inside = f"between({x},0,W-1)*between({y},0,H-1)"
