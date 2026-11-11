@@ -12,7 +12,46 @@ named restartable file.
 
 ## Current Stage Contracts
 
-### `CREATE_MKV`
+### Matched 4K HDR10 Reference
+
+`--uhd-reference PATH` selects `uhd_hdr_mv_hevc` for a new conversion at stage 1.
+The 3D source remains the source of audio, subtitles and stereo perspective. The
+reference must be progressive 3840x2160 10-bit PQ BT.2020 video at the same constant
+frame rate and within one second of the 3D source's runtime. Eye swapping, crop,
+resolution, frame-rate, FX upscale and software-encoder overrides are refused.
+
+Before audio or video encoding, the route decodes both whole sources once. It
+checks 50 sampled frame positions spread over 24 sections, including both ends,
+searches a one-second temporal window, and checks left and right eyes with feature
+registration. A consistent frame offset and matching scale, rotation, position
+and image coverage are required. An ambiguous eye cannot establish the match.
+A right-eye reference, changing edit, reframing, damaged MVC picture or insufficient
+whole-film evidence is refused in plain words. Black or featureless pictures
+cannot establish alignment. The 3D release may mask a letterbox that the UHD shows;
+color fitting uses their shared picture area.
+
+One cubic RGB standard-to-PQ map is learned per title from alternating matched
+left-eye frames. The other frames are held out. The report includes held-out RMS
+and 99th-percentile errors, highlight, dark and saturated-color tails, and the
+worst frame. A poor fit stops the conversion. Training error cannot qualify a map.
+
+The right eye is the actual MVC right eye, Lanczos-upscaled in floating point to
+3840x2160 and mapped through that fixed title map. It contains no warped UHD detail,
+frame-dependent sharpness switch, or 8-bit MetalFX step. The UHD is decoded as
+10-bit YUV; its left-eye planes are copied unchanged into each packed 10-bit Y4M
+frame. Only the MV-HEVC encode compresses that eye. The right eye uses limited-range
+PQ BT.2020 YUV. The encoder receives `--color hdr10`, plus `--mastering-display` and
+`--max-cll` read from the reference's stream or first decoded frame when present.
+Missing metadata is left absent, never replaced by invented mastering values.
+Dolby Vision enhancement metadata is not copied; the HDR10 base picture is used.
+
+Decoder and encoder processes use the existing managed process runners. The raw
+frame queues are bounded, cancellation stops all readers and the encoder, and a
+failed conversion removes its incomplete movie. The standard audio, subtitle and
+final-mux paths run afterward using the 3D source. Existing video routes retain
+their selection and processing behavior.
+
+## `CREATE_MKV`
 
 - Input: disc, ISO/image, MKV, MTS, or M2TS source plus selected title metadata.
 - Output: the selected MKV/MTS/M2TS source in default mode; a copy in the

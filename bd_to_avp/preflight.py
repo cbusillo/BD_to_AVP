@@ -56,7 +56,7 @@ def get_missing_dependency_binaries_for_current_job(
     ):
         missing_binaries.append(config.EDGE264_TEST_PATH)
     if (
-        video_route.selected is VideoRouteKind.DIRECT_MV_HEVC
+        video_route.selected in {VideoRouteKind.DIRECT_MV_HEVC, VideoRouteKind.UHD_HDR_MV_HEVC}
         and config.MV_HEVC_ENCODER_PATH not in missing_binaries
         and not os.access(config.MV_HEVC_ENCODER_PATH, os.X_OK)
     ):
@@ -75,7 +75,7 @@ def get_required_dependency_binaries_for_current_job(
         required_paths.append(config.MAKEMKVCON_PATH)
     if needs_native_mvc_splitter():
         required_paths.append(config.EDGE264_TEST_PATH)
-    if video_route.selected is VideoRouteKind.DIRECT_MV_HEVC:
+    if video_route.selected in {VideoRouteKind.DIRECT_MV_HEVC, VideoRouteKind.UHD_HDR_MV_HEVC}:
         required_paths.append(config.MV_HEVC_ENCODER_PATH)
     if video_route.selected is VideoRouteKind.GENERATED_MV_HEVC:
         required_paths.append(config.SPATIAL_MEDIA_PATH)

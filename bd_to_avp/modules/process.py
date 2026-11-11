@@ -55,6 +55,7 @@ from bd_to_avp.modules.video import (
     get_video_color_depth,
     resolve_generated_mv_hevc_expectations,
 )
+from bd_to_avp.modules.uhd import create_uhd_mv_hevc_file, prepare_uhd_conversion
 from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind, legacy_video_route
 from bd_to_avp.observability import ObservabilityContext, ObservabilityStage
 from bd_to_avp.process_runner import ProcessCancelled
@@ -261,7 +262,7 @@ def conversion_stage_plan(
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
         if video_route.output_mode is VideoMode.AV1_SBS:
             stages.append("finalize_av1_stereo")
-        elif video_route.selected is not VideoRouteKind.DIRECT_MV_HEVC:
+        elif video_route.selected not in {VideoRouteKind.DIRECT_MV_HEVC, VideoRouteKind.UHD_HDR_MV_HEVC}:
             stages.append("combine_to_mv_hevc")
     if reads_bluray:
         stages.extend(source_stages)
@@ -550,6 +551,19 @@ def _process_each(
         excerpt_path = output_folder / f"{disc_info.name}_excerpt.m2ts"
         video_probe_path = excerpt_path
         crop_start_seconds = 0
+    uhd_plan = None
+    if video_route.selected is VideoRouteKind.UHD_HDR_MV_HEVC:
+        assert video_route.uhd_reference is not None
+        uhd_plan = prepare_uhd_conversion(
+            source_media_path,
+            video_route.uhd_reference,
+            disc_info,
+            mvc_producer=mvc_producer,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+        )
+        if activity:
+            activity.log("4K source match and HDR color accepted", stage="inspect_source", uhd_match=uhd_plan.report())
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("probe_color", "Reading video color depth")
@@ -659,6 +673,20 @@ def _process_each(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("finalize_av1_stereo"),
+        )
+    elif video_route.selected is VideoRouteKind.UHD_HDR_MV_HEVC:
+        assert uhd_plan is not None
+        if activity:
+            activity.stage_started("create_left_right_files", "Encoding 4K HDR spatial video")
+        video_path = create_uhd_mv_hevc_file(
+            video_output_path,
+            output_folder / f"{disc_info.name}_MV-HEVC.mov",
+            uhd_plan,
+            video_route,
+            mvc_producer=mvc_producer,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("create_left_right_files"),
         )
     elif video_route.selected is VideoRouteKind.DIRECT_MV_HEVC:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:

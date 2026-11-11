@@ -746,6 +746,7 @@ def route_message(video_route: ResolvedVideoRoute) -> str:
     if video_route.uses_in_process_upscale:
         return "Using direct 4K MetalFX MV-HEVC encoding."
     messages = {
+        VideoRouteKind.UHD_HDR_MV_HEVC: "Using matching 4K HDR video with the real 3D right eye",
         VideoRouteKind.DIRECT_MV_HEVC: "Using direct MV-HEVC encoding.",
         VideoRouteKind.GENERATED_MV_HEVC: "Using generated MV-HEVC encoding.",
         VideoRouteKind.AV1: "Using AV1 stereo encoding.",

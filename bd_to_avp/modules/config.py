@@ -195,6 +195,7 @@ class Config:
 
         self.source_str: str | None = None
         self.source_path: Path | None = None
+        self.uhd_reference: Path | None = None
         self.source_folder_path: Path | None = None
         self.output_root_path = Path.home() / "Movies"
         self.overwrite = False
@@ -337,6 +338,11 @@ class Config:
             "--smoke-apple-vision-ocr",
             action="store_true",
             help=argparse.SUPPRESS,
+        )
+        parser.add_argument(
+            "--uhd-reference",
+            type=Path,
+            help="Matching 3840x2160 HDR10 movie. Check its cut, left eye and color before 4K HDR MV-HEVC conversion.",
         )
         source_group = parser.add_mutually_exclusive_group(required=False)
 
@@ -519,6 +525,7 @@ class Config:
         self.source_path = (
             Path(args.source_str).expanduser() if args.source_str and not args.source_str.startswith("disc:") else None
         )
+        self.uhd_reference = args.uhd_reference.expanduser() if args.uhd_reference else None
         self.source_str = args.source_str if args.source_str and args.source_str.startswith("disc:") else None
         self.source_folder_path = args.source_folder_path.expanduser() if args.source_folder_path else None
         self.output_root_path = (
