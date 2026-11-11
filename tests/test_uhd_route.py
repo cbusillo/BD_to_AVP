@@ -165,13 +165,15 @@ def test_localized_features_do_not_establish_an_eye_or_a_framing_mismatch() -> N
     assert match_frame(100, left, stereo_pair(left), {100: left}, expected_offset=0) is None
 
 
-def test_color_fit_excludes_the_shared_letterbox_and_floating_window() -> None:
+@pytest.mark.parametrize("left,right", [(70, 910), (394, 585)])
+def test_color_fit_excludes_the_shared_letterbox_and_floating_window(left: int, right: int) -> None:
     reference = texture()
     source = reference.copy()
-    source[:30] = source[-30:] = source[:, :70] = source[:, -50:] = 0
+    source[:30] = source[-30:] = source[:, :left] = source[:, right:] = 0
     registration = EyeRegistration(np.eye(2, 3, dtype=np.float64), 100, 1, 0, 12)
     frame = MatchedFrame(100, 100, source, reference, registration, True, True)
     training_source, training_target = aligned_color_pixels(frame)
+    assert len(training_source) > 0
     assert np.array_equal(training_source, training_target)
 
 

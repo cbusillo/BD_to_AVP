@@ -42,7 +42,8 @@ by one UHD luma pixel at a chroma boundary.
 One cubic RGB standard-to-PQ map is learned per title from alternating matched
 left-eye frames. The other frames are held out. The report includes held-out RMS
 and 99th-percentile errors, highlight, dark and saturated-color tails, and the
-worst frame. A poor fit stops the conversion. Training error cannot qualify a map.
+worst frame. A poor fit stops the conversion. Training error cannot qualify a map. Matched credits and other narrow pictures
+remain in the fit and held-out validation; their shared crop need only be nonempty.
 Before encoding, unmatched head and tail ranges in either input are checked at
 full resolution. A bright detail in either 3D eye prevents a frame being counted
 as black. A difference containing picture is refused. Black-only padding may

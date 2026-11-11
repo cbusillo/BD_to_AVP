@@ -204,7 +204,7 @@ def aligned_color_pixels(frame: MatchedFrame) -> tuple[FloatImage, FloatImage]:
         raise VideoRoutePreflightError("There is no shared picture area for HDR color fitting.")
     top, bottom = int(active_rows[0]) + 8, int(active_rows[-1]) - 8
     left, right = int(active_columns[0]) + 12, int(active_columns[-1]) - 12
-    if bottom - top < height // 2 or right - left < width // 2:
+    if bottom <= top or right <= left:
         raise VideoRoutePreflightError("The two copies do not share enough picture area for HDR color fitting.")
     return (
         aligned[top:bottom:4, left:right:4].reshape(-1, 3).astype(np.float32),
