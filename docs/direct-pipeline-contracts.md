@@ -66,6 +66,9 @@ finalized just before a producer failure. The standard audio, subtitle and
 final-mux paths run afterward using the 3D source. Existing video routes retain
 their selection and processing behavior.
 As on the direct route, damaged MVC units are concealed and reported as a warning.
+For a direct unencrypted disc or image read, the reader runs once for matching
+and again for encoding; each pass rewrites the conversion's audio/subtitle
+sidecar. The source disc or image is unchanged.
 
 ## Current Stage Contracts
 

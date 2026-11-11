@@ -11,6 +11,7 @@ from contextlib import nullcontext
 from bd_to_avp.modules import uhd, video_route
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.uhd_color import TitleColorMap, read_hdr_reference_info
+from bd_to_avp.modules.uhd_color import FloatImage, HDRReferenceInfo
 from bd_to_avp.modules.uhd_match import EyeRegistration, MatchedFrame, source_sample_indices
 from bd_to_avp.modules.video_route import VideoRoutePreflightError
 from tests.test_uhd_route import hdr_probe
@@ -84,14 +85,16 @@ def test_missing_reference_tail_is_refused_before_color_fit_or_encoding(tmp_path
 
 
 def test_an_ambiguous_opening_is_rechecked_against_the_later_frame_offset(tmp_path: Path) -> None:
-    plan = plan_for_test(tmp_path / "reference.mkv", 3000)
+    plan = plan_for_test(tmp_path / "reference.mkv")
     indices = source_sample_indices(plan.info.duration_seconds, plan.info.frame_rate)
     left = texture()
     right = stereo_pair(left)
     unrelated = left[::-1].copy()
     opening = indices[0]
 
-    def candidates(_reference, _info, window, **_kwargs):
+    def candidates(
+        _reference: Path, _info: HDRReferenceInfo, window: range, **_kwargs: object
+    ) -> dict[int, FloatImage]:
         if len(window) == 1:
             return {window.start: unrelated}
         source_index = min(indices, key=lambda index: abs(index - (window.start + window.stop - 1) / 2))

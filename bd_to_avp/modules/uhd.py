@@ -374,7 +374,9 @@ def write_title_lut(color_map: TitleColorMap, path: Path) -> None:
         np.savetxt(output, mapped, fmt="%.9f")
 
 
-def register_uhd_stream(stream: ffmpeg.Stream, registration: FloatImage, *, mask: bool = False) -> ffmpeg.Stream:
+def register_uhd_stream(
+    stream: ffmpeg.nodes.FilterableStream, registration: FloatImage, *, mask: bool = False
+) -> ffmpeg.nodes.FilterableStream:
     matrix = registration.copy()
     matrix[:, 2] *= UHD_SIZE[0] / SAMPLE_SIZE[0]
     corners = np.array([[0, 0, 1], [3840, 0, 1], [0, 2160, 1], [3840, 2160, 1]], dtype=np.float32)
@@ -389,7 +391,7 @@ def register_uhd_stream(stream: ffmpeg.Stream, registration: FloatImage, *, mask
     return stream.filter("geq", **expressions, interpolation="nearest" if mask else "bilinear")
 
 
-def uhd_picture_mask(source: ffmpeg.Stream, registration: FloatImage) -> ffmpeg.Stream:
+def uhd_picture_mask(source: ffmpeg.nodes.FilterableStream, registration: FloatImage) -> ffmpeg.nodes.FilterableStream:
     binary = (
         source.filter("extractplanes", "y")
         .filter("format", "gray16le")
@@ -426,7 +428,9 @@ def uhd_picture_mask(source: ffmpeg.Stream, registration: FloatImage) -> ffmpeg.
     return ffmpeg.filter([planes[0], chroma], "mergeplanes", mapping=0x001010, format="yuv420p10le")
 
 
-def mask_uhd_picture(picture: ffmpeg.Stream, mask: ffmpeg.Stream) -> ffmpeg.Stream:
+def mask_uhd_picture(
+    picture: ffmpeg.nodes.FilterableStream, mask: ffmpeg.nodes.FilterableStream
+) -> ffmpeg.nodes.FilterableStream:
     copies = picture.filter_multi_output("split", 2)
     black = copies[0].filter("lut", y="64", u="512", v="512")
     return ffmpeg.filter([black, copies[1], mask], "maskedmerge")
