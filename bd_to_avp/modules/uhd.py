@@ -498,6 +498,7 @@ def create_uhd_mv_hevc_file(
     observability_context: ObservabilityContext | None = None,
     damage_collector: Edge264DamageCollector | None = None,
 ) -> Path:
+    previous_output = output.stat() if output.exists() else None
     lut_path = output.with_suffix(".cube")
     write_title_lut(plan.color_map, lut_path)
     command = generate_direct_mv_hevc_encoder_command(output, route.direct_bitrate_mbps, route.direct_quality)
@@ -520,7 +521,12 @@ def create_uhd_mv_hevc_file(
         )
     except BaseException:
         remove_direct_mv_hevc_attempt_artifacts(output)
-        output.unlink(missing_ok=True)
+        current_output = output.stat() if output.exists() else None
+        if current_output is not None and (
+            previous_output is None
+            or (current_output.st_dev, current_output.st_ino) != (previous_output.st_dev, previous_output.st_ino)
+        ):
+            output.unlink(missing_ok=True)
         raise
     finally:
         if not config.keep_files:

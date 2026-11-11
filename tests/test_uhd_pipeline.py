@@ -117,14 +117,22 @@ def test_an_ambiguous_opening_is_rechecked_against_the_later_frame_offset(tmp_pa
         )
 
 
-def test_failed_encode_removes_a_finalized_movie_and_its_own_lut(tmp_path: Path) -> None:
+@pytest.mark.parametrize("previous", [None, "unreplaced", "replaced"])
+def test_failed_encode_removes_only_this_attempts_finalized_movie_and_its_own_lut(
+    tmp_path: Path, previous: str | None
+) -> None:
     output = tmp_path / "stereo.mov"
+    if previous is not None:
+        output.write_bytes(b"previous movie")
     sentinel = tmp_path / "another-movie.mov"
     sentinel.write_bytes(b"other work")
     plan = plan_for_test(tmp_path / "reference.mkv")
 
     def fail(*_args: object, **_kwargs: object) -> None:
-        output.write_bytes(b"incomplete movie finalized just before producer failure")
+        if previous != "unreplaced":
+            replacement = tmp_path / "native-atomic-output.mov"
+            replacement.write_bytes(b"incomplete movie finalized just before producer failure")
+            replacement.replace(output)
         raise RuntimeError("source failed")
 
     with (
@@ -134,6 +142,9 @@ def test_failed_encode_removes_a_finalized_movie_and_its_own_lut(tmp_path: Path)
         uhd.create_uhd_mv_hevc_file(
             tmp_path / "source.h264", output, plan, video_route.uhd_video_route(plan.reference_path, 100, None)
         )
-    assert not output.exists()
+    if previous == "unreplaced":
+        assert output.read_bytes() == b"previous movie"
+    else:
+        assert not output.exists()
     assert not output.with_suffix(".cube").exists()
     assert sentinel.read_bytes() == b"other work"
