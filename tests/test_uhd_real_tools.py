@@ -4,6 +4,7 @@ import json
 import platform
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,9 +25,8 @@ from bd_to_avp.modules.uhd import (
 from bd_to_avp.modules.container import create_muxed_file
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage
-from bd_to_avp.modules.video import generate_native_mvc_splitter_command
-from bd_to_avp.process_runner import ProcessPipelineRunner, ProcessPipelineStage, ProcessSpec
 from bd_to_avp.modules.uhd_color import TitleColorMap, read_hdr_reference_info
+from tests.test_uhd_route import hdr_probe
 from bd_to_avp.modules.video_route import uhd_video_route
 from scripts.build_mv_hevc_encoder_macos import build_encoder
 
@@ -125,43 +125,95 @@ def test_real_mvc_to_hdr_main10_copies_reference_mastering_metadata(tmp_path: Pa
     actual = np.frombuffer(mapped.stdout, "<u2").reshape(16, 16, 3).astype(np.float32) / np.float32(65535)
     expected = plan.color_map.apply(pixels.astype(np.float32) / np.float32(65535))
     assert np.max(np.abs(actual - expected)) * 1023 < 1
+
+
+def test_normalizer_preserves_uhd_outside_changing_per_eye_masks_and_keeps_warp_precision(tmp_path: Path) -> None:
+    width, height = 3840, 2160
+    source_width, source_height = 32, 18
+    left = np.full((4, source_height, source_width), 80, dtype=np.uint8)
+    right = np.broadcast_to(np.linspace(16, 235, source_width, dtype=np.uint8), left.shape).copy()
+    left[0, :2] = left[0, -2:] = right[0, :2] = right[0, -2:] = 16
+    left[1, :, :2] = right[1, :, :4] = 16
+    left[1, 8:10] = right[1, 8:10] = 16
+    left[2] = 16
+    left[2, 7, 8] = 80
+    left[3] = right[3] = 16
+    source = bytearray(f"YUV4MPEG2 W{source_width * 2} H{source_height} F24000:1001 Ip C420jpeg\n".encode())
+    for left_y, right_y in zip(left, right, strict=True):
+        source.extend(b"FRAME\n")
+        source.extend(np.hstack((left_y, right_y)).tobytes())
+        source.extend(np.full((source_height // 2, source_width), 128, dtype=np.uint8).tobytes() * 2)
+    rng = np.random.default_rng(42)
+    reference_planes = (
+        rng.integers(64, 941, (height, width), dtype="<u2"),
+        rng.integers(64, 961, (height // 2, width // 2), dtype="<u2"),
+        rng.integers(64, 961, (height // 2, width // 2), dtype="<u2"),
+    )
+    reference = tmp_path / "reference.y4m"
+    with reference.open("wb") as destination:
+        destination.write(f"YUV4MPEG2 W{width} H{height} F24000:1001 Ip C420p10\n".encode())
+        for _ in left:
+            destination.write(b"FRAME\n")
+            for plane in reference_planes:
+                destination.write(plane.tobytes())
+    coefficients = np.zeros((13, 3), dtype=np.float32)
+    coefficients[:3] = np.eye(3, dtype=np.float32)
+    coefficients[-1] = 0.03
+    registration = np.eye(2, 3, dtype=np.float32)
+    registration[0, 2] = 1
+    plan = UHDConversionPlan(
+        reference,
+        replace(read_hdr_reference_info(hdr_probe()), frame_count=len(left)),
+        0,
+        TitleColorMap(coefficients, {}),
+        registration,
+        0,
+        len(left),
+    )
+    lut = tmp_path / "map.cube"
+    write_title_lut(plan.color_map, lut)
     normalized = tmp_path / "normalized.y4m"
     with normalized.open("wb") as destination:
-        ProcessPipelineRunner().run(
-            (
-                ProcessPipelineStage(
-                    ProcessSpec(
-                        argv=tuple(generate_native_mvc_splitter_command(source)),
-                        tool_id="edge264",
-                        display_name="Decode real MVC",
-                    )
-                ),
-                ProcessPipelineStage(
-                    ProcessSpec(
-                        argv=tuple(generate_uhd_normalizer_command(plan, lut)),
-                        tool_id="ffmpeg",
-                        display_name="Normalize 10-bit stereo",
-                        stdout=destination,
-                        merge_stderr=False,
-                    )
-                ),
-            )
-        )
-
-    def frame_hashes(path: Path, crop: bool) -> list[str]:
-        command = [str(config.FFMPEG_PATH), "-v", "error", "-i", str(path), "-map", "0:v:0"]
-        if crop:
-            command += ["-vf", "crop=3840:2160:0:0"]
-        hashes = subprocess.run(
-            [*command, "-pix_fmt", "yuv420p10le", "-f", "framemd5", "-"],
+        subprocess.run(
+            generate_uhd_normalizer_command(plan, lut),
+            input=source,
+            stdout=destination,
+            stderr=subprocess.PIPE,
             check=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
+            timeout=120,
         )
-        return [
-            line.rsplit(",", 1)[-1].strip() for line in hashes.stdout.splitlines() if line and not line.startswith("#")
-        ]
 
-    assert frame_hashes(normalized, True) == frame_hashes(reference, False)
+    def expected_mask(luma: np.ndarray) -> np.ndarray:
+        active = luma > 18
+        rows = np.flatnonzero(active.any(axis=1))
+        columns = np.flatnonzero(active.any(axis=0))
+        mask = np.zeros_like(active)
+        if len(rows):
+            mask[rows[0] : rows[-1] + 1, columns[0] : columns[-1] + 1] = True
+        mask = np.repeat(np.repeat(mask, height // source_height, axis=0), width // source_width, axis=1)
+        shifted = np.zeros_like(mask)
+        shifted[:, :-4] = mask[:, 4:]
+        return shifted
+
+    with normalized.open("rb") as frames:
+        assert frames.readline().startswith(b"YUV4MPEG2")
+        for index in range(len(left)):
+            assert frames.readline().startswith(b"FRAME")
+            planes = (
+                np.frombuffer(frames.read(height * width * 4), "<u2").reshape(height, width * 2),
+                np.frombuffer(frames.read(height * width), "<u2").reshape(height // 2, width),
+                np.frombuffer(frames.read(height * width), "<u2").reshape(height // 2, width),
+            )
+            if index == 0:
+                assert len(np.unique(planes[0][height // 2, width + 200 : -200])) > 300
+            left_mask = expected_mask(left[index])
+            right_mask = expected_mask(right[index])
+            for channel, (plane, original) in enumerate(zip(planes, reference_planes, strict=True)):
+                keep_left = left_mask if channel == 0 else left_mask[::2, ::2]
+                keep_right = right_mask if channel == 0 else right_mask[::2, ::2]
+                left_plane, right_plane = np.split(plane, 2, axis=1)
+                assert np.array_equal(left_plane[keep_left], original[keep_left])
+                assert np.all(left_plane[~keep_left] == (64 if channel == 0 else 512))
+                assert np.all(right_plane[~keep_right] == (64 if channel == 0 else 512))
+        assert not frames.read(1)
     normalized.unlink()

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from contextlib import nullcontext
 
 from bd_to_avp.modules import uhd, video_route
 from bd_to_avp.modules.disc import DiscInfo
@@ -28,8 +29,8 @@ def plan_for_test(reference: Path, frame_count: int = 3000) -> uhd.UHDConversion
     )
 
 
-@pytest.mark.parametrize("missing", ["temporal", "eye", "coverage", "stable_geometry", "beginning"])
-def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(tmp_path: Path, missing: str) -> None:
+@pytest.mark.parametrize("missing", [None, "temporal", "eye", "coverage", "stable_geometry", "beginning"])
+def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(tmp_path: Path, missing: str | None) -> None:
     plan = plan_for_test(tmp_path / "reference.mkv", 180000)
     info = replace(plan.info, duration_seconds=7507.5)
     indices = source_sample_indices(info.duration_seconds, info.frame_rate)
@@ -56,11 +57,13 @@ def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(tmp_p
     with (
         patch.object(uhd, "read_reference_window", return_value={}),
         patch.object(uhd, "match_frame", side_effect=match),
-        pytest.raises(VideoRoutePreflightError),
+        pytest.raises(VideoRoutePreflightError) if missing is not None else nullcontext(),
     ):
-        uhd.collect_matched_frames(
+        matched, offset = uhd.collect_matched_frames(
             plan.reference_path, info, indices, stereo, workspace=tmp_path, run_context=None, cancellation_event=None
         )
+        assert len(matched) == len(indices)
+        assert offset == 0
 
 
 def test_missing_reference_tail_is_refused_before_color_fit_or_encoding(tmp_path: Path) -> None:

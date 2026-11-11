@@ -24,6 +24,10 @@ class EyeRegistration:
     coverage_cells: int
 
     @property
+    def has_supported_transform(self) -> bool:
+        return self.aligned_fraction >= 0.75 and self.coverage_cells >= 4
+
+    @property
     def is_pixel_aligned(self) -> bool:
         scale = np.hypot(self.matrix[0, 0], self.matrix[1, 0])
         rotation = np.degrees(np.arctan2(self.matrix[1, 0], self.matrix[0, 0]))
@@ -32,8 +36,7 @@ class EyeRegistration:
             and abs(rotation) <= 0.05
             and np.max(np.abs(self.matrix[:, 2])) <= 1
             and self.residual_pixels <= 0.6
-            and self.aligned_fraction >= 0.75
-            and self.coverage_cells >= 4
+            and self.has_supported_transform
         )
 
 
@@ -161,6 +164,10 @@ def match_frame(
     reference = candidates[best_index]
     left_match = register_eye(reference, left)
     right_match = register_eye(reference, right)
+    if left_match is not None and not left_match.has_supported_transform:
+        left_match = None
+    if right_match is not None and not right_match.has_supported_transform:
+        right_match = None
     if (
         right_match is not None
         and right_match.is_pixel_aligned
@@ -198,10 +205,16 @@ def aligned_color_pixels(frame: MatchedFrame) -> tuple[FloatImage, FloatImage]:
     )
     if not len(active_rows):
         raise VideoRoutePreflightError("There is no shared picture area for HDR color fitting.")
+    active_columns = np.flatnonzero(
+        (np.quantile(source_gray, 0.9, axis=0) > 0.03) & (np.quantile(target_gray, 0.9, axis=0) > 0.03)
+    )
+    if not len(active_columns):
+        raise VideoRoutePreflightError("There is no shared picture area for HDR color fitting.")
     top, bottom = int(active_rows[0]) + 8, int(active_rows[-1]) - 8
-    if bottom - top < height // 2:
+    left, right = int(active_columns[0]) + 12, int(active_columns[-1]) - 12
+    if bottom - top < height // 2 or right - left < width // 2:
         raise VideoRoutePreflightError("The two copies do not share enough picture area for HDR color fitting.")
     return (
-        aligned[top:bottom:4, 12:-12:4].reshape(-1, 3).astype(np.float32),
-        frame.reference[top:bottom:4, 12:-12:4].reshape(-1, 3),
+        aligned[top:bottom:4, left:right:4].reshape(-1, 3).astype(np.float32),
+        frame.reference[top:bottom:4, left:right:4].reshape(-1, 3),
     )

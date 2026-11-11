@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -14,9 +13,15 @@ from bd_to_avp.modules.uhd_color import (
     fit_title_color_map,
     read_hdr_reference_info,
 )
-from bd_to_avp.modules.uhd_match import check_reference_timing, match_frame, source_sample_indices
+from bd_to_avp.modules.uhd_match import (
+    EyeRegistration,
+    MatchedFrame,
+    aligned_color_pixels,
+    check_reference_timing,
+    match_frame,
+    source_sample_indices,
+)
 from bd_to_avp.modules.video_route import VideoRoutePreflightError
-from tests.test_video_route import job_options, mv_hevc_encoding
 
 
 def hdr_probe() -> dict:
@@ -70,35 +75,18 @@ def stereo_pair(left: np.ndarray) -> np.ndarray:
     return right
 
 
-def test_explicit_uhd_route_uses_hdr_encoder_without_generated_or_metalfx_fallback() -> None:
-    capability = Mock(return_value=video_route.DirectMVHEVCCapability(True, "supported"))
-    route = video_route.resolve_video_route(
-        mv_hevc_encoding(), job_options(), uhd_reference=Path("reference.mkv"), capability_probe=capability
-    )
-    assert route.selected is video_route.VideoRouteKind.UHD_HDR_MV_HEVC
-    assert route.uhd_reference == Path("reference.mkv")
-    assert route.direct_quality is not None
-    assert route.direct_upscale_mode is None
-    with pytest.raises(VideoRoutePreflightError, match="4K HDR"):
-        video_route.resolve_video_route(
-            mv_hevc_encoding(),
-            job_options(),
-            uhd_reference=Path("reference.mkv"),
-            capability_probe=lambda: video_route.DirectMVHEVCCapability(False, "unsupported"),
-        )
-
-
 @pytest.mark.parametrize(
     "overrides", [{"swap_eyes": True}, {"frame_rate": "24"}, {"resolution": "1280x720"}, {"crop_black_bars": True}]
 )
 def test_uhd_route_refuses_picture_overrides(overrides: dict) -> None:
-    with pytest.raises(VideoRoutePreflightError):
-        video_route.resolve_video_route(
-            replace(mv_hevc_encoding(), **overrides),
-            job_options(),
-            uhd_reference=Path("reference.mkv"),
-            capability_probe=lambda: video_route.DirectMVHEVCCapability(True, "supported"),
-        )
+    from bd_to_avp.modules.config import Config
+
+    settings = Config()
+    settings.uhd_reference = Path("reference.mkv")
+    for field, value in overrides.items():
+        setattr(settings, field, value)
+    with patch.object(video_route, "config", settings), pytest.raises(VideoRoutePreflightError):
+        video_route.legacy_video_route()
 
 
 @pytest.mark.parametrize(
@@ -161,6 +149,22 @@ def test_refuses_a_cut_or_frame_offset_change_in_the_middle() -> None:
         match_frame(100, left, right, {100: np.roll(left, 5, axis=0), 101: left}, expected_offset=0)
     with pytest.raises(VideoRoutePreflightError, match="different cuts"):
         match_frame(100, left, right, {100: texture()[::-1].copy()}, expected_offset=0)
+
+
+def test_localized_features_do_not_establish_an_eye_or_a_framing_mismatch() -> None:
+    left = np.zeros((540, 960, 3), dtype=np.float32)
+    left[50:200, 50:200] = texture()[50:200, 50:200]
+    assert match_frame(100, left, stereo_pair(left), {100: left}, expected_offset=0) is None
+
+
+def test_color_fit_excludes_the_shared_letterbox_and_floating_window() -> None:
+    reference = texture()
+    source = reference.copy()
+    source[:30] = source[-30:] = source[:, :70] = source[:, -50:] = 0
+    registration = EyeRegistration(np.eye(2, 3, dtype=np.float64), 100, 1, 0, 12)
+    frame = MatchedFrame(100, 100, source, reference, registration, True, True)
+    training_source, training_target = aligned_color_pixels(frame)
+    assert np.array_equal(training_source, training_target)
 
 
 def test_color_fit_scores_only_held_out_frames_and_refuses_highlight_tail_failure() -> None:

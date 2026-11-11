@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import tempfile
 import threading
 from dataclasses import dataclass, replace
@@ -38,22 +37,13 @@ from bd_to_avp.modules.video import (
     MvcProducer,
     generate_direct_mv_hevc_encoder_command,
     generate_mvc_annex_b_stream_command,
-    generate_native_mvc_splitter_command,
-    prepare_native_mvc_input,
     remove_direct_mv_hevc_attempt_artifacts,
     run_direct_mv_hevc_encoding,
-    select_native_pipeline_error,
+    run_native_mvc_encoding,
 )
 from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRoutePreflightError
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.presentation import cli_message
-from bd_to_avp.process_runner import (
-    CaptureOverflowPolicy,
-    ProcessPipelineError,
-    ProcessPipelineRunner,
-    ProcessPipelineStage,
-    ProcessSpec,
-)
 from bd_to_avp.runtime import RunContext
 
 
@@ -122,58 +112,40 @@ def probe_hdr_reference(
     return replace(info, frame_count=count, duration_seconds=count / float(info.frame_rate))
 
 
-def mvc_sample_stages(
-    source: Path,
+def generate_stereo_sample_command(
     indices: tuple[int, ...],
-    destination: int,
-    *,
-    mvc_producer: MvcProducer | None,
-    damage: Edge264DamageCollector,
-    count: list[int],
-) -> tuple[ProcessPipelineStage, ...]:
-    stages = []
-
-    def stage(arguments: list[str | Path], tool_id: str, *, stdout: int | None = None) -> ProcessPipelineStage:
-        return ProcessPipelineStage(
-            ProcessSpec(
-                argv=tuple(arguments),
-                tool_id=tool_id,
-                display_name="Check matching 3D frames",
-                merge_stderr=False,
-                capture_overflow=CaptureOverflowPolicy.TRUNCATE,
-                stdout=stdout if stdout is not None else subprocess.PIPE,
-            ),
-            line_handler=observe,
-        )
-
-    def observe(stream: object, line: str) -> None:
-        damage.handle_line(stream, line)
-        if line.startswith("frame="):
-            count[0] = int(line.partition("=")[2].strip())
-
-    if mvc_producer is not None:
-        stages.append(stage(list(mvc_producer.command), mvc_producer.tool_id))
-    elif source.suffix.lower() in {*config.MTS_EXTENSIONS, ".mkv"}:
-        stages.append(stage(generate_mvc_annex_b_stream_command(source), "ffmpeg"))
-    splitter_input = Path("-") if stages else prepare_native_mvc_input(source)
-    stages.append(stage(generate_native_mvc_splitter_command(splitter_input), "edge264"))
+    samples_path: Path,
+    counter_path: Path,
+) -> list[str]:
     selection = "+".join(f"eq(n,{index})" for index in indices)
-    command: list[str | Path] = [
-        config.FFMPEG_PATH,
+    return [
+        str(config.FFMPEG_PATH),
         "-v",
         "error",
         "-y",
         "-f",
         "yuv4mpegpipe",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
         "-i",
         "-",
         "-map",
         "0:v:0",
+        "-vf",
+        "scale=1:1:flags=neighbor,format=gray",
+        "-fps_mode",
+        "passthrough",
         "-c:v",
-        "copy",
+        "rawvideo",
+        "-threads:v",
+        "1",
         "-f",
-        "null",
-        "/dev/null",
+        "rawvideo",
+        "-flush_packets",
+        "1",
+        str(counter_path),
         "-map",
         "0:v:0",
         "-vf",
@@ -184,13 +156,8 @@ def mvc_sample_stages(
         "rgb48le",
         "-f",
         "rawvideo",
-        "pipe:1",
-        "-progress",
-        "pipe:2",
-        "-nostats",
+        str(samples_path),
     ]
-    stages.append(stage(command, "ffmpeg", stdout=destination))
-    return tuple(stages)
 
 
 def collect_stereo_samples(
@@ -202,41 +169,36 @@ def collect_stereo_samples(
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
 ) -> tuple[list[tuple[FloatImage, FloatImage]], int]:
-    count = [0]
-    damage = Edge264DamageCollector()
     samples = []
-    with tempfile.TemporaryFile(dir=workspace) as destination:
-        stages = mvc_sample_stages(
-            source, indices, destination.fileno(), mvc_producer=mvc_producer, damage=damage, count=count
+    producer = mvc_producer
+    if producer is None and source.suffix.lower() in {*config.MTS_EXTENSIONS, ".mkv"}:
+        producer = MvcProducer(tuple(generate_mvc_annex_b_stream_command(source)), "ffmpeg")
+    with tempfile.TemporaryDirectory(dir=workspace, prefix="uhd-match-") as directory:
+        samples_path = Path(directory) / "samples.rgb48"
+        counter_path = Path(directory) / "decoded-frames.raw"
+        run_native_mvc_encoding(
+            source,
+            (counter_path,),
+            generate_stereo_sample_command(indices, samples_path, counter_path),
+            mvc_producer=producer,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
         )
-        try:
-            ProcessPipelineRunner().run(stages, run_context=run_context, cancellation_event=cancellation_event)
-        except ProcessPipelineError as error:
-            selected = select_native_pipeline_error(error, producer_present=len(stages) == 3)
-            if selected is not None:
-                raise selected from error
-            raise
-        finally:
-            splitter_argument = stages[-2].spec.argv[1]
-            splitter_path = Path(
-                splitter_argument.decode() if isinstance(splitter_argument, bytes) else splitter_argument
-            )
-            if splitter_path not in {source, Path("-")}:
-                splitter_path.unlink(missing_ok=True)
-        destination.seek(0)
-        for _ in indices:
-            payload = destination.read(SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12)
-            if len(payload) != SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12:
-                raise VideoRoutePreflightError(
-                    "The 3D source ends before its stated video runtime. Its cut cannot be checked."
-                )
-            image = np.frombuffer(payload, "<u2").reshape(SAMPLE_SIZE[1], SAMPLE_SIZE[0] * 2, 3).astype(
-                np.float32
-            ) / np.float32(65535)
-            samples.append((image[:, : SAMPLE_SIZE[0]], image[:, SAMPLE_SIZE[0] :]))
-    if count[0] <= indices[-1]:
+        decoded_count = counter_path.stat().st_size
+        with samples_path.open("rb") as destination:
+            for _ in indices:
+                payload = destination.read(SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12)
+                if len(payload) != SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12:
+                    raise VideoRoutePreflightError(
+                        "The 3D source ends before its stated video runtime. Its cut cannot be checked."
+                    )
+                image = np.frombuffer(payload, "<u2").reshape(SAMPLE_SIZE[1], SAMPLE_SIZE[0] * 2, 3).astype(
+                    np.float32
+                ) / np.float32(65535)
+                samples.append((image[:, : SAMPLE_SIZE[0]], image[:, SAMPLE_SIZE[0] :]))
+    if decoded_count <= indices[-1]:
         raise VideoRoutePreflightError("The 3D decoder did not confirm the whole movie's frame count.")
-    return samples, count[0]
+    return samples, decoded_count
 
 
 def read_reference_window(
@@ -400,19 +362,75 @@ def write_title_lut(color_map: TitleColorMap, path: Path) -> None:
         np.savetxt(output, mapped, fmt="%.9f")
 
 
-def generate_uhd_normalizer_command(plan: UHDConversionPlan, lut_path: Path) -> list[str]:
-    rate = str(plan.info.frame_rate)
-    clock = f"1/{plan.info.frame_rate.numerator}"
-    frame_time = f"N*{plan.info.frame_rate.denominator}"
-    matrix = plan.registration.copy()
+def register_uhd_stream(stream: ffmpeg.Stream, registration: FloatImage, *, mask: bool = False) -> ffmpeg.Stream:
+    matrix = registration.copy()
     matrix[:, 2] *= UHD_SIZE[0] / SAMPLE_SIZE[0]
     corners = np.array([[0, 0, 1], [3840, 0, 1], [0, 2160, 1], [3840, 2160, 1]], dtype=np.float32)
     registered = corners @ matrix.T
     needs_registration = np.max(np.abs(registered - corners[:, :2])) > 0.25
+    if not needs_registration:
+        return stream
+    x = f"{matrix[0, 0]:.10f}*X+{matrix[0, 1]:.10f}*Y+{matrix[0, 2]:.10f}"
+    y = f"{matrix[1, 0]:.10f}*X+{matrix[1, 1]:.10f}*Y+{matrix[1, 2]:.10f}"
+    inside = f"between({x},0,W-1)*between({y},0,H-1)"
+    expressions = {channel: f"if({inside},{channel}({x},{y}),0)" for channel in (("lum",) if mask else ("r", "g", "b"))}
+    return stream.filter("geq", **expressions, interpolation="nearest" if mask else "bilinear")
+
+
+def uhd_picture_mask(source: ffmpeg.Stream, registration: FloatImage) -> ffmpeg.Stream:
+    binary = (
+        source.filter("extractplanes", "y")
+        .filter("format", "gray16le")
+        .filter("lut", c0="if(gt(val,4626),65535,0)")
+        .filter_multi_output("split", 2)
+    )
+    rows = (
+        binary[0]
+        .filter(
+            "geq",
+            lum="if(eq(X,0),65535*gt(lumsum(W-1,Y),0)*gt(lumsum(W-1,H-1)-if(gt(Y,0),lumsum(W-1,Y-1),0),0),0)",
+            interpolation="nearest",
+        )
+        .filter("crop", 1, "ih", 0, 0)
+    )
+    columns = (
+        binary[1]
+        .filter(
+            "geq",
+            lum="if(eq(Y,0),65535*gt(lumsum(X,H-1),0)*gt(lumsum(W-1,H-1)-if(gt(X,0),lumsum(X-1,H-1),0),0),0)",
+            interpolation="nearest",
+        )
+        .filter("crop", "iw", 1, 0, 0)
+    )
+    mask = ffmpeg.filter(
+        [rows.filter("scale", *UHD_SIZE, flags="neighbor"), columns.filter("scale", *UHD_SIZE, flags="neighbor")],
+        "blend",
+        all_mode="multiply",
+    )
+    planes = (
+        register_uhd_stream(mask, registration, mask=True).filter("format", "gray10le").filter_multi_output("split", 2)
+    )
+    chroma = planes[1].filter("scale", UHD_SIZE[0] // 2, UHD_SIZE[1] // 2, flags="neighbor")
+    return ffmpeg.filter([planes[0], chroma], "mergeplanes", mapping=0x001010, format="yuv420p10le")
+
+
+def mask_uhd_picture(picture: ffmpeg.Stream, mask: ffmpeg.Stream) -> ffmpeg.Stream:
+    copies = picture.filter_multi_output("split", 2)
+    black = copies[0].filter("lut", y="64", u="512", v="512")
+    return ffmpeg.filter([black, copies[1], mask], "maskedmerge")
+
+
+def generate_uhd_normalizer_command(plan: UHDConversionPlan, lut_path: Path) -> list[str]:
+    rate = str(plan.info.frame_rate)
+    clock = f"1/{plan.info.frame_rate.numerator}"
+    frame_time = f"N*{plan.info.frame_rate.denominator}"
     source = ffmpeg.input("pipe:0", f="yuv4mpegpipe", r=rate)
-    reference = ffmpeg.input(str(plan.reference_path))
+    eyes = source.video.filter("settb", expr=clock).filter("setpts", frame_time).filter_multi_output("split", 2)
+    left_mask = uhd_picture_mask(eyes[0].filter("crop", "iw/2", "ih", 0, 0), plan.registration)
+    right_source = eyes[1].filter("crop", "iw/2", "ih", "iw/2", 0).filter_multi_output("split", 2)
+    right_mask = uhd_picture_mask(right_source[1], plan.registration)
     right = (
-        source.video.filter("crop", "iw/2", "ih", "iw/2", 0)
+        right_source[0]
         .filter(
             "scale",
             *UHD_SIZE,
@@ -423,13 +441,7 @@ def generate_uhd_normalizer_command(plan: UHDConversionPlan, lut_path: Path) -> 
         )
         .filter("format", "gbrp16le")
     )
-    if needs_registration:
-        perspective = {
-            f"{coordinate}{index}": float(point[axis])
-            for index, point in enumerate(registered)
-            for axis, coordinate in enumerate(("x", "y"))
-        }
-        right = right.filter("perspective", **perspective, sense="source", interpolation="cubic")
+    right = register_uhd_stream(right, plan.registration)
     right = (
         right.filter("lut3d", file=str(lut_path), interp="tetrahedral")
         .filter(
@@ -439,15 +451,16 @@ def generate_uhd_normalizer_command(plan: UHDConversionPlan, lut_path: Path) -> 
             out_range="tv",
         )
         .filter("format", "yuv420p10le")
-        .filter("settb", expr=clock)
-        .filter("setpts", frame_time)
     )
+    right = mask_uhd_picture(right, right_mask)
+    reference = ffmpeg.input(str(plan.reference_path))
     left = (
         reference.video.filter("trim", start_frame=plan.frame_offset)
         .filter("settb", expr=clock)
         .filter("setpts", frame_time)
         .filter("format", "yuv420p10le")
     )
+    left = mask_uhd_picture(left, left_mask)
     packed = ffmpeg.filter([left, right], "hstack", inputs=2, shortest=1)
     output = ffmpeg.output(
         packed, "pipe:1", format="yuv4mpegpipe", pix_fmt="yuv420p10le", strict=-1, fps_mode="passthrough"

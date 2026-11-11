@@ -39,8 +39,8 @@ See the feasibility record before choosing experimental AV1 output.
 For a matching 3D Blu-ray source and 4K HDR10 copy, the CLI can create a 4K HDR
 spatial movie with `bd-to-avp --source 3d.mkv --uhd-reference 4k.mkv`. It checks
 the cut, left-eye match and HDR color across the whole film before encoding.
-The 4K copy supplies the left eye; the real 3D right eye is upscaled and mapped
-to HDR. See the [pipeline contract](docs/direct-pipeline-contracts.md#matched-4k-hdr10-reference)
+The 4K copy supplies the left eye, with the 3D release's black borders copied onto it;
+the real 3D right eye is upscaled and mapped to HDR. See the [pipeline contract](docs/direct-pipeline-contracts.md#matched-4k-hdr10-reference)
 for accepted inputs and refusal conditions.
 
 ## Watching on Vision Pro

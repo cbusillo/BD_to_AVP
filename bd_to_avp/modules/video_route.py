@@ -156,39 +156,12 @@ def resolve_video_route(
     job: JobOptions,
     *,
     capability_probe: CapabilityProbe | None = None,
-    uhd_reference: Path | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> ResolvedVideoRoute:
     video = encoding.video
     start_stage = Stage.get_stage(job.start_stage)
-
-    if uhd_reference is not None:
-        validate_uhd_route_options(
-            mode=video.mode,
-            start_stage=start_stage,
-            swap_eyes=encoding.swap_eyes,
-            frame_rate=encoding.frame_rate,
-            resolution=encoding.resolution,
-            crop=encoding.crop_black_bars,
-            upscale=encoding.upscale.enabled,
-            software_encoder=job.software_encoder,
-        )
-        if video.direct_bitrate is None:
-            raise VideoRoutePreflightError("The 4K HDR route requires direct MV-HEVC rate control.")
-        capability = (
-            capability_probe()
-            if capability_probe is not None
-            else probe_direct_mv_hevc_capability(
-                run_context=run_context,
-                cancellation_event=cancellation_event,
-                observability_context=observability_context,
-            )
-        )
-        require_uhd_encoder(capability)
-        bitrate, quality = _resolve_direct_rate_control(video.direct_bitrate, direct_quality=video.direct_quality)
-        return uhd_video_route(uhd_reference, bitrate, quality)
 
     if start_stage.value > Stage.COMBINE_TO_MV_HEVC.value:
         active_upscale_quality = (

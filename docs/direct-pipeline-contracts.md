@@ -26,10 +26,15 @@ decodes the whole 3D source once, retaining its decoded frame count. It checks
 searches a one-second UHD window by original presentation time, and checks left
 and right eyes with contrast-normalized feature registration. A consistent frame offset and matching scale, rotation, position
 and image coverage are required. An ambiguous eye cannot establish the match.
-A right-eye reference, changing edit, reframing, damaged MVC picture or insufficient
+A right-eye reference, changing edit, reframing or insufficient
 whole-film evidence is refused in plain words. Black or featureless pictures
 cannot establish alignment. The 3D release may mask a letterbox that the UHD shows;
-color fitting uses their shared picture area.
+color fitting uses their shared picture area, excluding masked rows and columns.
+The source's edge-connected black rows and columns are measured separately for
+each eye on every frame. The left eye receives the 3D left eye's mask, and the
+right eye retains its own mask after color mapping. This follows changing
+letterboxes and stereo floating windows. Black includes up to two luma levels
+above Blu-ray black; internal dark rows or columns are not treated as borders.
 
 One cubic RGB standard-to-PQ map is learned per title from alternating matched
 left-eye frames. The other frames are held out. The report includes held-out RMS
@@ -39,10 +44,11 @@ Frame counts must show that the UHD covers every source frame before encoding.
 
 The right eye is the actual MVC right eye, converted directly from decoded YUV to
 16-bit RGB, Lanczos-upscaled to 3840x2160 and mapped through a fixed 65-cube title
-LUT in FFmpeg. It contains no warped UHD detail,
+LUT in FFmpeg. A small measured registration is applied with 16-bit bilinear
+affine sampling; the identity case needs no extra resample. It contains no warped UHD detail,
 frame-dependent sharpness switch, or 8-bit MetalFX step. The UHD is decoded as
 10-bit YUV; its left-eye planes are copied unchanged into each packed 10-bit Y4M
-frame. Only the MV-HEVC encode compresses that eye. The right eye uses limited-range
+frame except for the matching 3D mask, which becomes limited-range black. Only the MV-HEVC encode compresses that eye. The right eye uses limited-range
 PQ BT.2020 YUV. The encoder receives `--color hdr10`, plus `--mastering-display` and
 `--max-cll` read from the reference's stream or first decoded frame when present.
 Missing metadata is left absent, never replaced by invented mastering values.
@@ -50,12 +56,13 @@ Both inputs receive the same exact frame clock before stacking, so rounded
 Matroska timestamps cannot duplicate stereo frames.
 Dolby Vision enhancement metadata is not copied; the HDR10 base picture is used.
 
-Encoding uses the existing direct MVC pipeline, including its splitter retry,
+Sampling and encoding use the existing native MVC pipelines, including their splitter retry,
 cancellation and process-error selection. The encoder checks the preflight frame
 count; a failed conversion removes its incomplete movie, including a file that
 finalized just before a producer failure. The standard audio, subtitle and
 final-mux paths run afterward using the 3D source. Existing video routes retain
 their selection and processing behavior.
+As on the direct route, damaged MVC units are concealed and reported as a warning.
 
 ## `CREATE_MKV`
 
