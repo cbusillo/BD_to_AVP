@@ -18,6 +18,30 @@ final class WatchFolderMonitoringTests: XCTestCase {
 
     // MARK: - Watching and timed re-scans
 
+    func testEventSourceRetiresOnMainWhenLastOwnerReleasesItInBackground() async throws {
+        let retired = expectation(description: "event source retired")
+        let directory = try makeDirectory()
+        let owner = try makeBackgroundReleaseOwner(directory: directory) { isMainThread in
+            XCTAssertTrue(isMainThread)
+            retired.fulfill()
+        }
+        DispatchQueue.global().async {
+            owner.source = nil
+        }
+        await fulfillment(of: [retired], timeout: 5)
+    }
+
+    private func makeBackgroundReleaseOwner(
+        directory: URL,
+        onRetire: @escaping (Bool) -> Void
+    ) throws -> BackgroundReleaseOwner {
+        let probe = EventSourceRetirementProbe(onRetire: onRetire)
+        let source = try XCTUnwrap(FSEventsWatchFolderEventSource(directoryURL: directory) {
+            withExtendedLifetime(probe) {}
+        })
+        return BackgroundReleaseOwner(source: source)
+    }
+
     func testLaunchCatchUpFindsExistingFileAndAdmitsItWhenTheSettleTimerFires() async throws {
         let harness = try makeHarness()
         let folder = try harness.controller.addWatchFolder(at: harness.directory)
@@ -618,6 +642,26 @@ final class WatchFolderMonitoringTests: XCTestCase {
 
     private func writeFile(_ url: URL, size: Int) throws {
         try Data(repeating: 0, count: size).write(to: url)
+    }
+}
+
+private final class BackgroundReleaseOwner: @unchecked Sendable {
+    var source: FSEventsWatchFolderEventSource?
+
+    init(source: FSEventsWatchFolderEventSource) {
+        self.source = source
+    }
+}
+
+private final class EventSourceRetirementProbe {
+    let onRetire: (Bool) -> Void
+
+    init(onRetire: @escaping (Bool) -> Void) {
+        self.onRetire = onRetire
+    }
+
+    deinit {
+        onRetire(Thread.isMainThread)
     }
 }
 

@@ -188,15 +188,7 @@ final class FSEventsWatchFolderEventSource: WatchFolderEventSource {
         }
     }
 
-    deinit {
-        guard let stream else {
-            return
-        }
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
-        if isAccessingSecurityScope {
-            directoryURL.stopAccessingSecurityScopedResource()
-        }
+    isolated deinit {
+        stop()
     }
 }

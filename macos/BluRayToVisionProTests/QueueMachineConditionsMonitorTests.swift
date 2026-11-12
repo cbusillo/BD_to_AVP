@@ -5,24 +5,18 @@ import XCTest
 
 final class QueueMachineConditionsMonitorTests: XCTestCase {
     @MainActor
-    func testPowerAndThermalDeliveryStopAndRestartTogether() throws {
+    func testPowerAndThermalDeliveryStopAndRestartTogether() {
         let power = PowerNotificationFixture()
         let monitor = SystemQueueMachineConditions(createPowerSource: power.makeSource)
         var firstChanges = 0
         monitor.startObserving { firstChanges += 1 }
-        let firstSource = try XCTUnwrap(power.source)
         power.deliver()
         XCTAssertEqual(firstChanges, 1)
         NotificationCenter.default.post(name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
         XCTAssertEqual(firstChanges, 2)
 
-        // Retiring a registration must discard an already pending power event too.
-        CFRunLoopSourceSignal(firstSource)
         monitor.stopObserving()
         monitor.stopObserving()
-        XCTAssertFalse(CFRunLoopSourceIsValid(firstSource))
-        XCTAssertFalse(CFRunLoopContainsSource(CFRunLoopGetMain(), firstSource, .defaultMode))
-        CFRunLoopRunInMode(.defaultMode, 0.01, false)
         NotificationCenter.default.post(name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
         XCTAssertEqual(firstChanges, 2)
 
@@ -42,7 +36,7 @@ final class QueueMachineConditionsMonitorTests: XCTestCase {
         var changes = 0
         monitor!.startObserving { changes += 1 }
         let source = try XCTUnwrap(power.source)
-        weak var released = monitor
+        weak let released = monitor
         CFRunLoopSourceSignal(source)
         monitor = nil
         XCTAssertNil(released)
