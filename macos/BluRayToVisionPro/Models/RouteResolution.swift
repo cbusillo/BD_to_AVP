@@ -566,13 +566,22 @@ final class RouteQualityResolutionState: ObservableObject {
             invalidMessage = "Conversion settings changed while this choice was waiting. Review the current settings and try the change again."
             return
         }
+        if option.choice == .preservePriorIntent,
+           options.uhdReferencePath != nil,
+           option.isAvailable,
+           conflict.resolutions.contains(option)
+        {
+            self.conflict = nil
+            invalidMessage = RouteQualityEngine.matching4KRefusal(options)
+            return
+        }
         var selectedConflict = conflict
         selectedConflict.selectedResolutionID = option.id
         switch RouteQualityEngine.resolve(option, conflict: selectedConflict) {
         case let .success(draft):
             options = draft.options
             self.conflict = nil
-            invalidMessage = nil
+            invalidMessage = RouteQualityEngine.matching4KRefusal(options)
         case let .failure(message):
             invalidMessage = message.localizedDescription
         }

@@ -2,6 +2,27 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class RouteResolutionTests: XCTestCase {
+    func testPreservingCopyAfterCancelledRemovalRestoresBlockedEditableDraft() throws {
+        var options = ConversionOptions()
+        try options.encoding.selectQualityStep(.detailed)
+        let state = RouteQualityResolutionState()
+        state.apply(.matching4KCopy("/Movies/4k.mkv"), to: &options)
+        state.apply(.cropBlackBars(true), to: &options)
+        let prior = options
+        state.apply(.matching4KCopy(nil), to: &options)
+        let conflict = try XCTUnwrap(state.conflict)
+        let preserve = try XCTUnwrap(conflict.resolutions.first { $0.choice == .preservePriorIntent })
+        if case .success = RouteQualityEngine.resolve(preserve, conflict: conflict) {
+            XCTFail("Invalid conversion options must not become a resolved queue draft")
+        }
+        state.resolve(preserve, in: &options)
+        XCTAssertNil(state.conflict)
+        XCTAssertEqual(options, prior)
+        XCTAssertNotNil(state.blockReason)
+        state.apply(.cropBlackBars(false), to: &options)
+        XCTAssertNil(state.blockReason)
+    }
+
     func testRemoving4KCopyResolvesRetainedGeneratedQualityThroughExistingChoices() throws {
         for step in [QualityStep.balanced, .detailed] {
             var options = ConversionOptions()

@@ -1,16 +1,57 @@
 import json
 import plistlib
 import shutil
+import os
+import signal
+import subprocess
 import tempfile
 import unittest
 
 from pathlib import Path
 from unittest.mock import patch
 
+from bd_to_avp.worker.protocol import PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 from scripts import smoke_release_app
 
 
 class ReleaseSmokeTests(unittest.TestCase):
+    def test_packaged_protocol_expectation_matches_worker(self) -> None:
+        self.assertEqual(smoke_release_app.EXPECTED_WORKER_PROTOCOL_VERSION, PROTOCOL_VERSION)
+
+    def test_cancellation_fixture_replies_in_requested_protocol(self) -> None:
+        for version in SUPPORTED_PROTOCOL_VERSIONS:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temp_dir:
+                workspace = Path(temp_dir)
+                fixture = workspace / "worker.py"
+                marker = workspace / "reaped"
+                smoke_release_app.write_worker_cancellation_fixture(fixture)
+                environment = {
+                    **os.environ,
+                    "BD_TO_AVP_CANCELLATION_SMOKE_WORKSPACE": str(workspace),
+                    "BD_TO_AVP_CANCELLATION_SMOKE_MARKER": str(marker),
+                    "BD_TO_AVP_CANCELLATION_SMOKE_RESULT": str(workspace / "result.json"),
+                }
+                with subprocess.Popen(
+                    [str(fixture)],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=environment,
+                ) as worker:
+                    assert worker.stdin is not None and worker.stdout is not None
+                    worker.stdin.write(json.dumps({"protocol_version": version, "job_id": "cancel-smoke"}) + "\n")
+                    worker.stdin.flush()
+                    ready = json.loads(worker.stdout.readline())
+                    worker.send_signal(signal.SIGTERM)
+                    output, errors = worker.communicate(timeout=10)
+                cancelled = json.loads(output)
+                self.assertEqual(errors, "")
+                self.assertEqual(ready["protocol_version"], version)
+                self.assertEqual(cancelled["protocol_version"], version)
+                self.assertEqual(cancelled["type"], "job.cancelled")
+                self.assertEqual(marker.read_text(), "reaped")
+
     def test_read_bundle_uses_info_plist_executable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             app_path = make_fake_app(Path(temp_dir), version="1.2.3")
