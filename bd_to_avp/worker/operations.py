@@ -42,6 +42,7 @@ from bd_to_avp.modules.video_route import (
     ResolvedVideoRoute,
     VideoRouteKind,
     VideoRoutePreflightError,
+    UHDReferenceError,
     resolve_video_route,
 )
 from bd_to_avp.process_runner import ProcessCancelled
@@ -533,6 +534,8 @@ def _convert_source(
         except VideoRoutePreflightError as error:
             if owner.cancellation_event.is_set():
                 raise WorkerCancelled("The conversion was cancelled.") from error
+            if isinstance(error, UHDReferenceError):
+                raise WorkerOperationError("uhd_reference_refused", str(error), retryable=True) from error
             raise WorkerOperationError(
                 "video_route_preflight_failed",
                 "The video route could not be prepared safely.",
@@ -712,6 +715,7 @@ def resolve_job_video_route(
     return resolve_video_route(
         job.encoding,
         job.job,
+        uhd_reference=job.uhd_reference,
         run_context=activity.run_context,
         cancellation_event=owner.cancellation_event,
         observability_context=stage_observability_context("configure"),
@@ -746,6 +750,7 @@ def route_message(video_route: ResolvedVideoRoute) -> str:
     if video_route.uses_in_process_upscale:
         return "Using direct 4K MetalFX MV-HEVC encoding."
     messages = {
+        VideoRouteKind.UHD_HDR_MV_HEVC: "Using the matching 4K copy for an HDR spatial movie.",
         VideoRouteKind.DIRECT_MV_HEVC: "Using direct MV-HEVC encoding.",
         VideoRouteKind.GENERATED_MV_HEVC: "Using generated MV-HEVC encoding.",
         VideoRouteKind.AV1: "Using AV1 stereo encoding.",

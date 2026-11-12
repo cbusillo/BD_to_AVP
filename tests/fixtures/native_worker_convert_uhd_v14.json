@@ -1,0 +1,47 @@
+{
+  "protocol_version": 14,
+  "type": "job.start",
+  "job_id": "00000000-0000-0000-0000-000000000001",
+  "operation": "convert_source",
+  "source": {
+    "kind": "direct_file",
+    "path": "/Movies/3d.mkv"
+  },
+  "destination": {
+    "path": "/Output"
+  },
+  "encoding": {
+    "audio": {
+      "mode": "automatic",
+      "bitrate": 384,
+      "preferred_language": "eng"
+    },
+    "video": {
+      "mode": "mv_hevc",
+      "route_intent": "matching_4k"
+    },
+    "upscale": {
+      "enabled": false
+    },
+    "fov": 90,
+    "frame_rate": "",
+    "resolution": "",
+    "crop_black_bars": false,
+    "swap_eyes": false,
+    "subtitles": {
+      "mode": "preferred_plus_others",
+      "preferred_language": "eng"
+    }
+  },
+  "job": {
+    "start_stage": 1,
+    "keep_files": false,
+    "overwrite": false,
+    "remove_original": false,
+    "continue_on_error": false,
+    "software_encoder": false,
+    "output_commands": false,
+    "keep_awake": true
+  },
+  "uhd_reference": "/Movies/4k.mkv"
+}

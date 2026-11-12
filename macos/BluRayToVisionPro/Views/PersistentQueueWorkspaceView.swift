@@ -1323,7 +1323,7 @@ struct PersistentQueueDetailView: View {
                     Text("Conversion Setup")
                         .font(.title3.weight(.semibold))
                     Text(item.isEditable
-                        ? "Waiting items can be edited until they start."
+                        ? "Edit these settings before the next conversion attempt."
                         : (item.queueManipulationLockReason ?? "Settings are locked for this queue state."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1331,7 +1331,7 @@ struct PersistentQueueDetailView: View {
                 Spacer()
                 Button("Edit…") { edit(item) }
                     .disabled(!item.isEditable)
-                    .help(item.isEditable ? "Edit this waiting item." : (item.queueManipulationLockReason ?? "Settings are locked."))
+                    .help(item.isEditable ? "Edit this queued item." : (item.queueManipulationLockReason ?? "Settings are locked."))
             }
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
                 GridRow {
@@ -1347,6 +1347,12 @@ struct PersistentQueueDetailView: View {
                             .help(item.canChangeDestination
                                 ? "Change this item's destination."
                                 : (item.queueManipulationLockReason ?? "Settings are locked."))
+                    }
+                }
+                if let path = item.draft.options.uhdReferencePath {
+                    GridRow {
+                        Text("4K copy").foregroundStyle(.secondary)
+                        detailValue(path, label: "4K copy")
                     }
                 }
                 GridRow {

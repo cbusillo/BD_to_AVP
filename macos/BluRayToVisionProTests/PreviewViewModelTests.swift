@@ -905,6 +905,8 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             )
         }
         switch video.routeIntent {
+        case .matching4K:
+            preconditionFailure("A matching 4K copy cannot create a short preview")
         case .automatic:
             let customBitrate = video.directBitrate?.mode == .custom ? video.directBitrate?.mbps : nil
             return VideoRouteReport(

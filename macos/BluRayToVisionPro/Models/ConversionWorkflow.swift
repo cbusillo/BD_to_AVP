@@ -396,7 +396,7 @@ struct PreviewDraft: Equatable {
         outputLength: OutputLength,
         samplePosition: SamplePosition
     ) {
-        guard outputLength.durationSeconds != nil else {
+        guard outputLength.durationSeconds != nil, conversion.options.uhdReferencePath == nil else {
             return nil
         }
         self.parentJobID = parentJobID

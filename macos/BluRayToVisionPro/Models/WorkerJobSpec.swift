@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 13
+    static let protocolVersion = 14
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -133,6 +133,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         struct Video: Encodable, Equatable {
             enum RouteIntent: String, Encodable, Equatable {
                 case automatic
+                case matching4K = "matching_4k"
                 case generated
                 case encode
                 case existingArtifact = "existing_artifact"
@@ -259,6 +260,10 @@ struct WorkerJobSpec: Encodable, Equatable {
                 }
                 let isValid: Bool
                 switch (mode, routeIntent) {
+                case (.mvHEVC, .matching4K):
+                    isValid = qualityIntent == nil && directBitrate == nil && directQuality == nil
+                        && generatedEyeBitrate == nil && generatedMergeQuality == nil
+                        && generatedFallback == nil && av1CRF == nil && activeQualityTarget == nil
                 case (.mvHEVC, .automatic):
                     isValid = qualityIntent != nil
                         && directBitrate != nil
@@ -343,7 +348,7 @@ struct WorkerJobSpec: Encodable, Equatable {
                     !includesUpscale || activeUpscaleQuality != nil
                 case .existingArtifact:
                     activeUpscaleQuality != nil
-                case .encode:
+                case .encode, .matching4K:
                     true
                 }
             }
@@ -398,7 +403,7 @@ struct WorkerJobSpec: Encodable, Equatable {
                     return activeUpscaleQuality == nil
                 case let (.existingArtifact, .upscale(quality)):
                     return activeUpscaleQuality == quality
-                case (.encode, _), (.automatic, _), (.generated, _), (.existingArtifact, _):
+                case (.encode, _), (.matching4K, _), (.automatic, _), (.generated, _), (.existingArtifact, _):
                     return false
                 }
             }
@@ -500,11 +505,13 @@ struct WorkerJobSpec: Encodable, Equatable {
     let encoding: Encoding?
     let job: Job?
     let preview: Preview?
+    let uhdReferencePath: String?
 
     init(source: ConversionSource, jobID: UUID = UUID()) {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
+        uhdReferencePath = nil
         operation = "inspect_source"
         self.source = Source(source: source)
         destination = nil
@@ -517,6 +524,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
+        uhdReferencePath = nil
         operation = "inspect_source"
         source = Source(fileURL: sourceURL)
         destination = nil
@@ -529,6 +537,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
+        uhdReferencePath = draft.options.uhdReferencePath
         source = Source(source: draft.source, titleID: Self.titleID(for: draft))
         destination = Destination(path: draft.destinationURL.path)
 
@@ -540,7 +549,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         } else {
             operation = "convert_source"
             let job = Self.conversionJob(from: draft)
-            encoding = Self.encoding(from: draft.options.encoding, job: job)
+            encoding = Self.encoding(from: draft.options.encoding, job: job, uhdReferencePath: draft.options.uhdReferencePath)
             self.job = job
         }
         preview = nil
@@ -552,6 +561,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         jobID: UUID = UUID()
     ) {
         let conversion = previewDraft.conversion
+        uhdReferencePath = conversion.options.uhdReferencePath
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
@@ -595,11 +605,13 @@ struct WorkerJobSpec: Encodable, Equatable {
         try container.encodeIfPresent(encoding, forKey: .encoding)
         try container.encodeIfPresent(job, forKey: .job)
         try container.encodeIfPresent(preview, forKey: .preview)
+        try container.encodeIfPresent(uhdReferencePath, forKey: .uhdReferencePath)
     }
 
     private static func encoding(
         from options: EncodingOptions,
         job: Job,
+        uhdReferencePath: String? = nil,
         routeStartStage: Int? = nil,
         routeKeepFiles: Bool? = nil,
         allowsExistingArtifact: Bool = true
@@ -608,6 +620,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         let requestedKeepFiles = routeKeepFiles ?? job.keepFiles
         let requestedRoute = VideoRoutePlan(
             encoding: options,
+            uhdReferencePath: uhdReferencePath,
             startStage: requestedStartStage,
             keepsReusableArtifacts: requestedKeepFiles,
             softwareEncoder: job.softwareEncoder,
@@ -620,7 +633,9 @@ struct WorkerJobSpec: Encodable, Equatable {
         let resolvedOptions: EncodingOptions
         let normalizationError: VideoQualityStateError?
         do {
-            if requestedRoute.kind == .existingArtifact {
+            if requestedRoute.kind == .uhdHDRMVHEVC {
+                resolvedOptions = options
+            } else if requestedRoute.kind == .existingArtifact {
                 resolvedOptions = usesExistingArtifactUpscale
                     ? try normalizedExistingArtifactUpscaleQualityState(options)
                     : options
@@ -778,6 +793,14 @@ struct WorkerJobSpec: Encodable, Equatable {
                 activeUpscaleQuality: activeUpscaleQuality,
                 qualityStateError: qualityStateError
             )
+        case .uhdHDRMVHEVC:
+            return Encoding.Video(
+                mode: options.videoOutputMode, routeIntent: .matching4K, qualityIntent: nil,
+                directBitrate: nil, directQuality: nil, generatedEyeBitrate: nil,
+                generatedMergeQuality: nil, generatedFallback: nil, av1CRF: nil,
+                activeQualityTarget: nil, includesUpscale: activeUpscaleEnabled,
+                activeUpscaleQuality: activeUpscaleQuality, qualityStateError: nil
+            )
         case .directMVHEVC:
             let directTarget: VideoQualityTarget = activeUpscaleEnabled
                 ? .directMVHEVCMetalFX2x
@@ -850,6 +873,8 @@ struct WorkerJobSpec: Encodable, Equatable {
         let step = options.videoQuality.lastLadderStep
         let supported: Bool
         switch route.kind {
+        case .uhdHDRMVHEVC:
+            return nil
         case .directMVHEVC:
             supported = VideoQualityCatalog.supports(
                 step,
@@ -962,6 +987,7 @@ struct WorkerJobSpec: Encodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case uhdReferencePath = "uhd_reference"
         case protocolVersion = "protocol_version"
         case type
         case jobID = "job_id"

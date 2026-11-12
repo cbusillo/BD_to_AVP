@@ -53,6 +53,8 @@ struct VideoQualityEditor: View {
             case .av1Stereo:
                 qualitySelectionControl
                 expertControls
+            case .uhdHDRMVHEVC:
+                Text("Conversion quality is chosen automatically for the matching 4K copy.")
             case .directMVHEVC, .generatedMVHEVC:
                 qualitySelectionControl
                 Toggle("AI FX upscale to 2× resolution", isOn: upscaleBinding)
@@ -137,6 +139,8 @@ struct VideoQualityEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 switch routePlan.kind {
+                case .uhdHDRMVHEVC:
+                    EmptyView()
                 case .directMVHEVC:
                     directRateControls
                     Divider()
@@ -292,6 +296,8 @@ struct VideoQualityEditor: View {
         }
         let steps: [QualityStep]
         switch routePlan.kind {
+        case .uhdHDRMVHEVC:
+            return []
         case .directMVHEVC:
             steps = VideoQualityCatalog.supportedSteps(
                 for: routePlan.includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC

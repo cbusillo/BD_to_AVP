@@ -64,7 +64,7 @@ it; **Stop** uses the existing cancellation path. Without a response, the
 120-second watchdog and automatic retry policy continue normally. The warning
 clears when the watched outputs recover or the attempt ends.
 
-[Worker protocol v13](native-worker-protocol-v13.md) records output roles,
+[Worker protocol v14](native-worker-protocol-v14.md) records output roles,
 sizes and no-progress ages, changing versus repeated tool statistics, and wait
 decisions without adding media filenames or raw commands. Support reports keep
 up to 32 recent stall/control decisions inside the existing event and byte

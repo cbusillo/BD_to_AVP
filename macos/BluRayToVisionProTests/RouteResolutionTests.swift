@@ -2,6 +2,70 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class RouteResolutionTests: XCTestCase {
+    func testPreservingCopyAfterCancelledRemovalRestoresBlockedEditableDraft() throws {
+        var options = ConversionOptions()
+        try options.encoding.selectQualityStep(.detailed)
+        let state = RouteQualityResolutionState()
+        state.apply(.matching4KCopy("/Movies/4k.mkv"), to: &options)
+        state.apply(.cropBlackBars(true), to: &options)
+        let prior = options
+        state.apply(.matching4KCopy(nil), to: &options)
+        let conflict = try XCTUnwrap(state.conflict)
+        let preserve = try XCTUnwrap(conflict.resolutions.first { $0.choice == .preservePriorIntent })
+        if case .success = RouteQualityEngine.resolve(preserve, conflict: conflict) {
+            XCTFail("Invalid conversion options must not become a resolved queue draft")
+        }
+        state.resolve(preserve, in: &options)
+        XCTAssertNil(state.conflict)
+        XCTAssertEqual(options, prior)
+        XCTAssertNotNil(state.blockReason)
+        state.apply(.cropBlackBars(false), to: &options)
+        XCTAssertNil(state.blockReason)
+    }
+
+    func testRemoving4KCopyResolvesRetainedGeneratedQualityThroughExistingChoices() throws {
+        for step in [QualityStep.balanced, .detailed] {
+            var options = ConversionOptions()
+            try options.encoding.selectQualityStep(step)
+            let state = RouteQualityResolutionState()
+            state.apply(.matching4KCopy("/Movies/4k.mkv"), to: &options)
+            state.apply(.reusableIntermediates(true), to: &options)
+            XCTAssertNil(state.conflict)
+            state.apply(.matching4KCopy(nil), to: &options)
+            let conflict = try XCTUnwrap(state.conflict)
+            XCTAssertEqual(conflict.trigger, .matching4KCopy)
+            let resolution = try XCTUnwrap(conflict.resolutions.first { $0.choice == .keepRequestedWorkflow && $0.isAvailable })
+            state.resolve(resolution, in: &options)
+            XCTAssertNil(state.blockReason)
+            XCTAssertNil(options.uhdReferencePath)
+            let draft = ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Movies/3d.mkv")),
+                sourceDetails: nil, profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Output"), options: options
+            )
+            let job = WorkerJobSpec(draft: draft)
+            XCTAssertEqual(job.encoding?.video.routeIntent, .generated)
+            _ = try JSONEncoder().encode(job)
+        }
+    }
+
+    func testMatchingCopyAllowsConflictingOverridesToBeClearedOneAtATime() {
+        var options = ConversionOptions()
+        options.uhdReferencePath = "/Movies/4k.mkv"
+        options.encoding.upscaleEnabled = true
+        options.job.softwareEncoder = true
+        let state = RouteQualityResolutionState()
+        state.validate(options)
+        XCTAssertNotNil(state.blockReason)
+        state.apply(.upscaleEnabled(false), to: &options)
+        XCTAssertFalse(options.encoding.upscaleEnabled)
+        XCTAssertNil(state.conflict)
+        XCTAssertNotNil(state.blockReason)
+        state.apply(.softwareEncoder(false), to: &options)
+        XCTAssertFalse(options.job.softwareEncoder)
+        XCTAssertNil(state.blockReason)
+    }
+
     func testEveryRouteForcingTriggerAndQualityStepProducesAValidExit() throws {
         let edits: [(RouteQualityTrigger, RouteQualityEdit)] = [
             (.reusableIntermediates, .reusableIntermediates(true)),

@@ -114,6 +114,7 @@ def _run_worker(
         emitter = WorkerEventEmitter(
             output_stream,
             job.job_id,
+            protocol_version=job.protocol_version,
             write_timeout_seconds=event_write_timeout_seconds,
             on_transport_failure=owner.notify_transport_failure,
         )

@@ -18,7 +18,7 @@ final class WorkerControlWriterTests: XCTestCase {
         XCTAssertEqual(object["tool_run_id"] as? String, command.toolRunID.uuidString)
         XCTAssertEqual(object["stall_episode_id"] as? String, command.stallEpisodeID.uuidString)
         XCTAssertEqual(object["command_id"] as? String, command.commandID.uuidString)
-        XCTAssertEqual(object["protocol_version"] as? Int, 13)
+        XCTAssertEqual(object["protocol_version"] as? Int, WorkerJobSpec.protocolVersion)
         XCTAssertEqual(object["type"] as? String, "job.keep_waiting")
         XCTAssertEqual(object.count, 6)
     }

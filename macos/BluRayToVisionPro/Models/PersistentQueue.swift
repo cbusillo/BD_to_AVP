@@ -183,7 +183,10 @@ struct PersistentQueueItem: Identifiable, Equatable {
     }
 
     var isEditable: Bool {
-        status == .waiting
+        if case let .failed(failure) = status {
+            return failure.isMatching4KRefusal
+        }
+        return status == .waiting
     }
 
     var hasStorageDestinationFailure: Bool {
@@ -195,7 +198,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
     }
 
     var canChangeDestination: Bool {
-        isEditable || hasStorageDestinationFailure
+        status == .waiting || hasStorageDestinationFailure
     }
 
     var canMove: Bool {

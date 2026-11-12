@@ -269,7 +269,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         draft: ConversionDraft,
         routeQualityConflict: RouteQualityConflict? = nil
     ) async throws {
-        try await durableQueueStore.updateWaitingItemIntent(
+        try await durableQueueStore.updateEditableItemIntent(
             itemID,
             intent: DurableQueueItemIntent(draft: draft),
             routeQualityConflict: routeQualityConflict.map(DurableRouteQualityConflict.init)

@@ -186,16 +186,19 @@ final class QueueAutomationTests: XCTestCase {
         var jobOptions = JobOptions()
         jobOptions.removeOriginalAfterSuccess = true
         let profile = BuiltInProfile.balanced.profile
+        var conversionOptions = ConversionOptions(encoding: profile.options, job: jobOptions)
+        conversionOptions.uhdReferencePath = "/Movies/Previous movie 4K.mkv"
         let factory = QueueDraftFactory(
             profile: profile,
             destinationURL: URL(fileURLWithPath: "/tmp/Output"),
-            jobOptions: jobOptions
+            options: conversionOptions
         )
         let file = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/Movie.mkv"))
         let disc = ConversionSource(kind: .physicalDisc, url: URL(fileURLWithPath: "/Volumes/MOVIE"))
 
         let drafts = factory.drafts(for: [file, disc])
 
+        XCTAssertTrue(drafts.allSatisfy { $0.options.uhdReferencePath == nil })
         XCTAssertEqual(drafts.map(\.source), [file, disc])
         XCTAssertEqual(drafts.map(\.profile), [profile, profile])
         XCTAssertEqual(drafts.map(\.options.encoding), [profile.options, profile.options])

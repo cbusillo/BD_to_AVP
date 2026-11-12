@@ -45,6 +45,7 @@ from bd_to_avp.worker.protocol import (
     MAX_REQUEST_BYTES,
     MAX_DETAIL_BYTES,
     PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
     WorkerActivityReporter,
     JobSpec,
     WorkerEventEmitter,
@@ -67,8 +68,10 @@ JOB_SPEC_FIXTURE_FAMILIES = (
 )
 
 
-def current_protocol_fixture(family: str) -> Path:
-    return FIXTURES_DIRECTORY / f"{family}_v{PROTOCOL_VERSION}.json"
+def current_protocol_fixture(family: str) -> str:
+    payload = json.loads((FIXTURES_DIRECTORY / f"{family}_v13.json").read_text())
+    payload["protocol_version"] = PROTOCOL_VERSION
+    return json.dumps(payload)
 
 
 def historical_job_spec_fixtures() -> list[tuple[int, Path]]:
@@ -76,7 +79,11 @@ def historical_job_spec_fixtures() -> list[tuple[int, Path]]:
     for family in JOB_SPEC_FIXTURE_FAMILIES:
         for path in FIXTURES_DIRECTORY.glob(f"{family}_v*.json"):
             match = re.fullmatch(rf"{re.escape(family)}_v(\d+)\.json", path.name)
-            if match and int(match.group(1)) < PROTOCOL_VERSION:
+            if (
+                match
+                and int(match.group(1)) < PROTOCOL_VERSION
+                and int(match.group(1)) not in SUPPORTED_PROTOCOL_VERSIONS
+            ):
                 fixtures.append((int(match.group(1)), path))
     return sorted(fixtures)
 
@@ -406,9 +413,9 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_source")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = current_protocol_fixture("native_worker_convert")
+        fixture_line = current_protocol_fixture("native_worker_convert")
 
-        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+        job = JobSpec.from_json_line(fixture_line)
 
         self.assertEqual(job.operation.value, "convert_source")
         self.assertEqual(job.source.kind, WorkerSourceKind.DIRECT_FILE)
@@ -610,9 +617,9 @@ class JobSpecTests(unittest.TestCase):
             JobSpec.from_json_line(json.dumps(request))
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = current_protocol_fixture("native_worker_convert_physical_disc")
+        fixture_line = current_protocol_fixture("native_worker_convert_physical_disc")
 
-        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+        job = JobSpec.from_json_line(fixture_line)
 
         self.assertEqual(job.source.kind, WorkerSourceKind.PHYSICAL_DISC)
         self.assertEqual(job.source.path, Path("/dev/disk9"))
@@ -621,9 +628,9 @@ class JobSpecTests(unittest.TestCase):
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = current_protocol_fixture("native_worker_preview")
+        fixture_line = current_protocol_fixture("native_worker_preview")
 
-        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+        job = JobSpec.from_json_line(fixture_line)
 
         self.assertEqual(job.operation, WorkerOperation.PREVIEW_SOURCE)
         self.assertEqual(job.encoding.audio.preferred_language if job.encoding else None, "eng")
@@ -631,9 +638,9 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.preview.duration_seconds if job.preview else None, 60)
 
     def test_parses_shared_swift_generated_route_fixture(self) -> None:
-        fixture_path = current_protocol_fixture("native_worker_convert_generated")
+        fixture_line = current_protocol_fixture("native_worker_convert_generated")
 
-        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+        job = JobSpec.from_json_line(fixture_line)
 
         self.assertEqual(job.encoding.video.route_intent.value if job.encoding else None, "generated")
         self.assertEqual(job.encoding.video.generated_eye_bitrate.mode.value if job.encoding else None, "automatic")
@@ -641,17 +648,17 @@ class JobSpecTests(unittest.TestCase):
         self.assertTrue(job.job.keep_files if job.job else False)
 
     def test_parses_shared_swift_existing_artifact_fixture(self) -> None:
-        fixture_path = current_protocol_fixture("native_worker_convert_existing_artifact")
+        fixture_line = current_protocol_fixture("native_worker_convert_existing_artifact")
 
-        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+        job = JobSpec.from_json_line(fixture_line)
 
         self.assertEqual(job.encoding.video.route_intent.value if job.encoding else None, "existing_artifact")
         self.assertEqual(job.job.start_stage if job.job else None, 6)
 
     def test_parses_shared_swift_existing_artifact_upscale_fixture(self) -> None:
-        fixture_path = current_protocol_fixture("native_worker_convert_existing_artifact_upscale")
+        fixture_line = current_protocol_fixture("native_worker_convert_existing_artifact_upscale")
 
-        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+        job = JobSpec.from_json_line(fixture_line)
 
         self.assertEqual(job.encoding.video.route_intent.value if job.encoding else None, "existing_artifact")
         self.assertEqual(job.encoding.video.quality_intent.mode.value if job.encoding else None, "custom")
@@ -1019,8 +1026,8 @@ class WorkerActivityReporterTests(unittest.TestCase):
             ],
         )
 
-        fixture_path = current_protocol_fixture("native_worker_audio_fallback_warning")
-        expected = json.loads(fixture_path.read_text())
+        fixture_line = current_protocol_fixture("native_worker_audio_fallback_warning")
+        expected = json.loads(fixture_line)
         self.assertEqual(decoded_events(output), [expected])
 
     def test_warning_emits_shared_audio_language_fallback_fixture(self) -> None:
@@ -1041,8 +1048,8 @@ class WorkerActivityReporterTests(unittest.TestCase):
             action="keep_source_default_audio",
         )
 
-        fixture_path = current_protocol_fixture("native_worker_audio_language_fallback_warning")
-        expected = json.loads(fixture_path.read_text())
+        fixture_line = current_protocol_fixture("native_worker_audio_language_fallback_warning")
+        expected = json.loads(fixture_line)
         self.assertEqual(decoded_events(output), [expected])
 
     def test_stage_plan_emits_shared_progress_fixture(self) -> None:
@@ -1053,8 +1060,8 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
         activity.stage_started("configure", "Preparing conversion settings")
 
-        fixture_path = current_protocol_fixture("native_worker_stage_started_progress")
-        expected = json.loads(fixture_path.read_text())
+        fixture_line = current_protocol_fixture("native_worker_stage_started_progress")
+        expected = json.loads(fixture_line)
         self.assertEqual(decoded_events(output), [expected])
 
     def test_heartbeat_carries_current_stage_fraction(self) -> None:
@@ -1401,8 +1408,8 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = current_protocol_fixture("native_worker_conversion_completed")
-        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        fixture_line = current_protocol_fixture("native_worker_conversion_completed")
+        fixture = json.loads(fixture_line)
 
         self.assertEqual(decoded_events(output)[-1], fixture)
 
@@ -2614,7 +2621,7 @@ if __name__ == "__main__":
 
 
 def rip_request_line(source_path: Path, destination_path: Path, **job_overrides: object) -> str:
-    request = json.loads(current_protocol_fixture("native_worker_rip_physical_disc").read_text(encoding="utf-8"))
+    request = json.loads(current_protocol_fixture("native_worker_rip_physical_disc"))
     request["job_id"] = str(uuid4())
     request["source"] = {
         "kind": source_kind_for_path(source_path),
@@ -2628,9 +2635,7 @@ def rip_request_line(source_path: Path, destination_path: Path, **job_overrides:
 
 class RipSourceTests(unittest.TestCase):
     def test_parses_shared_swift_rip_fixture(self) -> None:
-        job = JobSpec.from_json_line(
-            current_protocol_fixture("native_worker_rip_physical_disc").read_text(encoding="utf-8")
-        )
+        job = JobSpec.from_json_line(current_protocol_fixture("native_worker_rip_physical_disc"))
 
         self.assertEqual(job.operation, WorkerOperation.RIP_SOURCE)
         self.assertEqual(job.source.kind, WorkerSourceKind.PHYSICAL_DISC)

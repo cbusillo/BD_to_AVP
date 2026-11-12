@@ -515,6 +515,8 @@ private struct ProfileEncodingSummaryView: View {
             ProfileSummaryItem(title: "Route", value: route.title),
         ]
         switch route.kind {
+        case .uhdHDRMVHEVC:
+            items.append(ProfileSummaryItem(title: "4K HDR", value: "Automatic encoding quality"))
         case .directMVHEVC:
             items.append(ProfileSummaryItem(title: "Direct final rate control", value: directFinalRateSummary))
             if let generatedFallbackSummary = route.generatedFallbackSummary {
