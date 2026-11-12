@@ -2,6 +2,32 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class RouteResolutionTests: XCTestCase {
+    func testRemoving4KCopyResolvesRetainedGeneratedQualityThroughExistingChoices() throws {
+        for step in [QualityStep.balanced, .detailed] {
+            var options = ConversionOptions()
+            try options.encoding.selectQualityStep(step)
+            let state = RouteQualityResolutionState()
+            state.apply(.matching4KCopy("/Movies/4k.mkv"), to: &options)
+            state.apply(.reusableIntermediates(true), to: &options)
+            XCTAssertNil(state.conflict)
+            state.apply(.matching4KCopy(nil), to: &options)
+            let conflict = try XCTUnwrap(state.conflict)
+            XCTAssertEqual(conflict.trigger, .matching4KCopy)
+            let resolution = try XCTUnwrap(conflict.resolutions.first { $0.choice == .keepRequestedWorkflow && $0.isAvailable })
+            state.resolve(resolution, in: &options)
+            XCTAssertNil(state.blockReason)
+            XCTAssertNil(options.uhdReferencePath)
+            let draft = ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Movies/3d.mkv")),
+                sourceDetails: nil, profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Output"), options: options
+            )
+            let job = WorkerJobSpec(draft: draft)
+            XCTAssertEqual(job.encoding?.video.routeIntent, .generated)
+            _ = try JSONEncoder().encode(job)
+        }
+    }
+
     func testMatchingCopyAllowsConflictingOverridesToBeClearedOneAtATime() {
         var options = ConversionOptions()
         options.uhdReferencePath = "/Movies/4k.mkv"

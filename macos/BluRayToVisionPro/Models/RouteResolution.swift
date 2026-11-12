@@ -11,6 +11,7 @@ enum RouteQualityTrigger: String, CaseIterable, Codable, Identifiable {
     case resolutionOverride = "resolution_override"
     case outputMode = "output_mode"
     case qualitySettings = "quality_settings"
+    case matching4KCopy = "matching_4k_copy"
 
     var id: String { rawValue }
 
@@ -34,11 +35,14 @@ enum RouteQualityTrigger: String, CaseIterable, Codable, Identifiable {
             "Output format"
         case .qualitySettings:
             "Quality settings"
+        case .matching4KCopy:
+            "Matching 4K copy"
         }
     }
 }
 
 enum RouteQualityEdit: Equatable {
+    case matching4KCopy(String?)
     case outputMode(VideoOutputMode)
     case restartStage(ConversionStage)
     case reusableIntermediates(Bool)
@@ -53,6 +57,8 @@ enum RouteQualityEdit: Equatable {
 
     var trigger: RouteQualityTrigger {
         switch self {
+        case .matching4KCopy:
+            .matching4KCopy
         case .outputMode:
             .outputMode
         case .restartStage:
@@ -286,6 +292,8 @@ enum RouteQualityEngine {
         to options: inout ConversionOptions
     ) throws {
         switch edit {
+        case let .matching4KCopy(path):
+            options.uhdReferencePath = path
         case let .outputMode(mode):
             options.encoding.selectVideoOutputMode(mode)
         case let .restartStage(stage):

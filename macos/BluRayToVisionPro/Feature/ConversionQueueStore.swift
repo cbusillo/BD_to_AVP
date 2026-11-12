@@ -254,16 +254,22 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
-    func updateWaitingItemIntent(
+    func updateEditableItemIntent(
         _ itemID: UUID,
         intent: DurableQueueItemIntent,
         routeQualityConflict: DurableRouteQualityConflict? = nil
     ) async throws {
         try await mutateItems { items in
             guard let index = items.firstIndex(where: { $0.id == itemID }),
-                  items[index].state == .waiting
+                  (items[index].state == .waiting
+                    || (items[index].state == .failed && items[index].failure?.isMatching4KRefusal == true))
             else {
                 throw ConversionQueueStoreError.invalidDocument
+            }
+            if items[index].state == .failed {
+                items[index].failure = nil
+                items[index].decision = nil
+                items[index].result = nil
             }
             items[index].intent = intent
             items[index].routeQualityConflict = routeQualityConflict

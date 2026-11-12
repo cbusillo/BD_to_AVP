@@ -1,0 +1,13 @@
+{
+  "protocol_version": 14,
+  "type": "job.failed",
+  "job_id": "00000000-0000-0000-0000-000000000001",
+  "sequence": 5,
+  "payload": {
+    "error": {
+      "code": "uhd_reference_refused",
+      "message": "The 4K copy could not be found. Reconnect its drive or choose it again.",
+      "retryable": true
+    }
+  }
+}

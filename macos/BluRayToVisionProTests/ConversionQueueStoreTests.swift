@@ -3,6 +3,45 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class ConversionQueueStoreTests: XCTestCase {
+    @MainActor
+    func testRefused4KItemCanBeCorrectedWithoutLosingItsAttempt() async throws {
+        let event = try JSONDecoder().decode(WorkerEvent.self, from: workerFixtureData(named: "native_worker_uhd_refusal_v14.json"))
+        let error = try XCTUnwrap(event.payload.error)
+        let failure = DurableQueueFailure(code: error.code, message: error.message, details: error.details, retryable: error.retryable)
+        var refused = makeItem(ordinal: 0, sourcePath: "/Movies/3d.mkv", state: .failed, failure: failure)
+        refused.intent.options.uhdReferencePath = "/Movies/Old 4K.mkv"
+        refused.inspection = SourceInspection(name: "Movie", resolution: "1920x1080", frameRate: "24000/1001", interlaced: false, sizeBytes: 10)
+        refused.attempts = [DurableQueueAttempt(startedAt: Date(timeIntervalSince1970: 0), endedAt: Date(timeIntervalSince1970: 1))]
+        let item = try PersistentQueueItem(item: refused)
+        XCTAssertTrue(item.canRetry)
+        XCTAssertTrue(item.isEditable)
+        XCTAssertFalse(item.canMove)
+        XCTAssertFalse(item.canChangeDestination)
+        let unrelated = makeItem(ordinal: 1, state: .failed, failure: DurableQueueFailure(code: "other_failure", message: "Other failure", details: nil, retryable: false))
+        var active = makeItem(ordinal: 2, state: .processing)
+        active.attempts = [DurableQueueAttempt(startedAt: Date(timeIntervalSince1970: 0))]
+        let directory = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("queue.json")
+        let store = ConversionQueueStore(fileURL: file)
+        try await store.replaceItems([refused, unrelated, active])
+        for locked in [unrelated, active] {
+            XCTAssertFalse(try PersistentQueueItem(item: locked).isEditable)
+            await XCTAssertThrowsErrorAsync(try await store.updateEditableItemIntent(locked.id, intent: locked.intent))
+        }
+        var corrected = refused.intent
+        corrected.options.uhdReferencePath = "/Movies/Replacement 4K.mkv"
+        try await store.updateEditableItemIntent(refused.id, intent: corrected)
+        let restored = try XCTUnwrap(ConversionQueueStore(fileURL: file).items.first)
+        XCTAssertEqual(restored.id, refused.id)
+        XCTAssertEqual(restored.ordinal, refused.ordinal)
+        XCTAssertEqual(restored.inspection, refused.inspection)
+        XCTAssertEqual(restored.attempts, refused.attempts)
+        XCTAssertEqual(restored.intent, corrected)
+        XCTAssertEqual(restored.state, .waiting)
+        XCTAssertNil(restored.failure)
+    }
+
     func testRawDocumentRoundTripPreservesEveryStatusAndOmitsDerivedAvailability() throws {
         let items = DurableQueueItemState.allCases.enumerated().map { offset, state in
             makeItem(
@@ -584,7 +623,7 @@ final class ConversionQueueStoreTests: XCTestCase {
             XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
         }
         await XCTAssertThrowsErrorAsync(
-            try await store.updateWaitingItemIntent(completed.id, intent: completed.intent)
+            try await store.updateEditableItemIntent(completed.id, intent: completed.intent)
         ) { error in
             XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
         }
@@ -605,7 +644,7 @@ final class ConversionQueueStoreTests: XCTestCase {
         var updatedIntent = waiting.intent
         updatedIntent.destinationPath = "/tmp/New Output"
 
-        try await store.updateWaitingItemIntent(waiting.id, intent: updatedIntent)
+        try await store.updateEditableItemIntent(waiting.id, intent: updatedIntent)
         let token = try await store.clearCompletedItems()
 
         XCTAssertEqual(store.items.count, 1)

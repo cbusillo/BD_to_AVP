@@ -534,10 +534,12 @@ def _convert_source(
         except VideoRoutePreflightError as error:
             if owner.cancellation_event.is_set():
                 raise WorkerCancelled("The conversion was cancelled.") from error
+            if isinstance(error, UHDReferenceError):
+                raise WorkerOperationError("uhd_reference_refused", str(error), retryable=True) from error
             raise WorkerOperationError(
                 "video_route_preflight_failed",
-                str(error) if isinstance(error, UHDReferenceError) else "The video route could not be prepared safely.",
-                None if isinstance(error, UHDReferenceError) else str(error),
+                "The video route could not be prepared safely.",
+                str(error),
             ) from error
         except GeneratedMVHEVCArtifactError as error:
             if owner.cancellation_event.is_set():

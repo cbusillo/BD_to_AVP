@@ -34,6 +34,9 @@ Audio and subtitle options still apply to the 3D source. See the
 cut, eye, frame-rate, HDR color, left-eye mask and black-padding checks.
 
 Converter refusal text is the `job.failed` message, displayed on the queue item.
+Its error code is `uhd_reference_refused`, with `retryable: true`. The existing
+Retry and Edit controls let the user reconnect, replace or remove the copy.
+Editing returns the item to waiting and preserves its attempt history.
 A failed item keeps its selected 4K path. Conversion options and the durable
 queue save `uhdReferencePath`; old saved options without that field still load.
 Profiles do not store this movie-specific path. Choosing another 3D source

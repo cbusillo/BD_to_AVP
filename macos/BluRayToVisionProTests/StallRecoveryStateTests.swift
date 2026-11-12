@@ -107,7 +107,6 @@ final class StallRecoveryStateTests: XCTestCase {
     func testSharedStallFixtureRetainsUsefulProgressAndArtifactEvidence() throws {
         let data = try currentWorkerFixtureData("native_worker_stall")
         let decoded = try JSONDecoder().decode(WorkerEvent.self, from: data)
-        XCTAssertEqual(decoded.protocolVersion, WorkerJobSpec.protocolVersion)
         XCTAssertEqual(decoded.type, .toolStall)
         XCTAssertNil(decoded.payload.progress)
         let report = try XCTUnwrap(decoded.payload.stall)

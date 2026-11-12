@@ -448,6 +448,10 @@ struct DurableQueueFailure: Codable, Equatable {
     let message: String
     let details: String?
     let retryable: Bool
+
+    var isMatching4KRefusal: Bool {
+        code == "uhd_reference_refused"
+    }
 }
 
 enum DurableQueueFailureCode {

@@ -18,13 +18,13 @@ from bd_to_avp.modules.video_route import (
 )
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.controls import WorkerControls
-from bd_to_avp.worker.protocol import JobSpec, WorkerEventEmitter, WorkerProtocolError
+from bd_to_avp.worker.protocol import SUPPORTED_PROTOCOL_VERSIONS, JobSpec, WorkerEventEmitter, WorkerProtocolError
 from tests.test_native_worker import current_protocol_fixture
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-@pytest.mark.parametrize("version", [13, 14])
+@pytest.mark.parametrize("version", sorted(SUPPORTED_PROTOCOL_VERSIONS))
 def test_worker_replies_in_request_version(version: int) -> None:
     request = json.loads(current_protocol_fixture("native_worker_convert"))
     request["protocol_version"] = version
@@ -107,7 +107,7 @@ def test_shared_4k_route_cases(case: dict[str, Any], tmp_path: Path) -> None:
         route = resolve_video_route(encoding, options, uhd_reference=job.uhd_reference, capability_probe=probe)
         assert route.selected is VideoRouteKind.UHD_HDR_MV_HEVC
     else:
-        with pytest.raises(VideoRoutePreflightError):
+        with pytest.raises(UHDReferenceError):
             resolve_video_route(encoding, options, uhd_reference=job.uhd_reference, capability_probe=probe)
 
 
@@ -180,10 +180,24 @@ def test_v13_keep_waiting_command_still_reaches_runner() -> None:
     assert received[0].command_id == command["command_id"]
 
 
-def test_missing_4k_copy_refuses_before_probing_encoder(tmp_path: Path) -> None:
-    job = JobSpec.from_json_line((FIXTURES / "native_worker_convert_uhd_v14.json").read_text())
-    assert job.encoding is not None and job.job is not None
-    probe = Mock()
-    with pytest.raises(UHDReferenceError):
-        resolve_video_route(job.encoding, job.job, uhd_reference=tmp_path / "missing.mkv", capability_probe=probe)
+def test_missing_4k_copy_can_be_retried_without_probing_or_conversion(tmp_path: Path) -> None:
+    request = json.loads((FIXTURES / "native_worker_convert_uhd_v14.json").read_text())
+    source = tmp_path / "3d.mkv"
+    source.write_bytes(b"source")
+    request["source"]["path"] = str(source)
+    request["destination"]["path"] = str(tmp_path / "output")
+    request["uhd_reference"] = str(tmp_path / "missing.mkv")
+    output = io.StringIO()
+    with (
+        patch.object(config, "configure_tool_environment"),
+        patch("bd_to_avp.modules.video_route.probe_direct_mv_hevc_capability") as probe,
+        patch("bd_to_avp.modules.process.process_each") as convert,
+    ):
+        run_worker(io.StringIO(json.dumps(request) + "\n"), output, io.StringIO(), establish_session=False)
+    event = json.loads(output.getvalue().splitlines()[-1])
+    expected = json.loads((FIXTURES / "native_worker_uhd_refusal_v14.json").read_text())
+    assert event["type"] == expected["type"]
+    assert event["payload"]["error"]["code"] == expected["payload"]["error"]["code"]
+    assert event["payload"]["error"]["retryable"] is True
     probe.assert_not_called()
+    convert.assert_not_called()

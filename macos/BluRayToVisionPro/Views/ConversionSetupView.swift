@@ -113,19 +113,17 @@ struct ConversionSetupView: View {
             HStack {
                 Button("Add a 4K copy") {
                     if let url = SourcePicker.choose4KCopy() {
-                        options.uhdReferencePath = url.path
-                        routeQualityState.validate(options)
+                        routeQualityState.apply(.matching4KCopy(url.path), to: &options)
                     }
                 }
                 .accessibilityIdentifier("add-4k-copy")
-                .disabled(isLocked || sourceKind == nil || sourceKind == .sourceFolder)
+                .disabled(isLocked || routeQualityState.conflict != nil || sourceKind == nil || sourceKind == .sourceFolder)
                 if let path = options.uhdReferencePath {
                     Text(URL(fileURLWithPath: path).lastPathComponent).lineLimit(1)
                     Button("Remove") {
-                        options.uhdReferencePath = nil
-                        routeQualityState.validate(options)
+                        routeQualityState.apply(.matching4KCopy(nil), to: &options)
                     }
-                    .disabled(isLocked)
+                    .disabled(isLocked || routeQualityState.conflict != nil)
                 }
             }
             if options.uhdReferencePath != nil {

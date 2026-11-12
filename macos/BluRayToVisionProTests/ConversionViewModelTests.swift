@@ -4489,7 +4489,7 @@ final class ConversionViewModelTests: XCTestCase {
 
         try await queueStore.replaceItems(items)
         viewModel.selectPersistentQueueItem(items[2].id)
-        try await queueStore.updateWaitingItemIntent(items[0].id, intent: items[0].intent)
+        try await queueStore.updateEditableItemIntent(items[0].id, intent: items[0].intent)
 
         XCTAssertEqual(viewModel.persistentQueueItems.map(\.id), items.map(\.id))
         XCTAssertEqual(viewModel.persistentQueueItems.map(\.origin), [.singleSource, .multiTitle, .sourceFolder])
