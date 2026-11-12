@@ -1,4 +1,3 @@
-import AVKit
 import RealityKit
 import SwiftUI
 
@@ -39,26 +38,8 @@ struct PlayerView: View {
     }
 
     var body: some View {
-        Group {
-            if isPackedStereoMedia {
-                PackedStereoPlayerSurface(
-                    player: session.player
-                )
-                .allowsHitTesting(false)
-                .overlay {
-                    if trackPicker.isOpen {
-                        GeometryReader3D { geometry in
-                            trackListSurface(geometry: geometry)
-                        }
-                    }
-                }
-            } else {
-                // No backing behind the video: where the window and video shapes differ, the
-                // room shows through instead of a black frame around the picture (#1132).
-                GeometryReader3D { geometry in
-                    playerSurface(geometry: geometry)
-                }
-            }
+        GeometryReader3D { geometry in
+            playerSurface(geometry: geometry)
         }
         .overlay {
             // While a track list is open it sits over the video, so the surface steps aside
@@ -237,10 +218,6 @@ struct PlayerView: View {
         )
     }
 
-    private var isPackedStereoMedia: Bool {
-        session.mediaItem?.format == .sideBySide || session.mediaItem?.format == .overUnder
-    }
-
     /// The video's screen size in its entity's space, or nil before RealityKit knows it.
     private func videoScreenSize(reportedSize: SIMD2<Float>?) -> SIMD2<Float>? {
         guard let component = session.playerEntity.components[VideoPlayerComponent.self] else {
@@ -312,31 +289,8 @@ struct PlayerView: View {
         list.position = SIMD3<Float>(
             0,
             windowBottom + Self.trackListBottomInset + listHeight / 2,
-            (isPackedStereoMedia ? 0 : Self.playerDepthOffset) + Self.trackListDepthAboveVideo
+            Self.playerDepthOffset + Self.trackListDepthAboveVideo
         )
-    }
-}
-
-private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
-    let player: AVPlayer
-
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.experienceController.allowedExperiences = .only([.embedded])
-        controller.showsPlaybackControls = false
-        controller.allowsPictureInPicturePlayback = false
-        controller.player = player
-        return controller
-    }
-
-    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        if controller.player !== player {
-            controller.player = player
-        }
-    }
-
-    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {
-        controller.player = nil
     }
 }
 
@@ -699,24 +653,21 @@ private struct PlayerOrnamentView: View {
             onInteraction()
             session.toggleEyeSwap()
         } label: {
-            VStack(spacing: 2) {
+            Group {
                 if session.isChangingEyeOrder {
                     ProgressView()
                 } else {
                     Image(systemName: presentation.systemImage)
                 }
-                Text("Eye Order")
-                    .font(.caption2.weight(.semibold))
-                Text(presentation.title)
-                    .font(.caption2)
             }
-            .frame(minWidth: 92, minHeight: 60)
+            .frame(minWidth: 60, minHeight: 60)
         }
         .buttonStyle(.bordered)
         .disabled(session.isChangingEyeOrder || !session.canControlPlayback)
         .accessibilityIdentifier("player-eye-swap")
         .accessibilityLabel("Eye order")
         .accessibilityValue(presentation.title)
+        .help("Eye order: \(presentation.title)")
         .accessibilityAddTraits(presentation.isSelected ? .isSelected : [])
     }
 

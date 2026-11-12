@@ -161,7 +161,7 @@ final class BDToAVPPlayerUITests: XCTestCase {
         app.buttons["player-done"].tap()
     }
 
-    func testPackedStereoKeepsOurDoneControlOutsideAVKitAndReturnsToTheLibrary() throws {
+    func testPackedStereoUsesSharedControlsAndReturnsToTheLibrary() throws {
         let app = XCUIApplication()
         app.launch()
         app.buttons["source-on-my-vision-pro"].tap()

@@ -1,4 +1,5 @@
 import AVFoundation
+import RealityKit
 import XCTest
 @testable import BDToAVPPlayer
 
@@ -620,6 +621,54 @@ final class PlayerAppModelTests: XCTestCase {
         XCTAssertEqual(attributes[.modificationDate] as? Date, preservedDate)
     }
 
+    func testPackedMoviesDecodeThroughTheCompositionWithDistinctReversibleEyes() async throws {
+        let checks = try BuiltInStereoChecks.install(destinationDirectory: temporaryURL())
+        for check in checks {
+            let asset = AVURLAsset(url: check.url)
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            let track = try XCTUnwrap(tracks.first)
+            let duration = try await asset.load(.duration)
+            var outputs: [[Data]] = []
+            for eyeOrder in [PackedStereoEyeOrder.normal, .reversed] {
+                let reader = try AVAssetReader(asset: asset)
+                let output = AVAssetReaderVideoCompositionOutput(
+                    videoTracks: [track],
+                    videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: PackedStereoFrameRenderer.pixelFormat]
+                )
+                output.videoComposition = try await PackedStereoComposition.make(
+                    asset: asset, format: check.item.format, duration: duration,
+                    eyeOrder: eyeOrder, spatialMetadataFallback: .qualificationFixture
+                )
+                reader.add(output)
+                XCTAssertTrue(reader.startReading())
+                defer { reader.cancelReading() }
+                let sample = try XCTUnwrap(output.copyNextSampleBuffer(), "\(String(describing: reader.error))")
+                let tagged = try XCTUnwrap(sample.taggedBuffers)
+                var eyes: [Data] = []
+                for eye in [CMStereoViewComponents.leftEye, .rightEye] {
+                    let taggedEye = try XCTUnwrap(tagged.first { $0.tags.contains(.stereoView(eye)) })
+                    guard case let .pixelBuffer(pixels) = taggedEye.buffer else {
+                        return XCTFail("The composed eye has no video pixels.")
+                    }
+                    XCTAssertEqual(CVPixelBufferLockBaseAddress(pixels, .readOnly), kCVReturnSuccess)
+                    defer { CVPixelBufferUnlockBaseAddress(pixels, .readOnly) }
+                    let base = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(pixels, 0))
+                    let stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0)
+                    let width = CVPixelBufferGetWidthOfPlane(pixels, 0)
+                    var luma = Data()
+                    for row in 0 ..< CVPixelBufferGetHeightOfPlane(pixels, 0) {
+                        luma.append(base.advanced(by: row * stride).assumingMemoryBound(to: UInt8.self), count: width)
+                    }
+                    eyes.append(luma)
+                }
+                outputs.append(eyes)
+            }
+            XCTAssertNotEqual(outputs[0][0], outputs[0][1])
+            XCTAssertEqual(outputs[0][0], outputs[1][1])
+            XCTAssertEqual(outputs[0][1], outputs[1][0])
+        }
+    }
+
     func testPackedStereoFixtureBecomesReadyInAVPlayer() async throws {
         let destinationDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerReadyFixture")
@@ -654,39 +703,69 @@ final class PlayerAppModelTests: XCTestCase {
         let destinationDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("BDToAVPPlayerEyeOrderFixture")
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let installedCheck = try BuiltInStereoChecks.install(destinationDirectory: destinationDirectory)[0]
-        let bookmarkStore = BookmarkStore(storageURL: temporaryURL())
-        let resumeStore = ResumeStore(storageURL: temporaryURL())
-        try bookmarkStore.save(url: installedCheck.url, for: installedCheck.item.id)
-        let session = MVHEVCPlayerSession()
+        for installedCheck in try BuiltInStereoChecks.install(destinationDirectory: destinationDirectory) {
+            let bookmarkStore = BookmarkStore(storageURL: temporaryURL())
+            let resumeStore = ResumeStore(storageURL: temporaryURL())
+            try bookmarkStore.save(url: installedCheck.url, for: installedCheck.item.id)
+            let session = MVHEVCPlayerSession()
 
-        await session.prepare(
-            mediaItem: installedCheck.item,
-            bookmarkStore: bookmarkStore,
-            resumeStore: resumeStore
-        )
-        for _ in 0 ..< 100 where !session.isReady {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        XCTAssertTrue(session.isReady, session.failureMessage ?? "Packed stereo session did not become ready.")
-        for _ in 0 ..< 50 where session.player.rate == 0 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        XCTAssertGreaterThan(session.player.rate, 0)
+            await session.prepare(
+                mediaItem: installedCheck.item,
+                bookmarkStore: bookmarkStore,
+                resumeStore: resumeStore
+            )
+            for _ in 0 ..< 100 where !session.isReady {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertTrue(session.isReady, session.failureMessage ?? "Packed stereo session did not become ready.")
+            for _ in 0 ..< 50 where session.player.rate == 0 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertGreaterThan(session.player.rate, 0)
 
-        session.toggleEyeSwap()
-        for _ in 0 ..< 100 where session.isChangingEyeOrder || !session.isEyeSwapped {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
+            session.seekForward()
+            for _ in 0 ..< 50 where session.currentTime < 29 || session.player.rate == 0 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertGreaterThanOrEqual(session.currentTime, 29)
+            XCTAssertGreaterThan(session.player.rate, 0)
+            session.seekBackward()
+            for _ in 0 ..< 50 where session.currentTime > 24 || session.player.rate == 0 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertLessThan(session.currentTime, 24)
+            XCTAssertGreaterThan(session.player.rate, 0)
+            session.pause()
+            session.seek(to: 2)
+            for _ in 0 ..< 50 where abs(session.currentTime - 2) > 0.2 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertEqual(session.currentTime, 2, accuracy: 0.2)
+            XCTAssertEqual(session.player.rate, 0)
+            session.play()
+            for _ in 0 ..< 50 where session.player.rate == 0 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
 
-        XCTAssertTrue(session.isEyeSwapped, session.failureMessage ?? "Eye order did not reverse.")
-        XCTAssertFalse(session.isChangingEyeOrder)
-        XCTAssertTrue(session.isReady)
-        for _ in 0 ..< 50 where session.player.rate == 0 {
-            try await Task.sleep(nanoseconds: 100_000_000)
+            session.toggleEyeSwap()
+            for _ in 0 ..< 100 where session.isChangingEyeOrder || !session.isEyeSwapped {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+
+            XCTAssertTrue(session.isEyeSwapped, session.failureMessage ?? "Eye order did not reverse.")
+            XCTAssertFalse(session.isChangingEyeOrder)
+            XCTAssertTrue(session.isReady)
+            for _ in 0 ..< 50 where session.player.rate == 0 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertGreaterThan(session.player.rate, 0)
+            session.installPlayerComponent()
+            let video = try XCTUnwrap(session.playerEntity.components[VideoPlayerComponent.self])
+            XCTAssertTrue(video.avPlayer === session.player)
+            XCTAssertNotNil(video.avPlayer?.currentItem?.videoComposition)
+            session.finish()
+            XCTAssertNil(session.playerEntity.components[VideoPlayerComponent.self])
         }
-        XCTAssertGreaterThan(session.player.rate, 0)
-        session.finish()
     }
 
     /// Starts the bundled side-by-side check as a library movie and waits until it is ready.

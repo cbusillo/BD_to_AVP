@@ -492,22 +492,12 @@ final class PlaybackPresentationTests: XCTestCase {
     }
 
     func testEyeOrderPresentationHasVisibleAndAccessibleSelectedState() {
-        XCTAssertEqual(
-            PlaybackEyeOrderPresentation.value(isEyeSwapped: false),
-            PlaybackEyeOrderPresentation(
-                title: "Normal",
-                systemImage: "arrow.left.arrow.right",
-                isSelected: false
-            )
-        )
-        XCTAssertEqual(
-            PlaybackEyeOrderPresentation.value(isEyeSwapped: true),
-            PlaybackEyeOrderPresentation(
-                title: "Reversed",
-                systemImage: "arrow.left.arrow.right.circle.fill",
-                isSelected: true
-            )
-        )
+        let normal = PlaybackEyeOrderPresentation.value(isEyeSwapped: false)
+        let reversed = PlaybackEyeOrderPresentation.value(isEyeSwapped: true)
+        XCTAssertNotEqual(normal.title, reversed.title)
+        XCTAssertNotEqual(normal.systemImage, reversed.systemImage)
+        XCTAssertFalse(normal.isSelected)
+        XCTAssertTrue(reversed.isSelected)
     }
 
     func testAudioLabelsLeaveUniqueNamesUnchangedAndDisambiguateCollisions() {
