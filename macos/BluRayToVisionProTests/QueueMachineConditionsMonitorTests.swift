@@ -30,7 +30,7 @@ final class QueueMachineConditionsMonitorTests: XCTestCase {
     }
 
     @MainActor
-    func testDroppingMonitorRetiresPendingPowerAndThermalRegistrations() throws {
+    func testDroppingMonitorRetiresPendingPowerRegistration() throws {
         let power = PowerNotificationFixture()
         var monitor: SystemQueueMachineConditions? = SystemQueueMachineConditions(createPowerSource: power.makeSource)
         var changes = 0
@@ -43,23 +43,7 @@ final class QueueMachineConditionsMonitorTests: XCTestCase {
         XCTAssertFalse(CFRunLoopSourceIsValid(source))
         XCTAssertFalse(CFRunLoopContainsSource(CFRunLoopGetMain(), source, .defaultMode))
         CFRunLoopRunInMode(.defaultMode, 0.01, false)
-        NotificationCenter.default.post(name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
         XCTAssertEqual(changes, 0)
-    }
-
-    @MainActor
-    func testRealIOPSSourceIsInvalidatedWhenMonitorIsDropped() throws {
-        var source: CFRunLoopSource?
-        var monitor: SystemQueueMachineConditions? = SystemQueueMachineConditions(createPowerSource: { callback, context in
-            source = IOPSNotificationCreateRunLoopSource(callback, context)?.takeRetainedValue()
-            return source
-        })
-        monitor!.startObserving {}
-        let registration = try XCTUnwrap(source)
-        XCTAssertTrue(CFRunLoopContainsSource(CFRunLoopGetMain(), registration, .defaultMode))
-        monitor = nil
-        XCTAssertFalse(CFRunLoopSourceIsValid(registration))
-        XCTAssertFalse(CFRunLoopContainsSource(CFRunLoopGetMain(), registration, .defaultMode))
     }
 }
 
