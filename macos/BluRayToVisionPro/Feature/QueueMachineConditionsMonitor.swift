@@ -13,9 +13,22 @@ protocol QueueMachineConditionsProviding: AnyObject {
 /// Reads the providing power source from IOKit and the thermal state from `ProcessInfo`.
 @MainActor
 final class SystemQueueMachineConditions: QueueMachineConditionsProviding {
+    typealias PowerSourceFactory = (IOPowerSourceCallbackType, UnsafeMutableRawPointer) -> CFRunLoopSource?
+
+    private let createPowerSource: PowerSourceFactory
     private var onChange: (@MainActor () -> Void)?
     private var powerSource: CFRunLoopSource?
     private var thermalObserver: NSObjectProtocol?
+
+    init(createPowerSource: @escaping PowerSourceFactory = { callback, context in
+        IOPSNotificationCreateRunLoopSource(callback, context)?.takeRetainedValue()
+    }) {
+        self.createPowerSource = createPowerSource
+    }
+
+    isolated deinit {
+        stopObserving()
+    }
 
     var current: QueueMachineConditions {
         QueueMachineConditions(
@@ -38,7 +51,7 @@ final class SystemQueueMachineConditions: QueueMachineConditionsProviding {
         stopObserving()
         self.onChange = onChange
         let context = Unmanaged.passUnretained(self).toOpaque()
-        if let source = IOPSNotificationCreateRunLoopSource({ context in
+        if let source = createPowerSource({ context in
             guard let context else {
                 return
             }
@@ -46,7 +59,7 @@ final class SystemQueueMachineConditions: QueueMachineConditionsProviding {
             MainActor.assumeIsolated {
                 monitor.onChange?()
             }
-        }, context)?.takeRetainedValue() {
+        }, context) {
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
             powerSource = source
         }
@@ -63,7 +76,7 @@ final class SystemQueueMachineConditions: QueueMachineConditionsProviding {
 
     func stopObserving() {
         if let powerSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), powerSource, .defaultMode)
+            CFRunLoopSourceInvalidate(powerSource)
             self.powerSource = nil
         }
         if let thermalObserver {
