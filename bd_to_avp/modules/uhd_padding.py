@@ -10,7 +10,7 @@ import ffmpeg
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.uhd_color import HDRReferenceInfo
-from bd_to_avp.modules.video_route import VideoRoutePreflightError
+from bd_to_avp.modules.video_route import UHDReferenceError
 from bd_to_avp.runtime import RunContext
 
 BLACK_LUMA_8BIT = 18
@@ -27,7 +27,7 @@ def read_luma_maxima(path: Path, frame_count: int) -> list[int]:
     prefix = "lavfi.signalstats.YMAX="
     values = [int(line.removeprefix(prefix)) for line in path.read_text().splitlines() if line.startswith(prefix)]
     if len(values) != frame_count:
-        raise VideoRoutePreflightError("The black padding could not be checked for every video frame.")
+        raise UHDReferenceError("The black padding could not be checked for every video frame.")
     return values
 
 
@@ -38,7 +38,7 @@ def picture_indices(maxima: list[int], black_level: int) -> list[int]:
 def picture_extent(maxima: list[int], black_level: int) -> PictureExtent:
     picture = picture_indices(maxima, black_level)
     if not picture:
-        raise VideoRoutePreflightError("The video contains no clear picture to match.")
+        raise UHDReferenceError("The video contains no clear picture to match.")
     return PictureExtent(len(maxima), picture[0], picture[-1] + 1)
 
 
@@ -110,7 +110,7 @@ def reference_picture_extent(
             first = start + picture[0]
             break
     if first is None:
-        raise VideoRoutePreflightError("The 4K copy contains no clear picture to match.")
+        raise UHDReferenceError("The 4K copy contains no clear picture to match.")
     for stop in range(info.frame_count, first, -chunk):
         start = max(first, stop - chunk)
         maxima = read_reference_luma(
@@ -124,15 +124,13 @@ def reference_picture_extent(
         picture = picture_indices(maxima, BLACK_LUMA_8BIT * 4)
         if picture:
             return PictureExtent(info.frame_count, first, start + picture[-1] + 1)
-    raise VideoRoutePreflightError("The 4K picture ending could not be checked.")
+    raise UHDReferenceError("The 4K picture ending could not be checked.")
 
 
 def check_black_padding(source: PictureExtent, reference: PictureExtent, offset: int) -> None:
     if source.first + offset < 0 or source.stop + offset > reference.frame_count:
-        raise VideoRoutePreflightError("The 4K copy is missing pictures at the beginning or end of the 3D movie.")
+        raise UHDReferenceError("The 4K copy is missing pictures at the beginning or end of the 3D movie.")
     if reference.first < offset or reference.stop > source.frame_count + offset:
-        raise VideoRoutePreflightError("The 3D source is missing pictures at the beginning or end of the 4K movie.")
+        raise UHDReferenceError("The 3D source is missing pictures at the beginning or end of the 4K movie.")
     if reference.first != source.first + offset or reference.stop != source.stop + offset:
-        raise VideoRoutePreflightError(
-            "The picture begins or ends differently in the two copies. They may be different cuts."
-        )
+        raise UHDReferenceError("The picture begins or ends differently in the two copies. They may be different cuts.")

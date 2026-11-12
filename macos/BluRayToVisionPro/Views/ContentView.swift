@@ -357,6 +357,7 @@ struct ContentView: View {
                     destinationURL: destinationURL,
                     titleSelection: $titleSelection,
                     drafts: conversionDrafts,
+                    matching4KCopyAttached: options.uhdReferencePath != nil,
                     previewViewModel: previewViewModel,
                     queueAdmissionNoticeMessage: $queueAdmissionNoticeMessage,
                     persistentQueueErrorMessage: $persistentQueueErrorMessage,
@@ -755,6 +756,7 @@ struct ContentView: View {
             return []
         }
         if source.kind.isDiscWorkflow {
+            guard draftOptions.uhdReferencePath == nil || selectedTitles.count == 1 else { return [] }
             return selectedTitles.map { title in
                 ConversionDraft(
                     source: source,
@@ -1061,6 +1063,7 @@ struct ContentView: View {
             appendSourcesToPersistentQueue([source])
             return
         }
+        options.resetSourceScopedState(for: source.kind)
         titleSelection = .main
         configuredSource = source
         viewModel.selectSource(source)
@@ -1205,6 +1208,7 @@ struct ContentView: View {
         isShowingSourceConfigurationEditor = false
         guard configuredSource != nil else { return }
         configuredSource = nil
+        options.uhdReferencePath = nil
         if !viewModel.hasActiveWork {
             viewModel.clearSource()
         }
@@ -1528,6 +1532,7 @@ private struct SourceConfigurationSheet: View {
     let destinationURL: URL
     @Binding var titleSelection: DiscTitleSelection
     let drafts: [ConversionDraft]
+    let matching4KCopyAttached: Bool
     @ObservedObject var previewViewModel: PreviewViewModel
     @Binding var queueAdmissionNoticeMessage: String?
     @Binding var persistentQueueErrorMessage: String?
@@ -1551,6 +1556,10 @@ private struct SourceConfigurationSheet: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         titleSelectionControls(inspection)
+                        if matching4KCopyAttached, drafts.isEmpty {
+                            Text("Choose one 3D video to use with the matching 4K copy.")
+                                .foregroundStyle(.orange)
+                        }
                         setupSummary
                     } else if let inspectionFailureMessage {
                         ContentUnavailableView(

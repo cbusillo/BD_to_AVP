@@ -187,6 +187,9 @@ enum RouteQualityEngine {
             return .invalid(error.localizedDescription)
         }
 
+        if proposed.uhdReferencePath != nil {
+            return .resolved(RouteQualityDraft(options: proposed, mappingVersion: mappingVersion))
+        }
         let priorRoute = VideoRoutePlan(options: options)
         let proposedRoute = VideoRoutePlan(options: proposed)
         let routeChanged = priorRoute.kind != proposedRoute.kind
@@ -420,7 +423,9 @@ enum RouteQualityEngine {
         switch proposedRoute.kind {
         case .generatedMVHEVC:
             return "This change requires generated left- and right-eye files. Choose how the current quality choice should carry over."
-        case .directMVHEVC, .uhdHDRMVHEVC:
+        case .uhdHDRMVHEVC:
+            return "The matching copy supplies the 4K HDR picture."
+        case .directMVHEVC:
             return "This change uses the source video directly. Choose how the current quality choice should carry over."
         case .av1Stereo:
             return "This output format uses exact Custom quality settings. Choose how to continue."
@@ -459,7 +464,9 @@ enum RouteQualityEngine {
         }
         let supported: [QualityStep]
         switch route.kind {
-        case .directMVHEVC, .uhdHDRMVHEVC:
+        case .uhdHDRMVHEVC:
+            return nil
+        case .directMVHEVC:
             supported = VideoQualityCatalog.supportedSteps(
                 for: route.includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC
             )
@@ -482,7 +489,9 @@ enum RouteQualityEngine {
 
     private static func qualityTarget(for route: VideoRoutePlan) -> VideoQualityTarget? {
         switch route.kind {
-        case .directMVHEVC, .uhdHDRMVHEVC:
+        case .uhdHDRMVHEVC:
+            nil
+        case .directMVHEVC:
             route.includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC
         case .generatedMVHEVC:
             .generatedMVHEVC
@@ -531,7 +540,7 @@ final class RouteQualityResolutionState: ObservableObject {
         switch RouteQualityEngine.propose(options: options, edit: edit) {
         case let .resolved(draft):
             options = draft.options
-            invalidMessage = nil
+            invalidMessage = RouteQualityEngine.matching4KRefusal(options)
         case let .conflict(conflict):
             self.conflict = conflict
             invalidMessage = nil

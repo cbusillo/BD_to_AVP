@@ -97,6 +97,9 @@ struct EncodingOptionsEditor: View {
                     Divider()
                     VideoRouteSummaryView(plan: routePlan)
                     if routePlan.kind == .uhdHDRMVHEVC {
+                        if options.upscaleEnabled {
+                            Button("Turn off AI upscale") { applyRouteEdit(.upscaleEnabled(false)) }
+                        }
                         Text("The matching copy supplies the 4K HDR picture. Conversion quality is chosen automatically.")
                             .font(.caption)
                     } else {

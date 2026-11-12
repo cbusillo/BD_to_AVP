@@ -18,6 +18,12 @@ and short previews reject it in either version, so they cannot silently ignore
 a requested 4K copy. The app disables short previews while a copy is attached.
 The shared request example is `tests/fixtures/native_worker_convert_uhd_v14.json`.
 
+Its video object is `{"mode":"mv_hevc","route_intent":"matching_4k"}`,
+with no quality, bitrate or generated-fallback controls. The path and that intent
+must appear together. Ordinary video shapes use the unchanged v13 fixtures with
+the supported protocol version applied by the test readers; the new fixture
+records only the changed request shape.
+
 The worker selects `uhd_hdr_mv_hevc` before ordinary video routing and uses the
 same option validation and automatic encoding quality as the CLI route. It
 requires MV-HEVC, starts from the beginning, and refuses eye swapping,

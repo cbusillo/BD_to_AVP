@@ -50,7 +50,7 @@ from bd_to_avp.modules.video import (
     run_direct_mv_hevc_encoding,
     run_native_mvc_encoding,
 )
-from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRoutePreflightError
+from bd_to_avp.modules.video_route import ResolvedVideoRoute, UHDReferenceError
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.presentation import cli_message
 from bd_to_avp.runtime import RunContext
@@ -98,7 +98,7 @@ def probe_video_frame_count(
         if count <= 0:
             raise ValueError
     except (KeyError, IndexError, TypeError, ValueError) as error:
-        raise VideoRoutePreflightError("The video frame count could not be checked before encoding.") from error
+        raise UHDReferenceError("The video frame count could not be checked before encoding.") from error
     return count
 
 
@@ -197,7 +197,7 @@ def collect_stereo_samples(
             for _ in indices:
                 payload = destination.read(SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12)
                 if len(payload) != SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12:
-                    raise VideoRoutePreflightError(
+                    raise UHDReferenceError(
                         "The 3D source ends before its stated video runtime. Its cut cannot be checked."
                     )
                 image = np.frombuffer(payload, "<u2").reshape(SAMPLE_SIZE[1], SAMPLE_SIZE[0] * 2, 3).astype(
@@ -205,7 +205,7 @@ def collect_stereo_samples(
                 ) / np.float32(65535)
                 samples.append((image[:, : SAMPLE_SIZE[0]], image[:, SAMPLE_SIZE[0] :]))
     if decoded_count <= indices[-1]:
-        raise VideoRoutePreflightError("The 3D decoder did not confirm the whole movie's frame count.")
+        raise UHDReferenceError("The 3D decoder did not confirm the whole movie's frame count.")
     return StereoSamples(samples, extent)
 
 
@@ -242,12 +242,12 @@ def read_reference_window(
         for index in window:
             payload = destination.read(frame_bytes)
             if len(payload) != frame_bytes:
-                raise VideoRoutePreflightError("The 4K copy has missing or unevenly timed pictures near its end.")
+                raise UHDReferenceError("The 4K copy has missing or unevenly timed pictures near its end.")
             frames[index] = np.frombuffer(payload, "<u2").reshape(SAMPLE_SIZE[1], SAMPLE_SIZE[0], 3).astype(
                 np.float32
             ) / np.float32(65535)
         if destination.read(1):
-            raise VideoRoutePreflightError("The 4K copy does not have a constant matching frame rate.")
+            raise UHDReferenceError("The 4K copy does not have a constant matching frame rate.")
     return frames
 
 
@@ -315,12 +315,12 @@ def collect_matched_frames(
         or len(matched) < SAMPLE_BINS
         or sum(frame.eye_verified for frame in matched) < 3
     ):
-        raise VideoRoutePreflightError(
+        raise UHDReferenceError(
             "There are too few clear left-eye matches across the whole film to confirm its cut and eye."
         )
     matrices = np.stack([frame.registration.matrix for frame in matched])
     if np.max(np.abs(matrices - np.median(matrices, axis=0))) > 0.75:
-        raise VideoRoutePreflightError("The framing changes during the film. The two pictures cannot stay lined up.")
+        raise UHDReferenceError("The framing changes during the film. The two pictures cannot stay lined up.")
     return matched, frame_offset
 
 
@@ -336,7 +336,7 @@ def prepare_uhd_conversion(
 ) -> UHDConversionPlan:
     info = probe_hdr_reference(reference, run_context=run_context, cancellation_event=cancellation_event)
     if disc_info.resolution != "1920x1080" or disc_info.is_interlaced or disc_info.color_depth != 8:
-        raise VideoRoutePreflightError("The 3D source must be progressive 1920 by 1080 Blu-ray MVC video.")
+        raise UHDReferenceError("The 3D source must be progressive 1920 by 1080 Blu-ray MVC video.")
     check_reference_frame_rate(info, disc_info.frame_rate)
     duration = disc_info.duration_seconds
     indices = source_sample_indices(duration, info.frame_rate)

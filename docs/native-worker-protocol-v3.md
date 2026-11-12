@@ -1,7 +1,7 @@
 # Native Worker Protocol v3
 
 > Historical protocol. The app and worker now use
-> [Native Worker Protocol v14](native-worker-protocol-v14.md).
+> [Native Worker Protocol v13](native-worker-protocol-v13.md).
 
 Protocol v3 adds immutable conversion-preview child jobs while preserving the
 single-request, single-process JSON Lines transport from v2. The native app and

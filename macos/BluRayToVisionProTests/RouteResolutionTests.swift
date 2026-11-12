@@ -2,6 +2,23 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class RouteResolutionTests: XCTestCase {
+    func testMatchingCopyAllowsConflictingOverridesToBeClearedOneAtATime() {
+        var options = ConversionOptions()
+        options.uhdReferencePath = "/Movies/4k.mkv"
+        options.encoding.upscaleEnabled = true
+        options.job.softwareEncoder = true
+        let state = RouteQualityResolutionState()
+        state.validate(options)
+        XCTAssertNotNil(state.blockReason)
+        state.apply(.upscaleEnabled(false), to: &options)
+        XCTAssertFalse(options.encoding.upscaleEnabled)
+        XCTAssertNil(state.conflict)
+        XCTAssertNotNil(state.blockReason)
+        state.apply(.softwareEncoder(false), to: &options)
+        XCTAssertFalse(options.job.softwareEncoder)
+        XCTAssertNil(state.blockReason)
+    }
+
     func testEveryRouteForcingTriggerAndQualityStepProducesAValidExit() throws {
         let edits: [(RouteQualityTrigger, RouteQualityEdit)] = [
             (.reusableIntermediates, .reusableIntermediates(true)),

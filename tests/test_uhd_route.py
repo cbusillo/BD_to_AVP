@@ -208,12 +208,14 @@ def test_frame_mastering_metadata_is_copied_when_the_container_has_none() -> Non
     assert info.max_cll == original.max_cll
 
 
-def test_cli_passes_the_reference_to_route_selection() -> None:
+def test_cli_passes_the_reference_to_route_selection(tmp_path: Path) -> None:
     import sys
     from bd_to_avp.modules.config import Config
 
     settings = Config()
-    with patch.object(sys, "argv", ["bd-to-avp", "--source", "3d.mkv", "--uhd-reference", "uhd.mkv"]):
+    reference = tmp_path / "uhd.mkv"
+    reference.touch()
+    with patch.object(sys, "argv", ["bd-to-avp", "--source", "3d.mkv", "--uhd-reference", str(reference)]):
         settings.parse_args()
     with (
         patch.object(video_route, "config", settings),
@@ -225,7 +227,7 @@ def test_cli_passes_the_reference_to_route_selection() -> None:
     ):
         route = video_route.legacy_video_route()
     assert route.selected is video_route.VideoRouteKind.UHD_HDR_MV_HEVC
-    assert route.uhd_reference == Path("uhd.mkv")
+    assert route.uhd_reference == reference
 
 
 def test_match_refusal_happens_before_audio_or_video_encoding(tmp_path: Path) -> None:

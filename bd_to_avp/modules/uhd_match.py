@@ -8,7 +8,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from bd_to_avp.modules.uhd_color import FloatImage, HDRReferenceInfo, SAMPLE_SIZE, UHD_SIZE
-from bd_to_avp.modules.video_route import VideoRoutePreflightError
+from bd_to_avp.modules.video_route import UHDReferenceError
 
 SAMPLE_BINS = 24
 MAX_OFFSET_SECONDS = 1
@@ -44,15 +44,15 @@ def check_reference_frame_rate(reference: HDRReferenceInfo, source_rate: str) ->
     try:
         rate = Fraction(source_rate)
     except (ValueError, ZeroDivisionError) as error:
-        raise VideoRoutePreflightError("The 3D source needs a known frame rate to match a 4K copy.") from error
+        raise UHDReferenceError("The 3D source needs a known frame rate to match a 4K copy.") from error
     if abs(float(rate - reference.frame_rate)) > 0.0001:
-        raise VideoRoutePreflightError("The 3D source and 4K copy have different frame rates. Choose matching copies.")
+        raise UHDReferenceError("The 3D source and 4K copy have different frame rates. Choose matching copies.")
 
 
 def source_sample_indices(duration: float, rate: Fraction) -> tuple[int, ...]:
     frame_count = int(duration * rate)
     if frame_count < SAMPLE_BINS * 4:
-        raise VideoRoutePreflightError("The source is too short to check matching frames across the film.")
+        raise UHDReferenceError("The source is too short to check matching frames across the film.")
     last_frame = frame_count - 1
     return tuple(
         sorted(
@@ -138,7 +138,7 @@ def match_frame(
     if not ranked or ranked[0][0] < 0.4:
         if float(left.std()) < 0.025:
             return None
-        raise VideoRoutePreflightError(
+        raise UHDReferenceError(
             f"The pictures do not match near frame {source_index}. "
             "The copies may be different cuts or differently framed."
         )
@@ -146,10 +146,10 @@ def match_frame(
     if expected_offset is not None:
         expected_index = source_index + expected_offset
         if expected_index not in candidates:
-            raise VideoRoutePreflightError("The 4K copy is missing pictures at the beginning or end of the 3D source.")
+            raise UHDReferenceError("The 4K copy is missing pictures at the beginning or end of the 3D source.")
         expected_score = correspondence_score(candidates[expected_index], left)
         if best_index != expected_index and ranked[0][0] - expected_score > 0.03:
-            raise VideoRoutePreflightError(
+            raise UHDReferenceError(
                 f"The matching frames drift near frame {source_index}. The copies may contain different edits."
             )
         best_index = expected_index
@@ -165,13 +165,11 @@ def match_frame(
         and right_match.is_pixel_aligned
         and (left_match is None or not left_match.is_pixel_aligned)
     ):
-        raise VideoRoutePreflightError(
-            "The 4K copy matches the right eye. This route needs a copy matching the left eye."
-        )
+        raise UHDReferenceError("The 4K copy matches the right eye. This route needs a copy matching the left eye.")
     if left_match is None:
         return None
     if not left_match.is_pixel_aligned:
-        raise VideoRoutePreflightError(
+        raise UHDReferenceError(
             f"The 4K picture cannot be lined up with the 3D left eye near frame {source_index}. "
             "The scale, rotation, position or framing differs."
         )
@@ -205,7 +203,7 @@ def aligned_color_pixels(frame: MatchedFrame, registration: FloatImage) -> tuple
     shared_picture = (source_gray > 0.03) & (target_gray > 0.03)
     active_rows = np.flatnonzero(shared_picture.any(axis=1))
     if not len(active_rows):
-        raise VideoRoutePreflightError("There is no shared picture area for HDR color fitting.")
+        raise UHDReferenceError("There is no shared picture area for HDR color fitting.")
     active_columns = np.flatnonzero(shared_picture.any(axis=0))
     top, bottom = int(active_rows[0]), int(active_rows[-1]) + 1
     left, right = int(active_columns[0]), int(active_columns[-1]) + 1

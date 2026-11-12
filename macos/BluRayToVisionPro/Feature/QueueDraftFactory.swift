@@ -61,6 +61,7 @@ struct QueueDraftFactory: Equatable {
 
     func draft(for source: ConversionSource) -> ConversionDraft {
         var sourceOptions = options
+        sourceOptions.uhdReferencePath = nil
         if source.kind == .physicalDisc {
             sourceOptions.job.removeOriginalAfterSuccess = false
         }

@@ -1,7 +1,7 @@
 # Native Worker Protocol v5
 
 > Historical protocol. The app and worker now use
-> [Native Worker Protocol v14](native-worker-protocol-v14.md).
+> [Native Worker Protocol v13](native-worker-protocol-v13.md).
 
 Protocol v5 replaces the three legacy subtitle fields with one explicit,
 backend-neutral subtitle policy. The native app and bundled Python worker ship

@@ -18,22 +18,7 @@
     },
     "video": {
       "mode": "mv_hevc",
-      "route_intent": "automatic",
-      "quality_intent": {
-        "mode": "ladder",
-        "step": "balanced",
-        "mapping_version": 2
-      },
-      "direct_bitrate": {
-        "mode": "automatic"
-      },
-      "direct_quality": 0.7,
-      "generated_fallback": {
-        "eye_bitrate": {
-          "mode": "automatic"
-        },
-        "merge_quality": 75
-      }
+      "route_intent": "matching_4k"
     },
     "upscale": {
       "enabled": false

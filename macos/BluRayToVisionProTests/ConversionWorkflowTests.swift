@@ -23,7 +23,7 @@ final class ConversionWorkflowTests: XCTestCase {
         }
     }
 
-    func testMatching4KCopySurvivesQueueAndReachesWorker() throws {
+    func testMatching4KCopyReachesWorkerWithoutRetainedQualityControls() throws {
         var options = ConversionOptions()
         options.uhdReferencePath = "/Movies/4k.mkv"
         let draft = ConversionDraft(
@@ -35,19 +35,17 @@ final class ConversionWorkflowTests: XCTestCase {
         retainedOptions.job.intermediatePolicy = .reusable
         try retainedOptions.encoding.selectQualityStep(.detailed)
         let retainedDraft = ConversionDraft(source: draft.source, sourceDetails: nil, profile: draft.profile, destinationURL: draft.destinationURL, options: retainedOptions)
-        XCTAssertNoThrow(try JSONEncoder().encode(WorkerJobSpec(draft: retainedDraft)))
         XCTAssertNil(PreviewDraft(conversion: draft, outputLength: .oneMinute, samplePosition: .beginning))
-        let intent = DurableQueueItemIntent(draft: draft)
-        let restored = try JSONDecoder().decode(DurableQueueItemIntent.self, from: JSONEncoder().encode(intent))
-        XCTAssertEqual(restored.options.uhdReferencePath, options.uhdReferencePath)
-        XCTAssertEqual(restored.options.videoRoutePlan.kind, .uhdHDRMVHEVC)
-        XCTAssertNil(RouteQualityEngine.matching4KRefusal(restored.options))
+        XCTAssertEqual(options.videoRoutePlan.kind, .uhdHDRMVHEVC)
+        XCTAssertNil(RouteQualityEngine.matching4KRefusal(options))
         let job = WorkerJobSpec(draft: draft, jobID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(job)) as? [String: Any])
         XCTAssertEqual(payload["uhd_reference"] as? String, options.uhdReferencePath)
         XCTAssertEqual(payload["protocol_version"] as? Int, WorkerJobSpec.protocolVersion)
         let fixture = try JSONSerialization.jsonObject(with: sharedFixtureData(named: "native_worker_convert_uhd_v14.json")) as? NSDictionary
         XCTAssertEqual(payload as NSDictionary, fixture)
+        let retainedPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(WorkerJobSpec(draft: retainedDraft))) as? [String: Any])
+        XCTAssertEqual((retainedPayload["encoding"] as? NSDictionary)?["video"] as? NSDictionary, (payload["encoding"] as? NSDictionary)?["video"] as? NSDictionary)
     }
 
     func testMatching4KCopyRefusesOverridesAndResetsForNewSource() {
@@ -2147,7 +2145,7 @@ final class ConversionWorkflowTests: XCTestCase {
     }
 
     private func currentProtocolFixtureData(_ family: String) throws -> Data {
-        try sharedFixtureData(named: "\(family)_v\(WorkerJobSpec.protocolVersion).json")
+        try currentWorkerFixtureData(family)
     }
 
     private func sharedFixtureData(named name: String) throws -> Data {

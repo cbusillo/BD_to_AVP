@@ -60,6 +60,7 @@ final class ConversionQueueStoreTests: XCTestCase {
                 options: options,
                 state: .waiting
             )
+        firstItem.intent.options.uhdReferencePath = "/Movies/First movie 4K.mkv"
         firstItem.intent.sourceFolderDiscTitleSelection = .all3DVideos
         firstItem.intent.sourceFolderTitleIndex = 1
         let items = [
@@ -88,7 +89,8 @@ final class ConversionQueueStoreTests: XCTestCase {
         XCTAssertEqual(restored.items, items)
         XCTAssertEqual(restored.items.map(\.ordinal), [0, 1])
         XCTAssertEqual(restored.items.map(\.groupID), [groupID, groupID])
-        XCTAssertEqual(restored.items.first?.intent.options, options)
+        XCTAssertEqual(restored.items.first?.intent.options, firstItem.intent.options)
+        XCTAssertEqual(restored.items.last?.intent.options, options)
         XCTAssertEqual(restored.items.first?.intent.sourceFolderDiscTitleSelection, .all3DVideos)
         XCTAssertEqual(restored.items.first?.intent.sourceFolderTitleIndex, 1)
         XCTAssertFalse(try XCTUnwrap(restored.items.first).intent.options.job.removeOriginalAfterSuccess)

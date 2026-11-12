@@ -1,7 +1,7 @@
 # Native Worker Protocol v12
 
 > Historical contract. The native app and bundled worker now use
-> [Native Worker Protocol v14](native-worker-protocol-v14.md).
+> [Native Worker Protocol v13](native-worker-protocol-v13.md).
 
 Protocol v12 carries quality mapping version 2 and the exact concrete direct
 quality selected by the native app. The native app and bundled Python worker

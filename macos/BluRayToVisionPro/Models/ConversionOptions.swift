@@ -505,10 +505,11 @@ struct EncodingOptions: Codable, Equatable {
     }
 
     func videoSummary(for route: VideoRoutePlan) -> String {
-        if route.kind == .uhdHDRMVHEVC { return route.compactSummary }
         let resolution = upscaleEnabled ? "2× upscale" : "source resolution"
         return switch route.kind {
-        case .directMVHEVC, .uhdHDRMVHEVC:
+        case .uhdHDRMVHEVC:
+            route.compactSummary
+        case .directMVHEVC:
             route.includesUpscale ? route.compactSummary : "\(route.compactSummary) · source resolution"
         case .generatedMVHEVC:
             "\(route.compactSummary) · \(resolution)"

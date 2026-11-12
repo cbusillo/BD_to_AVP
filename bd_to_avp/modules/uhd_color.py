@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from bd_to_avp.modules.video_route import VideoRoutePreflightError
+from bd_to_avp.modules.video_route import UHDReferenceError
 
 FloatImage = NDArray[np.float32]
 UHD_SIZE = (3840, 2160)
@@ -31,7 +31,7 @@ class HDRReferenceInfo:
 def read_hdr_reference_info(probe: dict[str, Any]) -> HDRReferenceInfo:
     streams = [stream for stream in probe.get("streams", []) if stream.get("codec_type") == "video"]
     if not streams:
-        raise VideoRoutePreflightError("The 4K copy has no video track.")
+        raise UHDReferenceError("The 4K copy has no video track.")
     stream = dict(streams[0])
     frames = probe.get("frames", [])
     if frames:
@@ -39,24 +39,20 @@ def read_hdr_reference_info(probe: dict[str, Any]) -> HDRReferenceInfo:
             decoded = frames[0].get(key)
             declared = stream.get(key)
             if decoded is not None and declared not in {None, "unknown", "unspecified", decoded}:
-                raise VideoRoutePreflightError(
-                    "The 4K copy has conflicting HDR color tags in its container and picture."
-                )
+                raise UHDReferenceError("The 4K copy has conflicting HDR color tags in its container and picture.")
             if decoded is not None:
                 stream[key] = decoded
     if (stream.get("width"), stream.get("height")) != UHD_SIZE:
-        raise VideoRoutePreflightError("The matching copy must be 3840 by 2160 pixels.")
+        raise UHDReferenceError("The matching copy must be 3840 by 2160 pixels.")
     if stream.get("pix_fmt") not in {"yuv420p10le", "p010le"}:
-        raise VideoRoutePreflightError("The 4K copy must contain 10-bit HDR10 video. An 8-bit copy cannot be used.")
+        raise UHDReferenceError("The 4K copy must contain 10-bit HDR10 video. An 8-bit copy cannot be used.")
     if (
         stream.get("color_transfer") != "smpte2084"
         or stream.get("color_primaries") != "bt2020"
         or stream.get("color_space") != "bt2020nc"
         or stream.get("color_range", "tv") != "tv"
     ):
-        raise VideoRoutePreflightError(
-            "The 4K copy must be HDR10 with PQ and BT.2020 color. An SDR copy cannot be used."
-        )
+        raise UHDReferenceError("The 4K copy must be HDR10 with PQ and BT.2020 color. An SDR copy cannot be used.")
     try:
         frame_rate = Fraction(stream["avg_frame_rate"])
         nominal_rate = Fraction(stream["r_frame_rate"])
@@ -64,7 +60,7 @@ def read_hdr_reference_info(probe: dict[str, Any]) -> HDRReferenceInfo:
         if not np.isfinite(duration) or duration <= 0 or frame_rate <= 0 or nominal_rate != frame_rate:
             raise ValueError
     except (KeyError, ValueError, ZeroDivisionError, TypeError) as error:
-        raise VideoRoutePreflightError("The 4K copy needs a known, constant frame rate and runtime.") from error
+        raise UHDReferenceError("The 4K copy needs a known, constant frame rate and runtime.") from error
     mastering_display = None
     max_cll = None
     try:
@@ -102,7 +98,7 @@ def read_hdr_reference_info(probe: dict[str, Any]) -> HDRReferenceInfo:
                     raise ValueError
                 max_cll = f"{maximum_content},{maximum_average}"
     except (KeyError, ValueError, ZeroDivisionError, TypeError) as error:
-        raise VideoRoutePreflightError("The 4K copy contains invalid HDR mastering metadata.") from error
+        raise UHDReferenceError("The 4K copy contains invalid HDR mastering metadata.") from error
     first_frame_time = (frames[0] if frames else {}).get("best_effort_timestamp_time", stream.get("start_time", "0"))
     try:
         if not isinstance(first_frame_time, (str, int, float)):
@@ -111,7 +107,7 @@ def read_hdr_reference_info(probe: dict[str, Any]) -> HDRReferenceInfo:
         if not np.isfinite(start):
             raise ValueError
     except (ValueError, TypeError) as error:
-        raise VideoRoutePreflightError("The 4K copy has no usable starting picture time.") from error
+        raise UHDReferenceError("The 4K copy has no usable starting picture time.") from error
     return HDRReferenceInfo(frame_rate, duration, mastering_display, max_cll, start_seconds=start)
 
 
@@ -149,14 +145,12 @@ def fit_title_color_map(
     training: list[tuple[FloatImage, FloatImage]], validation: list[tuple[FloatImage, FloatImage]]
 ) -> TitleColorMap:
     if not training or not validation:
-        raise VideoRoutePreflightError("There are too few matching pictures to check the HDR color fit.")
+        raise UHDReferenceError("There are too few matching pictures to check the HDR color fit.")
     training_source = np.concatenate([pair[0] for pair in training])
     training_target = np.concatenate([pair[1] for pair in training])
     coefficients, _, rank, _ = np.linalg.lstsq(color_features(training_source), training_target, rcond=1e-5)
     if rank < 13 or not np.isfinite(coefficients).all():
-        raise VideoRoutePreflightError(
-            "The matching pictures do not contain enough color variation to learn HDR color."
-        )
+        raise UHDReferenceError("The matching pictures do not contain enough color variation to learn HDR color.")
     source = np.concatenate([pair[0] for pair in validation])
     target = np.concatenate([pair[1] for pair in validation])
     predicted = np.clip(color_features(source) @ coefficients, 0, 1)
@@ -181,7 +175,7 @@ def fit_title_color_map(
         or any(report[name]["rms_codes"] > MAX_REGION_RMS_CODES for name in regions)
     )
     if poor_fit:
-        raise VideoRoutePreflightError(
+        raise UHDReferenceError(
             "The two copies have a poor HDR color fit on pictures kept out of training "
             f"(average {report['held_out']['rms_codes']:.1f}, highlights {report['highlights']['rms_codes']:.1f}, "
             f"darks {report['darks']['rms_codes']:.1f}, saturated color {report['saturated']['rms_codes']:.1f} "

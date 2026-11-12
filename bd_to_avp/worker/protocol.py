@@ -79,6 +79,7 @@ class BitrateMode(StrEnum):
 
 
 class VideoRouteIntent(StrEnum):
+    MATCHING_4K = "matching_4k"
     AUTOMATIC = "automatic"
     GENERATED = "generated"
     ENCODE = "encode"
@@ -409,6 +410,10 @@ class JobSpec:
             encoding = cls._parse_encoding(raw.get("encoding"), job_id)
             job_options = cls._parse_job_options(raw.get("job"), job_id)
             assert job_options is not None and encoding is not None
+            if (uhd_reference is not None) != (encoding.video.route_intent is VideoRouteIntent.MATCHING_4K):
+                raise WorkerProtocolError(
+                    "invalid_uhd_reference", "Choose a matching 4K copy for 4K HDR conversion.", job_id=job_id
+                )
             if uhd_reference is None:
                 cls._validate_video_route_for_job(encoding, job_options, job_id)
         if operation is WorkerOperation.CONVERT_SOURCE:
@@ -580,6 +585,8 @@ class JobSpec:
             return
 
         quality_intent = video.quality_intent
+        if video.route_intent is VideoRouteIntent.MATCHING_4K:
+            return
         if quality_intent is None:
             raise WorkerProtocolError(
                 "invalid_encoding_options",
@@ -806,6 +813,11 @@ class JobSpec:
 
         mode = cls._parse_video_mode(value.get("mode"), job_id)
         route_intent = cls._parse_video_route_intent(value.get("route_intent"), job_id)
+        if mode is VideoMode.MV_HEVC and route_intent is VideoRouteIntent.MATCHING_4K:
+            cls._require_exact_keys(
+                value, {"mode", "route_intent"}, "encoding.video", job_id, error_code="invalid_encoding_options"
+            )
+            return VideoOptions(mode=mode, route_intent=route_intent)
         if mode is VideoMode.MV_HEVC and route_intent is VideoRouteIntent.AUTOMATIC:
             allowed_keys = {"mode", "route_intent", "quality_intent", "direct_bitrate"}
             if "direct_quality" in value:

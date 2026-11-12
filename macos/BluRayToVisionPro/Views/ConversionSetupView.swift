@@ -101,7 +101,11 @@ struct ConversionSetupView: View {
                 }
             }
         }
-        .onChange(of: options) { _, value in routeQualityState.validate(value) }
+        .onChange(of: options) { old, value in
+            if old.uhdReferencePath != nil || value.uhdReferencePath != nil {
+                routeQualityState.validate(value)
+            }
+        }
     }
 
     private var matching4KControl: some View {

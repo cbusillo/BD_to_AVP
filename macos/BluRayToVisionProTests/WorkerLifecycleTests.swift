@@ -587,7 +587,7 @@ final class WorkerLifecycleTests: XCTestCase {
     }
 
     private func currentProtocolFixtureData(_ family: String) throws -> Data {
-        try sharedFixtureData(named: "\(family)_v\(WorkerJobSpec.protocolVersion).json")
+        try currentWorkerFixtureData(family)
     }
 
     private func sharedFixtureData(named name: String) throws -> Data {

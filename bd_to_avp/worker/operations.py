@@ -42,6 +42,7 @@ from bd_to_avp.modules.video_route import (
     ResolvedVideoRoute,
     VideoRouteKind,
     VideoRoutePreflightError,
+    UHDReferenceError,
     resolve_video_route,
 )
 from bd_to_avp.process_runner import ProcessCancelled
@@ -535,7 +536,8 @@ def _convert_source(
                 raise WorkerCancelled("The conversion was cancelled.") from error
             raise WorkerOperationError(
                 "video_route_preflight_failed",
-                str(error),
+                str(error) if isinstance(error, UHDReferenceError) else "The video route could not be prepared safely.",
+                None if isinstance(error, UHDReferenceError) else str(error),
             ) from error
         except GeneratedMVHEVCArtifactError as error:
             if owner.cancellation_event.is_set():
