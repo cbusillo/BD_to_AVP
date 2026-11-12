@@ -595,45 +595,6 @@ final class PlaybackPresentationTests: XCTestCase {
         )
     }
 
-    func testPackedStereoStatusUsesQualificationCopyOnlyForBuiltInChecks() {
-        let builtInItem = MediaItem(
-            id: BuiltInStereoChecks.sideBySideID,
-            title: "Side-by-Side Stereo Check",
-            fileName: "Stereo-Check-SBS.mov",
-            format: .sideBySide
-        )
-        let importedItem = MediaItem(
-            id: "movie-1",
-            title: "Feature Film",
-            fileName: "Feature-Film-SBS.mov",
-            format: .sideBySide
-        )
-
-        XCTAssertEqual(
-            PackedStereoStatusPresentation.message(
-                mediaItem: builtInItem,
-                isReady: true,
-                failureMessage: nil
-            ),
-            "Cover one eye at a time"
-        )
-        XCTAssertEqual(
-            PackedStereoStatusPresentation.message(
-                mediaItem: importedItem,
-                isReady: false,
-                failureMessage: nil
-            ),
-            "Preparing Feature Film…"
-        )
-        XCTAssertEqual(
-            PackedStereoStatusPresentation.message(
-                mediaItem: importedItem,
-                isReady: true,
-                failureMessage: nil
-            ),
-            "Packed stereo playback"
-        )
-    }
 
     func testResumePolicyWritesAnInProgressPosition() {
         XCTAssertEqual(ResumeWritePolicy.decision(currentTime: 42, duration: 120), .write(42))

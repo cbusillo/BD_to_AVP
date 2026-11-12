@@ -83,12 +83,25 @@ struct LocationLibraryView: View {
             return titles.count == 1 ? "1 movie" : "\(titles.count) movies"
         case .unreachable:
             return "Can't reach this location"
+        case .needsAccess:
+            return "Choose this folder again"
         }
     }
 
     @ViewBuilder
     private var content: some View {
-        if status == .unreachable {
+        if status == .needsAccess {
+            ContentUnavailableView {
+                Label("Choose \(name) again", systemImage: "folder.badge.questionmark")
+            } description: {
+                Text("Shiny 3D Cinema no longer has saved access to this folder. This can happen after installing a different version of the app. Choose the folder again in Files to reconnect your Location. Your movies stay where they are.")
+            } actions: {
+                Button("Choose Folder Again", action: chooseFolderAgain)
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("location-restore-access")
+            }
+            .accessibilityIdentifier("location-needs-access")
+        } else if status == .unreachable {
             unreachableState
         } else if titles.isEmpty {
             if status == .available {

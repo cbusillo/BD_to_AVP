@@ -7,7 +7,9 @@ struct AppShellView: View {
     let resumeStore: ResumeStore
 
     @Environment(\.scenePhase) private var scenePhase
-    @State private var preparationTask: Task<Void, Never>?
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.dismissWindow) private var dismissWindow
+    @EnvironmentObject private var cinema: CinemaState
     @State private var selection: LibrarySelection = .onMyVisionPro
     @State private var filePickerPurpose: FilePickerPurpose = .addLocation
     @State private var isFilePickerPresented = false
@@ -16,7 +18,7 @@ struct AppShellView: View {
     #endif
 
     var body: some View {
-        Group {
+        ZStack {
             if model.playbackRequest != nil || playerSession.state != .idle {
                 PlayerView(
                     session: playerSession,
@@ -106,7 +108,7 @@ struct AppShellView: View {
             prepareForPlayback(request.item)
         }
                 .onDisappear {
-            preparationTask?.cancel()
+            finishPlayback()
         }
                 .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
@@ -114,7 +116,10 @@ struct AppShellView: View {
                     await model.refreshSourceStatuses()
                 }
             }
-            playerSession.handleScenePhase(phase)
+            model.handlePlaybackWindowPhase(phase, session: playerSession)
+            if phase == .background {
+                dismissPlaybackScenes()
+            }
         }
                 .task {
             await model.bootstrap()
@@ -156,31 +161,12 @@ struct AppShellView: View {
                 }
             }
         case .locatePlaybackSource:
-            guard let item = playerSession.mediaItem else { return }
-            preparationTask?.cancel()
-            preparationTask = Task {
-                guard await model.locate(itemID: item.id, at: url, shouldShowDetails: false),
-                      !Task.isCancelled else {
-                    return
-                }
-                await playerSession.prepare(
-                    mediaItem: model.item(id: item.id) ?? item,
-                    bookmarkStore: model.bookmarkStore,
-                    resumeStore: resumeStore
-                )
-            }
+            model.locatePlaybackSource(at: url, session: playerSession, resumeStore: resumeStore)
         }
     }
 
     private func prepareForPlayback(_ item: MediaItem) {
-        preparationTask?.cancel()
-        preparationTask = Task {
-            await playerSession.prepare(
-                mediaItem: item,
-                bookmarkStore: model.bookmarkStore,
-                resumeStore: resumeStore
-            )
-        }
+        model.preparePlayback(item, session: playerSession, resumeStore: resumeStore)
     }
 
     private func retryPlayback() {
@@ -191,9 +177,15 @@ struct AppShellView: View {
     }
 
     private func finishPlayback() {
-        preparationTask?.cancel()
-        preparationTask = nil
-        model.clearPlaybackRequest()
+        model.finishPlayback(session: playerSession)
+        dismissPlaybackScenes()
+    }
+
+    private func dismissPlaybackScenes() {
+        if cinema.isActive {
+            Task { await dismissImmersiveSpace() }
+        }
+        dismissWindow(id: PlaybackStatsView.windowID, value: PlaybackStatsView.windowValue)
     }
 
     /// One file picker serves adding a Location, choosing its folder again, and the player's Locate.

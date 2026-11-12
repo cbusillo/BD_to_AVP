@@ -141,10 +141,28 @@ final class BDToAVPPlayerUITests: XCTestCase {
         audioButton.tap()
         XCTAssertFalse(audioButton.isSelected)
 
+        let cinemaButton = app.buttons["player-cinema-button"]
+        XCTAssertTrue(cinemaButton.isHittable)
+        cinemaButton.tap()
+        let enteredCinema = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == 'Leave Cinema'"), object: cinemaButton
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [enteredCinema], timeout: 10), .completed)
+        audioButton.tap()
+        XCTAssertTrue(audioButton.isSelected)
+        attachScreenshot(named: "cinema-audio-tracks")
+        sleep(2)
+        audioButton.tap()
+        cinemaButton.tap()
+        let leftCinema = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == 'Watch in Cinema'"), object: cinemaButton
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [leftCinema], timeout: 10), .completed)
+
         app.buttons["player-done"].tap()
     }
 
-    func testBuiltInStereoCheckExposesNativeEyeOrderAndDoneActions() throws {
+    func testPackedStereoKeepsOurDoneControlOutsideAVKitAndReturnsToTheLibrary() throws {
         let app = XCUIApplication()
         app.launch()
         app.buttons["source-on-my-vision-pro"].tap()
@@ -156,19 +174,16 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertTrue(startButton.isHittable)
         startButton.tap()
 
-        guard firstHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 30) != nil else {
-            XCTFail(app.debugDescription)
-            return
-        }
-        guard firstHittableButton(labeled: "Done", in: app, timeout: 5) != nil else {
-            XCTFail(app.debugDescription)
-            return
-        }
-        XCTAssertFalse(app.buttons["player-play-pause"].exists)
+        let done = app.buttons["player-done"]
+        let controlsAppeared = done.waitForExistence(timeout: 30)
+        attachScreenshot(named: "packed-stereo-controls-after-opening")
+        XCTAssertTrue(controlsAppeared, app.debugDescription)
+        XCTAssertTrue(waitForHittable(done, timeout: 10))
+        XCTAssertTrue(app.buttons["player-surface"].exists)
         sleep(5)
-
-        XCTAssertNotNil(firstHittableButton(labeled: "Eye Order: Normal", in: app, timeout: 5))
-        XCTAssertNotNil(firstHittableButton(labeled: "Done", in: app, timeout: 5))
+        XCTAssertTrue(done.isHittable)
+        done.tap()
+        XCTAssertTrue(startButton.waitForExistence(timeout: 10))
     }
 
     private func attachScreenshot(named name: String) {
@@ -186,20 +201,5 @@ final class BDToAVPPlayerUITests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
-    private func firstHittableButton(
-        labeled label: String,
-        in app: XCUIApplication,
-        timeout: TimeInterval
-    ) -> XCUIElement? {
-        let buttons = app.buttons.matching(NSPredicate(format: "label == %@", label))
-        let deadline = Date().addingTimeInterval(timeout)
-        repeat {
-            if let button = buttons.allElementsBoundByIndex.first(where: \.isHittable) {
-                return button
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        } while Date() < deadline
-        return nil
-    }
 
 }

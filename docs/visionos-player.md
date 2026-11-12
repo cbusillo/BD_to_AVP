@@ -227,7 +227,10 @@ the Location says so and offers **Try Again**, **Choose Folder Again** and **Rem
 Location**. iOS-family bookmarks to network volumes can stop resolving after the volume
 is unmounted and remounted (Apple bug r.102995804, discussed on the
 [developer forums](https://developer.apple.com/forums/thread/774114)); choosing the
-folder again replaces the bookmark and keeps the Location. A share that stops answering
+folder again replaces the bookmark and keeps the Location. If saved folder access
+is missing or no longer resolves, the app explains that access was lost, including
+a possible change of app version, and offers **Choose Folder Again**. Reconnecting
+keeps the Location and never moves or deletes its movies. A share that stops answering
 is reported unreachable after 45 seconds instead of hanging the library; a request it
 gave up on keeps its folder access until it really ends, and no new request starts for
 that Location until then, so retries cannot pile up on a stalled share. A large share
@@ -278,8 +281,8 @@ inspection succeeds.
 Playback preparation distinguishes opening the source from preparing the media.
 The source-opening state is indeterminate and cancellable because third-party
 File Providers do not guarantee portable download percentages. Recoverable
-failures expose **Try Again**, **Locate**, and **Done** in both the RealityKit
-ornament and packed-stereo AVKit actions. Retry starts a fresh bounded session
+failures expose **Try Again**, **Locate**, and **Done** in the shared player
+ornament for every format. Retry starts a fresh bounded session
 generation; Locate updates the existing item and then prepares it again. Done
 invalidates the active generation, closes any acquired lease, and prevents late
 provider completion from installing an item or starting playback.
@@ -300,12 +303,12 @@ tall frame alone.
 `MVHEVCPlayerSession` owns one `AVPlayer`, one active `AVPlayerItem`, one
 RealityKit entity for MV-HEVC, and one source lease. MV-HEVC playback uses a
 `VideoPlayerComponent` configured for stereo viewing, screen spatial video mode,
-and portal immersive viewing mode. Packed stereo uses `AVPlayerViewController`,
-matching AVFoundation's custom spatial-compositor presentation path. AVKit
-supplies play/pause, seeking, the scrubber and time display, audio selection,
-and subtitle selection. Eye Order and Done use AVKit's visionOS-native
-`contextualActions`, so they remain part of the same supported playback control
-surface instead of relying on an overlay beneath AVKit's interaction layer.
+and portal immersive viewing mode. Packed stereo keeps `AVPlayerViewController`
+for AVFoundation's custom spatial-compositor presentation, restricted to the
+embedded experience so AVKit cannot replace the app window with its own player.
+Its system controls are disabled. All formats use the same app-owned ornament
+for transport, audio, subtitles, Eye Order where supported, Stats, and Done.
+Cinema remains available for MV-HEVC and native Blu-ray playback.
 Together the controls provide:
 
 - play and pause;
@@ -318,8 +321,7 @@ Together the controls provide:
 - Stats for Nerds, described below; and
 - Done, which persists progress and releases the session.
 
-**Stats for Nerds** opens from the controls' chart button, or from the packed-stereo
-player's contextual actions, as its own small window beside the movie rather than
+**Stats for Nerds** opens from the controls' chart button as its own small window beside the movie rather than
 text over the 3D picture (#1181). Once a second it shows the file's name, size,
 storage and average bit rate; the video codec, picture size per eye, frame rate and
 bit rate where the file or decoder reports them; the chosen audio and subtitles;
@@ -328,7 +330,7 @@ movie on a share, the current read speed and the bytes read so far. Every share
 read counts once, retries included, through `ShareConnectionMonitor`. Done closes
 the window with the player.
 
-The MV-HEVC ornament remains fully visible while playback is paused, loading,
+The player ornament remains fully visible while playback is paused, loading,
 failed, or being scrubbed, while a pointer hovers over it, and while its audio
 or subtitle list is open. Automatic fading is disabled while VoiceOver or Switch
 Control is active. During uninterrupted playback the ornament fades to nearly
@@ -347,12 +349,13 @@ The MV-HEVC scrub bar spans the movie's full length from the first frame and
 shows the range that can be played right now as a lighter band: the player's
 buffered range around the playhead.
 
-The MV-HEVC audio language and subtitle lists open at the bottom of the window,
+The audio language and subtitle lists open at the bottom of the window,
 just in front of the video and directly above the controls, so they read as part of
 the controls panel. Both buttons are enabled once the movie is ready. A list with
 nothing to choose between says so: **This title has one audio track.** or **This
 title has no subtitles.** The list is a RealityView attachment placed in the
-video's own space. The alternatives each failed: growing the controls ornament
+video's own space. It stays mounted in the window during Cinema, and packed
+stereo uses the same attachment above its embedded video surface. The alternatives each failed: growing the controls ornament
 pushed the list below the window; a second ornament, or a SwiftUI view in the
 window, sat behind the window's surface and was hidden; a plain SwiftUI overlay
 floated at the front of the window's depth and loomed over the controls; and a
@@ -362,30 +365,22 @@ It shows up to five rows and scrolls beyond that, starting at the current
 selection, so a disc with a dozen or more tracks stays usable. While a list is
 open, the video surface does not take pinches, so they reach the list.
 
-Packed-stereo controls use AVKit's native visibility behavior; revealing the
-playback controls also reveals actions labeled **Eye Order: Normal** or
-**Eye Order: Reversed** and **Done**.
-
-AVKit owns the packed-stereo audio menu and may present multiple same-language
-tracks with the same localized label. The app explicitly asserts the active
-packed-stereo audio option after the item becomes ready, but it does not replace
-or claim to relabel AVKit's native menu. The app-owned MV-HEVC audio list leaves
-unique names unchanged and adds role and stable track-number details only when
-labels collide.
+The shared audio list leaves unique names unchanged and adds role and stable
+track-number details only when labels collide.
 
 The app saves in-progress playback positions and restores them when the same
 library item is opened again. An inactive scene keeps playing: on visionOS that
 phase covers Control Center, looking at another window, and other ordinary focus
-changes, so the player only saves current progress then. Moving to the background
-cancels pending autoplay and pauses playback, saving current progress when a
-player item is available. Initial preparation and eye-order replacement remain
-paused if they complete while the app is in the background. Returning active
-restores scene permission but never infers a new play request; playback remains
-paused until the user starts it. Loading or failed preparations never overwrite
+changes, so the player only saves current progress then. When the playback
+window enters the background or disappears, its owner cancels preparation,
+finishes the session, saves progress, and closes Cinema and Stats. This also
+handles the system close button, which may background the last window without
+calling `onDisappear`. Reopening returns to the library; playing the movie again
+restores its saved position. The session's interruption recovery remains paused
+until the user starts it. Loading or failed preparations never overwrite
 an existing resume point because resume writes begin only after a player item
 has reached ready state. While playing, the position is also saved every 10
-seconds, so a forced quit or a closed window that runs no end path loses only
-seconds. Completed or near-completed playback is cleared instead of resuming at
+seconds, so a forced quit loses only seconds. Completed or near-completed playback is cleared instead of resuming at
 the end.
 
 Leaving the app can make the system take the video decoder away, which
@@ -431,8 +426,8 @@ confirmation. The checks are silent; use the audio validation matrix for sound.
 The app copies the fixtures into
 Application Support using a versioned, size-checked installation and refreshes
 their stable library records and bookmarks on every launch so app updates cannot
-leave stale bundle-path references. During a check, AVKit exposes Eye Order as a
-native playback action labeled Normal or Reversed.
+leave stale bundle-path references. During a check, the controls expose Eye Order as a
+button labeled Normal or Reversed.
 
 Files-provider sources may be backed by SMB or other network storage, but the app
 does not implement direct `smb://` transport, offline pinning,
@@ -741,11 +736,10 @@ xcodebuild test \
 
 The same scheme also contains `BDToAVPPlayerUITests`. Its built-in check test is
 unconditional: it verifies that the stereo-check panel is visible from launch,
-starts the SBS check, and confirms that AVKit exposes native Eye Order and Done
-actions. XRSimulator does not dispatch those actions while it displays the
-tagged-stereo unsupported-content placeholder, so the unit suite separately
-drives the production eye-order rebuild from ready through reversed and ready
-again.
+starts the SBS check, and confirms the app-owned Done control remains
+hittable and returns to the library. XRSimulator still
+displays an unsupported-content placeholder for tagged stereo; unit tests
+separately drive the eye-order rebuild and verify normal and reversed pixels.
 Its seeded-media flow is skipped when `PlayerLongFixture.mov` is absent from the
 simulator app Documents directory; when present, it verifies direct Library →
 Play → Library, Library → Details → Play, Details Done → Library, player Done →

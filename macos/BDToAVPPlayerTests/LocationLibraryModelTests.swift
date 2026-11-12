@@ -178,6 +178,33 @@ final class LocationLibraryModelTests: XCTestCase {
         XCTAssertNotNil(model.item(id: itemID))
     }
 
+    func testInvalidSavedAccessRequiresChoosingTheFolderAgainAndReconnectsWithoutRemovingMovies() async throws {
+        let share = try makeShare()
+        let fixture = makeFixture()
+        let original = fixture.locations(inspector: Self.shareInspector)
+        let locationID = try await XCTUnwrapAsync(await original.add(folderURL: share))
+        var rejectsSavedAccess = true
+        let invalidBookmarks = BookmarkStore(storageURL: fixture.bookmarksURL, resolveBookmark: { data in
+            if rejectsSavedAccess { throw CocoaError(.fileReadNoPermission) }
+            var stale = false
+            return (try URL(resolvingBookmarkData: data, options: [], bookmarkDataIsStale: &stale), stale)
+        })
+        let locations = LocationLibraryModel(
+            store: fixture.locationStore, bookmarkStore: invalidBookmarks, inspector: Self.shareInspector
+        )
+
+        await locations.refresh(locationID)
+        XCTAssertEqual(locations.statuses[locationID], .needsAccess)
+        XCTAssertTrue(locations.titles[locationID]?.isEmpty == true)
+        XCTAssertEqual(locations.locations.map(\.id), [locationID])
+
+        rejectsSavedAccess = false
+        await locations.reconnect(locationID, folderURL: share)
+        XCTAssertEqual(locations.statuses[locationID], .available)
+        XCTAssertFalse(locations.titles[locationID]?.isEmpty ?? true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: share.appendingPathComponent("Rainforest.iso").path))
+    }
+
     func testAStalledInspectionKeepsFolderAccessUntilItEndsAndBlocksNewScans() async throws {
         let share = try makeShare()
         let fixture = makeFixture()

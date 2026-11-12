@@ -4,6 +4,35 @@ import XCTest
 
 @MainActor
 final class PlayerAppModelTests: XCTestCase {
+    func testClosingPlaybackWindowStopsAndReleasesPlaybackEvenWithoutViewDisappearance() async throws {
+        let model = PlayerAppModel(
+            libraryStore: LibraryStore(storageURL: temporaryURL()),
+            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
+            locationStore: LocationStore(storageURL: temporaryURL()),
+            stereoCheckInstaller: { [] }
+        )
+        let session = MVHEVCPlayerSession()
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        let item = try await startFilePlayback(named: "Window Close", session: session, resumeStore: resumeStore)
+        session.play()
+        model.handlePlaybackWindowPhase(.inactive, session: session)
+        XCTAssertNotNil(session.playerItem)
+
+        model.handlePlaybackWindowPhase(.background, session: session)
+        XCTAssertEqual(session.state, .idle)
+        XCTAssertEqual(session.player.rate, 0)
+        XCTAssertNil(session.player.currentItem)
+        XCTAssertNil(session.mediaItem)
+        XCTAssertNil(model.playbackRequest)
+        XCTAssertNotNil(resumeStore.resumeTime(for: item.id))
+
+        model.preparePlayback(item, session: session, resumeStore: resumeStore)
+        model.handlePlaybackWindowPhase(.background, session: session)
+        await Task.yield()
+        XCTAssertEqual(session.state, .idle)
+        XCTAssertNil(session.player.currentItem)
+    }
+
     func testLoadedCatalogDrivesFilteredAndSortedProjection() throws {
         let items = [
             MediaItem(

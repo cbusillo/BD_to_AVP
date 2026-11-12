@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import Foundation
 import UniformTypeIdentifiers
+import SwiftUI
 
 enum LibraryViewMode: String, CaseIterable, Sendable {
     case posters
@@ -132,6 +133,7 @@ final class PlayerAppModel: ObservableObject {
     private var needsSourceStatusRefresh = false
     private var sourceStatusProbeGenerations: [String: Int] = [:]
     private var locationsChange: AnyCancellable?
+    private var preparationTask: Task<Void, Never>?
 
     init(
         libraryStore: LibraryStore = LibraryStore(),
@@ -270,6 +272,38 @@ final class PlayerAppModel: ObservableObject {
 
     func clearPlaybackRequest() {
         playbackRequest = nil
+    }
+
+    func preparePlayback(_ item: MediaItem, session: MVHEVCPlayerSession, resumeStore: ResumeStore) {
+        preparationTask?.cancel()
+        preparationTask = Task {
+            guard !Task.isCancelled else { return }
+            await session.prepare(mediaItem: item, bookmarkStore: bookmarkStore, resumeStore: resumeStore)
+        }
+    }
+
+    func locatePlaybackSource(at url: URL, session: MVHEVCPlayerSession, resumeStore: ResumeStore) {
+        guard let item = session.mediaItem else { return }
+        preparationTask?.cancel()
+        preparationTask = Task {
+            guard await locate(itemID: item.id, at: url, shouldShowDetails: false), !Task.isCancelled else { return }
+            await session.prepare(mediaItem: self.item(id: item.id) ?? item, bookmarkStore: bookmarkStore, resumeStore: resumeStore)
+        }
+    }
+
+    func finishPlayback(session: MVHEVCPlayerSession) {
+        preparationTask?.cancel()
+        preparationTask = nil
+        session.finish()
+        clearPlaybackRequest()
+    }
+
+    func handlePlaybackWindowPhase(_ phase: ScenePhase, session: MVHEVCPlayerSession) {
+        if phase == .background {
+            finishPlayback(session: session)
+        } else {
+            session.handleScenePhase(phase)
+        }
     }
 
     @discardableResult
