@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from bd_to_avp.modules.uhd_color import FloatImage, HDRReferenceInfo, SAMPLE_SIZE
+from bd_to_avp.modules.uhd_color import FloatImage, HDRReferenceInfo, SAMPLE_SIZE, UHD_SIZE
 from bd_to_avp.modules.video_route import VideoRoutePreflightError
 
 SAMPLE_BINS = 24
@@ -47,14 +47,6 @@ def check_reference_frame_rate(reference: HDRReferenceInfo, source_rate: str) ->
         raise VideoRoutePreflightError("The 3D source needs a known frame rate to match a 4K copy.") from error
     if abs(float(rate - reference.frame_rate)) > 0.0001:
         raise VideoRoutePreflightError("The 3D source and 4K copy have different frame rates. Choose matching copies.")
-
-
-def check_reference_timing(reference: HDRReferenceInfo, source_rate: str, source_duration: float) -> None:
-    check_reference_frame_rate(reference, source_rate)
-    if source_duration <= 0 or not np.isfinite(source_duration):
-        raise VideoRoutePreflightError("The 3D source needs a known runtime to check the cut.")
-    if abs(reference.duration_seconds - source_duration) > MAX_OFFSET_SECONDS:
-        raise VideoRoutePreflightError("The 3D source and 4K copy have different runtimes and may be different cuts.")
 
 
 def source_sample_indices(duration: float, rate: Fraction) -> tuple[int, ...]:
@@ -190,31 +182,40 @@ def match_frame(
     return MatchedFrame(source_index, best_index, left, reference, left_match, eye_verified, temporal_verified)
 
 
-def aligned_color_pixels(frame: MatchedFrame) -> tuple[FloatImage, FloatImage]:
+def applied_uhd_registration(registration: FloatImage) -> FloatImage:
+    matrix = registration.copy()
+    matrix[:, 2] *= UHD_SIZE[0] / SAMPLE_SIZE[0]
+    width, height = UHD_SIZE
+    corners = np.array([[0, 0, 1], [width, 0, 1], [0, height, 1], [width, height, 1]], dtype=np.float32)
+    if np.max(np.abs(corners @ matrix.T - corners[:, :2])) <= 0.25:
+        return np.eye(2, 3, dtype=np.float32)
+    return registration
+
+
+def aligned_color_pixels(frame: MatchedFrame, registration: FloatImage) -> tuple[FloatImage, FloatImage]:
     width, height = SAMPLE_SIZE
     aligned = cv2.warpAffine(
         frame.left,
-        frame.registration.matrix,
+        registration,
         (width, height),
-        flags=cv2.INTER_LANCZOS4 | cv2.WARP_INVERSE_MAP,
+        flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
     )
     source_gray = cv2.cvtColor(aligned, cv2.COLOR_RGB2GRAY)
     target_gray = cv2.cvtColor(frame.reference, cv2.COLOR_RGB2GRAY)
-    active_rows = np.flatnonzero(
-        (np.quantile(source_gray, 0.9, axis=1) > 0.03) & (np.quantile(target_gray, 0.9, axis=1) > 0.03)
-    )
+    shared_picture = (source_gray > 0.03) & (target_gray > 0.03)
+    active_rows = np.flatnonzero(shared_picture.any(axis=1))
     if not len(active_rows):
         raise VideoRoutePreflightError("There is no shared picture area for HDR color fitting.")
-    active_columns = np.flatnonzero(
-        (np.quantile(source_gray, 0.9, axis=0) > 0.03) & (np.quantile(target_gray, 0.9, axis=0) > 0.03)
-    )
-    if not len(active_columns):
-        raise VideoRoutePreflightError("There is no shared picture area for HDR color fitting.")
-    top, bottom = int(active_rows[0]) + 8, int(active_rows[-1]) - 8
-    left, right = int(active_columns[0]) + 12, int(active_columns[-1]) - 12
-    if bottom - top < height // 2 or right - left < width // 2:
-        raise VideoRoutePreflightError("The two copies do not share enough picture area for HDR color fitting.")
+    active_columns = np.flatnonzero(shared_picture.any(axis=0))
+    top, bottom = int(active_rows[0]), int(active_rows[-1]) + 1
+    left, right = int(active_columns[0]), int(active_columns[-1]) + 1
+    row_inset = min(8, (bottom - top) // 4)
+    column_inset = min(12, (right - left) // 4)
     return (
-        aligned[top:bottom:4, left:right:4].reshape(-1, 3).astype(np.float32),
-        frame.reference[top:bottom:4, left:right:4].reshape(-1, 3),
+        aligned[top + row_inset : bottom - row_inset : 4, left + column_inset : right - column_inset : 4]
+        .reshape(-1, 3)
+        .astype(np.float32),
+        frame.reference[
+            top + row_inset : bottom - row_inset : 4, left + column_inset : right - column_inset : 4
+        ].reshape(-1, 3),
     )

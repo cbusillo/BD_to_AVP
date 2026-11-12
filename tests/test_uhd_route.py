@@ -17,7 +17,7 @@ from bd_to_avp.modules.uhd_match import (
     EyeRegistration,
     MatchedFrame,
     aligned_color_pixels,
-    check_reference_timing,
+    check_reference_frame_rate,
     match_frame,
     source_sample_indices,
 )
@@ -126,10 +126,9 @@ def test_copies_mastering_and_content_light_metadata_in_encoder_units() -> None:
     assert missing.max_cll is None
 
 
-@pytest.mark.parametrize("rate,duration,words", [("24", 120, "frame rates"), ("24000/1001", 125, "different cuts")])
-def test_refuses_wrong_rate_or_runtime(rate: str, duration: float, words: str) -> None:
-    with pytest.raises(VideoRoutePreflightError, match=words):
-        check_reference_timing(read_hdr_reference_info(hdr_probe()), rate, duration)
+def test_refuses_wrong_frame_rate() -> None:
+    with pytest.raises(VideoRoutePreflightError, match="frame rates"):
+        check_reference_frame_rate(read_hdr_reference_info(hdr_probe()), "24")
 
 
 def test_sampling_spans_the_film_including_both_tails() -> None:
@@ -166,13 +165,19 @@ def test_localized_features_do_not_establish_an_eye_or_a_framing_mismatch() -> N
     assert match_frame(100, left, stereo_pair(left), {100: left}, expected_offset=0) is None
 
 
-def test_color_fit_excludes_the_shared_letterbox_and_floating_window() -> None:
+@pytest.mark.parametrize(
+    "top,bottom,left,right", [(30, 510, 70, 910), (30, 510, 394, 585), (250, 262, 70, 910), (30, 510, 470, 482)]
+)
+def test_color_fit_excludes_the_shared_letterbox_and_floating_window(
+    top: int, bottom: int, left: int, right: int
+) -> None:
     reference = texture()
     source = reference.copy()
-    source[:30] = source[-30:] = source[:, :70] = source[:, -50:] = 0
+    source[:top] = source[bottom:] = source[:, :left] = source[:, right:] = 0
     registration = EyeRegistration(np.eye(2, 3, dtype=np.float64), 100, 1, 0, 12)
     frame = MatchedFrame(100, 100, source, reference, registration, True, True)
-    training_source, training_target = aligned_color_pixels(frame)
+    training_source, training_target = aligned_color_pixels(frame, registration.matrix.astype(np.float32))
+    assert len(training_source) > 0
     assert np.array_equal(training_source, training_target)
 
 
@@ -262,7 +267,7 @@ def test_decoded_frame_color_tags_qualify_hdr_when_container_omits_them() -> Non
 
 
 def test_accepts_the_rounded_blu_ray_frame_rate_and_a_clear_left_eye_match() -> None:
-    check_reference_timing(read_hdr_reference_info(hdr_probe()), "23.976", 120)
+    check_reference_frame_rate(read_hdr_reference_info(hdr_probe()), "23.976")
     left = texture()
     right = stereo_pair(left)
     result = match_frame(100, left, right, {99: np.roll(left, 5, axis=0), 100: left}, expected_offset=0)
@@ -286,3 +291,15 @@ def test_cli_refuses_an_unsupported_encoder_before_reading_a_movie() -> None:
         pytest.raises(VideoRoutePreflightError),
     ):
         video_route.legacy_video_route()
+
+
+def test_registered_color_samples_stay_in_the_physical_rgb16_domain() -> None:
+    source = np.zeros((540, 960, 3), dtype=np.float32)
+    source[100:440, 100:860] = 1
+    source[199:339, 299:699] = 0
+    matrix = np.array([[1, 0, -0.125], [0, 1, 0.19]], dtype=np.float64)
+    registration = EyeRegistration(matrix, 100, 1, 0, 8)
+    x, _ = aligned_color_pixels(
+        MatchedFrame(100, 100, source, source, registration, True, True), matrix.astype(np.float32)
+    )
+    assert x.min() >= 0 and x.max() <= 1

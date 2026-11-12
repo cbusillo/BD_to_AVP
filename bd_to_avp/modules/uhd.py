@@ -27,10 +27,19 @@ from bd_to_avp.modules.uhd_match import (
     SAMPLE_BINS,
     MatchedFrame,
     aligned_color_pixels,
-    check_reference_timing,
+    applied_uhd_registration,
     check_reference_frame_rate,
     match_frame,
     source_sample_indices,
+)
+from bd_to_avp.modules.uhd_padding import (
+    BLACK_LUMA_8BIT,
+    PictureExtent,
+    check_black_padding,
+    picture_extent,
+    read_luma_maxima,
+    reference_picture_extent,
+    reference_window_stream,
 )
 from bd_to_avp.modules.video import (
     Edge264DamageCollector,
@@ -112,17 +121,27 @@ def probe_hdr_reference(
     return replace(info, frame_count=count, duration_seconds=count / float(info.frame_rate))
 
 
+@dataclass(frozen=True)
+class StereoSamples:
+    eyes: list[tuple[FloatImage, FloatImage]]
+    extent: PictureExtent
+
+
 def generate_stereo_sample_command(
     indices: tuple[int, ...],
     samples_path: Path,
     counter_path: Path,
+    luma_path: Path,
 ) -> list[str]:
     selection = "+".join(f"eq(n,{index})" for index in indices)
     source = ffmpeg.input("pipe:0", f="yuv4mpegpipe", probesize=32, analyzeduration=0).video.filter_multi_output(
         "split", 2
     )
     counter = ffmpeg.output(
-        source[0].filter("scale", 1, 1, flags="neighbor"),
+        source[0]
+        .filter("signalstats")
+        .filter("metadata", mode="print", key="lavfi.signalstats.YMAX", file=str(luma_path))
+        .filter("scale", 1, 1, flags="neighbor"),
         str(counter_path),
         format="rawvideo",
         pix_fmt="gray",
@@ -155,7 +174,7 @@ def collect_stereo_samples(
     mvc_producer: MvcProducer | None,
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
-) -> tuple[list[tuple[FloatImage, FloatImage]], int]:
+) -> StereoSamples:
     samples = []
     producer = mvc_producer
     if producer is None and source.suffix.lower() in {*config.MTS_EXTENSIONS, ".mkv"}:
@@ -163,15 +182,17 @@ def collect_stereo_samples(
     with tempfile.TemporaryDirectory(dir=workspace, prefix="uhd-match-") as directory:
         samples_path = Path(directory) / "samples.rgb48"
         counter_path = Path(directory) / "decoded-frames.raw"
+        luma_path = Path(directory) / "luma.txt"
         run_native_mvc_encoding(
             source,
             (counter_path,),
-            generate_stereo_sample_command(indices, samples_path, counter_path),
+            generate_stereo_sample_command(indices, samples_path, counter_path, luma_path),
             mvc_producer=producer,
             run_context=run_context,
             cancellation_event=cancellation_event,
         )
         decoded_count = counter_path.stat().st_size
+        extent = picture_extent(read_luma_maxima(luma_path, decoded_count), BLACK_LUMA_8BIT)
         with samples_path.open("rb") as destination:
             for _ in indices:
                 payload = destination.read(SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 12)
@@ -185,7 +206,7 @@ def collect_stereo_samples(
                 samples.append((image[:, : SAMPLE_SIZE[0]], image[:, SAMPLE_SIZE[0] :]))
     if decoded_count <= indices[-1]:
         raise VideoRoutePreflightError("The 3D decoder did not confirm the whole movie's frame count.")
-    return samples, decoded_count
+    return StereoSamples(samples, extent)
 
 
 def read_reference_window(
@@ -197,35 +218,15 @@ def read_reference_window(
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
 ) -> dict[int, FloatImage]:
-    rate = float(info.frame_rate)
-    first_time = info.start_seconds + (window.start - 0.5) / rate
-    last_time = info.start_seconds + (window.stop - 0.5) / rate
-    command = [
-        config.FFMPEG_PATH,
-        "-v",
-        "error",
-        "-ss",
-        f"{max(0, window.start / rate - 1):.9f}",
-        "-t",
-        f"{len(window) / rate + 3:.9f}",
-        "-copyts",
-        "-i",
-        reference,
-        "-map",
-        "0:v:0",
-        "-vf",
-        f"select='between(t,{first_time:.9f},{last_time:.9f})',"
-        "scale=960:540:flags=area:in_color_matrix=bt2020:in_range=tv:out_range=pc",
-        "-fps_mode",
-        "passthrough",
-        "-frames:v",
-        str(len(window) + 1),
-        "-pix_fmt",
-        "rgb48le",
-        "-f",
-        "rawvideo",
-        "pipe:1",
-    ]
+    stream = reference_window_stream(reference, info, window).filter(
+        "scale", 960, 540, flags="area", in_color_matrix="bt2020", in_range="tv", out_range="pc"
+    )
+    command = ffmpeg.compile(
+        ffmpeg.output(
+            stream, "pipe:1", format="rawvideo", pix_fmt="rgb48le", vframes=len(window) + 1, fps_mode="passthrough"
+        ),
+        cmd=str(config.FFMPEG_PATH),
+    )
     frames = {}
     frame_bytes = SAMPLE_SIZE[0] * SAMPLE_SIZE[1] * 6
     with tempfile.TemporaryFile(dir=workspace) as destination:
@@ -256,6 +257,8 @@ def collect_matched_frames(
     indices: tuple[int, ...],
     stereo: list[tuple[FloatImage, FloatImage]],
     *,
+    source_frame_count: int,
+    initial_offset: int,
     workspace: Path,
     run_context: RunContext | None,
     cancellation_event: threading.Event | None,
@@ -264,7 +267,10 @@ def collect_matched_frames(
     matched: list[MatchedFrame] = []
     frame_offset = None
     for source_index, eyes in zip(indices, stereo, strict=True):
-        window = range(max(0, source_index - radius), min(info.frame_count, source_index + radius + 1))
+        center = source_index + (frame_offset if frame_offset is not None else initial_offset)
+        window = range(max(0, center - radius), min(info.frame_count, center + radius + 1))
+        if not window:
+            continue
         candidates = read_reference_window(
             reference, info, window, workspace=workspace, run_context=run_context, cancellation_event=cancellation_event
         )
@@ -273,8 +279,6 @@ def collect_matched_frames(
             continue
         if frame_offset is None and result.temporal_verified:
             frame_offset = result.reference_index - source_index
-            if frame_offset < 0:
-                raise VideoRoutePreflightError("The 4K copy is missing the beginning of the 3D source.")
         matched.append(result)
     if frame_offset is not None:
         corrected = []
@@ -302,7 +306,9 @@ def collect_matched_frames(
                 frame = corrected_frame
             corrected.append(frame)
         matched = corrected
-    checked_bins = {min(SAMPLE_BINS - 1, int(frame.source_index / info.frame_count * SAMPLE_BINS)) for frame in matched}
+    checked_bins = {
+        min(SAMPLE_BINS - 1, int(frame.source_index / source_frame_count * SAMPLE_BINS)) for frame in matched
+    }
     if (
         frame_offset is None
         or len(checked_bins) < SAMPLE_BINS - 2
@@ -332,10 +338,10 @@ def prepare_uhd_conversion(
     if disc_info.resolution != "1920x1080" or disc_info.is_interlaced or disc_info.color_depth != 8:
         raise VideoRoutePreflightError("The 3D source must be progressive 1920 by 1080 Blu-ray MVC video.")
     check_reference_frame_rate(info, disc_info.frame_rate)
-    duration = min(disc_info.duration_seconds, info.duration_seconds)
+    duration = disc_info.duration_seconds
     indices = source_sample_indices(duration, info.frame_rate)
     cli_message("Checking the cut, matching eye and HDR color across the whole film.", run_context=run_context)
-    stereo, decoded_count = collect_stereo_samples(
+    samples = collect_stereo_samples(
         source,
         indices,
         workspace=workspace,
@@ -343,24 +349,30 @@ def prepare_uhd_conversion(
         run_context=run_context,
         cancellation_event=cancellation_event,
     )
-    check_reference_timing(info, disc_info.frame_rate, decoded_count / float(info.frame_rate))
+    reference_extent = reference_picture_extent(
+        reference, info, workspace=workspace, run_context=run_context, cancellation_event=cancellation_event
+    )
+    initial_offset = reference_extent.first - samples.extent.first
     matched, offset = collect_matched_frames(
         reference,
         info,
         indices,
-        stereo,
+        samples.eyes,
+        source_frame_count=samples.extent.frame_count,
+        initial_offset=initial_offset,
         workspace=workspace,
         run_context=run_context,
         cancellation_event=cancellation_event,
     )
-    if decoded_count + offset > info.frame_count:
-        raise VideoRoutePreflightError("The matching 4K copy is missing the last pictures of the 3D movie.")
-    color_map = fit_title_color_map(
-        [aligned_color_pixels(frame) for frame in matched[::2]],
-        [aligned_color_pixels(frame) for frame in matched[1::2]],
+    check_black_padding(samples.extent, reference_extent, offset)
+    registration = applied_uhd_registration(
+        np.median(np.stack([frame.registration.matrix for frame in matched]), axis=0).astype(np.float32)
     )
-    registration = np.median(np.stack([frame.registration.matrix for frame in matched]), axis=0).astype(np.float32)
-    plan = UHDConversionPlan(reference, info, offset, color_map, registration, len(matched), decoded_count)
+    color_map = fit_title_color_map(
+        [aligned_color_pixels(frame, registration) for frame in matched[::2]],
+        [aligned_color_pixels(frame, registration) for frame in matched[1::2]],
+    )
+    plan = UHDConversionPlan(reference, info, offset, color_map, registration, len(matched), samples.extent.frame_count)
     cli_message(f"4K match accepted: {json.dumps(plan.report())}", run_context=run_context)
     return plan
 
@@ -377,13 +389,10 @@ def write_title_lut(color_map: TitleColorMap, path: Path) -> None:
 def register_uhd_stream(
     stream: ffmpeg.nodes.FilterableStream, registration: FloatImage, *, mask: bool = False
 ) -> ffmpeg.nodes.FilterableStream:
-    matrix = registration.copy()
-    matrix[:, 2] *= UHD_SIZE[0] / SAMPLE_SIZE[0]
-    corners = np.array([[0, 0, 1], [3840, 0, 1], [0, 2160, 1], [3840, 2160, 1]], dtype=np.float32)
-    registered = corners @ matrix.T
-    needs_registration = np.max(np.abs(registered - corners[:, :2])) > 0.25
-    if not needs_registration:
+    matrix = applied_uhd_registration(registration).copy()
+    if np.array_equal(matrix, np.eye(2, 3, dtype=np.float32)):
         return stream
+    matrix[:, 2] *= UHD_SIZE[0] / SAMPLE_SIZE[0]
     x = f"{matrix[0, 0]:.10f}*X+{matrix[0, 1]:.10f}*Y+{matrix[0, 2]:.10f}"
     y = f"{matrix[1, 0]:.10f}*X+{matrix[1, 1]:.10f}*Y+{matrix[1, 2]:.10f}"
     inside = f"between({x},0,W-1)*between({y},0,H-1)"
@@ -395,7 +404,7 @@ def uhd_picture_mask(source: ffmpeg.nodes.FilterableStream, registration: FloatI
     binary = (
         source.filter("extractplanes", "y")
         .filter("format", "gray16le")
-        .filter("lut", c0="if(gt(val,4626),65535,0)")
+        .filter("lut", c0=f"if(gt(val,{BLACK_LUMA_8BIT * 257}),65535,0)")
         .filter_multi_output("split", 2)
     )
     rows = (
@@ -471,10 +480,22 @@ def generate_uhd_normalizer_command(plan: UHDConversionPlan, lut_path: Path) -> 
     right = mask_uhd_picture(right, right_mask)
     reference = ffmpeg.input(str(plan.reference_path))
     left = (
-        reference.video.filter("trim", start_frame=plan.frame_offset)
+        reference.video.filter(
+            "trim",
+            start_frame=max(0, plan.frame_offset),
+            end_frame=min(plan.info.frame_count, plan.source_frame_count + plan.frame_offset),
+        )
         .filter("settb", expr=clock)
         .filter("setpts", frame_time)
         .filter("format", "yuv420p10le")
+    )
+    left = left.filter(
+        "tpad",
+        start=max(0, -plan.frame_offset),
+        stop=max(0, plan.source_frame_count + plan.frame_offset - plan.info.frame_count),
+        start_mode="add",
+        stop_mode="add",
+        color="black",
     )
     left = mask_uhd_picture(left, left_mask)
     packed = ffmpeg.filter([left, right], "hstack", inputs=2, shortest=1)

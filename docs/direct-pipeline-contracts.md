@@ -15,13 +15,16 @@ named restartable file.
 `--uhd-reference PATH` selects `uhd_hdr_mv_hevc` for a new conversion at stage 1.
 The 3D source remains the source of audio, subtitles and stereo perspective. The
 reference must be progressive 3840x2160 10-bit PQ BT.2020 video at the same constant
-frame rate and within one second of the 3D source's runtime. Eye swapping, crop,
+frame rate. Different head or tail lengths are accepted only after every
+unmatched frame is verified as black. Eye swapping, crop,
 resolution, frame-rate, FX upscale and software-encoder overrides are refused.
 
 Before audio or video encoding, the route counts the UHD video access units and
-decodes the whole 3D source once, retaining its decoded frame count. It checks
+decodes the whole 3D source once, retaining its decoded frame count and the
+full-resolution maximum luma of every stereo frame. It checks
 50 sampled frame positions spread over 24 sections, including both ends,
-searches a one-second UHD window by original presentation time, and checks left
+uses the first picture in each video to center an initial UHD search over one
+second on either side by original presentation time, then follows the verified frame offset, and checks left
 and right eyes with contrast-normalized feature registration. A consistent frame offset and matching scale, rotation, position
 and image coverage are required. An ambiguous eye cannot establish the match.
 A right-eye reference, changing edit, reframing or insufficient
@@ -40,7 +43,18 @@ One cubic RGB standard-to-PQ map is learned per title from alternating matched
 left-eye frames. The other frames are held out. The report includes held-out RMS
 and 99th-percentile errors, highlight, dark and saturated-color tails, and the
 worst frame. A poor fit stops the conversion. Training error cannot qualify a map.
-Frame counts must show that the UHD covers every source frame before encoding.
+Matched credits and other narrow pictures remain in the fit and held-out validation. Their common picture bounds exclude
+borders while retaining dark background and bright detail. Calibration uses the
+same steady matrix and identity decision as encoding. Both paths use bilinear
+registration at their respective image resolutions.
+Before encoding, unmatched head and tail ranges in either input are checked at
+full resolution. A bright detail in either 3D eye prevents a frame being counted
+as black. A difference containing picture is refused. Black-only padding may
+differ by more than one second. The output keeps the 3D frame count and timeline.
+The detected picture boundaries must agree after applying the verified offset.
+A short picture addition cannot hide inside a timing allowance or before a black
+tail. Extra UHD padding is trimmed and missing UHD frames are filled with
+limited-range black in both output eyes. Audio and subtitles retain the 3D timeline.
 
 The right eye is the actual MVC right eye, converted directly from decoded YUV to
 16-bit RGB, Lanczos-upscaled to 3840x2160 and mapped through a fixed 65-cube title
@@ -48,7 +62,8 @@ LUT in FFmpeg. A small measured registration is applied with 16-bit bilinear
 affine sampling; the identity case needs no extra resample. It contains no warped UHD detail,
 frame-dependent sharpness switch, or 8-bit MetalFX step. The UHD is decoded as
 10-bit YUV; its left-eye planes are copied unchanged into each packed 10-bit Y4M
-frame except for the matching 3D mask, which becomes limited-range black. Only the MV-HEVC encode compresses that eye. The right eye uses limited-range
+frame except in rows or columns masked by the 3D left eye, which become
+limited-range black, and verified black-only frames outside the UHD's extent. Only the MV-HEVC encode compresses that eye. The right eye uses limited-range
 PQ BT.2020 YUV. The encoder receives `--color hdr10`, plus `--mastering-display` and
 `--max-cll` read from the reference's stream or first decoded frame when present.
 Missing metadata is left absent, never replaced by invented mastering values.

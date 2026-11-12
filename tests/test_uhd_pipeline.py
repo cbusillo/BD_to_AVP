@@ -31,10 +31,13 @@ def plan_for_test(reference: Path, frame_count: int = 3000) -> uhd.UHDConversion
     )
 
 
-@pytest.mark.parametrize("missing", [None, "temporal", "eye", "coverage", "stable_geometry", "beginning"])
-def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(tmp_path: Path, missing: str | None) -> None:
+@pytest.mark.parametrize("offset", [-96, 0, 96])
+@pytest.mark.parametrize("missing", [None, "temporal", "eye", "coverage", "stable_geometry"])
+def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(
+    tmp_path: Path, missing: str | None, offset: int
+) -> None:
     plan = plan_for_test(tmp_path / "reference.mkv", 180000)
-    info = replace(plan.info, duration_seconds=7507.5)
+    info = replace(plan.info, frame_count=216000, duration_seconds=7507.5)
     indices = source_sample_indices(info.duration_seconds, info.frame_rate)
     if missing == "coverage":
         indices = tuple(index // 4 for index in indices)
@@ -48,7 +51,7 @@ def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(tmp_p
         registration = EyeRegistration(matrix, 100, 0.99, 0.1, 8)
         return MatchedFrame(
             index,
-            index + (expected_offset or 0) - (1 if missing == "beginning" else 0),
+            index + (expected_offset if expected_offset is not None else offset),
             left,
             left,
             registration,
@@ -56,32 +59,55 @@ def test_whole_film_match_requires_timing_eye_coverage_and_stable_geometry(tmp_p
             missing != "temporal",
         )
 
+    observed_windows = []
+
+    def read_window(
+        _reference: Path, _info: HDRReferenceInfo, window: range, **_kwargs: object
+    ) -> dict[int, FloatImage]:
+        center = min(indices, key=lambda index: abs(index + offset - (window.start + window.stop - 1) / 2))
+        assert center + offset in window
+        observed_windows.append(window)
+        return {}
+
     with (
-        patch.object(uhd, "read_reference_window", return_value={}),
+        patch.object(uhd, "read_reference_window", side_effect=read_window),
         patch.object(uhd, "match_frame", side_effect=match),
         pytest.raises(VideoRoutePreflightError) if missing is not None else nullcontext(),
     ):
-        matched, offset = uhd.collect_matched_frames(
-            plan.reference_path, info, indices, stereo, workspace=tmp_path, run_context=None, cancellation_event=None
+        matched, found = uhd.collect_matched_frames(
+            plan.reference_path,
+            info,
+            indices,
+            stereo,
+            source_frame_count=plan.source_frame_count,
+            initial_offset=offset + 5,
+            workspace=tmp_path,
+            run_context=None,
+            cancellation_event=None,
         )
-        assert len(matched) == len(indices)
-        assert offset == 0
+        assert len(matched) == len(observed_windows)
+        assert found == offset
 
 
 def test_missing_reference_tail_is_refused_before_color_fit_or_encoding(tmp_path: Path) -> None:
     source = tmp_path / "source.mkv"
     reference = tmp_path / "reference.mkv"
     info = replace(read_hdr_reference_info(hdr_probe()), frame_count=3000, duration_seconds=3000 * 1001 / 24000)
-    disc = DiscInfo(frame_rate="24000/1001", duration_seconds=3010 * 1001 / 24000)
+    disc = DiscInfo(frame_rate="24000/1001", duration_seconds=3100 * 1001 / 24000)
     with (
         patch.object(uhd, "probe_hdr_reference", return_value=info),
-        patch.object(uhd, "collect_stereo_samples", return_value=([], 3010)),
+        patch.object(
+            uhd, "collect_stereo_samples", return_value=uhd.StereoSamples([], uhd.PictureExtent(3100, 0, 3100))
+        ) as collected,
         patch.object(uhd, "collect_matched_frames", return_value=([], 0)),
+        patch.object(uhd, "reference_picture_extent", return_value=uhd.PictureExtent(3000, 0, 3000)),
         patch.object(uhd, "fit_title_color_map") as fit,
         pytest.raises(VideoRoutePreflightError),
     ):
         uhd.prepare_uhd_conversion(source, reference, disc, workspace=tmp_path)
     fit.assert_not_called()
+    sampled_tail = collected.call_args.args[1][-1] / float(info.frame_rate)
+    assert disc.duration_seconds - sampled_tail < 1
 
 
 def test_an_ambiguous_opening_is_rechecked_against_the_later_frame_offset(tmp_path: Path) -> None:
@@ -111,6 +137,8 @@ def test_an_ambiguous_opening_is_rechecked_against_the_later_frame_offset(tmp_pa
             plan.info,
             indices,
             [(left, right)] * len(indices),
+            source_frame_count=plan.source_frame_count,
+            initial_offset=0,
             workspace=tmp_path,
             run_context=None,
             cancellation_event=None,
@@ -148,3 +176,53 @@ def test_failed_encode_removes_only_this_attempts_finalized_movie_and_its_own_lu
         assert not output.exists()
     assert not output.with_suffix(".cube").exists()
     assert sentinel.read_bytes() == b"other work"
+
+
+@pytest.mark.parametrize(
+    "source,reference,offset,refused",
+    [
+        ((1000, 10, 1000), (1000, 0, 990), -10, False),
+        ((1000, 9, 1000), (1000, 0, 990), -10, True),
+        ((1000, 0, 990), (1000, 10, 1000), 10, False),
+        ((1000, 0, 991), (1000, 10, 1000), 10, True),
+        ((1000, 0, 990), (1000, 9, 1000), 10, True),
+        ((1000, 10, 1000), (1000, 0, 991), -10, True),
+        ((1200, 200, 1100), (950, 0, 900), -200, False),
+        ((1000, 0, 900), (1400, 300, 1200), 300, False),
+        ((1000, 100, 900), (1000, 90, 920), 0, True),
+        ((1000, 100, 900), (1000, 100, 924), 0, True),
+        ((1000, 100, 900), (1000, 100, 901), 0, True),
+        ((1000, 100, 900), (1000, 99, 900), 0, True),
+        ((2880, 0, 2760), (3000, 0, 2880), 0, True),
+        ((3000, 0, 2880), (2880, 0, 2760), 0, True),
+    ],
+)
+def test_only_black_padding_passes_and_a_changed_ending_cannot_hide_in_black(
+    source: tuple[int, int, int],
+    reference: tuple[int, int, int],
+    offset: int,
+    refused: bool,
+) -> None:
+    with pytest.raises(VideoRoutePreflightError) if refused else nullcontext():
+        uhd.check_black_padding(uhd.PictureExtent(*source), uhd.PictureExtent(*reference), offset)
+
+
+def test_color_qualification_uses_the_same_steady_registration_as_the_encoder(tmp_path: Path) -> None:
+    plan = plan_for_test(tmp_path / "reference.mkv")
+    image = texture()
+    matches = []
+    for index in range(48):
+        matrix = np.eye(2, 3, dtype=np.float64)
+        matrix[0, 2] = 0.03 if index % 2 else 0.07
+        matches.append(MatchedFrame(index, index, image, image, EyeRegistration(matrix, 100, 1, 0, 8), True, True))
+    samples = uhd.StereoSamples([], uhd.PictureExtent(plan.source_frame_count, 0, plan.source_frame_count))
+    disc = DiscInfo(frame_rate=str(plan.info.frame_rate), duration_seconds=plan.info.duration_seconds)
+    with (
+        patch.object(uhd, "probe_hdr_reference", return_value=plan.info),
+        patch.object(uhd, "collect_stereo_samples", return_value=samples),
+        patch.object(uhd, "reference_picture_extent", return_value=samples.extent),
+        patch.object(uhd, "collect_matched_frames", return_value=(matches, 0)),
+    ):
+        result = uhd.prepare_uhd_conversion(tmp_path / "source.mkv", plan.reference_path, disc, workspace=tmp_path)
+    assert np.array_equal(result.registration, np.eye(2, 3))
+    assert result.color_map.validation["held_out"]["rms_codes"] < 0.01
