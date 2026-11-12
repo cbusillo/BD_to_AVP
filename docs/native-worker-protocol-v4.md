@@ -1,7 +1,7 @@
 # Native Worker Protocol v4
 
 > Historical protocol. The app and worker now use
-> [Native Worker Protocol v13](native-worker-protocol-v13.md).
+> [Native Worker Protocol v14](native-worker-protocol-v14.md).
 
 Protocol v4 adds explicit 3D Blu-ray title discovery and selection while
 preserving the single-request, single-process transport from v3. The native app

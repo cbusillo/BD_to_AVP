@@ -96,11 +96,16 @@ struct EncodingOptionsEditor: View {
 
                     Divider()
                     VideoRouteSummaryView(plan: routePlan)
-                    VideoQualityEditor(
-                        options: $options,
-                        context: qualityEditorContext,
-                        routeQualityState: routeQualityState
-                    )
+                    if routePlan.kind == .uhdHDRMVHEVC {
+                        Text("The matching copy supplies the 4K HDR picture. Conversion quality is chosen automatically.")
+                            .font(.caption)
+                    } else {
+                        VideoQualityEditor(
+                            options: $options,
+                            context: qualityEditorContext,
+                            routeQualityState: routeQualityState
+                        )
+                    }
                 }
 
                 if routePlan.kind != .existingArtifact {

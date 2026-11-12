@@ -53,7 +53,7 @@ struct VideoQualityEditor: View {
             case .av1Stereo:
                 qualitySelectionControl
                 expertControls
-            case .directMVHEVC, .generatedMVHEVC:
+            case .directMVHEVC, .uhdHDRMVHEVC, .generatedMVHEVC:
                 qualitySelectionControl
                 Toggle("AI FX upscale to 2× resolution", isOn: upscaleBinding)
                 expertControls
@@ -137,7 +137,7 @@ struct VideoQualityEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 switch routePlan.kind {
-                case .directMVHEVC:
+                case .directMVHEVC, .uhdHDRMVHEVC:
                     directRateControls
                     Divider()
                     generatedControls(title: "Generated fallback", labelPrefix: "Generated fallback")
@@ -292,7 +292,7 @@ struct VideoQualityEditor: View {
         }
         let steps: [QualityStep]
         switch routePlan.kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             steps = VideoQualityCatalog.supportedSteps(
                 for: routePlan.includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC
             )

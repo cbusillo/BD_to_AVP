@@ -1,0 +1,56 @@
+[
+  {
+    "name": "matched",
+    "accepted": true
+  },
+  {
+    "name": "av1",
+    "mode": "av1",
+    "accepted": false
+  },
+  {
+    "name": "restart",
+    "start_stage": 2,
+    "accepted": false
+  },
+  {
+    "name": "late-restart",
+    "start_stage": 7,
+    "accepted": false
+  },
+  {
+    "name": "swap_eyes",
+    "swap_eyes": true,
+    "accepted": false
+  },
+  {
+    "name": "frame_rate",
+    "frame_rate": "24",
+    "accepted": false
+  },
+  {
+    "name": "resolution",
+    "resolution": "1920x1080",
+    "accepted": false
+  },
+  {
+    "name": "crop_black_bars",
+    "crop_black_bars": true,
+    "accepted": false
+  },
+  {
+    "name": "upscale",
+    "upscale": true,
+    "accepted": false
+  },
+  {
+    "name": "software_encoder",
+    "software_encoder": true,
+    "accepted": false
+  },
+  {
+    "name": "reusable",
+    "keep_files": true,
+    "accepted": true
+  }
+]

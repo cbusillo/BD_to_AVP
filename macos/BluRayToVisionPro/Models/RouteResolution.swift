@@ -269,6 +269,9 @@ enum RouteQualityEngine {
 
     static func validate(_ options: ConversionOptions) -> Result<RouteQualityDraft, RouteQualityResolutionError> {
         let route = VideoRoutePlan(options: options)
+        if let reason = matching4KRefusal(options) {
+            return .failure(.init(message: reason))
+        }
         guard isValid(options, route: route) else {
             return .failure(.init(message: validationReason(for: options, route: route)))
         }
@@ -330,10 +333,36 @@ enum RouteQualityEngine {
         try options.encoding.applyVideoQualityIntent()
     }
 
+    static func matching4KRefusal(_ options: ConversionOptions) -> String? {
+        guard options.uhdReferencePath != nil else {
+            return nil
+        }
+        if options.job.intermediatePolicy.ripsOnly {
+            return "Choose a converted movie to use a matching 4K copy."
+        }
+        if options.encoding.videoOutputMode != .mvHEVC {
+            return "A matching 4K copy requires MV-HEVC output."
+        }
+        if options.job.startStage != .createMKV {
+            return "Start from the beginning so both copies can be checked together."
+        }
+        let encoding = options.encoding
+        if encoding.swapEyes || !encoding.frameRateOverride.isEmpty
+            || !encoding.resolutionOverride.isEmpty || encoding.cropBlackBars
+            || encoding.upscaleEnabled || options.job.softwareEncoder
+        {
+            return "To use the 4K picture, turn off eye swapping, frame rate, resolution, crop, AI upscale and software encoder overrides."
+        }
+        return nil
+    }
+
     private static func isValid(
         _ options: ConversionOptions,
         route: VideoRoutePlan
     ) -> Bool {
+        if options.uhdReferencePath != nil {
+            return matching4KRefusal(options) == nil
+        }
         guard (try? options.encoding.validateQualityMirrors()) != nil else {
             return false
         }
@@ -391,7 +420,7 @@ enum RouteQualityEngine {
         switch proposedRoute.kind {
         case .generatedMVHEVC:
             return "This change requires generated left- and right-eye files. Choose how the current quality choice should carry over."
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             return "This change uses the source video directly. Choose how the current quality choice should carry over."
         case .av1Stereo:
             return "This output format uses exact Custom quality settings. Choose how to continue."
@@ -430,7 +459,7 @@ enum RouteQualityEngine {
         }
         let supported: [QualityStep]
         switch route.kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             supported = VideoQualityCatalog.supportedSteps(
                 for: route.includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC
             )
@@ -453,7 +482,7 @@ enum RouteQualityEngine {
 
     private static func qualityTarget(for route: VideoRoutePlan) -> VideoQualityTarget? {
         switch route.kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             route.includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC
         case .generatedMVHEVC:
             .generatedMVHEVC

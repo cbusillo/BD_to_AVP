@@ -505,9 +505,10 @@ struct EncodingOptions: Codable, Equatable {
     }
 
     func videoSummary(for route: VideoRoutePlan) -> String {
+        if route.kind == .uhdHDRMVHEVC { return route.compactSummary }
         let resolution = upscaleEnabled ? "2× upscale" : "source resolution"
         return switch route.kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             route.includesUpscale ? route.compactSummary : "\(route.compactSummary) · source resolution"
         case .generatedMVHEVC:
             "\(route.compactSummary) · \(resolution)"
@@ -652,6 +653,7 @@ extension JobOptions {
 struct ConversionOptions: Codable, Equatable {
     var encoding = EncodingOptions()
     var job = JobOptions()
+    var uhdReferencePath: String?
 
     var videoRoutePlan: VideoRoutePlan {
         VideoRoutePlan(options: self)
@@ -707,6 +709,7 @@ struct SourceScopedResetSummary: Equatable {
         case removeOriginal = "delete source after success"
         case recovery = "recovery choices"
         case titleSelection = "title selection"
+        case matching4KCopy = "matching 4K copy"
     }
 
     let choices: [Choice]
@@ -740,6 +743,10 @@ private enum SourceScopedResetPolicy {
         recoveryDecisionPresent: Bool
     ) -> SourceScopedResetSummary {
         var choices: [SourceScopedResetSummary.Choice] = []
+        if options.uhdReferencePath != nil {
+            options.uhdReferencePath = nil
+            choices.append(.matching4KCopy)
+        }
 
         if options.job.startStage != .createMKV {
             options.job.startStage = .createMKV

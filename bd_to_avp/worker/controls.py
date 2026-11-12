@@ -17,7 +17,6 @@ from uuid import UUID
 from bd_to_avp.runtime import WAIT_GRANT_SECONDS, WaitCommand
 from bd_to_avp.worker.protocol import (
     MAX_REQUEST_BYTES,
-    PROTOCOL_VERSION,
     WorkerEventEmitter,
     WorkerEventType,
     WorkerProtocolError,
@@ -86,7 +85,7 @@ class WorkerControls:
             not isinstance(raw, dict)
             or set(raw) != expected_keys
             or type(raw.get("protocol_version")) is not int
-            or raw["protocol_version"] != PROTOCOL_VERSION
+            or raw["protocol_version"] != self._emitter.protocol_version
             or raw.get("type") != "job.keep_waiting"
             or len(identifiers) != 4
         ):

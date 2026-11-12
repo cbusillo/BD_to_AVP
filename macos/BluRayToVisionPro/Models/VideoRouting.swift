@@ -1,6 +1,7 @@
 import Foundation
 
 enum VideoRouteKind: String, Equatable {
+    case uhdHDRMVHEVC = "uhd_hdr_mv_hevc"
     case directMVHEVC = "direct_mv_hevc"
     case generatedMVHEVC = "generated_mv_hevc"
     case av1Stereo = "av1"
@@ -77,6 +78,7 @@ struct VideoRoutePlan: Equatable {
     ) {
         self.init(
             encoding: options.encoding,
+            uhdReferencePath: options.uhdReferencePath,
             startStage: options.job.startStage.rawValue,
             keepsReusableArtifacts: options.job.intermediatePolicy.createsReusableArtifacts,
             softwareEncoder: options.job.softwareEncoder,
@@ -100,6 +102,7 @@ struct VideoRoutePlan: Equatable {
 
     init(
         encoding: EncodingOptions,
+        uhdReferencePath: String? = nil,
         startStage: Int,
         keepsReusableArtifacts: Bool,
         softwareEncoder: Bool,
@@ -112,6 +115,21 @@ struct VideoRoutePlan: Equatable {
             && encoding.upscaleEnabled
             && startStage <= ConversionStage.upscaleVideo.rawValue
 
+        if uhdReferencePath != nil {
+            kind = .uhdHDRMVHEVC
+            generatedRequirement = nil
+            directBitrateMode = .automatic
+            directBitrateMbps = nil
+            generatedEyeBitrateMode = nil
+            generatedEyeBitrateMbps = nil
+            generatedMergeQuality = nil
+            fallbackGeneratedEyeBitrateMode = nil
+            fallbackGeneratedEyeBitrateMbps = nil
+            fallbackGeneratedMergeQuality = nil
+            av1CRF = nil
+            upscaleQuality = nil
+            return
+        }
         if allowsExistingArtifact, startStage > ConversionStage.combineToMVHEVC.rawValue {
             kind = .existingArtifact
             generatedRequirement = nil
@@ -208,8 +226,9 @@ struct VideoRoutePlan: Equatable {
     }
 
     var title: String {
-        switch kind {
-        case .directMVHEVC:
+        if kind == .uhdHDRMVHEVC { return "4K HDR spatial movie" }
+        return switch kind {
+        case .directMVHEVC, .uhdHDRMVHEVC:
             includesUpscale ? "Direct 4K MV-HEVC when available" : "Direct MV-HEVC when available"
         case .generatedMVHEVC:
             "Generated MV-HEVC"
@@ -221,12 +240,12 @@ struct VideoRoutePlan: Equatable {
     }
 
     var qualityTitle: String {
-        resolvedQualityTitle ?? "Not applied"
+        kind == .uhdHDRMVHEVC ? "Automatic 4K HDR" : resolvedQualityTitle ?? "Not applied"
     }
 
     var systemImage: String {
         switch kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             "bolt.horizontal.circle"
         case .generatedMVHEVC:
             "rectangle.split.2x1"
@@ -238,8 +257,9 @@ struct VideoRoutePlan: Equatable {
     }
 
     var settingsSummary: String {
+        if kind == .uhdHDRMVHEVC { return "Matching 4K picture and real 3D depth" }
         switch kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             let rateControl: String
             if let directBitrateMbps {
                 rateControl = "Fixed \(directBitrateMbps) Mbps final"
@@ -291,8 +311,9 @@ struct VideoRoutePlan: Equatable {
     }
 
     var speedGuidance: String {
-        switch kind {
-        case .directMVHEVC:
+        if kind == .uhdHDRMVHEVC { return "Checks both movies, then creates the 4K HDR spatial movie." }
+        return switch kind {
+        case .directMVHEVC, .uhdHDRMVHEVC:
             includesUpscale
                 ? "One hardware encode with inline MetalFX when direct preflight succeeds."
                 : "One hardware encode when direct preflight succeeds."
@@ -312,8 +333,9 @@ struct VideoRoutePlan: Equatable {
     }
 
     var detail: String {
-        switch kind {
-        case .directMVHEVC:
+        if kind == .uhdHDRMVHEVC { return "Checks both copies before conversion. Keeps the 4K HDR picture and uses the 3D source for depth, audio and subtitles." }
+        return switch kind {
+        case .directMVHEVC, .uhdHDRMVHEVC:
             if includesUpscale {
                 if let generatedFallbackSummary {
                     "The engine confirms stereo MV-HEVC and MetalFX 2× support before reading conversion input. It scales both eyes inside the direct encoder and uses \(generatedFallbackSummary) if unavailable."
@@ -341,8 +363,9 @@ struct VideoRoutePlan: Equatable {
     }
 
     var pipelineSteps: [String] {
-        switch kind {
-        case .directMVHEVC:
+        if kind == .uhdHDRMVHEVC { return ["Check both copies", "Create 4K HDR movie", "Add audio and subtitles"] }
+        return switch kind {
+        case .directMVHEVC, .uhdHDRMVHEVC:
             if includesUpscale {
                 ["1 Prepare", "2–3 Extract 3D", "4 Direct 4K MV-HEVC", "7–9 Finish"]
             } else {
@@ -362,8 +385,9 @@ struct VideoRoutePlan: Equatable {
     }
 
     var pipelineDetail: String {
-        switch kind {
-        case .directMVHEVC:
+        if kind == .uhdHDRMVHEVC { return "Both copies must be the same cut. Black-only differences at the beginning or end are allowed." }
+        return switch kind {
+        case .directMVHEVC, .uhdHDRMVHEVC:
             if includesUpscale {
                 "Direct MetalFX upscale writes the stage-4 4K spatial movie and skips the file-backed stages 5 and 6."
             } else {
@@ -400,7 +424,7 @@ struct VideoRoutePlan: Equatable {
 
     private var qualityTargets: [VideoQualityTarget] {
         switch kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             [includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC]
         case .generatedMVHEVC:
             includesUpscale ? [.generatedMVHEVC, .fileUpscale] : [.generatedMVHEVC]
@@ -476,8 +500,9 @@ extension VideoRouteReport {
     }
 
     var displayTitle: String {
-        switch kind {
-        case .directMVHEVC:
+        if kind == .uhdHDRMVHEVC { return "4K HDR spatial movie" }
+        return switch kind {
+        case .directMVHEVC, .uhdHDRMVHEVC:
             usesMetalFXUpscale ? "Direct 4K MV-HEVC" : "Direct MV-HEVC"
         case .generatedMVHEVC:
             isFallback ? "Generated MV-HEVC fallback" : "Generated MV-HEVC"
@@ -492,7 +517,7 @@ extension VideoRouteReport {
 
     var systemImage: String {
         switch kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             "bolt.horizontal.circle.fill"
         case .generatedMVHEVC:
             isFallback ? "arrow.triangle.branch" : "rectangle.split.2x1.fill"
@@ -610,8 +635,9 @@ extension VideoRouteReport.RouteSettings {
     }
 
     var displayTitle: String {
-        switch kind {
-        case .directMVHEVC:
+        if kind == .uhdHDRMVHEVC { return "4K HDR spatial movie" }
+        return switch kind {
+        case .directMVHEVC, .uhdHDRMVHEVC:
             upscaleMode == "metalfx" ? "Direct 4K MV-HEVC" : "Direct MV-HEVC"
         case .generatedMVHEVC:
             "Generated MV-HEVC"
@@ -626,7 +652,7 @@ extension VideoRouteReport.RouteSettings {
 
     private var qualityTargets: [VideoQualityTarget] {
         switch kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             [upscaleMode == "metalfx" ? .directMVHEVCMetalFX2x : .directMVHEVC]
         case .generatedMVHEVC:
             upscaleQuality == nil ? [.generatedMVHEVC] : [.generatedMVHEVC, .fileUpscale]
@@ -670,7 +696,7 @@ extension VideoRouteReport.RouteSettings {
     func settingsSummary(qualityTitle: String?) -> String {
         let concrete: String
         switch kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             if qualityTitle == nil {
                 let legacy: String
                 if rateControl == "quality" || quality != nil {
@@ -836,8 +862,9 @@ struct VideoStorageEstimate: Equatable {
         }
 
         let route = VideoRoutePlan(options: draft.options)
+        if route.kind == .uhdHDRMVHEVC { return nil }
         switch route.kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             guard route.directBitrateMode == .custom,
                   let directBitrateMbps = route.directBitrateMbps
             else {
@@ -891,6 +918,8 @@ struct VideoStorageEstimate: Equatable {
             "AV1 size varies with source content and CRF."
         case .existingArtifact:
             "This restart uses an existing encoded video artifact."
+        case .uhdHDRMVHEVC:
+            "4K HDR size depends on the pictures in both copies."
         case .directMVHEVC:
             "Automatic direct size varies with source content. Choose a Custom bitrate for a size estimate."
         case .generatedMVHEVC:

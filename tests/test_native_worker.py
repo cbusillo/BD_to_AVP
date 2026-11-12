@@ -45,6 +45,7 @@ from bd_to_avp.worker.protocol import (
     MAX_REQUEST_BYTES,
     MAX_DETAIL_BYTES,
     PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
     WorkerActivityReporter,
     JobSpec,
     WorkerEventEmitter,
@@ -76,7 +77,11 @@ def historical_job_spec_fixtures() -> list[tuple[int, Path]]:
     for family in JOB_SPEC_FIXTURE_FAMILIES:
         for path in FIXTURES_DIRECTORY.glob(f"{family}_v*.json"):
             match = re.fullmatch(rf"{re.escape(family)}_v(\d+)\.json", path.name)
-            if match and int(match.group(1)) < PROTOCOL_VERSION:
+            if (
+                match
+                and int(match.group(1)) < PROTOCOL_VERSION
+                and int(match.group(1)) not in SUPPORTED_PROTOCOL_VERSIONS
+            ):
                 fixtures.append((int(match.group(1)), path))
     return sorted(fixtures)
 

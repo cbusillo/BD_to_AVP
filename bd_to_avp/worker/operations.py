@@ -535,7 +535,6 @@ def _convert_source(
                 raise WorkerCancelled("The conversion was cancelled.") from error
             raise WorkerOperationError(
                 "video_route_preflight_failed",
-                "The video route could not be prepared safely.",
                 str(error),
             ) from error
         except GeneratedMVHEVCArtifactError as error:
@@ -712,6 +711,7 @@ def resolve_job_video_route(
     return resolve_video_route(
         job.encoding,
         job.job,
+        uhd_reference=job.uhd_reference,
         run_context=activity.run_context,
         cancellation_event=owner.cancellation_event,
         observability_context=stage_observability_context("configure"),
@@ -746,6 +746,7 @@ def route_message(video_route: ResolvedVideoRoute) -> str:
     if video_route.uses_in_process_upscale:
         return "Using direct 4K MetalFX MV-HEVC encoding."
     messages = {
+        VideoRouteKind.UHD_HDR_MV_HEVC: "Using the matching 4K copy for an HDR spatial movie.",
         VideoRouteKind.DIRECT_MV_HEVC: "Using direct MV-HEVC encoding.",
         VideoRouteKind.GENERATED_MV_HEVC: "Using generated MV-HEVC encoding.",
         VideoRouteKind.AV1: "Using AV1 stereo encoding.",

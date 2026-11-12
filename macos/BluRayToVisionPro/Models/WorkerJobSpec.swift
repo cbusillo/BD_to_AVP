@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 13
+    static let protocolVersion = 14
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -500,11 +500,13 @@ struct WorkerJobSpec: Encodable, Equatable {
     let encoding: Encoding?
     let job: Job?
     let preview: Preview?
+    let uhdReferencePath: String?
 
     init(source: ConversionSource, jobID: UUID = UUID()) {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
+        uhdReferencePath = nil
         operation = "inspect_source"
         self.source = Source(source: source)
         destination = nil
@@ -517,6 +519,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
+        uhdReferencePath = nil
         operation = "inspect_source"
         source = Source(fileURL: sourceURL)
         destination = nil
@@ -529,6 +532,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
+        uhdReferencePath = draft.options.uhdReferencePath
         source = Source(source: draft.source, titleID: Self.titleID(for: draft))
         destination = Destination(path: draft.destinationURL.path)
 
@@ -540,7 +544,9 @@ struct WorkerJobSpec: Encodable, Equatable {
         } else {
             operation = "convert_source"
             let job = Self.conversionJob(from: draft)
-            encoding = Self.encoding(from: draft.options.encoding, job: job)
+            encoding = draft.options.uhdReferencePath == nil
+                ? Self.encoding(from: draft.options.encoding, job: job)
+                : Self.matching4KEncoding(from: draft.options.encoding, job: job)
             self.job = job
         }
         preview = nil
@@ -552,6 +558,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         jobID: UUID = UUID()
     ) {
         let conversion = previewDraft.conversion
+        uhdReferencePath = conversion.options.uhdReferencePath
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
@@ -595,6 +602,13 @@ struct WorkerJobSpec: Encodable, Equatable {
         try container.encodeIfPresent(encoding, forKey: .encoding)
         try container.encodeIfPresent(job, forKey: .job)
         try container.encodeIfPresent(preview, forKey: .preview)
+        try container.encodeIfPresent(uhdReferencePath, forKey: .uhdReferencePath)
+    }
+
+    private static func matching4KEncoding(from options: EncodingOptions, job: Job) -> Encoding {
+        var automatic = options
+        automatic.videoQuality = .balanced
+        return encoding(from: automatic, job: job, routeKeepFiles: false)
     }
 
     private static func encoding(
@@ -778,7 +792,7 @@ struct WorkerJobSpec: Encodable, Equatable {
                 activeUpscaleQuality: activeUpscaleQuality,
                 qualityStateError: qualityStateError
             )
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             let directTarget: VideoQualityTarget = activeUpscaleEnabled
                 ? .directMVHEVCMetalFX2x
                 : .directMVHEVC
@@ -850,7 +864,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         let step = options.videoQuality.lastLadderStep
         let supported: Bool
         switch route.kind {
-        case .directMVHEVC:
+        case .directMVHEVC, .uhdHDRMVHEVC:
             supported = VideoQualityCatalog.supports(
                 step,
                 for: activeUpscaleEnabled ? .directMVHEVCMetalFX2x : .directMVHEVC
@@ -962,6 +976,7 @@ struct WorkerJobSpec: Encodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case uhdReferencePath = "uhd_reference"
         case protocolVersion = "protocol_version"
         case type
         case jobID = "job_id"

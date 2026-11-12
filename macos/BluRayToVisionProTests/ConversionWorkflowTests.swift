@@ -3,6 +3,66 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class ConversionWorkflowTests: XCTestCase {
+    func testMatching4KRouteAgreesWithPythonCases() throws {
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: sharedFixtureData(named: "uhd_route_cases.json")) as? [[String: Any]])
+        for entry in cases {
+            var options = ConversionOptions()
+            options.uhdReferencePath = "/Movies/4k.mkv"
+            options.encoding.videoOutputMode = entry["mode"] as? String == "av1" ? .av1Stereo : .mvHEVC
+            options.encoding.swapEyes = entry["swap_eyes"] as? Bool ?? false
+            options.encoding.frameRateOverride = entry["frame_rate"] as? String ?? ""
+            options.encoding.resolutionOverride = entry["resolution"] as? String ?? ""
+            options.encoding.cropBlackBars = entry["crop_black_bars"] as? Bool ?? false
+            options.encoding.upscaleEnabled = entry["upscale"] as? Bool ?? false
+            options.job.softwareEncoder = entry["software_encoder"] as? Bool ?? false
+            options.job.startStage = ConversionStage(rawValue: entry["start_stage"] as? Int ?? 1)!
+            options.job.intermediatePolicy = entry["keep_files"] as? Bool == true ? .reusable : .automatic
+            let accepted = entry["accepted"] as? Bool == true
+            XCTAssertEqual(RouteQualityEngine.matching4KRefusal(options) == nil, accepted, entry["name"] as? String ?? "")
+            if accepted { XCTAssertEqual(options.videoRoutePlan.kind, .uhdHDRMVHEVC) }
+        }
+    }
+
+    func testMatching4KCopySurvivesQueueAndReachesWorker() throws {
+        var options = ConversionOptions()
+        options.uhdReferencePath = "/Movies/4k.mkv"
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Movies/3d.mkv")),
+            sourceDetails: nil, profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Output"), options: options
+        )
+        var retainedOptions = options
+        retainedOptions.job.intermediatePolicy = .reusable
+        try retainedOptions.encoding.selectQualityStep(.detailed)
+        let retainedDraft = ConversionDraft(source: draft.source, sourceDetails: nil, profile: draft.profile, destinationURL: draft.destinationURL, options: retainedOptions)
+        XCTAssertNoThrow(try JSONEncoder().encode(WorkerJobSpec(draft: retainedDraft)))
+        XCTAssertNil(PreviewDraft(conversion: draft, outputLength: .oneMinute, samplePosition: .beginning))
+        let intent = DurableQueueItemIntent(draft: draft)
+        let restored = try JSONDecoder().decode(DurableQueueItemIntent.self, from: JSONEncoder().encode(intent))
+        XCTAssertEqual(restored.options.uhdReferencePath, options.uhdReferencePath)
+        XCTAssertEqual(restored.options.videoRoutePlan.kind, .uhdHDRMVHEVC)
+        XCTAssertNil(RouteQualityEngine.matching4KRefusal(restored.options))
+        let job = WorkerJobSpec(draft: draft, jobID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(job)) as? [String: Any])
+        XCTAssertEqual(payload["uhd_reference"] as? String, options.uhdReferencePath)
+        XCTAssertEqual(payload["protocol_version"] as? Int, WorkerJobSpec.protocolVersion)
+        let fixture = try JSONSerialization.jsonObject(with: sharedFixtureData(named: "native_worker_convert_uhd_v14.json")) as? NSDictionary
+        XCTAssertEqual(payload as NSDictionary, fixture)
+    }
+
+    func testMatching4KCopyRefusesOverridesAndResetsForNewSource() {
+        var options = ConversionOptions()
+        options.uhdReferencePath = "/Movies/4k.mkv"
+        options.encoding.upscaleEnabled = true
+        XCTAssertNotNil(RouteQualityEngine.matching4KRefusal(options))
+        options.encoding.upscaleEnabled = false
+        options.job.startStage = .extractMVCAndAudio
+        XCTAssertNotNil(RouteQualityEngine.matching4KRefusal(options))
+        options.resetSourceScopedState(for: .matroska)
+        XCTAssertNil(options.uhdReferencePath)
+    }
+
+
     func testDraftBuildsPlannedAVPOutput() {
         let draft = ConversionDraft(
             source: ConversionSource(

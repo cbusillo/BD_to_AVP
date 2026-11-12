@@ -1349,6 +1349,12 @@ struct PersistentQueueDetailView: View {
                                 : (item.queueManipulationLockReason ?? "Settings are locked."))
                     }
                 }
+                if let path = item.draft.options.uhdReferencePath {
+                    GridRow {
+                        Text("4K copy").foregroundStyle(.secondary)
+                        detailValue(path, label: "4K copy")
+                    }
+                }
                 GridRow {
                     Text("Planned file").foregroundStyle(.secondary)
                     detailValue(item.draft.proposedOutputURL.lastPathComponent, label: "Planned file")

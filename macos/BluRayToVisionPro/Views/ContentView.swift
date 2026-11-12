@@ -1575,7 +1575,9 @@ private struct SourceConfigurationSheet: View {
                 Button("Edit Settings…", action: openSettings)
                     .disabled(inspection == nil)
                 Button("Preview…") { isShowingPreview = true }
-                    .disabled(drafts.count != 1 || drafts.first?.options.job.intermediatePolicy.ripsOnly == true)
+                    .disabled(drafts.count != 1
+                        || drafts.first?.options.job.intermediatePolicy.ripsOnly == true
+                        || drafts.first?.options.uhdReferencePath != nil)
                 Button("Add to Queue") { addToQueue(drafts) }
                     .disabled(drafts.isEmpty)
                 Button("Start Queue") { startQueue(drafts) }

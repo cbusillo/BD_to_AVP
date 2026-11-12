@@ -36,8 +36,11 @@ The default MV-HEVC videos play in Shiny 3D Cinema, or directly in the Files or
 [Screenlit](https://apps.apple.com/us/app/screenlit/id6499478407) app on the AVP.
 See the feasibility record before choosing experimental AV1 output.
 
-For a matching 3D Blu-ray source and 4K HDR10 copy, run
-`bd-to-avp --source 3d.mkv --uhd-reference 4k.mkv`. See the
+For a matching 3D Blu-ray source and 4K HDR10 copy, choose **Add a 4K copy**
+in the Mac app’s conversion options. Each queue item keeps its own copy; use
+**Edit…** to change it. The app checks both movies before conversion and shows
+any mismatch on the item. Short previews are unavailable with a 4K copy.
+Terminal users can run `bd-to-avp --source 3d.mkv --uhd-reference 4k.mkv`. See the
 [pipeline contract](docs/direct-pipeline-contracts.md#matched-4k-hdr10-reference)
 for qualification, the approved 3D mask and black-only padding.
 

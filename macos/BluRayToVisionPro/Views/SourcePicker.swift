@@ -3,6 +3,19 @@ import UniformTypeIdentifiers
 
 enum SourcePicker {
     @MainActor
+    static func choose4KCopy() -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "Add a 4K copy"
+        panel.prompt = "Add Copy"
+        panel.message = "Choose a 4K HDR10 video of the same cut of this movie."
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = ["mkv", "mov", "mp4", "m2ts", "mts"].compactMap { UTType(filenameExtension: $0) }
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url?.standardizedFileURL
+    }
+
+    @MainActor
     static func chooseExistingSource() -> URL? {
         let panel = NSOpenPanel()
         panel.title = "Open a 3D Blu-ray Source"

@@ -91,11 +91,43 @@ struct ConversionSetupView: View {
     }
 
     var body: some View {
-        Group {
-            if isReady {
-                readyBody
-            } else {
-                editorBody
+        VStack(alignment: .leading, spacing: 12) {
+            matching4KControl
+            Group {
+                if isReady {
+                    readyBody
+                } else {
+                    editorBody
+                }
+            }
+        }
+        .onChange(of: options) { _, value in routeQualityState.validate(value) }
+    }
+
+    private var matching4KControl: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Button("Add a 4K copy") {
+                    if let url = SourcePicker.choose4KCopy() {
+                        options.uhdReferencePath = url.path
+                        routeQualityState.validate(options)
+                    }
+                }
+                .accessibilityIdentifier("add-4k-copy")
+                .disabled(isLocked || sourceKind == nil || sourceKind == .sourceFolder)
+                if let path = options.uhdReferencePath {
+                    Text(URL(fileURLWithPath: path).lastPathComponent).lineLimit(1)
+                    Button("Remove") {
+                        options.uhdReferencePath = nil
+                        routeQualityState.validate(options)
+                    }
+                    .disabled(isLocked)
+                }
+            }
+            if options.uhdReferencePath != nil {
+                Text(RouteQualityEngine.matching4KRefusal(options) ?? "The same cut in 4K HDR10. Both copies are checked before conversion. Short previews are unavailable with a 4K copy.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -157,7 +189,7 @@ struct ConversionSetupView: View {
             Divider()
             HStack {
                 Button("Preview", action: preview)
-                    .disabled(!canPreview)
+                    .disabled(!canPreview || options.uhdReferencePath != nil)
                     .accessibilityIdentifier("ready-preview")
                 Button("Add to Queue", action: addToQueue)
                     .disabled(!canAddToQueue)
@@ -442,6 +474,7 @@ struct ConversionSetupView: View {
     }
 
     private var profileOutcomeSummary: String {
+        if options.uhdReferencePath != nil { return options.videoRoutePlan.compactSummary }
         if options.job.intermediatePolicy.ripsOnly {
             return ConversionOptions.ripSummary
         }

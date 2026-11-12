@@ -27,7 +27,8 @@ from bd_to_avp.modules.video_quality_defaults import (
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.runtime import RunContext
 
-PROTOCOL_VERSION = 13
+PROTOCOL_VERSION = 14
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({13, PROTOCOL_VERSION})
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -251,6 +252,7 @@ class JobSpec:
     encoding: EncodingOptions | None = None
     job: JobOptions | None = None
     preview: PreviewOptions | None = None
+    uhd_reference: Path | None = None
 
     @classmethod
     def from_json_line(cls, line: str) -> "JobSpec":
@@ -273,7 +275,7 @@ class JobSpec:
         if (
             not isinstance(protocol_version, int)
             or isinstance(protocol_version, bool)
-            or protocol_version != PROTOCOL_VERSION
+            or protocol_version not in SUPPORTED_PROTOCOL_VERSIONS
         ):
             raise WorkerProtocolError(
                 "protocol_mismatch",
@@ -309,7 +311,17 @@ class JobSpec:
             WorkerOperation.RIP_SOURCE: base_keys | {"destination", "job"},
             WorkerOperation.PREVIEW_SOURCE: base_keys | {"destination", "encoding", "job", "preview"},
         }[operation]
+        if protocol_version >= 14 and operation is WorkerOperation.CONVERT_SOURCE:
+            operation_keys |= {"uhd_reference"}
         cls._reject_unknown_keys(raw, operation_keys, "request", job_id)
+        uhd_reference = None
+        if raw.get("uhd_reference") is not None:
+            value = raw["uhd_reference"]
+            if not isinstance(value, str):
+                raise WorkerProtocolError(
+                    "invalid_uhd_reference", "Choose a file for the matching 4K copy.", job_id=job_id
+                )
+            uhd_reference = cls._parse_absolute_path(value, "uhd_reference", job_id)
 
         source = raw.get("source")
         if not isinstance(source, Mapping):
@@ -396,8 +408,9 @@ class JobSpec:
             )
             encoding = cls._parse_encoding(raw.get("encoding"), job_id)
             job_options = cls._parse_job_options(raw.get("job"), job_id)
-            assert job_options is not None
-            cls._validate_video_route_for_job(encoding, job_options, job_id)
+            assert job_options is not None and encoding is not None
+            if uhd_reference is None:
+                cls._validate_video_route_for_job(encoding, job_options, job_id)
         if operation is WorkerOperation.CONVERT_SOURCE:
             assert job_options is not None
             if source_kind is WorkerSourceKind.PHYSICAL_DISC and job_options.remove_original:
@@ -460,6 +473,7 @@ class JobSpec:
             encoding=encoding,
             job=job_options,
             preview=preview_options,
+            uhd_reference=uhd_reference,
         )
 
     @staticmethod
@@ -1574,6 +1588,7 @@ class WorkerEventEmitter:
         output: TextIO,
         job_id: str,
         *,
+        protocol_version: int = PROTOCOL_VERSION,
         write_timeout_seconds: float = EVENT_WRITE_TIMEOUT_SECONDS,
         on_transport_failure: Callable[[], None] | None = None,
     ) -> None:
@@ -1587,6 +1602,7 @@ class WorkerEventEmitter:
                 raise ValueError("Worker event output requires a file descriptor or finite StringIO") from None
             self._descriptor = None
         self._job_id = job_id
+        self.protocol_version = protocol_version
         self.write_timeout_seconds = write_timeout_seconds
         self._sequence = -1
         self._terminal_emitted = False
@@ -1628,7 +1644,7 @@ class WorkerEventEmitter:
                     raise RuntimeError("Cannot emit an event after a terminal worker event.")
                 next_sequence = self._sequence + 1
                 event = {
-                    "protocol_version": PROTOCOL_VERSION,
+                    "protocol_version": self.protocol_version,
                     "type": event_type.value,
                     "job_id": self._job_id,
                     "sequence": next_sequence,

@@ -1,5 +1,7 @@
 # Native Worker Protocol v13
 
+> Historical contract. Current app and worker: [Native Worker Protocol v14](native-worker-protocol-v14.md).
+
 The Mac app and bundled worker require protocol 13 and ship together. Quality
 mapping, source requests, conversion results, signals, cancellation, cleanup,
 and unattended retry policy retain their [v12 behavior](native-worker-protocol-v12.md).
