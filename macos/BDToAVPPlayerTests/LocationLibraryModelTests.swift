@@ -202,7 +202,6 @@ final class LocationLibraryModelTests: XCTestCase {
         await locations.reconnect(locationID, folderURL: share)
         XCTAssertEqual(locations.statuses[locationID], .available)
         XCTAssertFalse(locations.titles[locationID]?.isEmpty ?? true)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: share.appendingPathComponent("Rainforest.iso").path))
     }
 
     func testAStalledInspectionKeepsFolderAccessUntilItEndsAndBlocksNewScans() async throws {

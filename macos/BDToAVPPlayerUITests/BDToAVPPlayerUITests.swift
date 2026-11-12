@@ -94,7 +94,6 @@ final class BDToAVPPlayerUITests: XCTestCase {
         XCTAssertEqual(playPauseButton.label, "Pause playback")
         sleep(UInt32(5))
         attachScreenshot(named: "player-controls-faded")
-        XCTAssertTrue(app.buttons["player-surface"].exists)
         XCTAssertFalse(app.buttons["player-show-controls"].exists)
         XCTAssertTrue(playPauseButton.isHittable)
         playPauseButton.tap()

@@ -103,6 +103,10 @@ struct AppShellView: View {
         }
                 .onChange(of: model.playbackRequest) { _, request in
             guard let request else {
+                Task {
+                    await model.refreshSourceStatuses()
+                    await model.locations.refreshAll()
+                }
                 return
             }
             prepareForPlayback(request.item)
@@ -116,7 +120,7 @@ struct AppShellView: View {
                     await model.refreshSourceStatuses()
                 }
             }
-            model.handlePlaybackWindowPhase(phase, session: playerSession)
+            playerSession.handleScenePhase(phase)
             if phase == .background {
                 dismissPlaybackScenes()
             }
@@ -264,11 +268,13 @@ private struct LocationsSidebarSection: View {
                         Text(location.name)
                     } icon: {
                         Image(systemName: locations.statuses[location.id] == .unreachable
+                            || locations.statuses[location.id] == .needsAccess
                             ? "externaldrive.badge.exclamationmark" : "server.rack")
                     }
                 }
                 .accessibilityIdentifier("location-\(location.id.uuidString)")
-                .accessibilityValue(locations.statuses[location.id] == .unreachable ? "Can't reach" : "")
+                .accessibilityValue(locations.statuses[location.id] == .needsAccess
+                    ? "Choose folder again" : locations.statuses[location.id] == .unreachable ? "Can't reach" : "")
             }
             Button(action: add) {
                 Label("Add Location", systemImage: "plus")

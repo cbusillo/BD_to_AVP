@@ -2,7 +2,6 @@ import AVFoundation
 import Combine
 import Foundation
 import UniformTypeIdentifiers
-import SwiftUI
 
 enum LibraryViewMode: String, CaseIterable, Sendable {
     case posters
@@ -274,12 +273,15 @@ final class PlayerAppModel: ObservableObject {
         playbackRequest = nil
     }
 
-    func preparePlayback(_ item: MediaItem, session: MVHEVCPlayerSession, resumeStore: ResumeStore) {
+    @discardableResult
+    func preparePlayback(_ item: MediaItem, session: MVHEVCPlayerSession, resumeStore: ResumeStore) -> Task<Void, Never> {
         preparationTask?.cancel()
-        preparationTask = Task {
+        let task = Task {
             guard !Task.isCancelled else { return }
             await session.prepare(mediaItem: item, bookmarkStore: bookmarkStore, resumeStore: resumeStore)
         }
+        preparationTask = task
+        return task
     }
 
     func locatePlaybackSource(at url: URL, session: MVHEVCPlayerSession, resumeStore: ResumeStore) {
@@ -296,14 +298,6 @@ final class PlayerAppModel: ObservableObject {
         preparationTask = nil
         session.finish()
         clearPlaybackRequest()
-    }
-
-    func handlePlaybackWindowPhase(_ phase: ScenePhase, session: MVHEVCPlayerSession) {
-        if phase == .background {
-            finishPlayback(session: session)
-        } else {
-            session.handleScenePhase(phase)
-        }
     }
 
     @discardableResult

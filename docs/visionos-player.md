@@ -228,7 +228,7 @@ Location**. iOS-family bookmarks to network volumes can stop resolving after the
 is unmounted and remounted (Apple bug r.102995804, discussed on the
 [developer forums](https://developer.apple.com/forums/thread/774114)); choosing the
 folder again replaces the bookmark and keeps the Location. If saved folder access
-is missing or no longer resolves, the app explains that access was lost, including
+is missing or invalid, the app explains that access was lost, including
 a possible change of app version, and offers **Choose Folder Again**. Reconnecting
 keeps the Location and never moves or deletes its movies. A share that stops answering
 is reported unreachable after 45 seconds instead of hanging the library; a request it
@@ -371,13 +371,13 @@ track-number details only when labels collide.
 The app saves in-progress playback positions and restores them when the same
 library item is opened again. An inactive scene keeps playing: on visionOS that
 phase covers Control Center, looking at another window, and other ordinary focus
-changes, so the player only saves current progress then. When the playback
-window enters the background or disappears, its owner cancels preparation,
-finishes the session, saves progress, and closes Cinema and Stats. This also
-handles the system close button, which may background the last window without
-calling `onDisappear`. Reopening returns to the library; playing the movie again
-restores its saved position. The session's interruption recovery remains paused
-until the user starts it. Loading or failed preparations never overwrite
+changes, so the player only saves current progress then. Moving to the background
+cancels pending autoplay and pauses playback, saving current progress. This
+covers the system close button, which may background the last window without
+calling `onDisappear`. Cinema and Stats close when the playback window
+backgrounds. Reopening keeps the movie paused at its saved position. When the
+window is removed, or Done is used, its owner cancels preparation and finishes
+the session so late source access cannot restart playback. Loading or failed preparations never overwrite
 an existing resume point because resume writes begin only after a player item
 has reached ready state. While playing, the position is also saved every 10
 seconds, so a forced quit loses only seconds. Completed or near-completed playback is cleared instead of resuming at
