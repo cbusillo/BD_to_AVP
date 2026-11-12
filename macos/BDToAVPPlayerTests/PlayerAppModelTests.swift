@@ -4,6 +4,62 @@ import XCTest
 
 @MainActor
 final class PlayerAppModelTests: XCTestCase {
+    func testPlaybackWindowBackgroundPausesAndRemovalReleasesItsSession() async throws {
+        let model = PlayerAppModel(
+            libraryStore: LibraryStore(storageURL: temporaryURL()),
+            bookmarkStore: BookmarkStore(storageURL: temporaryURL()),
+            locationStore: LocationStore(storageURL: temporaryURL()),
+            stereoCheckInstaller: { [] }
+        )
+        let session = MVHEVCPlayerSession()
+        let resumeStore = ResumeStore(storageURL: temporaryURL())
+        let item = try await startFilePlayback(named: "Window Close", session: session, resumeStore: resumeStore)
+        session.play()
+        session.handleScenePhase(.inactive)
+        XCTAssertNotNil(session.playerItem)
+
+        session.handleScenePhase(.background)
+        XCTAssertEqual(session.player.rate, 0)
+        session.handleScenePhase(.active)
+        XCTAssertEqual(session.player.rate, 0)
+        model.finishPlayback(session: session)
+        XCTAssertEqual(session.state, .idle)
+        XCTAssertEqual(session.player.rate, 0)
+        XCTAssertNil(session.player.currentItem)
+        XCTAssertNil(session.mediaItem)
+        XCTAssertNil(model.playbackRequest)
+        XCTAssertNotNil(resumeStore.resumeTime(for: item.id))
+
+    }
+
+    func testClosingPlaybackWhileSourceIsOpeningPreventsLatePlayback() async throws {
+        let check = try BuiltInStereoChecks.install(destinationDirectory: temporaryURL())[0]
+        let began = expectation(description: "Source resolution began")
+        let proceed = DispatchSemaphore(value: 0)
+        defer { proceed.signal() }
+        let bookmarks = BookmarkStore(storageURL: temporaryURL(), resolveBookmark: { data in
+            began.fulfill()
+            _ = proceed.wait(timeout: .now() + 5)
+            var stale = false
+            return (try URL(resolvingBookmarkData: data, options: [], bookmarkDataIsStale: &stale), stale)
+        })
+        try bookmarks.save(url: check.url, for: check.item.id)
+        let model = PlayerAppModel(
+            libraryStore: LibraryStore(storageURL: temporaryURL()), bookmarkStore: bookmarks,
+            locationStore: LocationStore(storageURL: temporaryURL()), stereoCheckInstaller: { [] }
+        )
+        let session = MVHEVCPlayerSession()
+        let preparation = model.preparePlayback(check.item, session: session, resumeStore: ResumeStore(storageURL: temporaryURL()))
+        await fulfillment(of: [began], timeout: 5)
+        XCTAssertEqual(session.state, .loading)
+        model.finishPlayback(session: session)
+        proceed.signal()
+        await preparation.value
+        XCTAssertEqual(session.state, .idle)
+        XCTAssertNil(session.player.currentItem)
+        XCTAssertEqual(session.player.rate, 0)
+    }
+
     func testLoadedCatalogDrivesFilteredAndSortedProjection() throws {
         let items = [
             MediaItem(

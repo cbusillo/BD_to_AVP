@@ -172,7 +172,7 @@ final class BookmarkStore {
                     throw bookmarkError
                 }
             }
-            throw BookmarkStoreError.invalidBookmark(id)
+            throw error
         }
 
         if let refreshedBookmarkData = opened.refreshedBookmarkData {
@@ -242,6 +242,10 @@ private final class BookmarkAccess: @unchecked Sendable {
         do {
             (resolvedURL, isStale) = try resolveBookmark(bookmarkData)
         } catch {
+            if let error = error as? CocoaError,
+               error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+                throw error
+            }
             throw BookmarkStoreError.invalidBookmark("")
         }
 

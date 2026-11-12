@@ -486,25 +486,6 @@ enum PlaybackAudioSelectionPolicy {
     }
 }
 
-enum PackedStereoStatusPresentation {
-    static func message(
-        mediaItem: MediaItem?,
-        isReady: Bool,
-        failureMessage: String?,
-        preparationPhase: PlaybackPreparationPhase = .preparingMedia
-    ) -> String {
-        if let failureMessage {
-            return failureMessage
-        }
-        if BuiltInStereoChecks.contains(mediaItem) {
-            return isReady ? "Cover one eye at a time" : "Preparing the built-in stereo check…"
-        }
-        if isReady {
-            return "Packed stereo playback"
-        }
-        return preparationPhase.message(for: mediaItem?.title)
-    }
-}
 
 enum PlaybackPreparationPhase: Equatable {
     case openingSource

@@ -18,7 +18,6 @@ struct PlayerView: View {
     private let onDone: () -> Void
 
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.accessibilityVoiceOverEnabled) private var isVoiceOverEnabled
     @Environment(\.accessibilitySwitchControlEnabled) private var isSwitchControlEnabled
     @State private var hudVisibility = PlaybackHUDVisibilityState()
@@ -26,7 +25,6 @@ struct PlayerView: View {
     /// The video's screen size from RealityKit's size event, before `playerScreenSize` has it.
     @State private var reportedVideoSize: SIMD2<Float>?
     @EnvironmentObject private var cinema: CinemaState
-    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
     init(
         session: MVHEVCPlayerSession,
@@ -44,12 +42,16 @@ struct PlayerView: View {
         Group {
             if isPackedStereoMedia {
                 PackedStereoPlayerSurface(
-                    session: session,
-                    onRetry: onRetry,
-                    onLocate: onLocate,
-                    onShowStats: showStats,
-                    onDone: done
+                    player: session.player
                 )
+                .allowsHitTesting(false)
+                .overlay {
+                    if trackPicker.isOpen {
+                        GeometryReader3D { geometry in
+                            trackListSurface(geometry: geometry)
+                        }
+                    }
+                }
             } else {
                 // No backing behind the video: where the window and video shapes differ, the
                 // room shows through instead of a black frame around the picture (#1132).
@@ -61,7 +63,7 @@ struct PlayerView: View {
         .overlay {
             // While a track list is open it sits over the video, so the surface steps aside
             // rather than catching the pinches meant for the list.
-            if !isPackedStereoMedia, !trackPicker.isOpen {
+            if !trackPicker.isOpen {
                 Button {
                     hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
                 } label: {
@@ -129,37 +131,34 @@ struct PlayerView: View {
             attachmentAnchor: .scene(.bottom),
             contentAlignment: .topBack
         ) {
-            if !isPackedStereoMedia {
-                VStack(spacing: 0) {
-                    Color.clear
-                        .frame(height: 16)
-                        .accessibilityHidden(true)
-                    PlayerOrnamentView(
-                        session: session,
-                        isFaded: hudVisibility.isFaded,
-                        trackPicker: $trackPicker,
-                        onRetry: onRetry,
-                        onLocate: onLocate,
-                        onShowStats: showStats,
-                        onDone: done,
-                        onHoldChanged: { hold, isActive in
-                            if hold == .hover, isActive {
-                                hudVisibility.hoverBegan(isPlaying: isAutomaticHidingAllowed)
-                            } else {
-                                hudVisibility.setHold(hold, isActive: isActive, isPlaying: isAutomaticHidingAllowed)
-                            }
-                        },
-                        onInteraction: {
-                            hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: 16)
+                    .accessibilityHidden(true)
+                PlayerOrnamentView(
+                    session: session,
+                    isFaded: hudVisibility.isFaded,
+                    trackPicker: $trackPicker,
+                    onRetry: onRetry,
+                    onLocate: onLocate,
+                    onShowStats: showStats,
+                    onDone: onDone,
+                    onHoldChanged: { hold, isActive in
+                        if hold == .hover, isActive {
+                            hudVisibility.hoverBegan(isPlaying: isAutomaticHidingAllowed)
+                        } else {
+                            hudVisibility.setHold(hold, isActive: isActive, isPlaying: isAutomaticHidingAllowed)
                         }
-                    )
-                }
+                    },
+                    onInteraction: {
+                        hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                    }
+                )
             }
         }
         .onDisappear {
             trackPicker.close()
             hudVisibility.setHold(.trackPicker, isActive: false, isPlaying: isAutomaticHidingAllowed)
-            session.finish()
         }
     }
 
@@ -174,7 +173,7 @@ struct PlayerView: View {
             Color.clear
         case .ready where cinema.isActive:
             // The one video entity is on the Cinema screen; only the window's controls show.
-            Color.clear
+            trackListSurface(geometry: geometry)
         case .ready:
             let reportedSize = reportedVideoSize
             RealityView { content, attachments in
@@ -191,28 +190,37 @@ struct PlayerView: View {
             } attachments: {
                 if let picker = trackPicker.openPicker {
                     Attachment(id: Self.trackListAttachmentID) {
-                        PlayerTrackListView(
-                            session: session,
-                            picker: picker,
-                            onSelect: {
-                                hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
-                                trackPicker.close()
-                            },
-                            onClose: { trackPicker.close() }
-                        )
+                        trackList(picker)
                     }
                 }
             }
         }
     }
 
-    private func done() {
-        if cinema.isActive {
-            Task { await dismissImmersiveSpace() }
+    private func trackListSurface(geometry: GeometryProxy3D) -> some View {
+        RealityView { content, attachments in
+            placeTrackList(proxy: geometry, content: content, attachments: attachments)
+        } update: { content, attachments in
+            placeTrackList(proxy: geometry, content: content, attachments: attachments)
+        } attachments: {
+            if let picker = trackPicker.openPicker {
+                Attachment(id: Self.trackListAttachmentID) {
+                    trackList(picker)
+                }
+            }
         }
-        dismissWindow(id: PlaybackStatsView.windowID, value: PlaybackStatsView.windowValue)
-        session.finish()
-        onDone()
+    }
+
+    private func trackList(_ picker: PlaybackTrackPicker) -> some View {
+        PlayerTrackListView(
+            session: session,
+            picker: picker,
+            onSelect: {
+                hudVisibility.reveal(isPlaying: isAutomaticHidingAllowed)
+                trackPicker.close()
+            },
+            onClose: { trackPicker.close() }
+        )
     }
 
     private func showStats() {
@@ -304,189 +312,31 @@ struct PlayerView: View {
         list.position = SIMD3<Float>(
             0,
             windowBottom + Self.trackListBottomInset + listHeight / 2,
-            session.playerEntity.position.z + Self.trackListDepthAboveVideo
+            (isPackedStereoMedia ? 0 : Self.playerDepthOffset) + Self.trackListDepthAboveVideo
         )
     }
 }
 
 private struct PackedStereoPlayerSurface: UIViewControllerRepresentable {
-    @ObservedObject var session: MVHEVCPlayerSession
-    let onRetry: () -> Void
-    let onLocate: () -> Void
-    let onShowStats: () -> Void
-    let onDone: () -> Void
-
-    @MainActor
-    final class Coordinator: NSObject {
-        private struct ActionState: Equatable {
-            let isReady: Bool
-            let eyeOrder: PackedStereoEyeOrder
-            let isChangingEyeOrder: Bool
-            let canControlPlayback: Bool
-            let showsEyeOrder: Bool
-            let canRetry: Bool
-            let canLocate: Bool
-        }
-
-        var session: MVHEVCPlayerSession
-        var onRetry: () -> Void
-        var onLocate: () -> Void
-        var onShowStats: () -> Void
-        var onDone: () -> Void
-        weak var statusLabel: UILabel?
-        private var actionState: ActionState?
-
-        init(
-            session: MVHEVCPlayerSession,
-            onRetry: @escaping () -> Void,
-            onLocate: @escaping () -> Void,
-            onShowStats: @escaping () -> Void,
-            onDone: @escaping () -> Void
-        ) {
-            self.session = session
-            self.onRetry = onRetry
-            self.onLocate = onLocate
-            self.onShowStats = onShowStats
-            self.onDone = onDone
-        }
-
-        func installInfoView(in viewController: AVPlayerViewController) {
-            let titleLabel = UILabel()
-            titleLabel.text = session.mediaItem?.title ?? "Packed Stereo Check"
-            titleLabel.font = .preferredFont(forTextStyle: .headline)
-            titleLabel.adjustsFontForContentSizeCategory = true
-            titleLabel.textColor = .label
-
-            let statusLabel = UILabel()
-            statusLabel.font = .preferredFont(forTextStyle: .subheadline)
-            statusLabel.adjustsFontForContentSizeCategory = true
-            statusLabel.textColor = .secondaryLabel
-            statusLabel.numberOfLines = 2
-            statusLabel.accessibilityIdentifier = "player-packed-stereo-status"
-            self.statusLabel = statusLabel
-
-            let labels = UIStackView(arrangedSubviews: [titleLabel, statusLabel])
-            labels.axis = .vertical
-            labels.spacing = 4
-            labels.translatesAutoresizingMaskIntoConstraints = false
-            let infoView = viewController.contextualActionsInfoView
-            infoView.addSubview(labels)
-            NSLayoutConstraint.activate([
-                labels.leadingAnchor.constraint(equalTo: infoView.leadingAnchor),
-                labels.trailingAnchor.constraint(equalTo: infoView.trailingAnchor),
-                labels.topAnchor.constraint(equalTo: infoView.topAnchor),
-                labels.bottomAnchor.constraint(equalTo: infoView.bottomAnchor),
-            ])
-        }
-
-        func update(viewController: AVPlayerViewController) {
-            statusLabel?.text = PackedStereoStatusPresentation.message(
-                mediaItem: session.mediaItem,
-                isReady: session.isReady,
-                failureMessage: session.failureMessage,
-                preparationPhase: session.preparationPhase
-            )
-
-            let newState = ActionState(
-                isReady: session.isReady,
-                eyeOrder: session.isEyeSwapped ? .reversed : .normal,
-                isChangingEyeOrder: session.isChangingEyeOrder,
-                canControlPlayback: session.canControlPlayback,
-                showsEyeOrder: session.state != .failed || BuiltInStereoChecks.contains(session.mediaItem),
-                canRetry: session.failurePresentation?.canRetry == true,
-                canLocate: session.failurePresentation?.canLocate == true
-            )
-            guard newState != actionState else {
-                return
-            }
-            actionState = newState
-
-            let eyeOrderTitle: String
-            if newState.isChangingEyeOrder {
-                eyeOrderTitle = "Changing Eye Order…"
-            } else {
-                eyeOrderTitle = "Eye Order: \(newState.eyeOrder == .reversed ? "Reversed" : "Normal")"
-            }
-            let eyeOrderAction = UIAction(
-                title: eyeOrderTitle,
-                image: UIImage(systemName: "arrow.left.arrow.right"),
-                attributes: newState.canControlPlayback ? [] : .disabled
-            ) { [weak self] _ in
-                self?.session.toggleEyeSwap()
-            }
-            let doneAction = UIAction(
-                title: "Done",
-                image: UIImage(systemName: "xmark")
-            ) { [weak self] _ in
-                self?.onDone()
-            }
-            var actions: [UIAction] = []
-            if newState.showsEyeOrder {
-                actions.append(eyeOrderAction)
-            }
-            if newState.canRetry {
-                actions.append(
-                    UIAction(title: "Try Again", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
-                        self?.onRetry()
-                    }
-                )
-            }
-            if newState.canLocate {
-                actions.append(
-                    UIAction(title: "Locate", image: UIImage(systemName: "folder")) { [weak self] _ in
-                        self?.onLocate()
-                    }
-                )
-            }
-            if newState.isReady {
-                actions.append(
-                    UIAction(title: "Stats for Nerds", image: UIImage(systemName: "chart.bar.xaxis")) { [weak self] _ in
-                        self?.onShowStats()
-                    }
-                )
-            }
-            actions.append(doneAction)
-            viewController.contextualActions = actions
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(
-            session: session,
-            onRetry: onRetry,
-            onLocate: onLocate,
-            onShowStats: onShowStats,
-            onDone: onDone
-        )
-    }
+    let player: AVPlayer
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let viewController = AVPlayerViewController()
-        viewController.showsPlaybackControls = true
-        viewController.allowsPictureInPicturePlayback = false
-        viewController.player = session.player
-        context.coordinator.installInfoView(in: viewController)
-        context.coordinator.update(viewController: viewController)
-        return viewController
+        let controller = AVPlayerViewController()
+        controller.experienceController.allowedExperiences = .only([.embedded])
+        controller.showsPlaybackControls = false
+        controller.allowsPictureInPicturePlayback = false
+        controller.player = player
+        return controller
     }
 
-    func updateUIViewController(_ viewController: AVPlayerViewController, context: Context) {
-        if viewController.player !== session.player {
-            viewController.player = session.player
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        if controller.player !== player {
+            controller.player = player
         }
-        context.coordinator.session = session
-        context.coordinator.onRetry = onRetry
-        context.coordinator.onLocate = onLocate
-        context.coordinator.onShowStats = onShowStats
-        context.coordinator.onDone = onDone
-        context.coordinator.update(viewController: viewController)
     }
 
-    static func dismantleUIViewController(_ viewController: AVPlayerViewController, coordinator: Coordinator) {
-        viewController.contextualActions = []
-        viewController.contextualActionsInfoView.subviews.forEach { $0.removeFromSuperview() }
-        viewController.player = nil
-        coordinator.statusLabel = nil
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {
+        controller.player = nil
     }
 }
 
@@ -687,7 +537,9 @@ private struct PlayerOrnamentView: View {
             if cinema.isActive {
                 cinemaSizeButtons
             }
-            cinemaButton
+            if session.mediaItem?.format == .mvHEVC || session.mediaItem?.format == .bluray3D {
+                cinemaButton
+            }
             statsButton
             doneButton
         }

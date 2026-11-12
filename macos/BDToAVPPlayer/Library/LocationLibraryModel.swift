@@ -1,11 +1,13 @@
 import Combine
 import Foundation
+import OSLog
 
 enum LocationStatus: Equatable, Sendable {
     case notChecked
     case checking
     case available
     case unreachable
+    case needsAccess
 }
 
 /// A file in a Location that the player cannot play, with the plain reason.
@@ -22,6 +24,7 @@ struct UnplayableLocationFile: Equatable, Identifiable, Sendable {
 /// lists its playable titles, which play through the same players as local movies.
 @MainActor
 final class LocationLibraryModel: ObservableObject {
+    private static let logger = Logger(subsystem: "com.shinycomputers.bd-to-avp.player", category: "Locations")
     @Published private(set) var locations: [StoredLocation]
     @Published private(set) var statuses: [UUID: LocationStatus] = [:]
     @Published private(set) var titles: [UUID: [MediaItem]] = [:]
@@ -63,7 +66,7 @@ final class LocationLibraryModel: ObservableObject {
         locations = store.load()
         for location in locations {
             statuses[location.id] = bookmarkStore.bookmarkData(for: Self.bookmarkID(for: location.id)) == nil
-                ? .unreachable : .notChecked
+                ? .needsAccess : .notChecked
         }
     }
 
@@ -103,7 +106,7 @@ final class LocationLibraryModel: ObservableObject {
             return item(id: itemID) == nil ? .missing : .available
         case .notChecked:
             return .checking
-        case .unreachable, nil:
+        case .unreachable, .needsAccess, nil:
             return .unavailable
         }
     }
@@ -202,7 +205,18 @@ final class LocationLibraryModel: ObservableObject {
                 return (lease, listing, name)
             }
         } catch {
-            if isCurrent() { markUnreachable(locationID) }
+            if isCurrent() {
+                Self.logger.error("Location refresh failed: \(String(reflecting: type(of: error)), privacy: .public), code \((error as NSError).code, privacy: .public)")
+                markUnreachable(locationID)
+                if let error = error as? BookmarkStoreError {
+                    switch error {
+                    case .missingBookmark, .invalidBookmark, .staleBookmark:
+                        statuses[locationID] = .needsAccess
+                    default:
+                        break
+                    }
+                }
+            }
             return
         }
         let (openedLease, listing, systemName) = listed
