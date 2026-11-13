@@ -301,12 +301,12 @@ qualified for SDR HEVC only. It does not infer stereo from an unusually wide or
 tall frame alone.
 
 `MVHEVCPlayerSession` owns one `AVPlayer`, one active `AVPlayerItem`, one
-RealityKit entity for MV-HEVC, and one source lease. MV-HEVC playback uses a
+RealityKit video entity, and one source lease. MV-HEVC and packed stereo use a
 `VideoPlayerComponent` configured for stereo viewing, screen spatial video mode,
-and portal immersive viewing mode. Packed stereo keeps `AVPlayerViewController`
-for AVFoundation's custom spatial-compositor presentation, restricted to the
-embedded experience so AVKit cannot replace the app window with its own player.
-Its system controls are disabled. All formats use the same app-owned ornament
+and portal immersive viewing mode. Packed stereo feeds its existing tagged
+custom-compositor output into that same surface. [Apple documents inline AVKit as 2D-only](https://developer.apple.com/documentation/avkit/adopting-the-system-player-interface-in-visionos);
+the previous embedded AVKit route produced audio without a video window on the
+Vision Pro in the November 12 check. All formats use the same app-owned ornament
 for transport, audio, subtitles, Eye Order where supported, Stats, and Done.
 Cinema remains available for MV-HEVC and native Blu-ray playback.
 Together the controls provide:
@@ -355,7 +355,7 @@ the controls panel. Both buttons are enabled once the movie is ready. A list wit
 nothing to choose between says so: **This title has one audio track.** or **This
 title has no subtitles.** The list is a RealityView attachment placed in the
 video's own space. It stays mounted in the window during Cinema, and packed
-stereo uses the same attachment above its embedded video surface. The alternatives each failed: growing the controls ornament
+stereo uses that same video surface and attachment. The alternatives each failed: growing the controls ornament
 pushed the list below the window; a second ornament, or a SwiftUI view in the
 window, sat behind the window's surface and was hidden; a plain SwiftUI overlay
 floated at the front of the window's depth and loomed over the controls; and a
@@ -738,8 +738,11 @@ The same scheme also contains `BDToAVPPlayerUITests`. Its built-in check test is
 unconditional: it verifies that the stereo-check panel is visible from launch,
 starts the SBS check, and confirms the app-owned Done control remains
 hittable and returns to the library. XRSimulator still
-displays an unsupported-content placeholder for tagged stereo; unit tests
-separately drive the eye-order rebuild and verify normal and reversed pixels.
+rejects tagged stereo presentation, so this UI test proves navigation and Done,
+not rendered video. Unit tests separately decode both real bundled HEVC movies
+through the production composition, compare normal/reversed eye pixels, and
+verify the composed AVPlayer is attached to the RealityKit component. They also
+check that both skip directions keep playing and a paused seek stays paused.
 Its seeded-media flow is skipped when `PlayerLongFixture.mov` is absent from the
 simulator app Documents directory; when present, it verifies direct Library →
 Play → Library, Library → Details → Play, Details Done → Library, player Done →
@@ -771,13 +774,16 @@ physical layout fills the window with the RealityKit video surface and keeps the
 playback probe's depth offset, so foreground stereo content remains behind the
 native ornament and the window's resize handle stays reachable (#1187); changes to
 that geometry still require physical Vision Pro validation. Nothing is drawn behind the video, so where the window's shape and
-the video's differ the room shows through instead of a black frame (#1132). The visionOS Simulator can expose the AVKit surface and contextual
-actions but displays an unsupported-content placeholder for tagged stereo
-output. The automated suite therefore also prepares each bundled fixture through
-the real `AVPlayer` composition path and exercises the production rendering core
-directly. It asserts normal and reversed eye pixels, fixed semantic eye tags,
-native pixel format, chroma routing, color attachment propagation, fixture
-installation, format detection, and UI discoverability. Physical Vision Pro
-remains the only way to prove that AVKit routes those tagged outputs to the
-intended eyes; that qualification is a single bounded gate after local tests
-pass.
+the video's differ the room shows through instead of a black frame (#1132).
+The November 12 visionOS 27 simulator runs rejected tagged stereo presentation
+through both embedded AVKit and RealityKit. The candidate recording shows
+“Stereo Check Unavailable,” so this simulator cannot complete presentation proof. An item can become ready without a visible frame; navigation,
+controls, a running clock or compositor output alone are not presentation proof.
+Tests cover decoded movie frames, normal/reversed eye mapping, semantic tags,
+chroma/color routing, video-surface attachment, seek intent and lifecycle.
+Only a physical Vision Pro can complete the remaining proof: visible moving video
+from SBS and over-under, correct per-eye routing before and after Eye Order,
+continued playback after both skips, and the compact eye-order button fitting
+beside the other shared controls. Avatar MV-HEVC, Cinema tracks, Locations and
+window-close behavior remain part of the same regression check. Never call the
+packed presentation fixed from simulator success alone.

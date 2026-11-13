@@ -316,9 +316,6 @@ final class MVHEVCPlayerSession: ObservableObject {
         finishCurrentSession(persistResume: true)
 
         self.mediaItem = mediaItem
-        if mediaItem.format != .mvHEVC {
-            playerEntity.components.remove(VideoPlayerComponent.self)
-        }
         self.resumeStore = resumeStore
         resumeID = nil
         state = .loading
@@ -503,7 +500,9 @@ final class MVHEVCPlayerSession: ObservableObject {
             playerEntity.components.set(component)
             return
         }
-        guard mediaItem?.format == .mvHEVC else {
+        guard let format = mediaItem?.format,
+              format == .mvHEVC || format == .sideBySide || format == .overUnder
+        else {
             playerEntity.components.remove(VideoPlayerComponent.self)
             return
         }
@@ -691,7 +690,7 @@ final class MVHEVCPlayerSession: ObservableObject {
         let targetEyeOrder: PackedStereoEyeOrder = isEyeSwapped ? .normal : .reversed
         let restoration = PlaybackItemRestorationState(
             time: player.currentTime(),
-            wasPlaying: player.timeControlStatus == .playing,
+            wasPlaying: PlayerTimeControl(player).wantsPlayback,
             mediaSelection: currentMediaSelectionRestoration(),
             reason: .eyeOrder
         )
@@ -1694,8 +1693,8 @@ final class MVHEVCPlayerSession: ObservableObject {
         if let nativePlayback {
             nativePlayback.stop()
             self.nativePlayback = nil
-            playerEntity.components.remove(VideoPlayerComponent.self)
         }
+        playerEntity.components.remove(VideoPlayerComponent.self)
         isBuffering = false
         shareConnectionTask?.cancel()
         shareConnectionTask = nil
