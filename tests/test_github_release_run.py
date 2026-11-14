@@ -42,6 +42,10 @@ WORKFLOW_ID = 101_708_423
 PRERELEASE_WORKFLOW_ID = 222_333_444
 RUN_ENDPOINT = f"repos/{REPOSITORY}/actions/runs/{RUN_ID}"
 BRANCH_ENDPOINT = f"repos/{REPOSITORY}/git/ref/heads/main"
+PENDING_ENDPOINT = f"{RUN_ENDPOINT}/pending_deployments"
+REVIEWER_PENDING = [
+    {"environment": {"name": "pypi"}, "reviewers": [{"type": "User", "reviewer": {"login": "someone"}}]},
+]
 
 
 class FakeGitHubAPI:
@@ -100,10 +104,10 @@ def branch_reference(sha: str = HEAD_SHA) -> dict[str, object]:
 
 
 class GitHubReleaseRunWatchTests(unittest.TestCase):
-    def test_waiting_run_is_a_safety_error_without_sleeping(self) -> None:
+    def test_run_waiting_on_a_reviewer_is_a_safety_error_without_sleeping(self) -> None:
         client = FakeGitHubAPI()
         client.add(RUN_ENDPOINT, workflow_run(status="waiting"))
-        client.add(BRANCH_ENDPOINT, branch_reference())
+        client.add(PENDING_ENDPOINT, REVIEWER_PENDING)
 
         with self.assertRaises(ReleaseRunError):
             watch_release_run(
@@ -112,6 +116,21 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
                 sleeper=lambda _: self.fail("A waiting run must not keep sleeping."),
                 emit=lambda _: None,
             )
+
+    def test_brief_branch_policy_wait_keeps_watching_until_success(self) -> None:
+        for pending in ([], [{"environment": {"name": "pypi"}, "reviewers": []}]):
+            with self.subTest(pending=pending):
+                client = FakeGitHubAPI()
+                client.add(RUN_ENDPOINT, workflow_run(status="waiting"))
+                client.add(PENDING_ENDPOINT, pending)
+                client.add(BRANCH_ENDPOINT, branch_reference())
+                client.add(RUN_ENDPOINT, workflow_run(status="completed", conclusion="success"))
+                events: list[dict[str, object]] = []
+
+                result = watch_release_run(expectation(), client, sleeper=lambda _: None, emit=events.append)
+
+                self.assertEqual(result, EXIT_SUCCESS)
+                self.assertEqual([event["event"] for event in events], ["running", "succeeded"])
 
     def test_unexpected_engine_workflow_path_is_rejected_before_github_access(self) -> None:
         client = FakeGitHubAPI()
@@ -238,6 +257,8 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
             with self.subTest(status=status):
                 client = FakeGitHubAPI()
                 client.add(RUN_ENDPOINT, workflow_run(status=status))
+                if status == "waiting":
+                    client.add(PENDING_ENDPOINT, REVIEWER_PENDING)
                 client.add(BRANCH_ENDPOINT, GitHubReadError("GitHub CLI request timed out."))
                 events: list[dict[str, object]] = []
 
@@ -250,7 +271,8 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
 
                 self.assertEqual(result, EXIT_SAFETY_ERROR)
                 self.assertEqual([event["event"] for event in events], ["safety_error"])
-                self.assertEqual(client.get_calls, [RUN_ENDPOINT])
+                expected_calls = [RUN_ENDPOINT, PENDING_ENDPOINT] if status == "waiting" else [RUN_ENDPOINT]
+                self.assertEqual(client.get_calls, expected_calls)
 
     def test_a_successful_read_resets_the_failure_count(self) -> None:
         client = FakeGitHubAPI()
