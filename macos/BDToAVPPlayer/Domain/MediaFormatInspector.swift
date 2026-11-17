@@ -5,6 +5,7 @@ struct MediaFormatInspector {
     struct Signals: Equatable, Sendable {
         let isStereoVideo: Bool
         let isStereoMultiviewVideo: Bool
+        let hasStereoMultiviewTrack: Bool
         let isHEVC: Bool
         let isHDR: Bool
         let width: Int?
@@ -14,6 +15,7 @@ struct MediaFormatInspector {
         init(
             isStereoVideo: Bool,
             isStereoMultiviewVideo: Bool,
+            hasStereoMultiviewTrack: Bool = false,
             isHEVC: Bool = true,
             isHDR: Bool = false,
             width: Int?,
@@ -22,6 +24,7 @@ struct MediaFormatInspector {
         ) {
             self.isStereoVideo = isStereoVideo
             self.isStereoMultiviewVideo = isStereoMultiviewVideo
+            self.hasStereoMultiviewTrack = hasStereoMultiviewTrack
             self.isHEVC = isHEVC
             self.isHDR = isHDR
             self.width = width
@@ -31,7 +34,7 @@ struct MediaFormatInspector {
     }
 
     static func classify(_ signals: Signals) -> StereoFormat {
-        if signals.isStereoMultiviewVideo {
+        if signals.isStereoMultiviewVideo || signals.hasStereoMultiviewTrack {
             return .mvHEVC
         }
         guard signals.isHEVC, !signals.isHDR else {
@@ -71,6 +74,7 @@ struct MediaFormatInspector {
             Signals(
                 isStereoVideo: options.contains(.stereoVideo),
                 isStereoMultiviewVideo: options.contains(.stereoMultiviewVideo),
+                hasStereoMultiviewTrack: mediaCharacteristics.contains(.containsStereoMultiviewVideo),
                 isHEVC: isHEVC,
                 isHDR: mediaCharacteristics.contains(.containsHDRVideo),
                 width: naturalSize.map { Int(abs($0.width)) },
