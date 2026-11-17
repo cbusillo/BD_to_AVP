@@ -2,6 +2,37 @@ import XCTest
 @testable import BDToAVPPlayer
 
 final class MediaFormatInspectorTests: XCTestCase {
+    func testDolbyVisionMultiviewTrackWithoutPlaybackOptionsIsRecognized() {
+        let format = MediaFormatInspector.classify(
+            .init(
+                isStereoVideo: false,
+                isStereoMultiviewVideo: false,
+                hasStereoMultiviewTrack: true,
+                isHEVC: false,
+                isHDR: true,
+                width: 3840,
+                height: 2160
+            )
+        )
+
+        XCTAssertEqual(format, .mvHEVC)
+    }
+
+    func testDolbyVisionWithoutMultiviewEvidenceRemainsUnsupported() {
+        let format = MediaFormatInspector.classify(
+            .init(
+                isStereoVideo: false,
+                isStereoMultiviewVideo: false,
+                isHEVC: false,
+                isHDR: true,
+                width: 3840,
+                height: 2160
+            )
+        )
+
+        XCTAssertEqual(format, .unsupported)
+    }
+
     func testHVC1WithoutStereoSignalIsUnsupported() {
         let format = MediaFormatInspector.classify(
             .init(isStereoVideo: false, isStereoMultiviewVideo: false, width: 3840, height: 2160)

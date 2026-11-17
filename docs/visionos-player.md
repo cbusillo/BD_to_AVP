@@ -291,7 +291,10 @@ provider completion from installing an item or starting playback.
 
 The player supports MV-HEVC plus explicitly identified HEVC side-by-side and
 over-under movies. MV-HEVC detection uses AVFoundation stereo multiview playback
-characteristics; an HEVC codec tag alone is not accepted as proof of MV-HEVC.
+characteristics or the video track's explicit stereo multiview characteristic.
+The track characteristic also recognizes Dolby Vision profile 20 movies when
+the playback assistant offers no stereo configuration. A codec tag alone is
+not accepted as proof of MV-HEVC.
 Packed stereo detection prefers embedded packing metadata and otherwise accepts
 conservative, separator-delimited filename tokens such as `SBS`, `FSBS`, `OU`,
 or `FOU`. These tokens are treated as full-resolution packing; half-resolution
