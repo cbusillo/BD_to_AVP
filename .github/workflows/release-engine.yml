@@ -806,6 +806,14 @@ jobs:
           printf '%s' "$CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
           security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
             -T "/usr/bin/codesign"
+          cert="$(security find-certificate -c "Developer ID Application" -p "$KEYCHAIN_PATH")"
+          expires="$(/usr/bin/openssl x509 -noout -enddate <<<"$cert" | cut -d= -f2)"
+          renew="$expires; renew it: https://github.com/cbusillo/mediaforce/issues/1036"
+          if ! /usr/bin/openssl x509 -noout -checkend 0 <<<"$cert" >/dev/null; then
+            echo "::error title=Developer ID certificate expired::$renew" | tee -a "$GITHUB_STEP_SUMMARY"; exit 1
+          elif ! /usr/bin/openssl x509 -noout -checkend $((45 * 86400)) <<<"$cert" >/dev/null; then
+            echo "::warning title=Developer ID certificate expires soon::$renew" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
             -s -k "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
