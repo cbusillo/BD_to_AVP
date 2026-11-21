@@ -493,7 +493,7 @@ class PackagedAacEvidenceTests(unittest.TestCase):
                     "warning",
                     {
                         "code": "audio_layout_policy_rejected",
-                        "layout_decisions": [{"reason": "channel_layout_missing"}],
+                        "layout_decisions": [{"reason": case.expected_rejection}],
                     },
                 ),
                 worker_event(1, "job.failed", {"error": {"code": "conversion_failed"}}),
@@ -504,7 +504,7 @@ class PackagedAacEvidenceTests(unittest.TestCase):
             evidence = _failed_case(case, execution, Path(temporary_directory))
 
         self.assertTrue(evidence["passed"])
-        self.assertEqual(evidence["rejection_reason"], "channel_layout_missing")
+        self.assertEqual(evidence["rejection_reason"], case.expected_rejection)
 
     def test_output_stream_contract_checks_metadata_and_layout(self) -> None:
         case = next(case for case in load_fixture_manifest().cases if case.case_id == "preserve-multilingual")

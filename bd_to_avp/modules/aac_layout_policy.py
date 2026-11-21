@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Mapping
 
@@ -47,6 +49,12 @@ class AacLayoutPolicyError(ValueError):
     pass
 
 
+WIDE_AAC_LAYOUT = "7.1(wide)"
+WIDE_AAC_CONFIGURATION = 7
+WIDE_AAC_ENCODER_OPTION = "aac_allow_71wide"
+PREPARED_WIDE_AAC_TAG = "bd_to_avp_wide_aac"
+
+
 LAYOUT_CHANNELS: dict[str, tuple[str, ...]] = {
     "mono": ("FC",),
     "stereo": ("FL", "FR"),
@@ -71,7 +79,7 @@ LAYOUT_CHANNELS: dict[str, tuple[str, ...]] = {
     "7.0": ("FL", "FR", "FC", "BL", "BR", "SL", "SR"),
     "7.0(front)": ("FL", "FR", "FC", "FLC", "FRC", "SL", "SR"),
     "7.1": ("FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"),
-    "7.1(wide)": ("FL", "FR", "FC", "LFE", "BL", "BR", "FLC", "FRC"),
+    WIDE_AAC_LAYOUT: ("FL", "FR", "FC", "LFE", "BL", "BR", "FLC", "FRC"),
     "7.1(wide-side)": ("FL", "FR", "FC", "LFE", "FLC", "FRC", "SL", "SR"),
     "octagonal": ("FL", "FR", "FC", "BL", "BR", "BC", "SL", "SR"),
 }
@@ -299,12 +307,12 @@ AAC_LAYOUT_POLICIES = (
     ),
     AacLayoutPolicy(
         "ch08-7_1_wide",
-        "7.1(wide)",
-        AacLayoutAction.DOWNMIX,
-        "5.1",
-        "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=BL|BR=BR",
-        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", BL="SL", BR="SR", FLC="FL", FRC="FR"),
-        "Fold front-wide channels into canonical AAC 5.1.",
+        WIDE_AAC_LAYOUT,
+        AacLayoutAction.PRESERVE,
+        WIDE_AAC_LAYOUT,
+        None,
+        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", BL="SL", BR="SR", FLC="FLC", FRC="FRC"),
+        "Encode explicit front-wide channels with standard AAC configuration 7.",
     ),
     AacLayoutPolicy(
         "ch08-7_1_wide_side",
@@ -327,10 +335,18 @@ AAC_LAYOUT_POLICIES = (
 )
 
 AAC_LAYOUT_POLICY_BY_SOURCE = {policy.source_layout: policy for policy in AAC_LAYOUT_POLICIES}
+AMBIGUOUS_WIDE_AAC_POLICY = replace(
+    AAC_LAYOUT_POLICY_BY_SOURCE[WIDE_AAC_LAYOUT],
+    action=AacLayoutAction.DOWNMIX,
+    target_layout="5.1",
+    pan_filter="pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=BL|BR=BR",
+    expected_identity_map=identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", BL="SL", BR="SR", FLC="FL", FRC="FR"),
+    rationale="Fold front-wide channels when the source or encoder cannot provide standard wide AAC.",
+)
 AAC_COPY_LAYOUT_CHANNELS = {
     policy.source_layout: len(policy.source_channels)
     for policy in AAC_LAYOUT_POLICIES
-    if policy.action is AacLayoutAction.PRESERVE
+    if policy.action is AacLayoutAction.PRESERVE and policy.source_layout != WIDE_AAC_LAYOUT
 }
 UNLISTED_LAYOUT_POLICY = {
     "action": AacLayoutAction.FAIL.value,
@@ -338,7 +354,37 @@ UNLISTED_LAYOUT_POLICY = {
 }
 
 
-def resolve_aac_layout_policy(channel_layout: object, channels: object) -> AacLayoutDecision:
+def aac_encoder_options(target_layout: str | None) -> dict[str, str]:
+    if target_layout == "stereo":
+        return {"aac_coder": "twoloop"}
+    if target_layout == WIDE_AAC_LAYOUT:
+        return {WIDE_AAC_ENCODER_OPTION: "1"}
+    return {}
+
+
+def parse_aac_channel_configuration(extradata: object) -> int | None:
+    if not isinstance(extradata, str):
+        return None
+    match = re.search(r"^00000000: ([0-9a-fA-F]+(?: [0-9a-fA-F]+)*)", extradata, flags=re.MULTILINE)
+    if match is None:
+        return None
+    try:
+        data = bytes.fromhex(match.group(1))
+    except ValueError:
+        return None
+    bits = f"{int.from_bytes(data):0{len(data) * 8}b}"
+    offset = 11 if bits.startswith("11111") else 5
+    offset += 28 if bits[offset : offset + 4] == "1111" else 4
+    configuration = bits[offset : offset + 4]
+    return int(configuration, 2) if len(configuration) == 4 else None
+
+
+def resolve_aac_layout_policy(
+    channel_layout: object,
+    channels: object,
+    *,
+    preserve_wide: bool = True,
+) -> AacLayoutDecision:
     normalized_layout = _normalize_layout(channel_layout)
     channel_count = _parse_channel_count(channels)
     if normalized_layout is None:
@@ -348,6 +394,8 @@ def resolve_aac_layout_policy(channel_layout: object, channels: object) -> AacLa
     policy = AAC_LAYOUT_POLICY_BY_SOURCE.get(normalized_layout)
     if policy is None:
         return _failed_decision(normalized_layout, channel_count, "channel_layout_not_qualified")
+    if normalized_layout == WIDE_AAC_LAYOUT and not preserve_wide:
+        policy = AMBIGUOUS_WIDE_AAC_POLICY
     expected_channels = len(policy.source_channels)
     if channel_count != expected_channels:
         return _failed_decision(normalized_layout, channel_count, "channel_layout_mismatch")

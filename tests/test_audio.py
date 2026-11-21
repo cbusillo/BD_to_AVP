@@ -7,9 +7,11 @@ from unittest.mock import Mock, patch
 
 import ffmpeg
 
-from bd_to_avp.modules import audio
+from bd_to_avp.modules import audio, container
 from bd_to_avp.modules.aac_layout_policy import (
     AAC_LAYOUT_POLICIES,
+    PREPARED_WIDE_AAC_TAG,
+    WIDE_AAC_LAYOUT,
     AacLayoutAction,
     AacLayoutPolicyError,
 )
@@ -361,6 +363,7 @@ class AudioPreparationTests(unittest.TestCase):
             self.assertEqual(result, aac_path)
             qualify.assert_called_once_with(
                 aac_path,
+                prepared_aac=True,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -494,14 +497,10 @@ class AudioPreparationTests(unittest.TestCase):
         qualified_copy_layouts = {
             policy.source_layout: len(policy.source_channels)
             for policy in AAC_LAYOUT_POLICIES
-            if policy.action is AacLayoutAction.PRESERVE
+            if policy.action is AacLayoutAction.PRESERVE and policy.source_layout != WIDE_AAC_LAYOUT
         }
 
         self.assertEqual(audio.AAC_COPY_LAYOUT_CHANNELS, qualified_copy_layouts)
-        self.assertEqual(
-            qualified_copy_layouts,
-            {"mono": 1, "stereo": 2, "3.0": 3, "4.0": 4, "5.0": 5, "5.1": 6},
-        )
         for index, policy in enumerate(AAC_LAYOUT_POLICIES):
             with self.subTest(layout=policy.source_layout):
                 result = audio.qualify_audio_stream(
@@ -511,7 +510,7 @@ class AudioPreparationTests(unittest.TestCase):
                         channel_layout=policy.source_layout,
                     )
                 )
-                self.assertEqual(result.qualified, policy.action is AacLayoutAction.PRESERVE)
+                self.assertEqual(result.qualified, policy.source_layout in qualified_copy_layouts)
                 if policy.action is not AacLayoutAction.PRESERVE:
                     self.assertEqual(result.reason, f"channel_layout_requires_{policy.action.value}")
 
@@ -522,6 +521,7 @@ class AudioPreparationTests(unittest.TestCase):
                     [
                         qualified_stream(
                             index=index,
+                            codec_name="flac",
                             channels=len(policy.source_channels),
                             channel_layout=policy.source_layout,
                         )
@@ -545,6 +545,72 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertEqual(policy.target_layout, "5.1")
         self.assertFalse(qualification.qualified)
         self.assertEqual(qualification.reason, "channel_layout_requires_downmix")
+
+    def test_wide_transcode_keeps_all_channels_and_scopes_encoder_options(self) -> None:
+        streams = [
+            qualified_stream(index=1, codec_name="flac", channels=8, channel_layout="7.1(wide)"),
+            qualified_stream(index=2, codec_name="flac"),
+            qualified_stream(index=3, codec_name="flac", channels=8, channel_layout="7.1"),
+        ]
+        selection = select_audio_streams(streams, None)
+        with (
+            patch.object(audio, "supports_wide_aac", return_value=True),
+            patch.object(audio, "audio_handler_metadata_options", return_value={}),
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384, selection=selection)
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertEqual(command[command.index("-channel_layout:a:0") + 1], "7.1(wide)")
+        self.assertEqual(command[command.index("-aac_allow_71wide:a:0") + 1], "1")
+        self.assertNotIn("-filter:a:0", command)
+        self.assertEqual(command[command.index("-aac_coder:a:1") + 1], "twoloop")
+        self.assertEqual(command[command.index("-channel_layout:a:2") + 1], "5.1")
+        self.assertNotIn("-aac_allow_71wide:a:2", command)
+        self.assertNotIn("-aac_coder:a:2", command)
+
+        with (
+            patch.object(audio, "supports_wide_aac", return_value=False),
+            patch.object(audio, "audio_handler_metadata_options", return_value={}),
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384, selection=selection)
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertEqual(command[command.index("-channel_layout:a:0") + 1], "5.1")
+        self.assertNotIn("-aac_allow_71wide:a:0", command)
+
+    def test_reported_canonical_layout_does_not_allow_pce_passthrough(self) -> None:
+        stream = {
+            **qualified_stream(index=0, channels=6, channel_layout="5.1"),
+            "extradata": "\n00000000: 1180 04c8 4400 2000  ........\n",
+        }
+
+        self.assertFalse(audio.qualify_audio_stream(stream).qualified)
+        self.assertEqual(audio.plan_aac_layouts([stream])[0].decision.target_layout, "5.1")
+
+    def test_resume_distinguishes_owned_wide_aac_from_legacy_configuration_seven(self) -> None:
+        stream = {
+            **qualified_stream(index=0, channels=8, channel_layout="7.1"),
+            "codec_type": "audio",
+            "extradata": "\n00000000: 11b8 56e5 00  ..V..\n",
+        }
+        prepared = Path("Movie_audio_AAC.m4a")
+        with (
+            patch.object(container, "run_ffprobe", return_value={"streams": [stream]}),
+            self.assertRaisesRegex(AacLayoutPolicyError, "Restart from Prepare Audio"),
+        ):
+            audio.validate_resumed_prepared_audio(prepared, None)
+
+        with patch.object(
+            container,
+            "run_ffprobe",
+            side_effect=[
+                {"streams": [stream], "format": {"tags": {PREPARED_WIDE_AAC_TAG: "1"}}},
+                {"streams": [{**stream, "channel_layout": "7.1(wide)"}]},
+            ],
+        ):
+            audio.validate_resumed_prepared_audio(prepared, None)
 
     def test_transcode_audio_maps_requested_stream_selector(self) -> None:
         streams = [qualified_stream(index=0)]

@@ -3,12 +3,13 @@
   "fixture_set_id": "apple-aac-packaged-v1",
   "identity_signal": {
     "path": "docs/qualification/apple-aac-layouts-v1.json",
-    "sha256": "a14847992a15796f7ac089ae123b0f6bcfc2159d9a642c2bf99990a45f7bb6ca",
-    "policy_sha256": "ce493276a758329ebdead492fe601db87c618992ca63fe8dabeb7162a7564eef"
+    "sha256": "629cf68d7abe0c06cda531f17c16eee96ea7e75c3ad2dc013fcc9505b191141e",
+    "policy_sha256": "c01d42b25be092cc62dbd6022ef471a36c7c63f6508ffdc9f9433f67344a42ba"
   },
   "required_coverage": [
     "preserve-stereo",
     "preserve-5.1",
+    "preserve-7.1-wide",
     "remap-5.1(side)-to-5.1",
     "downmix-7.1-to-5.1",
     "fail-missing-layout",
@@ -96,6 +97,36 @@
       ]
     },
     {
+      "id": "preserve-7_1-wide",
+      "source_file": "preserve-7_1-wide.mkv",
+      "coverage": ["preserve-7.1-wide"],
+      "audio_mode": "automatic",
+      "preferred_language": null,
+      "expected_rejection": null,
+      "tracks": [
+        {
+          "policy_id": "ch08-7_1_wide",
+          "codec_name": "flac",
+          "source_layout": "7.1(wide)",
+          "channels": 8,
+          "aac_channel_configuration": null,
+          "language": "eng",
+          "handler_title": "English 7.1 Wide",
+          "default": true
+        },
+        {
+          "policy_id": "ch02-stereo",
+          "codec_name": "flac",
+          "source_layout": "stereo",
+          "channels": 2,
+          "aac_channel_configuration": null,
+          "language": "jpn",
+          "handler_title": "Japanese Stereo",
+          "default": false
+        }
+      ]
+    },
+    {
       "id": "fail-missing-layout",
       "source_file": "fail-missing-layout.mkv",
       "coverage": ["fail-missing-layout"],
@@ -141,16 +172,16 @@
       "coverage": ["fail-pce-layout"],
       "audio_mode": "automatic",
       "preferred_language": null,
-      "expected_rejection": "channel_layout_missing",
+      "expected_rejection": "channel_layout_not_qualified",
       "tracks": [
         {
           "policy_id": null,
           "codec_name": "aac",
-          "source_layout": null,
+          "source_layout": "6 channels (FL+FR+BL+BR+FLC+FRC)",
           "channels": 6,
           "aac_channel_configuration": 0,
           "language": "eng",
-          "handler_title": "PCE 5.1 Side",
+          "handler_title": "PCE 6.0 Front",
           "default": true
         }
       ]
