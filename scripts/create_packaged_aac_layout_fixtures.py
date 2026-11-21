@@ -44,7 +44,7 @@ EXTRA_CHANNEL_FREQUENCIES = {"TFL": 1430, "TFR": 1540}
 FAILURE_IDENTITY_RECIPES = {
     "fail-missing-layout": ("5.1", ("FL", "FR", "FC", "LFE", "BL", "BR")),
     "fail-unknown-layout": ("3.1.2", ("FL", "FR", "FC", "LFE", "TFL", "TFR")),
-    "fail-pce-layout": ("5.1(side)", ("FL", "FR", "FC", "LFE", "SL", "SR")),
+    "fail-pce-layout": ("6.0(front)", ("FL", "FR", "FLC", "FRC", "SL", "SR")),
 }
 
 
@@ -201,6 +201,8 @@ def _audio_encoding_command(track: TrackSpec, source: Path, output: Path) -> lis
     ]
     if track.codec_name == "aac":
         command.extend(["-c:a", "aac", "-profile:a", "aac_low", "-b:a", "384k"])
+        if track.aac_channel_configuration == 0:
+            command.extend(["-aac_pce", "1"])
     elif track.codec_name == "flac":
         command.extend(["-c:a", "flac"])
     elif track.codec_name == "pcm_s24le":

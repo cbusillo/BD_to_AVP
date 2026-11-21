@@ -66,6 +66,7 @@ REQUIRED_COVERAGE = frozenset(
     {
         "preserve-stereo",
         "preserve-5.1",
+        "preserve-7.1-wide",
         "remap-5.1(side)-to-5.1",
         "downmix-7.1-to-5.1",
         "fail-missing-layout",
@@ -79,7 +80,7 @@ REQUIRED_COVERAGE = frozenset(
 FAILURE_COVERAGE_REASONS = {
     "fail-missing-layout": "channel_layout_missing",
     "fail-unknown-layout": "channel_layout_not_qualified",
-    "fail-pce-layout": "channel_layout_missing",
+    "fail-pce-layout": "channel_layout_not_qualified",
 }
 
 
@@ -250,7 +251,10 @@ def _validate_case(case: FixtureCase) -> None:
     ):
         raise PackagedAacFailure(f"Fixture {case.case_id} does not model an unqualified layout.")
     if "fail-pce-layout" in case.coverage and (
-        track.codec_name != "aac" or track.source_layout is not None or track.aac_channel_configuration != 0
+        track.codec_name != "aac"
+        or track.source_layout is None
+        or track.source_layout in LAYOUT_CHANNELS
+        or track.aac_channel_configuration != 0
     ):
         raise PackagedAacFailure(f"Fixture {case.case_id} does not model AAC configuration 0.")
 
@@ -259,6 +263,7 @@ def _validate_coverage(cases: Sequence[FixtureCase]) -> None:
     policy_coverage = {
         "preserve-stereo": "ch02-stereo",
         "preserve-5.1": "ch06-5_1",
+        "preserve-7.1-wide": "ch08-7_1_wide",
         "remap-5.1(side)-to-5.1": "ch06-5_1_side",
         "downmix-7.1-to-5.1": "ch08-7_1",
     }
@@ -583,8 +588,21 @@ def _managed_sigterm_exit() -> Iterator[None]:
         signal.signal(signal.SIGTERM, previous)
 
 
-def _probe(app: AppBundle, path: Path) -> Mapping[str, object]:
-    completed = _run([app.ffprobe, "-v", "error", "-show_streams", "-show_format", "-show_data", "-of", "json", path])
+def _probe(app: AppBundle, path: Path, *, standard_aac: bool = False) -> Mapping[str, object]:
+    completed = _run(
+        [
+            app.ffprobe,
+            "-v",
+            "error",
+            "-show_streams",
+            "-show_format",
+            "-show_data",
+            *(["-strict", "1"] if standard_aac else []),
+            "-of",
+            "json",
+            path,
+        ]
+    )
     try:
         return _mapping(json.loads(completed.stdout), "packaged FFprobe output")
     except json.JSONDecodeError as error:
@@ -917,13 +935,13 @@ def _completed_case(
     if not output.is_file() or not output.is_relative_to(destination.resolve()):
         raise PackagedAacFailure(f"Fixture {case.case_id} output escaped its destination.")
     expected = [_output_summary(track) for track in case.selected_tracks]
-    output_probe = _probe(app, output)
+    output_probe = _probe(app, output, standard_aac=True)
     output_streams = _audio_streams(output_probe)
     _validate_streams(case, output_streams, expected)
 
     passthrough = work_directory / "apple-passthrough.mov"
     report = _inspect_apple_media_conversion(output, passthrough)
-    passthrough_streams = _audio_streams(_probe(app, passthrough))
+    passthrough_streams = _audio_streams(_probe(app, passthrough, standard_aac=True))
     if report.output_streams["audio"] != len(expected):
         raise PackagedAacFailure(f"Fixture {case.case_id} lost audio in Apple passthrough.")
     _validate_streams(case, passthrough_streams, expected, passthrough=True)

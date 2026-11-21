@@ -11,7 +11,6 @@ from scripts.create_packaged_aac_layout_fixtures import (
     MAX_SOURCE_SIZE_BYTES,
     FixtureBuildFailure,
     _audio_encoding_command,
-    _create_identity_source,
     _mux_command,
     _run,
     _source_video_summary,
@@ -33,14 +32,13 @@ class PackagedAacFixtureCommandTests(unittest.TestCase):
         self.assertIn("pcm_s24le", command)
         self.assertEqual(command[command.index("-ch_layout") + 1], "6c")
 
-    def test_pce_fixture_uses_side_layout_identity_source(self) -> None:
+    def test_pce_fixture_forces_pce_encoding(self) -> None:
         case = self.cases["fail-pce-layout"]
         track = case.tracks[0]
 
-        with patch("scripts.create_packaged_aac_layout_fixtures.create_channel_identity_audio") as create:
-            _create_identity_source(case, track, Path("source.wav"))
+        command = _audio_encoding_command(track, Path("source.wav"), Path("output.mka"))
 
-        self.assertEqual(create.call_args.args[1], "5.1(side)")
+        self.assertEqual(command[command.index("-aac_pce") + 1], "1")
 
     def test_mux_command_preserves_track_metadata_and_default(self) -> None:
         case = self.cases["preserve-multilingual"]

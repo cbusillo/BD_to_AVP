@@ -5,6 +5,7 @@ from typing import Any, Mapping, Sequence
 
 import ffmpeg
 
+from bd_to_avp.modules.aac_layout_policy import PREPARED_WIDE_AAC_TAG
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.audio_selection import (
     AudioSelectionActivityReporter,
@@ -221,6 +222,7 @@ def mux_video_audio_subs(
 ) -> None:
     audio_streams = get_audio_stream_data(
         audio_path,
+        prepared_aac=config.audio_mode is not AudioMode.PCM,
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=observability_context,
@@ -413,16 +415,25 @@ def normalize_track_language(language_code: object) -> tuple[str, str]:
 def get_audio_stream_data(
     file_path: Path,
     *,
+    prepared_aac: bool = False,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> list[dict[str, Any]]:
-    probe = run_ffprobe(
-        file_path,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        observability_context=observability_context,
-    )
+    def probe_audio(**options: object) -> dict[str, Any]:
+        return run_ffprobe(
+            file_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+            select_streams="a",
+            show_data=None,
+            **options,
+        )
+
+    probe = probe_audio()
+    if prepared_aac and probe and probe.get("format", {}).get("tags", {}).get(PREPARED_WIDE_AAC_TAG) == "1":
+        probe = probe_audio(strict=1)
     if not probe or "streams" not in probe:
         return []
     audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]

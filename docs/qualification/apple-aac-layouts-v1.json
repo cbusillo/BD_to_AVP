@@ -1,37 +1,37 @@
 {
   "schema_version": 1,
   "qualification_id": "apple-aac-layouts-v1",
-  "generated_at": "2026-07-26T21:39:19.217810+00:00",
+  "generated_at": "2026-11-21T22:20:14.495929+00:00",
   "toolchain": {
-    "platform": "macOS-27.0-arm64-arm-64bit",
-    "macos": "27.0",
+    "platform": "macOS-27.3-arm64-arm-64bit",
+    "macos": "27.3",
     "architecture": "arm64",
-    "ffmpeg": "ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers",
-    "ffprobe": "ffprobe version 8.1.2 Copyright (c) 2007-2026 the FFmpeg developers",
+    "ffmpeg": "ffmpeg version 9.1-https://www.martin-riedl.de Copyright (c) 2000-2026 the FFmpeg developers",
+    "ffprobe": "ffprobe version 9.1-https://www.martin-riedl.de Copyright (c) 2007-2026 the FFmpeg developers",
     "avconvert": "/usr/bin/avconvert"
   },
   "policy": {
-    "policy_sha256": "ce493276a758329ebdead492fe601db87c618992ca63fe8dabeb7162a7564eef",
+    "policy_sha256": "c01d42b25be092cc62dbd6022ef471a36c7c63f6508ffdc9f9433f67344a42ba",
     "automatic_behavior_changed": false,
     "current_runtime_snapshot": {
       "aac_copy_layout_channels": {
         "mono": 1,
         "stereo": 2,
-        "5.1": 6,
-        "7.1": 8
+        "3.0": 3,
+        "4.0": 4,
+        "5.0": 5,
+        "5.1": 6
       },
-      "aac_transcode_layout_normalization": {
-        "5.1(side)": "5.1"
-      }
+      "aac_layout_policy_sha256": "c01d42b25be092cc62dbd6022ef471a36c7c63f6508ffdc9f9433f67344a42ba"
     },
     "unlisted_layout": {
       "action": "fail",
       "reason": "Missing, unknown, custom, discrete, or unlisted layouts require new identity and Apple evidence."
     },
     "action_counts": {
-      "preserve": 6,
+      "preserve": 7,
       "remap": 2,
-      "downmix": 18,
+      "downmix": 17,
       "fail": 1
     }
   },
@@ -109,7 +109,7 @@
           },
           "observed_rms": {
             "FC": {
-              "FC": 0.226268
+              "FC": 0.226163
             }
           }
         }
@@ -200,16 +200,77 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226641
             },
             "FR": {
-              "FR": 0.226086
+              "FR": 0.226164
             }
           }
         }
       },
       "candidate": {
-        "same_as_direct": true
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "ffprobe_layout": "stereo",
+          "channel_configuration": 2,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226572
+            },
+            "FR": {
+              "FR": 0.22608
+            }
+          }
+        }
       },
       "policy_passed": true
     },
@@ -349,10 +410,10 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.151075
+              "FL": 0.151071
             },
             "FR": {
-              "FR": 0.150799
+              "FR": 0.150798
             },
             "LFE": {
               "FL": 0.074674,
@@ -452,13 +513,13 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226575
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226086
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             }
           }
         }
@@ -604,14 +665,14 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.132718
+              "FL": 0.132717
             },
             "FR": {
               "FR": 0.132441
             },
             "BC": {
-              "FL": 0.093776,
-              "FR": 0.093776
+              "FL": 0.093706,
+              "FR": 0.093706
             }
           }
         }
@@ -715,16 +776,16 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226093
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "BC": {
-              "BC": 0.226311
+              "BC": 0.226328
             }
           }
         }
@@ -874,16 +935,16 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.132718
+              "FL": 0.132717
             },
             "FR": {
               "FR": 0.132441
             },
             "BL": {
-              "FL": 0.093756
+              "FL": 0.093729
             },
             "BR": {
-              "FR": 0.093604
+              "FR": 0.093597
             }
           }
         }
@@ -931,7 +992,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 4,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "quad",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -944,12 +1005,11 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "apple_lpcm_decode": {
           "preset": "PresetAppleProRes422LPCM",
@@ -958,15 +1018,15 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "identity": {
-          "status": "audio_dropped"
+          "status": "pce_not_evaluated",
+          "output_channel_count": 4
         }
       },
       "candidate": {
@@ -1031,16 +1091,16 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.132718
+              "FL": 0.132717
             },
             "FR": {
               "FR": 0.132441
             },
             "SL": {
-              "FL": 0.093716
+              "FL": 0.093677
             },
             "SR": {
-              "FR": 0.093711
+              "FR": 0.093714
             }
           }
         }
@@ -1090,7 +1150,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 4,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "3.1",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -1192,18 +1252,18 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.102687
+              "FL": 0.102685
             },
             "FR": {
               "FR": 0.102431
             },
             "FC": {
-              "FL": 0.072409,
-              "FR": 0.072409
+              "FL": 0.072384,
+              "FR": 0.072384
             },
             "LFE": {
-              "FL": 0.050732,
-              "FR": 0.050732
+              "FL": 0.050731,
+              "FR": 0.050731
             }
           }
         }
@@ -1315,19 +1375,19 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226093
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "BL": {
-              "SL": 0.226345
+              "SL": 0.226329
             },
             "BR": {
-              "SR": 0.226109
+              "SR": 0.226173
             }
           }
         }
@@ -1382,7 +1442,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 5,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "5.0",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -1395,12 +1455,11 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "apple_lpcm_decode": {
           "preset": "PresetAppleProRes422LPCM",
@@ -1409,15 +1468,15 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "identity": {
-          "status": "audio_dropped"
+          "status": "pce_not_evaluated",
+          "output_channel_count": 5
         }
       },
       "candidate": {
@@ -1488,19 +1547,19 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226093
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "SL": {
-              "SL": 0.226196
+              "SL": 0.226221
             },
             "SR": {
-              "SR": 0.226237
+              "SR": 0.226331
             }
           }
         }
@@ -1555,7 +1614,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 5,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "4.1",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -1667,12 +1726,12 @@
               "FR": 0.077629
             },
             "FC": {
-              "FL": 0.054889,
-              "FR": 0.054889
+              "FL": 0.054891,
+              "FR": 0.054891
             },
             "LFE": {
-              "FL": 0.038436,
-              "FR": 0.038436
+              "FL": 0.038433,
+              "FR": 0.038433
             },
             "BC": {
               "FL": 0.054919,
@@ -1796,22 +1855,22 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226089
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "LFE": {
-              "LFE": 0.224114
+              "LFE": 0.224168
             },
             "BL": {
-              "SL": 0.226364
+              "SL": 0.226363
             },
             "BR": {
-              "SR": 0.226167
+              "SR": 0.226158
             }
           }
         }
@@ -1870,7 +1929,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 6,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "5.1",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -1883,12 +1942,11 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "apple_lpcm_decode": {
           "preset": "PresetAppleProRes422LPCM",
@@ -1897,15 +1955,15 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "identity": {
-          "status": "audio_dropped"
+          "status": "pce_not_evaluated",
+          "output_channel_count": 6
         }
       },
       "candidate": {
@@ -1980,22 +2038,22 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226089
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "LFE": {
-              "LFE": 0.224114
+              "LFE": 0.224168
             },
             "SL": {
-              "SL": 0.226212
+              "SL": 0.226251
             },
             "SR": {
-              "SR": 0.226206
+              "SR": 0.226257
             }
           }
         }
@@ -2052,7 +2110,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 6,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "hexagonal",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -2065,12 +2123,11 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "apple_lpcm_decode": {
           "preset": "PresetAppleProRes422LPCM",
@@ -2079,15 +2136,15 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "identity": {
-          "status": "audio_dropped"
+          "status": "pce_not_evaluated",
+          "output_channel_count": 6
         }
       },
       "candidate": {
@@ -2162,23 +2219,23 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226093
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "BC": {
-              "SL": 0.093737,
-              "SR": 0.093737
+              "SL": 0.093676,
+              "SR": 0.093676
             },
             "SL": {
-              "SL": 0.132502
+              "SL": 0.13261
             },
             "SR": {
-              "SR": 0.132551
+              "SR": 0.132526
             }
           }
         }
@@ -2236,7 +2293,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 6,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "6 channels (FL+FR+BL+BR+FLC+FRC)",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -2347,24 +2404,24 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.132717
+              "FL": 0.132817
             },
             "FR": {
-              "FR": 0.132442
+              "FR": 0.132561
             },
             "FLC": {
-              "FC": 0.113105,
-              "FL": 0.093704
+              "FC": 0.113212,
+              "FL": 0.093788
             },
             "FRC": {
-              "FC": 0.113094,
-              "FR": 0.09365
+              "FC": 0.113084,
+              "FR": 0.093677
             },
             "SL": {
-              "SL": 0.226213
+              "SL": 0.226283
             },
             "SR": {
-              "SR": 0.226206
+              "SR": 0.226324
             }
           }
         }
@@ -2421,7 +2478,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 6,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "hexagonal",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -2434,12 +2491,11 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "apple_lpcm_decode": {
           "preset": "PresetAppleProRes422LPCM",
@@ -2448,15 +2504,15 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "identity": {
-          "status": "audio_dropped"
+          "status": "pce_not_evaluated",
+          "output_channel_count": 6
         }
       },
       "candidate": {
@@ -2531,23 +2587,23 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226093
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "BL": {
-              "SL": 0.13252
+              "SL": 0.132638
             },
             "BR": {
-              "SR": 0.132428
+              "SR": 0.132489
             },
             "BC": {
-              "SL": 0.093703,
-              "SR": 0.093703
+              "SL": 0.093773,
+              "SR": 0.093773
             }
           }
         }
@@ -2608,7 +2664,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 7,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "6.1(back)",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -2621,12 +2677,11 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "apple_lpcm_decode": {
           "preset": "PresetAppleProRes422LPCM",
@@ -2635,15 +2690,15 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "identity": {
-          "status": "audio_dropped"
+          "status": "pce_not_evaluated",
+          "output_channel_count": 7
         }
       },
       "candidate": {
@@ -2722,26 +2777,26 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226089
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "LFE": {
-              "LFE": 0.224114
+              "LFE": 0.224168
             },
             "BC": {
-              "SL": 0.093734,
-              "SR": 0.093734
+              "SL": 0.093749,
+              "SR": 0.093749
             },
             "SL": {
-              "SL": 0.132548
+              "SL": 0.132537
             },
             "SR": {
-              "SR": 0.132545
+              "SR": 0.132554
             }
           }
         }
@@ -2802,8 +2857,8 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 7,
-          "ffprobe_layout": null,
-          "channel_configuration": 0,
+          "ffprobe_layout": "6.1(back)",
+          "channel_configuration": 11,
           "language": "eng",
           "title": "SoundHandler",
           "default": 1
@@ -2815,12 +2870,11 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "apple_lpcm_decode": {
           "preset": "PresetAppleProRes422LPCM",
@@ -2829,15 +2883,15 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "identity": {
-          "status": "audio_dropped"
+          "status": "pce_not_evaluated",
+          "output_channel_count": 7
         }
       },
       "candidate": {
@@ -2916,26 +2970,26 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226089
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "LFE": {
-              "LFE": 0.224114
+              "LFE": 0.224168
             },
             "BL": {
-              "SL": 0.132638
+              "SL": 0.132617
             },
             "BR": {
-              "SR": 0.132459
+              "SR": 0.132471
             },
             "BC": {
-              "SL": 0.093705,
-              "SR": 0.093705
+              "SL": 0.093749,
+              "SR": 0.093749
             }
           }
         }
@@ -2997,7 +3051,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 7,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "7 channels (FL+FR+LFE+BL+BR+FLC+FRC)",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -3112,27 +3166,27 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.132717
+              "FL": 0.132817
             },
             "FR": {
-              "FR": 0.132442
+              "FR": 0.132561
             },
             "LFE": {
               "LFE": 0.224191
             },
             "FLC": {
-              "FC": 0.11321,
-              "FL": 0.093744
+              "FC": 0.113171,
+              "FL": 0.093787
             },
             "FRC": {
-              "FC": 0.113125,
-              "FR": 0.093642
+              "FC": 0.113135,
+              "FR": 0.0937
             },
             "SL": {
-              "SL": 0.226242
+              "SL": 0.226312
             },
             "SR": {
-              "SR": 0.226242
+              "SR": 0.226266
             }
           }
         }
@@ -3192,7 +3246,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 7,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "7.0",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -3304,25 +3358,25 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226093
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "BL": {
-              "SL": 0.113205
+              "SL": 0.113143
             },
             "BR": {
-              "SR": 0.113077
+              "SR": 0.113086
             },
             "SL": {
-              "SL": 0.113106
+              "SL": 0.11316
             },
             "SR": {
-              "SR": 0.113155
+              "SR": 0.113142
             }
           }
         }
@@ -3382,7 +3436,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 7,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "7 channels (FL+FR+FC+BL+BR+FLC+FRC)",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -3494,25 +3548,25 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.132717
+              "FL": 0.132817
             },
             "FR": {
-              "FR": 0.132442
+              "FR": 0.132561
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.22624
             },
             "FLC": {
-              "FL": 0.093744
+              "FL": 0.093797
             },
             "FRC": {
-              "FR": 0.093641
+              "FR": 0.093682
             },
             "SL": {
-              "SL": 0.226242
+              "SL": 0.226374
             },
             "SR": {
-              "SR": 0.226242
+              "SR": 0.226266
             }
           }
         }
@@ -3577,6 +3631,251 @@
           "sample_rate": "48000",
           "channels": 8,
           "ffprobe_layout": "7.1",
+          "channel_configuration": 12,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "pce_not_evaluated",
+          "output_channel_count": 8
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226374
+            },
+            "FR": {
+              "FR": 0.226073
+            },
+            "FC": {
+              "FC": 0.226239
+            },
+            "LFE": {
+              "LFE": 0.224168
+            },
+            "BL": {
+              "SL": 0.11317
+            },
+            "BR": {
+              "SR": 0.113079
+            },
+            "SL": {
+              "SL": 0.113121
+            },
+            "SR": {
+              "SR": 0.113126
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch08-7_1_wide",
+      "input": {
+        "layout": "7.1(wide)",
+        "channel_count": 8,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "BL",
+          "BR",
+          "FLC",
+          "FRC"
+        ],
+        "identity_duration_seconds": 2.5
+      },
+      "decision": {
+        "action": "preserve",
+        "target_layout": "7.1(wide)",
+        "pan_filter": null,
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ],
+          "FLC": [
+            "FLC"
+          ],
+          "FRC": [
+            "FRC"
+          ]
+        },
+        "rationale": "Encode explicit front-wide channels with standard AAC configuration 7."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 8,
+          "ffprobe_layout": "7.1(wide)",
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "pce_not_evaluated",
+          "output_channel_count": 8
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 8,
+          "ffprobe_layout": "7.1(wide)",
           "channel_configuration": 7,
           "language": "eng",
           "title": "SoundHandler",
@@ -3609,316 +3908,11 @@
           "audio_retained": true
         },
         "identity": {
-          "status": "observed",
+          "status": "passed",
           "output_channel_order": [
             "FC",
             "FLC",
             "FRC",
-            "FL",
-            "FR",
-            "SL",
-            "SR",
-            "LFE"
-          ],
-          "observed_map": {
-            "FL": [
-              "FLC"
-            ],
-            "FR": [
-              "FRC"
-            ],
-            "FC": [
-              "FC"
-            ],
-            "LFE": [
-              "LFE"
-            ],
-            "BL": [
-              "SL"
-            ],
-            "BR": [
-              "SR"
-            ],
-            "SL": [
-              "FL"
-            ],
-            "SR": [
-              "FR"
-            ]
-          },
-          "observed_rms": {
-            "FL": {
-              "FLC": 0.226571
-            },
-            "FR": {
-              "FRC": 0.226089
-            },
-            "FC": {
-              "FC": 0.226288
-            },
-            "LFE": {
-              "LFE": 0.224114
-            },
-            "BL": {
-              "SL": 0.226364
-            },
-            "BR": {
-              "SR": 0.226167
-            },
-            "SL": {
-              "FL": 0.226165
-            },
-            "SR": {
-              "FR": 0.226173
-            }
-          }
-        }
-      },
-      "candidate": {
-        "aac": {
-          "audio_stream_count": 1,
-          "valid": true,
-          "codec": "aac",
-          "profile": "LC",
-          "sample_rate": "48000",
-          "channels": 6,
-          "ffprobe_layout": "5.1",
-          "channel_configuration": 6,
-          "language": "eng",
-          "title": "SoundHandler",
-          "default": 1
-        },
-        "apple_passthrough": {
-          "preset": "PresetPassthrough",
-          "source_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "output_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "dropped_streams": {},
-          "audio_retained": true
-        },
-        "apple_lpcm_decode": {
-          "preset": "PresetAppleProRes422LPCM",
-          "source_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "output_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "dropped_streams": {},
-          "audio_retained": true
-        },
-        "identity": {
-          "status": "passed",
-          "output_channel_order": [
-            "FC",
-            "FL",
-            "FR",
-            "SL",
-            "SR",
-            "LFE"
-          ],
-          "observed_map": {
-            "FL": [
-              "FL"
-            ],
-            "FR": [
-              "FR"
-            ],
-            "FC": [
-              "FC"
-            ],
-            "LFE": [
-              "LFE"
-            ],
-            "BL": [
-              "SL"
-            ],
-            "BR": [
-              "SR"
-            ],
-            "SL": [
-              "SL"
-            ],
-            "SR": [
-              "SR"
-            ]
-          },
-          "observed_rms": {
-            "FL": {
-              "FL": 0.226571
-            },
-            "FR": {
-              "FR": 0.226089
-            },
-            "FC": {
-              "FC": 0.226288
-            },
-            "LFE": {
-              "LFE": 0.224114
-            },
-            "BL": {
-              "SL": 0.113118
-            },
-            "BR": {
-              "SR": 0.113064
-            },
-            "SL": {
-              "SL": 0.113034
-            },
-            "SR": {
-              "SR": 0.113108
-            }
-          }
-        }
-      },
-      "policy_passed": true
-    },
-    {
-      "id": "ch08-7_1_wide",
-      "input": {
-        "layout": "7.1(wide)",
-        "channel_count": 8,
-        "channels": [
-          "FL",
-          "FR",
-          "FC",
-          "LFE",
-          "BL",
-          "BR",
-          "FLC",
-          "FRC"
-        ],
-        "identity_duration_seconds": 2.5
-      },
-      "decision": {
-        "action": "downmix",
-        "target_layout": "5.1",
-        "pan_filter": "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=BL|BR=BR",
-        "expected_identity_map": {
-          "FL": [
-            "FL"
-          ],
-          "FR": [
-            "FR"
-          ],
-          "FC": [
-            "FC"
-          ],
-          "LFE": [
-            "LFE"
-          ],
-          "BL": [
-            "SL"
-          ],
-          "BR": [
-            "SR"
-          ],
-          "FLC": [
-            "FL"
-          ],
-          "FRC": [
-            "FR"
-          ]
-        },
-        "rationale": "Fold front-wide channels into canonical AAC 5.1."
-      },
-      "direct": {
-        "aac": {
-          "audio_stream_count": 1,
-          "valid": true,
-          "codec": "aac",
-          "profile": "LC",
-          "sample_rate": "48000",
-          "channels": 8,
-          "ffprobe_layout": null,
-          "channel_configuration": 0,
-          "language": "eng",
-          "title": "SoundHandler",
-          "default": 1
-        },
-        "apple_passthrough": {
-          "preset": "PresetPassthrough",
-          "source_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "output_streams": {
-            "video": 1
-          },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
-        },
-        "apple_lpcm_decode": {
-          "preset": "PresetAppleProRes422LPCM",
-          "source_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "output_streams": {
-            "video": 1
-          },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
-        },
-        "identity": {
-          "status": "audio_dropped"
-        }
-      },
-      "candidate": {
-        "aac": {
-          "audio_stream_count": 1,
-          "valid": true,
-          "codec": "aac",
-          "profile": "LC",
-          "sample_rate": "48000",
-          "channels": 6,
-          "ffprobe_layout": "5.1",
-          "channel_configuration": 6,
-          "language": "eng",
-          "title": "SoundHandler",
-          "default": 1
-        },
-        "apple_passthrough": {
-          "preset": "PresetPassthrough",
-          "source_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "output_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "dropped_streams": {},
-          "audio_retained": true
-        },
-        "apple_lpcm_decode": {
-          "preset": "PresetAppleProRes422LPCM",
-          "source_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "output_streams": {
-            "audio": 1,
-            "video": 1
-          },
-          "dropped_streams": {},
-          "audio_retained": true
-        },
-        "identity": {
-          "status": "passed",
-          "output_channel_order": [
-            "FC",
             "FL",
             "FR",
             "SL",
@@ -3945,36 +3939,36 @@
               "SR"
             ],
             "FLC": [
-              "FL"
+              "FLC"
             ],
             "FRC": [
-              "FR"
+              "FRC"
             ]
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.132717
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.132442
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "LFE": {
-              "LFE": 0.224114
+              "LFE": 0.224168
             },
             "BL": {
-              "SL": 0.226364
+              "SL": 0.226363
             },
             "BR": {
-              "SR": 0.226167
+              "SR": 0.226158
             },
             "FLC": {
-              "FL": 0.093731
+              "FLC": 0.226355
             },
             "FRC": {
-              "FR": 0.093693
+              "FRC": 0.226183
             }
           }
         }
@@ -4038,7 +4032,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 8,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "7.1(wide)",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -4051,12 +4045,11 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "apple_lpcm_decode": {
           "preset": "PresetAppleProRes422LPCM",
@@ -4065,15 +4058,15 @@
             "video": 1
           },
           "output_streams": {
+            "audio": 1,
             "video": 1
           },
-          "dropped_streams": {
-            "audio": 1
-          },
-          "audio_retained": false
+          "dropped_streams": {},
+          "audio_retained": true
         },
         "identity": {
-          "status": "audio_dropped"
+          "status": "pce_not_evaluated",
+          "output_channel_count": 8
         }
       },
       "candidate": {
@@ -4154,28 +4147,28 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.132717
+              "FL": 0.132817
             },
             "FR": {
-              "FR": 0.132442
+              "FR": 0.132561
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.22624
             },
             "LFE": {
-              "LFE": 0.224114
+              "LFE": 0.224168
             },
             "FLC": {
-              "FL": 0.093756
+              "FL": 0.093734
             },
             "FRC": {
-              "FR": 0.093663
+              "FR": 0.093676
             },
             "SL": {
-              "SL": 0.226165
+              "SL": 0.226223
             },
             "SR": {
-              "SR": 0.226173
+              "SR": 0.226335
             }
           }
         }
@@ -4240,7 +4233,7 @@
           "profile": "LC",
           "sample_rate": "48000",
           "channels": 8,
-          "ffprobe_layout": null,
+          "ffprobe_layout": "octagonal",
           "channel_configuration": 0,
           "language": "eng",
           "title": "SoundHandler",
@@ -4356,29 +4349,29 @@
           },
           "observed_rms": {
             "FL": {
-              "FL": 0.226571
+              "FL": 0.226374
             },
             "FR": {
-              "FR": 0.226093
+              "FR": 0.226073
             },
             "FC": {
-              "FC": 0.226288
+              "FC": 0.226239
             },
             "BL": {
-              "SL": 0.083613
+              "SL": 0.083649
             },
             "BR": {
-              "SR": 0.08351
+              "SR": 0.083546
             },
             "BC": {
-              "SL": 0.059087,
-              "SR": 0.059087
+              "SL": 0.05913,
+              "SR": 0.05913
             },
             "SL": {
-              "SL": 0.083606
+              "SL": 0.083573
             },
             "SR": {
-              "SR": 0.083568
+              "SR": 0.083602
             }
           }
         }
@@ -4398,7 +4391,7 @@
       7,
       8
     ],
-    "direct_apple_audio_retained": 8,
+    "direct_apple_audio_retained": 17,
     "policy_passed": 26,
     "policy_failures": []
   }

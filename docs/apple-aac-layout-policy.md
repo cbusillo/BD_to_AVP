@@ -16,7 +16,7 @@ The production runtime imports this same policy for Automatic and Convert-to-AAC
 - Run Apple `PresetAppleProRes422LPCM` and measure the decoded output-channel energy matrix.
 - Apply the explicit candidate transform and require a canonical AAC configuration, retained Apple audio, and the expected identity map.
 
-Generated on **2026-07-26T21:39:19.217810+00:00** with `ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers` on macOS `27.0` (arm64). The checked-in evidence is `docs/qualification/apple-aac-layouts-v1.json`.
+Generated on **2026-11-21T22:20:14.495929+00:00** with `ffmpeg version 9.1-https://www.martin-riedl.de Copyright (c) 2000-2026 the FFmpeg developers` on macOS `27.3` (arm64). The checked-in evidence is `docs/qualification/apple-aac-layouts-v1.json`.
 
 ## Policy Matrix
 
@@ -29,24 +29,24 @@ Generated on **2026-07-26T21:39:19.217810+00:00** with `ffmpeg version 8.1.2 Cop
 | 3 | `3.0(back)` | PCE (0) | dropped | **downmix** | `stereo` | pass |
 | 4 | `4.0` | 4 | retained | **preserve** | `4.0` | pass |
 | 4 | `quad` | PCE (0) | retained | **downmix** | `stereo` | pass |
-| 4 | `quad(side)` | PCE (0) | dropped | **downmix** | `stereo` | pass |
+| 4 | `quad(side)` | PCE (0) | retained | **downmix** | `stereo` | pass |
 | 4 | `3.1` | PCE (0) | dropped | **downmix** | `stereo` | pass |
 | 5 | `5.0` | 5 | retained | **preserve** | `5.0` | pass |
-| 5 | `5.0(side)` | PCE (0) | dropped | **remap** | `5.0` | pass |
+| 5 | `5.0(side)` | PCE (0) | retained | **remap** | `5.0` | pass |
 | 5 | `4.1` | PCE (0) | dropped | **downmix** | `stereo` | pass |
 | 6 | `5.1` | 6 | retained | **preserve** | `5.1` | pass |
-| 6 | `5.1(side)` | PCE (0) | dropped | **remap** | `5.1` | pass |
-| 6 | `6.0` | PCE (0) | dropped | **downmix** | `5.0` | pass |
+| 6 | `5.1(side)` | PCE (0) | retained | **remap** | `5.1` | pass |
+| 6 | `6.0` | PCE (0) | retained | **downmix** | `5.0` | pass |
 | 6 | `6.0(front)` | PCE (0) | dropped | **downmix** | `5.0` | pass |
-| 6 | `hexagonal` | PCE (0) | dropped | **downmix** | `5.0` | pass |
-| 7 | `6.1` | PCE (0) | dropped | **downmix** | `5.1` | pass |
-| 7 | `6.1(back)` | PCE (0) | dropped | **downmix** | `5.1` | pass |
+| 6 | `hexagonal` | PCE (0) | retained | **downmix** | `5.0` | pass |
+| 7 | `6.1` | PCE (0) | retained | **downmix** | `5.1` | pass |
+| 7 | `6.1(back)` | 11 | retained | **downmix** | `5.1` | pass |
 | 7 | `6.1(front)` | PCE (0) | dropped | **downmix** | `5.1` | pass |
 | 7 | `7.0` | PCE (0) | dropped | **downmix** | `5.0` | pass |
 | 7 | `7.0(front)` | PCE (0) | dropped | **downmix** | `5.0` | pass |
-| 8 | `7.1` | 7 | retained | **downmix** | `5.1` | pass |
-| 8 | `7.1(wide)` | PCE (0) | dropped | **downmix** | `5.1` | pass |
-| 8 | `7.1(wide-side)` | PCE (0) | dropped | **downmix** | `5.1` | pass |
+| 8 | `7.1` | 12 | retained | **downmix** | `5.1` | pass |
+| 8 | `7.1(wide)` | PCE (0) | retained | **preserve** | `7.1(wide)` | pass |
+| 8 | `7.1(wide-side)` | PCE (0) | retained | **downmix** | `5.1` | pass |
 | 8 | `octagonal` | PCE (0) | dropped | **downmix** | `5.0` | pass |
 
 Any missing, unknown, custom, discrete, or unlisted layout **fails** until a new matrix row and Apple identity result are reviewed.
@@ -54,8 +54,8 @@ Any missing, unknown, custom, discrete, or unlisted layout **fails** until a new
 ## Important Findings
 
 - Canonical AAC configurations 1-6 (`mono` through `5.1`) retain audio and pass semantic identity checks.
-- Most FFmpeg PCE outputs (`channel_configuration=0`) become video-only after Apple passthrough. `quad` is retained, but remains a downmix because PCE placement has no physical qualification.
-- FFmpeg `7.1` uses channel configuration 7 and remains visible, but Apple decodes it in AAC wide order. The identity matrix shows front, side, and rear signals in different semantic positions, so the policy downmixes it to `5.1` pending physical evidence.
+- Apple passthrough retains some AAC tracks with PCE signaling. Automatic re-encodes recognized PCE layouts to a qualified standard configuration before muxing.
+- FFmpeg 9.1 preserves explicit `7.1(wide)` layouts using standard AAC configuration 7. The #1215 Vision Pro test confirmed track switching, seeking, and cue sync. Ordinary `7.1`, `7.1(wide-side)`, and ambiguous wide AAC sources still downmix to `5.1`. An older external FFmpeg without standard wide encoding also uses the 5.1 downmix.
 - `5.0(side)` and `5.1(side)` have lossless one-to-one remaps to canonical `5.0` and `5.1`; all uncommon same-count mappings remain forbidden.
 - The policy gate passed **26 / 26** generated candidates.
 
@@ -78,17 +78,16 @@ Any missing, unknown, custom, discrete, or unlisted layout **fails** until a new
 - `7.0` → `5.0`: `pan=5.0|FL=FL|FR=FR|FC=FC|BL<BL+SL|BR<BR+SR`
 - `7.0(front)` → `5.0`: `pan=5.0|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|BL=SL|BR=SR`
 - `7.1` → `5.1`: `pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL<BL+SL|BR<BR+SR`
-- `7.1(wide)` → `5.1`: `pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=BL|BR=BR`
 - `7.1(wide-side)` → `5.1`: `pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=SL|BR=SR`
 - `octagonal` → `5.0`: `pan=5.0|FL=FL|FR=FR|FC=FC|BL<BL+SL+0.707*BC|BR<BR+SR+0.707*BC`
 
 ## Runtime Boundary
 
-`bd_to_avp/modules/aac_layout_policy.py` is the shared source of truth for this table. Automatic copies only the six qualified preserve layouts; any selected remap or downmix causes the whole selected set to be encoded with per-output policy filters. Missing, unknown, custom, discrete, or unlisted layouts stop before FFmpeg with a structured failure, and resumed prepared AAC is requalified before final muxing. #382 records physical acceptance of the exact signed Beta 8 package on Vision Pro. Changed candidates need their own applicable qualification; the historical receipt does not establish fresh acceptance.
+`bd_to_avp/modules/aac_layout_policy.py` is the shared source of truth for this table. Automatic copies the six qualified AAC layouts through `5.1`. It encodes explicit `7.1(wide)` from non-AAC sources and uses the existing two-loop encoder for stereo. When Automatic needs to encode any track, it encodes the whole selected set. Missing, unknown, custom, discrete, or unlisted layouts stop before FFmpeg with a structured failure. The converter requalifies resumed AAC before final muxing. #382 records physical acceptance of the exact signed Beta 8 package on Vision Pro. Changed candidates need their own applicable qualification; the historical receipt does not establish fresh acceptance.
 
 ## Packaged Fixture Gate
 
-`docs/qualification/apple-aac-package-fixtures-v1.json` is the checked release fixture contract. It binds representative packaged-worker cases for canonical stereo and `5.1` preservation, `5.1(side)` remapping, `7.1` downmixing, missing/unknown/PCE fail-closed behavior, multiple languages, handler titles, and default disposition. Its channel-identity maps must remain identical to the production policy.
+`docs/qualification/apple-aac-package-fixtures-v1.json` is the checked release fixture contract. It binds representative packaged-worker cases for stereo, `5.1`, and `7.1(wide)` preservation, `5.1(side)` remapping, `7.1` downmixing, missing/unknown/PCE fail-closed behavior, multiple languages, handler titles, and default disposition. Its channel-identity maps must remain identical to the production policy.
 
 Each private fixture is a short MVC MKV with the #380 time-slotted channel-identity signal and the exact stream metadata declared by the manifest. Run the verifier from the checkout that built the candidate:
 

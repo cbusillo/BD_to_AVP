@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import platform
-import re
 import shutil
 import subprocess
 import tempfile
@@ -22,7 +21,11 @@ from bd_to_avp.modules.aac_layout_policy import (
     AAC_LAYOUT_POLICIES,
     LAYOUT_CHANNELS,
     UNLISTED_LAYOUT_POLICY,
+    WIDE_AAC_CONFIGURATION,
+    WIDE_AAC_LAYOUT,
     AacLayoutPolicy,
+    aac_encoder_options,
+    parse_aac_channel_configuration,
 )
 from bd_to_avp.modules.config import config
 from scripts.create_spatial_audio_validation_fixtures import create_channel_identity_audio
@@ -50,7 +53,7 @@ PACKAGED_FIXTURE_GATE_LINES = (
     "",
     (
         "`docs/qualification/apple-aac-package-fixtures-v1.json` is the checked release fixture contract. "
-        "It binds representative packaged-worker cases for canonical stereo and `5.1` preservation, "
+        "It binds representative packaged-worker cases for stereo, `5.1`, and `7.1(wide)` preservation, "
         "`5.1(side)` remapping, `7.1` downmixing, missing/unknown/PCE fail-closed behavior, multiple "
         "languages, handler titles, and default disposition. Its channel-identity maps must remain identical "
         "to the production policy."
@@ -147,7 +150,7 @@ CANONICAL_AAC_CONFIGURATION = {
     "4.0": 4,
     "5.0": 5,
     "5.1": 6,
-    "7.1": 7,
+    WIDE_AAC_LAYOUT: WIDE_AAC_CONFIGURATION,
 }
 
 AudioLayoutCase = AacLayoutPolicy
@@ -222,6 +225,9 @@ def encode_aac(source_path: Path, output_path: Path, case: AudioLayoutCase, *, a
     ]
     if apply_policy and case.pan_filter is not None:
         command.extend(["-af", case.pan_filter])
+    if apply_policy:
+        for option, value in aac_encoder_options(target_layout).items():
+            command.extend([f"-{option}:a:0", value])
     command.extend(
         [
             "-c:a",
@@ -267,7 +273,7 @@ def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> No
     )
 
 
-def probe(path: Path) -> dict[str, Any]:
+def probe(path: Path, *, standard_aac: bool = False) -> dict[str, Any]:
     completed = run(
         [
             config.FFPROBE_PATH,
@@ -276,6 +282,7 @@ def probe(path: Path) -> dict[str, Any]:
             "-show_streams",
             "-show_format",
             "-show_data",
+            *(["-strict", "1"] if standard_aac else []),
             "-of",
             "json",
             path,
@@ -292,18 +299,8 @@ def audio_streams(probe_data: dict[str, Any]) -> list[dict[str, Any]]:
     return [stream for stream in streams if isinstance(stream, dict) and stream.get("codec_type") == "audio"]
 
 
-def parse_aac_channel_configuration(extradata: object) -> int | None:
-    if not isinstance(extradata, str):
-        return None
-    match = re.search(r"^[0-9a-fA-F]{8}:\s+([0-9a-fA-F]{4})", extradata, flags=re.MULTILINE)
-    if match is None:
-        return None
-    first_word = int(match.group(1), 16)
-    return (first_word >> 3) & 0x0F
-
-
 def aac_stream_evidence(path: Path) -> dict[str, Any]:
-    streams = audio_streams(probe(path))
+    streams = audio_streams(probe(path, standard_aac=True))
     if len(streams) != 1:
         return {"audio_stream_count": len(streams), "valid": False}
     stream = streams[0]
@@ -504,7 +501,7 @@ def build_asset_evidence(
 
 
 def direct_expected_map(case: AudioLayoutCase) -> Mapping[str, tuple[str, ...]] | None:
-    return case.expected_identity_map if case.action == "preserve" else None
+    return case.expected_identity_map if case.action == "preserve" and case.source_layout != WIDE_AAC_LAYOUT else None
 
 
 def expected_target_configuration(case: AudioLayoutCase) -> int:
@@ -549,7 +546,7 @@ def qualify_case(case: AudioLayoutCase, root: Path, video_path: Path) -> dict[st
         direct_expected_map(case),
     )
 
-    if case.action == "preserve":
+    if case.action == "preserve" and not aac_encoder_options(case.target_layout):
         candidate_evidence = direct_evidence
         candidate_report: dict[str, Any] = {"same_as_direct": True}
     else:
@@ -610,7 +607,9 @@ def policy_digest() -> str:
 
 def runtime_behavior_changed() -> bool:
     expected_copy_layouts = {
-        case.source_layout: len(case.source_channels) for case in LAYOUT_CASES if case.action == "preserve"
+        case.source_layout: len(case.source_channels)
+        for case in LAYOUT_CASES
+        if case.action == "preserve" and case.source_layout != WIDE_AAC_LAYOUT
     }
     return audio.AAC_COPY_LAYOUT_CHANNELS != expected_copy_layouts
 
@@ -776,14 +775,14 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                     "semantic identity checks."
                 ),
                 (
-                    "- Most FFmpeg PCE outputs (`channel_configuration=0`) become video-only after Apple "
-                    "passthrough. `quad` is retained, but remains a downmix because PCE placement has no "
-                    "physical qualification."
+                    "- Apple passthrough retains some AAC tracks with PCE signaling. Automatic re-encodes "
+                    "recognized PCE layouts to a qualified standard configuration before muxing."
                 ),
                 (
-                    "- FFmpeg `7.1` uses channel configuration 7 and remains visible, but Apple decodes it "
-                    "in AAC wide order. The identity matrix shows front, side, and rear signals in different "
-                    "semantic positions, so the policy downmixes it to `5.1` pending physical evidence."
+                    "- FFmpeg 9.1 preserves explicit `7.1(wide)` layouts using standard AAC configuration 7. "
+                    "The #1215 Vision Pro test confirmed track switching, seeking, and cue sync. "
+                    "Ordinary `7.1`, `7.1(wide-side)`, and ambiguous wide AAC sources still downmix to `5.1`. "
+                    "An older external FFmpeg without standard wide encoding also uses the 5.1 downmix."
                 ),
                 (
                     "- `5.0(side)` and `5.1(side)` have lossless one-to-one remaps to canonical `5.0` and "
@@ -802,10 +801,11 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                 "",
                 (
                     "`bd_to_avp/modules/aac_layout_policy.py` is the shared source of truth for this table. "
-                    "Automatic copies only the six qualified preserve layouts; any selected remap or downmix causes "
-                    "the whole selected set to be encoded with per-output policy filters. Missing, unknown, custom, "
-                    "discrete, or unlisted layouts stop before FFmpeg with a structured failure, and resumed prepared "
-                    "AAC is requalified before final muxing. #382 records physical acceptance of the exact signed "
+                    "Automatic copies the six qualified AAC layouts through `5.1`. It encodes explicit "
+                    "`7.1(wide)` from non-AAC sources and uses the existing two-loop encoder for stereo. "
+                    "When Automatic needs to encode any track, it encodes the whole selected set. Missing, unknown, "
+                    "custom, discrete, or unlisted layouts stop before FFmpeg with a structured failure. The converter "
+                    "requalifies resumed AAC before final muxing. #382 records physical acceptance of the exact signed "
                     "Beta 8 package on Vision Pro. Changed candidates need their own applicable qualification; "
                     "the historical receipt does not establish fresh acceptance."
                 ),
